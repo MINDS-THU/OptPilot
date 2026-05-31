@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import sys
+from pathlib import Path
 from typing import Any, Dict, Type
 
 
@@ -48,7 +50,18 @@ def resolve_component(category: str, implementation: str) -> Type[Any]:
             raise RegistryError(f"Unknown builtin {category} implementation: {implementation}")
         return _load_dotted(dotted)
     if implementation.startswith("python:"):
-        return _load_dotted(implementation[len("python:") :])
+        dotted = implementation[len("python:") :]
+        try:
+            return _load_dotted(dotted)
+        except ModuleNotFoundError as exc:
+            module_name, _, _ = dotted.partition(":")
+            top_level = module_name.split(".", 1)[0]
+            if exc.name != top_level:
+                raise
+            cwd = str(Path.cwd())
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
+            return _load_dotted(dotted)
     raise RegistryError(
         f"Unsupported implementation identifier '{implementation}'. Use 'builtin.*' or 'python:module:Class'."
     )

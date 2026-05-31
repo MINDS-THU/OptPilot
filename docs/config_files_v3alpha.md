@@ -797,9 +797,9 @@ OptPilot compiles authoring configs to the internal `StudySpec`.
 
 The generated `StudySpec` is recorded in the run evidence for audit and reproducibility.
 
-## 9. Usage Examples From Version 3
+## 9. Usage Examples
 
-This section shows how the use cases from `version 3.md` are represented without adding new config concepts.
+This section shows how representative OptPilot use cases are expressed without adding extra config concepts.
 
 ### 9.1 Direct Parameter Search Over A Simulator
 

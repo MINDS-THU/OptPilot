@@ -4,6 +4,8 @@ import json
 import hashlib
 import contextlib
 import io
+import os
+import sys
 import tempfile
 import time
 import unittest
@@ -589,6 +591,35 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(study_spec.target["adapter"]["implementation"], "builtin.configured_environment")
             self.assertEqual(study_spec.primary_artifact["kind"], "files")
             self.assertEqual(study_spec.engines[0]["config"]["candidateDestination"], "scripts/init.py")
+
+    def test_cli_run_loads_user_owned_components_from_current_working_directory(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        spec_path = repo_root / "examples" / "studies" / "toy_user_engine.yaml"
+        original_cwd = Path.cwd()
+        original_sys_path = list(sys.path)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            filtered_sys_path = []
+            for entry in sys.path:
+                if not entry:
+                    continue
+                try:
+                    if Path(entry).resolve() == repo_root:
+                        continue
+                except OSError:
+                    pass
+                filtered_sys_path.append(entry)
+
+            try:
+                os.chdir(repo_root)
+                sys.path[:] = filtered_sys_path
+                with contextlib.redirect_stdout(io.StringIO()):
+                    exit_code = cli_main(["run", str(spec_path), "--output-root", tmp_dir])
+            finally:
+                os.chdir(original_cwd)
+                sys.path[:] = original_sys_path
+
+            self.assertEqual(exit_code, 0)
 
     def test_cli_target_adapter_runs_and_captures_process_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

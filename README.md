@@ -1,158 +1,191 @@
 # OptPilot
 
-OptPilot is an orchestrator for AI-assisted optimization studies over target
-environments.
+OptPilot is an orchestrator for AI-assisted iterative optimization over measured objectives. It standardizes the study loop around configuration, candidate handoff, evaluation against target environments or evaluation harnesses, evidence capture, lineage, and reproducibility.
 
-It is not a Bayesian optimization library, RL framework, LLM agent framework,
-or simulator. Those pieces are user-owned. OptPilot provides the common study
-protocol: configuration, candidate handoff, evaluation, evidence capture,
-lineage, and reproducibility records.
+OptPilot is intentionally not an optimizer, simulator, RL framework, or LLM agent framework. Those parts remain user-owned. OptPilot provides the protocol that lets those components run as repeatable studies against a shared execution and evidence model.
 
-## Current Status
+## Alpha Status
 
-This repository is preparing for an initial alpha release. The public
-configuration interface is:
+This repository is at an initial alpha stage. The intended user-facing surface today is small and explicit:
 
-- `EnvironmentConfig`: describes how an environment accepts candidates and
-  produces metrics, saved files, and extracted records
-- `MethodConfig`: describes the user-owned controller/engine method
-- `StudyConfig`: binds one method to one environment with an objective and
-  budget
+- `EnvironmentConfig`: describes how an environment evaluates candidates and produces metrics and artifacts.
+- `MethodConfig`: describes the user-owned controller and engine method.
+- `StudyConfig`: binds one method to one environment with an objective, instances, and budget.
+- CLI: `optpilot run`, `optpilot import-frontier`
+- Python entrypoint: `optpilot.runner.run_study`
 
-OptPilot compiles these files into an internal `StudySpec` that is recorded in
-run evidence. Users should normally write the three public config kinds, not
-hand-write `StudySpec`.
+OptPilot compiles the three authoring files above into an internal `StudySpec` that is recorded in the run evidence. Most users should author the public configs, not hand-write `StudySpec`.
 
-## Included
+Included in the current alpha:
 
-- v3alpha user-facing config loader and compiler
-- configured-environment adapter for `evaluate.type: python` and
-  `evaluate.type: command`
+- v3alpha config loader and compiler
+- `evaluate.type: python` and `evaluate.type: command`
 - parameter and file candidate materialization
 - candidate validation for parameter bounds and referenced file artifacts
-- `filesToSave` evidence capture
-- `recordsToExtract` structured extraction from JSONL, CSV, and SQLite sources
-- pluggable controller and engine interfaces through `python:module:Class`
-- synchronous user engines and lifecycle engines
-- reference random-search engine for examples and smoke tests
-- evidence-aware controller example
-- local threaded backend and local subprocess backend
-- retry policy for failed or timed-out attempts
-- run resume and branch lineage metadata
-- local JSONL/file evidence store
-- environment snapshots, run policy snapshots, observations, trials, artifacts,
-  engine snapshots, controller decisions, and scheduler events
-- prompt/model provenance helpers for user-owned LLM engines
-- Frontier-Engineering metadata importer that generates a v3alpha
-  `StudyConfig` draft
+- structured evidence capture into local JSONL and file-backed run directories
+- pluggable controllers and engines through `python:module:Class`
+- reference random search for examples and smoke tests
+- resume and branch lineage metadata
+- prompt and model provenance helpers for user-owned LLM-style engines
+- Frontier-Engineering draft import support
 
-The complete config reference is
-[docs/config_files_v3alpha.md](docs/config_files_v3alpha.md).
-Release checks are tracked in
-[docs/release_checklist.md](docs/release_checklist.md).
+Not included in the current alpha:
 
-## Install For Development
+- built-in Bayesian optimization, RL, or LLM search algorithms
+- remote execution backends
+- strong sandbox isolation
+- UI
+
+## Install With uv
+
+OptPilot now uses `uv` as the recommended project manager.
+
+Prerequisites:
+
+- Python 3.10+
+- `uv` 0.10+
+
+Clone the repository, then create the local environment and install the package
+in editable mode:
 
 ```bash
-python3 -m pip install -e .
+uv sync
 ```
 
-If you do not install the package, run commands from the repository root with
-`PYTHONPATH=src`.
-
-## Run Example Studies
+Verify the CLI:
 
 ```bash
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_random_search.yaml
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_cli_random_search.yaml
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_user_engine.yaml
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_lifecycle_engine.yaml
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_evidence_aware_controller.yaml
+uv run optpilot --help
 ```
 
-Create a Frontier-Engineering draft config when a local copy of that external
-project exists under `resource/`. The `resource/` directory is ignored and is
-not part of the OptPilot release package.
+`uv sync` creates a local `.venv`, installs the package from `src/`, and uses
+the checked-in `uv.lock` for reproducible dependency resolution.
+
+## Quickstart
+
+Run the reference toy study:
 
 ```bash
-PYTHONPATH=src python3 -m optpilot import-frontier \
+uv run optpilot run examples/studies/toy_random_search.yaml
+```
+
+The command prints a JSON summary with fields such as `study_id`, `run_dir`, `completed_trials`, and `best_metric`. The run directory contains the audit and evidence records for that study, including:
+
+- `study_spec.json`
+- `summary.json`
+- `observations.jsonl`
+- `trials.jsonl`
+- `artifacts.jsonl`
+- `controller_decisions.jsonl`
+- `scheduler_events.jsonl`
+
+Other runnable examples in this repository:
+
+```bash
+uv run optpilot run examples/studies/toy_cli_random_search.yaml
+uv run optpilot run examples/studies/toy_user_engine.yaml
+uv run optpilot run examples/studies/toy_lifecycle_engine.yaml
+uv run optpilot run examples/studies/toy_evidence_aware_controller.yaml
+```
+
+## Authoring Model
+
+Every OptPilot study is built from three small config files.
+
+1. `EnvironmentConfig`
+   Defines how OptPilot evaluates candidates. The current alpha supports Python
+   callables, external commands, and custom adapters.
+2. `MethodConfig`
+   Defines the optimization method. This can point at a built-in reference
+   engine or at user-owned Python classes for the controller and engine.
+3. `StudyConfig`
+   Selects the environment and method, then adds the objective, instances,
+   execution settings, and stopping budget.
+
+The reference toy study is exactly this pattern:
+
+```yaml
+apiVersion: optpilot.io/v3alpha1
+kind: StudyConfig
+name: toy-random-search
+
+environment: ../environments/toy_factory.yaml
+method: ../methods/reference_random_search.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+instances:
+  source: files
+  paths:
+    - ../instances/toy_factory_case.yaml
+
+budget:
+  maxTrials: 12
+```
+
+For a full walkthrough, see [docs/getting_started.md](docs/getting_started.md).
+For the full schema, see [docs/config_files_v3alpha.md](docs/config_files_v3alpha.md).
+
+## User-Owned Python Hooks
+
+OptPilot is designed so users own the search algorithm and, when needed, the environment adapter.
+
+- Environment callables use `module:function` for `evaluate.type: python`.
+- Controllers and engines use `python:module:Class`.
+- Example user-owned components live under `examples/user_engines/` and
+  `examples/user_controllers/`.
+
+That means you can keep your optimization logic outside the OptPilot package itself while still getting the standard study runtime and evidence model.
+
+## Common Commands
+
+Resume an existing run directory:
+
+```bash
+uv run optpilot run examples/studies/toy_user_engine.yaml \
+  --resume-run-dir path/to/existing-run
+```
+
+Branch a new run from an earlier run:
+
+```bash
+uv run optpilot run examples/studies/toy_user_engine.yaml \
+  --branch-from-run-dir path/to/existing-run
+```
+
+Generate a Frontier-Engineering draft config when a local copy of that external project exists under `resource/`:
+
+```bash
+uv run optpilot import-frontier \
   resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning \
   --output frontier_pid_study.yaml
 ```
 
-Resume or branch a run:
+The `resource/` directory is intentionally ignored and is not part of the OptPilot release package.
+
+## Development Checks
+
+Run the repository checks with `uv`:
 
 ```bash
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_user_engine.yaml \
-  --resume-run-dir path/to/existing-run
-
-PYTHONPATH=src python3 -m optpilot run examples/studies/toy_user_engine.yaml \
-  --branch-from-run-dir path/to/existing-run
-```
-
-## User-Owned Code Artifacts
-
-Generated source code should be stored by reference, not inline in JSON/YAML.
-During a study run, engines receive
-`study_state["runtime_context"]["artifact_store_dir"]`:
-
-```python
-from optpilot.code_artifacts import CodeArtifactStore
-
-store = CodeArtifactStore(
-    study_state["runtime_context"]["artifact_store_dir"],
-    content_ref_mode=study_state["runtime_context"]["artifact_content_ref_mode"],
-)
-artifact = store.store_directory(
-    "/path/to/generated/solver",
-    artifact_id="artifact-code-001",
-    entrypoint="solver:solve",
-    generator_record={"engine_id": "llm_engine", "strategy": "code_evolution"},
-)
-```
-
-LLM-style engines can also store prompt/model provenance by reference:
-
-```python
-from optpilot.provenance import PromptStore, build_generator_record, build_model_record
-
-prompt_store = PromptStore(study_state["runtime_context"]["prompt_store_dir"])
-prompt_record = prompt_store.store_prompt(
-    messages=[{"role": "user", "content": "Improve solver.py"}],
-)
-model_record = build_model_record(provider="example", model="code-model-v1")
-generator_record = build_generator_record(
-    engine_id="llm_engine",
-    strategy="code_evolution",
-    prompt_record=prompt_record,
-    model_record=model_record,
-)
-```
-
-## Test And Smoke Check
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'
-PYTHONPYCACHEPREFIX=/tmp/optpilot-pycache python3 -m compileall src/optpilot
+uv run python -m unittest discover -s tests -p 'test_*.py'
+uv run python -m compileall src/optpilot
 ./scripts/smoke_test.sh
 ```
 
-## Public API Boundary
+The smoke script re-executes itself through `uv run` when needed.
 
-Stable-for-alpha user surface:
+## More Documentation
 
-- CLI: `optpilot run`, `optpilot import-frontier`
-- Python: `optpilot.runner.run_study`
-- Configs: `StudyConfig`, `EnvironmentConfig`, `MethodConfig`
+- [docs/getting_started.md](docs/getting_started.md)
+- [docs/config_files_v3alpha.md](docs/config_files_v3alpha.md)
+- [docs/concept_and_requirements.md](docs/concept_and_requirements.md)
+- [docs/release_checklist.md](docs/release_checklist.md)
 
-Internal implementation details may still change:
-
-- expanded `StudySpec`
-- low-level adapters and materializers
-- worker internals
-- local evidence store layout
-
-## Release Blockers
+## Release Note
 
 Before publishing an official public package, choose and add a license. That is
-a project/legal decision and is intentionally not guessed in this repository.
+a project and legal decision and is intentionally not guessed in this
+repository.

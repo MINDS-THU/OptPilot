@@ -4,14 +4,16 @@ Use this checklist before publishing an alpha or stable release.
 
 ## Required For Alpha
 
-- Run unit tests: `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py'`
-- Run compile check: `PYTHONPYCACHEPREFIX=/tmp/optpilot-pycache python3 -m compileall src/optpilot`
+- Refresh the local environment and lockfile as needed: `uv sync`
+- Run unit tests: `uv run python -m unittest discover -s tests -p 'test_*.py'`
+- Run compile check: `uv run python -m compileall src/optpilot`
 - Run smoke tests: `./scripts/smoke_test.sh`
 - Confirm public docs point users to `StudyConfig`, `EnvironmentConfig`, and `MethodConfig`.
+- Confirm public docs use the `uv` workflow for installation and examples.
 - Confirm generated run directories are not committed under `examples/runs`.
 - Confirm local external projects are not committed under `resource/`.
 - Confirm public examples use only the v3alpha config design.
-- Confirm `README.md` describes public API boundaries and release blockers.
+- Confirm `README.md` and `docs/getting_started.md` describe public API boundaries and release blockers.
 
 ## Required Before Public Package Publication
 

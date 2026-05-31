@@ -2,13 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_BIN="${PYTHON:-python3}"
 OUTPUT_ROOT="${OPTPILOT_SMOKE_OUTPUT_ROOT:-/tmp/optpilot-smoke}"
 FRONTIER_DRAFT="${OPTPILOT_SMOKE_FRONTIER_DRAFT:-/tmp/optpilot-frontier-smoke.yaml}"
 
 cd "$ROOT_DIR"
 
-export PYTHONPATH="${PYTHONPATH:-src}"
+if command -v uv >/dev/null 2>&1 && [ -z "${VIRTUAL_ENV:-}" ]; then
+  exec uv run "$0" "$@"
+fi
+
+PYTHON_BIN="${PYTHON:-python}"
 export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/optpilot-pycache}"
 
 "$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py'
@@ -21,11 +24,11 @@ for study in \
   examples/studies/toy_lifecycle_engine.yaml \
   examples/studies/toy_evidence_aware_controller.yaml
 do
-  "$PYTHON_BIN" -m optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
+  optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
 done
 
 if [ -d "resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning/frontier_eval" ]; then
-  "$PYTHON_BIN" -m optpilot import-frontier \
+  optpilot import-frontier \
     resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning \
     --output "$FRONTIER_DRAFT" \
     --force >/dev/null
