@@ -88,6 +88,10 @@ uv run optpilot run examples/studies/toy_lifecycle_engine.yaml
 uv run optpilot run examples/studies/toy_evidence_aware_controller.yaml
 ```
 
+For an external-project code-edit example that uses an LLM engine to modify a
+discrete-event simulator generated in another repository, see
+[examples/opt_devs_gen_sims/README.md](examples/opt_devs_gen_sims/README.md).
+
 ## Authoring Model
 
 Every OptPilot study is built from three small config files.

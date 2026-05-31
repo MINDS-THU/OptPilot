@@ -5,6 +5,7 @@ import hashlib
 import contextlib
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -947,7 +948,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["callable"] = "examples.bad_targets:non_numeric_metric"
+        raw_spec["target"]["adapter"]["config"]["evaluate"]["callable"] = "tests.fixtures.bad_targets:non_numeric_metric"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "invalid_target_output.yaml"
@@ -1013,6 +1014,67 @@ class MvpIntegrationTest(unittest.TestCase):
 
             self.assertEqual(observations[0]["status"], "timeout")
             self.assertEqual(observations[0]["provenance"]["resource_profile"]["timeoutSeconds"], 1)
+
+    def test_sa_example_evaluator_timeout_kills_simulator_process_group(self) -> None:
+        from examples.opt_devs_gen_sims.sa_eval import evaluate
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            workspace = tmp_path / "workspace"
+            simulator_root = workspace / "simulator"
+            devs_project = simulator_root / "devs_project"
+            devs_project.mkdir(parents=True)
+            (devs_project / "__init__.py").write_text("", encoding="utf-8")
+
+            marker = f"optpilot-sa-timeout-{time.time_ns()}"
+            (simulator_root / "child_sleeper.py").write_text(
+                "import time\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+            (devs_project / "run_strategicairlift_d0.py").write_text(
+                "import subprocess\n"
+                "import sys\n"
+                "import time\n"
+                f"subprocess.Popen([sys.executable, 'child_sleeper.py', '{marker}'])\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+
+            before = self._process_count_with_marker(marker)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                evaluate(
+                    {
+                        "workspace": str(workspace),
+                        "candidateRoot": str(simulator_root),
+                    },
+                    {
+                        "duration": 600.0,
+                        "num_aircraft": 2,
+                        "pallet_interval": 20.0,
+                        "pallet_expiration_time": 120.0,
+                        "flight_time": 30.0,
+                        "unload_time": 2.0,
+                        "return_time": 30.0,
+                        "maintenance_time": 10.0,
+                        "timeoutSeconds": 1,
+                    },
+                    {
+                        "workspace": str(workspace),
+                        "instance_index": 0,
+                        "trial_id": "trial-timeout",
+                        "study_id": "study-timeout",
+                    },
+                )
+
+            self.assertTrue((workspace / "sa_events.jsonl").exists())
+            self.assertTrue((workspace / "sa_stderr.log").exists())
+
+            for _ in range(20):
+                if self._process_count_with_marker(marker) == before:
+                    break
+                time.sleep(0.1)
+            self.assertEqual(self._process_count_with_marker(marker), before)
 
     def test_local_subprocess_backend_runs_successful_trial(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1290,6 +1352,16 @@ class MvpIntegrationTest(unittest.TestCase):
     @staticmethod
     def _metric_signature(entry):
         return tuple(sorted(entry["metric_values"].items()))
+
+    @staticmethod
+    def _process_count_with_marker(marker: str) -> int:
+        result = subprocess.run(
+            ["ps", "-Ao", "command"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return sum(1 for line in result.stdout.splitlines() if marker in line)
 
 
 if __name__ == "__main__":
