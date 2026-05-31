@@ -186,6 +186,4 @@ The smoke script re-executes itself through `uv run` when needed.
 
 ## Release Note
 
-Before publishing an official public package, choose and add a license. That is
-a project and legal decision and is intentionally not guessed in this
-repository.
+OptPilot is licensed under the Apache License 2.0. See [LICENSE](LICENSE).

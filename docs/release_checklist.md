@@ -17,7 +17,6 @@ Use this checklist before publishing an alpha or stable release.
 
 ## Required Before Public Package Publication
 
-- Choose and add a license.
 - Add real project URLs to `pyproject.toml`.
 - Tag the release and publish from a clean working tree.
 
