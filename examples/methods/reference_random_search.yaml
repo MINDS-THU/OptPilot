@@ -1,0 +1,10 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: reference-random-search
+description: Built-in reference random search for examples and tests
+tags: [reference]
+
+engine:
+  implementation: builtin.reference_random_search
+  config:
+    batchSize: 4

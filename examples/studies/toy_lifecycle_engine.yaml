@@ -1,0 +1,28 @@
+apiVersion: optpilot.io/v3alpha1
+kind: StudyConfig
+name: toy-lifecycle-engine
+description: Exercise a user-owned lifecycle engine loaded through the python component hook
+tags: [mvp, toy, user-engine, lifecycle-engine]
+
+environment: ../environments/toy_factory.yaml
+method: ../methods/lifecycle_fixed_parameter_engine.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+instances:
+  source: files
+  paths:
+    - ../instances/toy_factory_case.yaml
+
+budget:
+  maxTrials: 2
+
+execution:
+  backend: local
+  parallelism: 2
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

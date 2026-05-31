@@ -1,0 +1,14 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: fixed-parameter-engine
+description: User-owned fixed candidate engine
+tags: [user-engine]
+
+engine:
+  implementation: python:examples.user_engines.fixed_parameter_engine:FixedParameterEngine
+  config:
+    batchSize: 3
+    candidates:
+      - {x: 4.2, y: 7, mode: balanced}
+      - {x: 2.0, y: 4, mode: conservative}
+      - {x: 7.5, y: 9, mode: aggressive}

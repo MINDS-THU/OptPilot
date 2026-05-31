@@ -1,0 +1,28 @@
+apiVersion: optpilot.io/v3alpha1
+kind: StudyConfig
+name: toy-random-search
+description: Exercise the platform loop with the v3alpha authoring config
+tags: [mvp, toy, reference-engine]
+
+environment: ../environments/toy_factory.yaml
+method: ../methods/reference_random_search.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+instances:
+  source: files
+  paths:
+    - ../instances/toy_factory_case.yaml
+
+budget:
+  maxTrials: 12
+
+execution:
+  backend: local
+  parallelism: 4
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

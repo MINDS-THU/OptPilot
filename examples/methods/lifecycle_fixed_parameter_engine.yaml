@@ -1,0 +1,14 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: lifecycle-fixed-parameter-engine
+description: User-owned lifecycle engine
+tags: [user-engine, lifecycle]
+
+engine:
+  implementation: python:examples.user_engines.lifecycle_fixed_engine:LifecycleFixedParameterEngine
+  config:
+    batchSize: 2
+    maxPolls: 3
+    candidates:
+      - {x: 4.2, y: 7, mode: balanced}
+      - {x: 2.0, y: 4, mode: conservative}

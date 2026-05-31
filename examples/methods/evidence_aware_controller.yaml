@@ -1,0 +1,18 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: evidence-aware-controller
+description: User-owned controller reading prior evidence
+tags: [user-controller, evidence-view]
+
+controller:
+  implementation: python:examples.user_controllers.evidence_aware_controller:EvidenceAwareController
+  config:
+    engineId: engine_main
+
+engine:
+  implementation: python:examples.user_engines.fixed_parameter_engine:FixedParameterEngine
+  config:
+    batchSize: 1
+    candidates:
+      - {x: 99.0, y: 7, mode: balanced}
+      - {x: 4.2, y: 7, mode: balanced}

@@ -1,0 +1,31 @@
+apiVersion: optpilot.io/v3alpha1
+kind: StudyConfig
+name: toy-evidence-aware-controller
+description: Exercise a user-owned controller that reads prior evidence
+tags: [mvp, toy, user-controller, evidence-view]
+
+environment: ../environments/toy_factory.yaml
+method: ../methods/evidence_aware_controller.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+instances:
+  source: files
+  paths:
+    - ../instances/toy_factory_case.yaml
+
+budget:
+  maxTrials: 2
+
+execution:
+  backend: local
+  parallelism: 1
+  timeoutSeconds: 120
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 7
