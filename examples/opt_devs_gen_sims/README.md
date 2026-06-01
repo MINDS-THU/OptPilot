@@ -222,6 +222,16 @@ examples/opt_devs_gen_sims/runs/sa-code-optimization-2026-05-31T14-57-43.253686+
 These run directories are generated output. They are useful for inspection, but
 they are not part of the curated example and are ignored by git.
 
+Not every file under `runs/` is equally important for day-to-day use. This
+example keeps full evidence capture on purpose because LLM-driven code editing
+is much easier to trust when you can inspect the whole chain from prompt, to
+candidate code, to measured outcome. In practice:
+
+- most users mainly need `summary.json`, `observations.jsonl`, `prompts/`,
+  `artifacts/`, and the relevant `trials/trial-<id>/` directory
+- the remaining JSON and JSONL files are primarily reproducibility,
+  provenance, and debugging records
+
 If you want the output somewhere else, pass `--output-root` explicitly:
 
 ```bash
@@ -233,6 +243,12 @@ uv run optpilot run examples/opt_devs_gen_sims/studies/sa_code_optimization.yaml
 
 The run directory contains both the normal OptPilot evidence files and the
 SA-specific files emitted by this example.
+
+For this example, the extra files are intentional rather than accidental. They
+exist because the study is configured with full evidence retention. They are not
+all required to judge whether a run improved the metric, but they are useful for
+auditing what the LLM changed and why a trial succeeded, regressed, or timed
+out.
 
 A typical layout looks like this:
 
@@ -270,38 +286,51 @@ runs/
           devs_project/...
 ```
 
-What the top-level files mean:
+What you will usually inspect first:
 
-- `summary.json`: final run summary, including `run_dir`, `completed_trials`,
-  and the best metric found
+- `summary.json`: final run-level answer, including the best artifact, best
+  metric, completed trial count, and `run_dir`
+- `observations.jsonl`: one completed evaluation per line, including status,
+  metrics, and error/timeout details
+- `prompts/`: exact prompt payloads used for each LLM edit
+- `artifacts/`: durable copies of the candidate code snapshots produced by the
+  engine
+- `trials/trial-<id>/`: the actual per-trial workspace and the SA-specific
+  outputs for that trial
+
+What the other top-level files mean:
+
 - `study_spec.json`: the compiled internal `StudySpec` actually executed by the runner
-- `run_policy.json`: execution settings resolved for this run
-- `run_lineage.json`: whether this run was new, resumed, or branched
-- `environment_snapshot.json`: machine and runtime snapshot captured for reproducibility
-- `observations.jsonl`: one evaluation result per completed trial, including
-  status, metrics, and event summary
-- `trials.jsonl`: trial scheduling records and backend metadata
+- `run_policy.json`: the resolved execution and evidence settings for this run
+- `run_lineage.json`: whether this run was new, resumed, or branched from another run
+- `environment_snapshot.json`: machine and runtime metadata captured for reproducibility
+- `trials.jsonl`: trial scheduling records and backend execution metadata
 - `artifacts.jsonl`: normalized artifact records, validation results, and
   materialization metadata
-- `controller_decisions.jsonl`: what the controller asked the engine to do
-- `engine_snapshots.jsonl`: what the engine proposed at each step
-- `scheduler_events.jsonl`: batch submission, completion, and retry events
+- `controller_decisions.jsonl`: controller-level decisions about when and how to ask the engine for candidates
+- `engine_snapshots.jsonl`: engine-side records of what was proposed at each step
+- `scheduler_events.jsonl`: submission, completion, and retry events from the local scheduler
 
 What the subdirectories mean:
 
 - `prompts/`: exact prompt payloads sent to the LLM engine; baseline candidates
   do not create prompt records because no model call happens
 - `artifacts/`: durable copies of each candidate code snapshot returned by the
-  engine; these are what OptPilot materializes into trial workspaces
+  engine; these are the code snapshots OptPilot materializes into trial workspaces
 - `trials/trial-<id>/`: the per-trial workspace used for evaluation
 
 Inside each `trials/trial-<id>/` directory:
 
 - `workspace_manifest.json`: how the candidate files were copied into the workspace
 - `simulator/`: the copied SA simulator tree that was actually executed for this trial
-- `sa_events.jsonl`: the raw JSONL event stream emitted by the simulator
+- `sa_events.jsonl`: the raw JSONL event stream emitted by the simulator on a successful evaluation
 - `sa_metrics.json`: the evaluator's derived metrics, including `service_score`
 - `sa_stderr.log`: anything the simulator wrote to stderr
+
+For successful trials, that directory contains the raw event stream and derived
+metrics. For invalid or timed-out trials, you may only see the materialized
+workspace plus error information in `observations.jsonl`, because the evaluator
+never reached the point where it could write normal SA output files.
 
 That gives you a full audit trail from prompt, to candidate code snapshot, to
 materialized workspace, to measured simulator outcome.
