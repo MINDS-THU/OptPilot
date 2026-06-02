@@ -10,6 +10,7 @@ import yaml
 
 from .importers import build_frontier_unified_study_config
 from .runner import run_study
+from .ui.server import run_ui
 
 
 
@@ -22,6 +23,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--output-root", help="Directory to place study runs")
     run_parser.add_argument("--resume-run-dir", help="Append more trials to an existing run directory")
     run_parser.add_argument("--branch-from-run-dir", help="Start a new run that records an existing run as its parent")
+
+    ui_parser = subparsers.add_parser("ui", help="Start the lightweight local web UI")
+    ui_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
+    ui_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
+    ui_parser.add_argument("--catalog", action="append", default=[], help="Catalog root to scan")
+    ui_parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
+    ui_parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
 
     frontier_parser = subparsers.add_parser(
         "import-frontier",
@@ -59,6 +67,15 @@ def main(argv=None) -> int:
             branch_from_run_dir=args.branch_from_run_dir,
         )
         print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "ui":
+        run_ui(
+            host=args.host,
+            port=args.port,
+            catalog_roots=args.catalog,
+            run_roots=args.runs,
+            open_browser=args.open_browser,
+        )
         return 0
     if args.command == "import-frontier":
         spec = build_frontier_unified_study_config(

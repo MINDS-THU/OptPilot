@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from optpilot.artifacts import BoundsArtifactValidator, CodeArtifactManifestValidator, WorkspaceBundleMaterializer
-from optpilot.cli import main as cli_main
+from optpilot.cli import build_parser, main as cli_main
 from optpilot.code_artifacts import CodeArtifactStore, store_code_file
 from optpilot.config import compile_authoring_config
 from optpilot.evidence import EvidenceView
@@ -26,6 +26,7 @@ from optpilot.provenance import PromptStore, build_generator_record, build_model
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
+from optpilot.ui.server import UiState, _catalog_payload, _list_runs, _validate_study
 
 
 class MvpIntegrationTest(unittest.TestCase):
@@ -1388,6 +1389,63 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual({event["event_type"] for event in engine_events}, {"controller_decision", "engine_snapshot"})
             self.assertEqual(scheduler_events[0]["record"]["event"], "batch_submitted")
             self.assertEqual(store.read_environment_snapshot()["python"]["version"], "test")
+
+    def test_ui_catalog_scans_authoring_configs_and_validates_study(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+
+        catalog = _catalog_payload(state)
+        validation = _validate_study(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+
+        self.assertTrue(any(item["id"] == "toy-factory" for item in catalog["environments"]))
+        self.assertTrue(any(item["id"] == "reference-random-search" for item in catalog["methods"]))
+        self.assertTrue(any(item["label"] == "toy-random-search" for item in catalog["studies"]))
+        self.assertIn("builtin.reference_random_search", catalog["builtins"]["engine"])
+        self.assertTrue(validation["valid"], validation)
+        self.assertEqual(validation["target_id"], "toy-factory")
+
+    def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        study_spec = load_study_spec(str(repo_root / "examples" / "studies" / "toy_random_search.yaml"))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            store = LocalEvidenceStore(tmp_path, "ui-run")
+            store.write_spec(study_spec.raw)
+            store.record_observation(
+                {
+                    "trial_id": "trial-ok",
+                    "artifact_id": "artifact-ok",
+                    "status": "success",
+                    "metric_values": {"throughput": 10.0},
+                }
+            )
+            store.write_summary(
+                {
+                    "study_id": "study-ui",
+                    "run_dir": str(store.run_dir),
+                    "completed_trials": 1,
+                    "best_metric": 10.0,
+                    "best_trial_id": "trial-ok",
+                    "best_artifact_id": "artifact-ok",
+                    "failure_count": 0,
+                }
+            )
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[tmp_path])
+
+            runs = _list_runs(state)
+
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["name"], "toy-random-search")
+            self.assertEqual(runs[0]["completed_trials"], 1)
+            self.assertEqual(runs[0]["best_metric"], 10.0)
+            self.assertEqual(runs[0]["status"], "completed")
+
+    def test_cli_parser_accepts_ui_command(self) -> None:
+        args = build_parser().parse_args(["ui", "--port", "9001", "--catalog", "examples"])
+
+        self.assertEqual(args.command, "ui")
+        self.assertEqual(args.port, 9001)
+        self.assertEqual(args.catalog, ["examples"])
 
     @staticmethod
     def _read_jsonl(path: Path):

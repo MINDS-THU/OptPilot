@@ -92,11 +92,15 @@ def _selected_environment(keys: Iterable[str]) -> JsonDict:
 def _installed_packages() -> List[JsonDict]:
     packages = []
     for distribution in importlib_metadata.distributions():
-        name = distribution.metadata.get("Name") or distribution.metadata.get("Summary") or "unknown"
+        try:
+            name = distribution.metadata.get("Name") or distribution.metadata.get("Summary") or "unknown"
+            version = distribution.version
+        except OSError:
+            continue
         packages.append(
             {
                 "name": str(name),
-                "version": distribution.version,
+                "version": version,
             }
         )
     packages.sort(key=lambda item: item["name"].lower())

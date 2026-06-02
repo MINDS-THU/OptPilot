@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OptPilot UI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">OP</div>
+          <div>
+            <div class="brand-title">OptPilot</div>
+            <div class="brand-subtitle">Study Console</div>
+          </div>
+        </div>
+        <nav class="nav" aria-label="Main navigation">
+          <button class="nav-button active" data-view="studies" type="button">Studies</button>
+          <button class="nav-button" data-view="catalog" type="button">Catalog</button>
+          <button class="nav-button" data-view="builder" type="button">Builder</button>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="muted">Local server</div>
+          <div id="healthStatus">Checking</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="pageTitle">Studies</h1>
+            <p id="pageSubtitle">Monitor running studies and inspect previous runs.</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refreshButton" class="icon-button" type="button" title="Refresh">Refresh</button>
+          </div>
+        </header>
+
+        <section id="studiesView" class="view active-view">
+          <div class="summary-grid">
+            <div class="metric-tile">
+              <span class="tile-label">Runs</span>
+              <strong id="totalRuns">0</strong>
+            </div>
+            <div class="metric-tile">
+              <span class="tile-label">Running</span>
+              <strong id="runningRuns">0</strong>
+            </div>
+            <div class="metric-tile">
+              <span class="tile-label">Completed Trials</span>
+              <strong id="completedTrials">0</strong>
+            </div>
+            <div class="metric-tile">
+              <span class="tile-label">Failures</span>
+              <strong id="failureCount">0</strong>
+            </div>
+          </div>
+
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Study Runs</h2>
+                <input id="runFilter" class="search-input" type="search" placeholder="Filter runs" />
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>Trials</th>
+                      <th>Best</th>
+                      <th>Environment</th>
+                      <th>Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody id="runsTable"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="panel detail-panel">
+              <div id="runDetailEmpty" class="empty-state">
+                <h2>No run selected</h2>
+                <p>Select a run to inspect observations, artifacts, events, and files.</p>
+              </div>
+              <div id="runDetail" class="hidden">
+                <div class="detail-heading">
+                  <div>
+                    <h2 id="detailName"></h2>
+                    <p id="detailPath" class="path-text"></p>
+                  </div>
+                  <span id="detailStatus" class="status-pill"></span>
+                </div>
+                <div class="detail-stats">
+                  <div><span>Best metric</span><strong id="detailBest">-</strong></div>
+                  <div><span>Trials</span><strong id="detailTrials">0</strong></div>
+                  <div><span>Failures</span><strong id="detailFailures">0</strong></div>
+                  <div><span>Objective</span><strong id="detailObjective">-</strong></div>
+                </div>
+                <div id="metricChart" class="chart"></div>
+                <div class="tabs" role="tablist">
+                  <button class="tab active" data-tab="observations" type="button">Observations</button>
+                  <button class="tab" data-tab="artifacts" type="button">Artifacts</button>
+                  <button class="tab" data-tab="events" type="button">Events</button>
+                  <button class="tab" data-tab="files" type="button">Files</button>
+                </div>
+                <div id="detailTabContent" class="tab-content"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section id="catalogView" class="view">
+          <div class="catalog-grid">
+            <section class="panel">
+              <div class="panel-header"><h2>Environments</h2></div>
+              <div id="environmentsList" class="list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><h2>Methods</h2></div>
+              <div id="methodsList" class="list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><h2>Studies</h2></div>
+              <div id="studiesList" class="list"></div>
+            </section>
+          </div>
+          <section class="panel builtin-panel">
+            <div class="panel-header"><h2>Built-In Components</h2></div>
+            <div id="builtinsList" class="builtin-grid"></div>
+          </section>
+        </section>
+
+        <section id="builderView" class="view">
+          <div class="builder-layout">
+            <section class="panel">
+              <div class="panel-header"><h2>Launch Study</h2></div>
+              <form id="launchForm" class="form-stack">
+                <label>
+                  <span>StudyConfig path</span>
+                  <input id="studyPathInput" type="text" placeholder="examples/studies/toy_random_search.yaml" />
+                </label>
+                <label>
+                  <span>Output root</span>
+                  <input id="outputRootInput" type="text" placeholder="runs" />
+                </label>
+                <div class="form-actions">
+                  <button id="validateButton" type="button">Validate</button>
+                  <button id="launchButton" type="submit" class="primary-button">Launch</button>
+                </div>
+              </form>
+              <div id="validationResult" class="validation-box"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><h2>UI Jobs</h2></div>
+              <div id="jobsList" class="list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
