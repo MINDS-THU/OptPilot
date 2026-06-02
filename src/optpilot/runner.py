@@ -109,9 +109,13 @@ class StudyRunner:
         patience_trials = int(patience_cfg.get("patienceTrials", 0) or 0)
         min_delta = float(patience_cfg.get("minDelta", 0.0) or 0.0)
         no_improvement_count = 0
+        failure_count = int(prior["failure_count"])
+        max_failures = int(self.study_spec.stopping.get("maxFailures", 0) or 0)
 
         while True:
             if max_trials and completed_trials >= max_trials:
+                break
+            if max_failures and failure_count >= max_failures:
                 break
             elapsed = time.monotonic() - start_monotonic
             if max_wall_clock and elapsed >= max_wall_clock:
@@ -119,6 +123,7 @@ class StudyRunner:
 
             study_state = {
                 "completed_trials": completed_trials,
+                "failure_count": failure_count,
                 "best_metric": best_metric,
                 "best_trial_id": best_trial_id,
                 "runtime_context": runtime_context,
@@ -156,6 +161,8 @@ class StudyRunner:
             batch_observations = scheduler.run_batch(trial_specs)
             engine.observe([observation.to_dict() for observation in batch_observations])
             for observation in batch_observations:
+                if _is_failure_status(observation.status):
+                    failure_count += 1
                 if self.study_spec.primary_metric_name not in observation.metric_values:
                     no_improvement_count += 1
                     continue
@@ -180,6 +187,7 @@ class StudyRunner:
             best_artifact_id=best_artifact_id,
             started_at=started_at,
             finished_at=utc_now_iso(),
+            failure_count=failure_count,
             policy=run_policy,
         )
         store.write_summary(summary.to_dict())
@@ -333,8 +341,16 @@ def _build_run_policy(study_spec: StudySpec) -> Dict[str, Any]:
 def _prior_run_state(evidence_view: EvidenceView, previous_summary: Dict[str, Any]) -> Dict[str, Any]:
     summary = evidence_view.summary()
     completed_trials = int(previous_summary.get("completed_trials", summary.observation_count) or 0)
+    failure_count = int(
+        previous_summary.get(
+            "failure_count",
+            _failure_count_from_status_counts(summary.status_counts),
+        )
+        or 0
+    )
     return {
         "completed_trials": completed_trials,
+        "failure_count": failure_count,
         "best_metric": previous_summary.get("best_metric", summary.best_metric),
         "best_trial_id": previous_summary.get("best_trial_id", summary.best_trial_id),
         "best_artifact_id": previous_summary.get("best_artifact_id", summary.best_artifact_id),
@@ -381,3 +397,14 @@ def _is_better(candidate: float, current: Optional[float], direction: str, min_d
     if direction == "minimize":
         return candidate < current - min_delta
     raise ValueError(f"Unsupported optimization direction: {direction}")
+
+
+FAILURE_STATUSES = {"failed", "invalid", "timeout", "partial"}
+
+
+def _is_failure_status(status: str) -> bool:
+    return status in FAILURE_STATUSES
+
+
+def _failure_count_from_status_counts(status_counts: Dict[str, Any]) -> int:
+    return sum(int(status_counts.get(status, 0) or 0) for status in FAILURE_STATUSES)

@@ -499,16 +499,33 @@ def _aggregate_metric_values(instance_results: List[Dict[str, Any]], objective: 
         ]
         if not values:
             continue
-        if aggregation == "mean":
-            aggregated[metric_name] = sum(values) / len(values)
-        elif aggregation == "weighted_mean":
-            weights = objective.get("aggregation", {}).get("weights", {})
-            default_weight = 1.0
-            weighted_values = [value * float(weights.get(metric_name, default_weight)) for value in values]
-            aggregated[metric_name] = sum(weighted_values) / len(weighted_values)
-        else:
-            raise NotImplementedError(f"Unsupported aggregation mode: {aggregation}")
+        aggregated[metric_name] = _aggregate_values(values, aggregation, objective, metric_name)
     return aggregated
+
+
+def _aggregate_values(values: List[float], aggregation: str, objective: Dict[str, Any], metric_name: str) -> float:
+    if aggregation == "mean":
+        return sum(values) / len(values)
+    if aggregation == "median":
+        sorted_values = sorted(values)
+        midpoint = len(sorted_values) // 2
+        if len(sorted_values) % 2:
+            return sorted_values[midpoint]
+        return (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2
+    if aggregation == "min":
+        return min(values)
+    if aggregation == "max":
+        return max(values)
+    if aggregation == "sum":
+        return sum(values)
+    if aggregation == "last":
+        return values[-1]
+    if aggregation == "weighted_mean":
+        weights = objective.get("aggregation", {}).get("weights", {})
+        default_weight = 1.0
+        weighted_values = [value * float(weights.get(metric_name, default_weight)) for value in values]
+        return sum(weighted_values) / len(weighted_values)
+    raise NotImplementedError(f"Unsupported aggregation mode: {aggregation}")
 
 
 def _validation_exception_report(exc: Exception) -> ValidationReport:

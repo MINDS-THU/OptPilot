@@ -41,6 +41,7 @@ SUPPORTED_MUTATION_POLICIES = {
 }
 SUPPORTED_EVALUATION_SCOPES = {"FixedInstance", "InstanceSet", "Distribution"}
 SUPPORTED_DIRECTIONS = {"maximize", "minimize"}
+SUPPORTED_AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
 
 
 @dataclass
@@ -225,6 +226,11 @@ def _validate_study_spec(raw: Dict[str, Any]) -> None:
     direction = raw["objective"].get("primaryMetric", {}).get("direction")
     if direction not in SUPPORTED_DIRECTIONS:
         raise ValueError(f"Unsupported objective direction {direction!r}; expected 'maximize' or 'minimize'.")
+    aggregation = raw["objective"].get("aggregation", {}).get("mode", "mean")
+    if aggregation not in SUPPORTED_AGGREGATIONS:
+        raise ValueError(
+            f"Unsupported objective aggregation {aggregation!r}; expected one of {sorted(SUPPORTED_AGGREGATIONS)}."
+        )
 
     scope_mode = raw["evaluationScope"].get("mode")
     if scope_mode not in SUPPORTED_EVALUATION_SCOPES:

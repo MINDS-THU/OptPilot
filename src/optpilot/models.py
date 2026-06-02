@@ -148,6 +148,7 @@ class RunSummary:
     best_artifact_id: Optional[str]
     started_at: str
     finished_at: str
+    failure_count: int = 0
     policy: JsonDict = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:

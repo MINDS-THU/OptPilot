@@ -20,6 +20,7 @@ from optpilot.code_artifacts import CodeArtifactStore, store_code_file
 from optpilot.config import compile_authoring_config
 from optpilot.evidence import EvidenceView
 from optpilot.environment import build_environment_snapshot
+from optpilot.execution import _aggregate_metric_values
 from optpilot.importers import build_frontier_initial_artifact, build_frontier_unified_study_config
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 from optpilot.runner import run_expanded_study_spec, run_study
@@ -169,6 +170,30 @@ class MvpIntegrationTest(unittest.TestCase):
             for observation in observations:
                 self.assertEqual(observation["instance_descriptor"]["count"], 2)
                 self.assertGreaterEqual(len(observation["artifacts"]), 2)
+
+    def test_documented_objective_aggregation_modes(self) -> None:
+        instance_results = [
+            {"metric_values": {"score": 1.0}},
+            {"metric_values": {"score": 3.0}},
+            {"metric_values": {"score": 7.0}},
+            {"metric_values": {"score": 9.0}},
+        ]
+        expected = {
+            "mean": 5.0,
+            "median": 5.0,
+            "min": 1.0,
+            "max": 9.0,
+            "sum": 20.0,
+            "last": 9.0,
+        }
+
+        for mode, value in expected.items():
+            with self.subTest(mode=mode):
+                objective = {
+                    "primaryMetric": {"name": "score", "direction": "maximize"},
+                    "aggregation": {"mode": mode},
+                }
+                self.assertEqual(_aggregate_metric_values(instance_results, objective)["score"], value)
 
     def test_candidate_parallelism_reduces_elapsed_time(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -910,6 +935,37 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(trials[0]["status"], "invalid")
             self.assertFalse(artifacts[0]["validation"]["accepted"])
             self.assertEqual(observations[0]["event_summary"]["error"]["phase"], "validation")
+
+    def test_max_failures_stops_study_after_failed_trial(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec["metadata"]["name"] = "toy-max-failures"
+        raw_spec["stopping"]["maxTrials"] = 3
+        raw_spec["stopping"]["maxFailures"] = 1
+        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["engines"][0]["config"]["candidates"] = [
+            {"x": 99.0, "y": 7, "mode": "balanced"},
+            {"x": 4.2, "y": 7, "mode": "balanced"},
+        ]
+        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            spec_path = Path(tmp_dir) / "max_failures.yaml"
+            spec_path.write_text(yaml.safe_dump(raw_spec, sort_keys=False), encoding="utf-8")
+            summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
+            run_dir = Path(summary.run_dir)
+            observations = self._read_jsonl(run_dir / "observations.jsonl")
+            decisions = self._read_jsonl(run_dir / "controller_decisions.jsonl")
+            summary_payload = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(summary.completed_trials, 1)
+            self.assertEqual(summary.failure_count, 1)
+            self.assertEqual(len(observations), 1)
+            self.assertEqual(len(decisions), 1)
+            self.assertEqual(observations[0]["status"], "invalid")
+            self.assertEqual(summary_payload["failure_count"], 1)
 
     def test_cli_nonzero_exit_records_failed_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
