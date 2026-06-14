@@ -11,16 +11,31 @@ evaluate:
 
 candidate:
   type: files
-  root: simulator
-  required:
-    - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
-  allow:
-    - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+  artifactKind: code_bundle
+  description: SA simulator control logic files.
+  files:
+    root: simulator
+    source:
+      type: workspace_copy
+      root: simulator
+    editable:
+      - path: devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+        language: python
+        role: control_logic
+        description: Mission control logic used by the SA simulator evaluator.
+    required:
+      - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+    allow:
+      - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+  exposure:
+    instructions:
+      - ../prompts/sa_file_edit_system_prompt.md
 
 workspace:
   copy:
     - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
       to: simulator
+      role: source
 
 metrics:
   source: return

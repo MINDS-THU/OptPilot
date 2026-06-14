@@ -134,6 +134,17 @@ evaluate:
 
 candidate:
   type: files
+  artifactKind: code_bundle
+  description: Candidate files evaluated by this environment.
+  files:
+    root: "."
+    source:
+      type: workspace_copy
+      root: "."
+    editable:
+      - path: candidate.py
+        language: python
+    required: ["candidate.py"]
 
 metrics:
   source: file
@@ -246,12 +257,24 @@ Allowed `candidate.type` values:
 | `files` | Candidate is one or more files, including generated code with imports. |
 | `opaque` | Candidate is a binary/checkpoint/external object that OptPilot stores and passes by reference. |
 
+Common fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `type` | yes | Structural candidate family. |
+| `artifactKind` | yes | Semantic compatibility kind used by methods to decide whether they can operate on this environment. |
+| `description` | yes | Human explanation of the candidate surface. |
+| `tags` | no | Labels for search and UI. |
+| `exposure` | no | Environment-owned context that methods may inspect. |
+
 `parameters` fields:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `type` | yes | Must be `parameters`. |
-| `schema` | no | Parameter schema used for validation and for methods that need a declared search space. |
+| `parameters.schema` | yes | Parameter schema used for validation and for methods that need a declared search space. |
+| `parameters.constraints` | no | Structured cross-parameter constraints enforced by schema validation. |
+| `parameters.encoding` | no | Vector/chromosome hints for methods that support them. |
 
 Allowed parameter schema field types:
 
@@ -268,14 +291,30 @@ Example:
 ```yaml
 candidate:
   type: parameters
-  schema:
-    buffer_size:
-      type: int
-      min: 1
-      max: 64
-    dispatch_rule:
-      type: categorical
-      values: [fifo, shortest_queue, earliest_due_date]
+  artifactKind: parameter_spec
+  description: Dispatch parameters accepted by the evaluator.
+  parameters:
+    schema:
+      buffer_size:
+        type: int
+        min: 1
+        max: 64
+      dispatch_rule:
+        type: categorical
+        values: [fifo, shortest_queue, earliest_due_date]
+    constraints:
+      - id: fifo_small_buffer
+        description: FIFO is only allowed for small buffers.
+        expr:
+          any:
+            - compare:
+                op: "!="
+                left: {param: dispatch_rule}
+                right: {const: fifo}
+            - compare:
+                op: <=
+                left: {param: buffer_size}
+                right: {const: 16}
 ```
 
 `files` fields:
@@ -283,22 +322,41 @@ candidate:
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `type` | yes | Must be `files`. |
-| `root` | no | Destination root inside the trial workspace. Default `.`. |
-| `required` | no | Files, relative to `root`, that must be present after materialization. |
-| `entrypoint` | no | Entrypoint understood by the environment, such as `solver:solve`. |
-| `allow` | no | Glob patterns allowed in candidate artifacts, relative to `root`. |
-| `deny` | no | Glob patterns rejected in candidate artifacts, relative to `root`. |
+| `files.root` | yes | Destination root inside the trial workspace. |
+| `files.source` | yes | Baseline source provider, usually `type: workspace_copy`. |
+| `files.editable` | yes | Files methods may edit, relative to `files.root`. |
+| `files.required` | no | Files, relative to `files.root`, that must be present after materialization. |
+| `files.allow` | no | Glob patterns allowed in candidate artifacts, relative to `files.root`. |
+| `files.deny` | no | Glob patterns rejected in candidate artifacts, relative to `files.root`. |
 
 Example:
 
 ```yaml
 candidate:
   type: files
-  root: "."
-  required: ["solver.py"]
-  entrypoint: "solver:solve"
-  allow: ["**/*.py", "pyproject.toml"]
-  deny: ["data/**", "evaluator.py"]
+  artifactKind: code_bundle
+  description: Solver source files.
+  files:
+    root: "."
+    source:
+      type: workspace_copy
+      root: "."
+    editable:
+      - path: solver.py
+        language: python
+        role: solver
+    required: ["solver.py"]
+    allow: ["**/*.py", "pyproject.toml"]
+    deny: ["data/**", "evaluator.py"]
+  exposure:
+    instructions:
+      - prompts/solver.md
+    contextArtifacts:
+      - id: historical_database
+        path: database.db
+        role: historical_data
+        mediaType: application/vnd.sqlite3
+        readonly: true
 ```
 
 Generated code is stored by reference. A candidate artifact may include many files:
@@ -332,8 +390,44 @@ The source code itself is not embedded in the JSON.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `type` | yes | Must be `opaque`. |
+| `opaque.family` | yes | Opaque artifact family, such as `policy_checkpoint`. |
 
 Opaque candidates are used for checkpoints, learned policies, binary assets, external service handles, or any artifact that a custom adapter/materializer understands.
+
+`exposure` fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `instructions` | no | Prompt/task files safe for methods to read. Paths resolve relative to the environment config. |
+| `contextFiles` | no | Additional read-only context files. Paths resolve relative to the environment config. |
+| `contextArtifacts` | no | Non-candidate artifacts safe for methods to inspect, such as databases, datasets, traces, or simulator profiles. |
+| `contextRecords` | no | Named structured context records. |
+
+If a method needs query semantics over a context artifact, declare an
+environment `interfaces` capability rather than putting data paths in method
+config.
+
+### 5.2.1 `interfaces`
+
+`interfaces` declares optional environment capabilities beyond black-box
+evaluation. Methods can require these by capability string.
+
+Example:
+
+```yaml
+interfaces:
+  - id: historical_db_query
+    capability: optpilot.sqlite_query.v1
+    description: Read-only SQL access to the historical database.
+    adapter:
+      implementation: builtin.sqlite_query
+      config:
+        path: database.db
+```
+
+The built-in `builtin.sqlite_query` adapter accepts read-only `SELECT` and
+`WITH` queries. Capability strings are open namespaced contracts, not a closed
+OptPilot enum.
 
 ### 5.3 `workspace`
 
@@ -520,6 +614,27 @@ recordsToExtract:
 
 A file can appear in both `filesToSave` and `recordsToExtract`. For example, saving `simulation.db` preserves the database for audit, while extracting `event_log` makes selected rows queryable by controllers and engines.
 
+Controllers and engines receive an `evidence_view` object. They can inspect
+extracted record streams without walking artifact paths manually:
+
+```python
+streams = evidence_view.record_streams("machine_events")
+rows = evidence_view.records("machine_events", limit=100)
+```
+
+Each returned row includes the original record plus provenance:
+
+```python
+{
+    "name": "machine_events",
+    "source": "csv",
+    "trial_id": "trial-abc",
+    "artifact_id": "artifact-def",
+    "row_index": 0,
+    "record": {"event": "queued", "machine": "m1"},
+}
+```
+
 ## 6. MethodConfig
 
 `MethodConfig` describes the optimization method. OptPilot does not implement Bayesian optimization, RL, metaheuristics, or LLM code evolution as platform requirements. Those live in user-owned engines and controllers.
@@ -533,6 +648,9 @@ id: my-method
 
 engine:
   implementation: python:my_lab.engines:MyEngine
+
+compatibility:
+  candidateTypes: [parameters]
 ```
 
 Fields:
@@ -541,6 +659,7 @@ Fields:
 | --- | --- | --- |
 | `engine` | yes | Component that proposes candidate artifacts and observes trial results. |
 | `controller` | no | Component that decides which engine action to take. Defaults to `builtin.single_engine_controller`. |
+| `compatibility` | yes | Declares which environment candidate contracts and capabilities this method can use. |
 
 ### 6.1 `engine`
 
@@ -603,6 +722,40 @@ decide(study_state, engines, evidence_view=None) -> Action
 ```
 
 The default controller simply asks the configured engine for the next batch until budget is exhausted.
+
+### 6.3 `compatibility`
+
+`compatibility` lets OptPilot reject invalid environment/method pairings before
+launch.
+
+Fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `candidateTypes` | yes | Candidate families accepted by the method, such as `[parameters]` or `[files]`. |
+| `artifactKinds` | no | Semantic artifact kinds accepted by the method, such as `[parameter_spec]` or `[code_bundle]`. |
+| `requiredContext` | no | Candidate context paths that must exist, such as `parameters.schema`, `files.source`, or `files.editable`. |
+| `optionalContext` | no | Candidate context paths the method can use when present. |
+| `requiredCapabilities` | no | Environment interface capabilities required by the method. |
+
+Example:
+
+```yaml
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable
+  optionalContext:
+    - exposure.instructions
+    - exposure.contextArtifacts
+  requiredCapabilities:
+    - optpilot.sqlite_query.v1
+```
+
+Environment-specific source directories, editable file lists, metric rules, and
+workspace copy rules belong in `EnvironmentConfig`, not in method config.
 
 ## 7. StudyConfig
 
@@ -816,14 +969,17 @@ evaluate:
 
 candidate:
   type: parameters
-  schema:
-    buffer_size:
-      type: int
-      min: 1
-      max: 64
-    dispatch_rule:
-      type: categorical
-      values: [fifo, shortest_queue, earliest_due_date]
+  artifactKind: parameter_spec
+  description: Dispatch parameters accepted by the factory simulator.
+  parameters:
+    schema:
+      buffer_size:
+        type: int
+        min: 1
+        max: 64
+      dispatch_rule:
+        type: categorical
+        values: [fifo, shortest_queue, earliest_due_date]
 
 metrics:
   source: return
@@ -839,6 +995,10 @@ id: random-search
 
 engine:
   implementation: builtin.reference_random_search
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 Study:
@@ -879,6 +1039,10 @@ engine:
   config:
     sampler: TPESampler
     batchSize: 4
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 Study:
@@ -914,6 +1078,10 @@ engine:
     populationSize: 32
     mutationRate: 0.15
     batchSize: 8
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 The same `EnvironmentConfig` and `StudyConfig` pattern applies. The algorithm-specific fields remain inside `engine.config`.
@@ -951,12 +1119,29 @@ evaluate:
 
 candidate:
   type: files
-  root: candidate
-  required:
-    - "train.py"
-    - "policy.py"
-  allow:
-    - "**/*.py"
+  artifactKind: code_bundle
+  description: Training and policy source files for the RL workflow.
+  files:
+    root: candidate
+    source:
+      type: workspace_copy
+      root: candidate
+    editable:
+      - path: train.py
+        language: python
+        role: trainer
+      - path: policy.py
+        language: python
+        role: policy
+    required:
+      - "train.py"
+      - "policy.py"
+    allow:
+      - "**/*.py"
+  exposure:
+    contextFiles:
+      - observation_space.json
+      - action_space.json
 
 workspace:
   copy:
@@ -990,6 +1175,13 @@ engine:
   config:
     trainIterations: 100
     numRolloutWorkers: 8
+
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable
 ```
 
 Study:
@@ -1049,11 +1241,20 @@ evaluate:
 
 candidate:
   type: files
-  root: "."
-  required: ["solver.py"]
-  entrypoint: "solver:solve"
-  allow: ["**/*.py"]
-  deny: ["data/**", "evaluate.py"]
+  artifactKind: code_bundle
+  description: Solver source files produced by the code evolution method.
+  files:
+    root: "."
+    source:
+      type: workspace_copy
+      root: "."
+    editable:
+      - path: solver.py
+        language: python
+        role: solver
+    required: ["solver.py"]
+    allow: ["**/*.py"]
+    deny: ["data/**", "evaluate.py"]
 
 workspace:
   copy:
@@ -1086,6 +1287,13 @@ engine:
   config:
     model: gpt-5
     batchSize: 3
+
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable
 ```
 
 Study:
@@ -1133,6 +1341,10 @@ engine:
   config:
     sampler: TPESampler
     batchSize: 4
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 Study:
@@ -1182,10 +1394,19 @@ evaluate:
 
 candidate:
   type: files
-  root: workflow
-  required: ["workflow/main.py"]
-  entrypoint: "main:run"
-  allow: ["workflow/**"]
+  artifactKind: code_bundle
+  description: Workflow source files evaluated by the outer benchmark.
+  files:
+    root: workflow
+    source:
+      type: workspace_copy
+      root: workflow
+    editable:
+      - path: workflow/main.py
+        language: python
+        role: workflow_entrypoint
+    required: ["workflow/main.py"]
+    allow: ["workflow/**"]
 
 metrics:
   source: file
@@ -1249,10 +1470,26 @@ evaluate:
 
 candidate:
   type: files
-  root: "."
-  required: ["agent.py"]
-  allow: ["**/*.py"]
-  deny: ["evaluation/**", "data/**"]
+  artifactKind: code_bundle
+  description: Editable agent source files inside the existing benchmark project.
+  files:
+    root: "."
+    source:
+      type: workspace_copy
+      root: "."
+    editable:
+      - path: agent.py
+        language: python
+        role: agent
+    required: ["agent.py"]
+    allow: ["**/*.py"]
+    deny: ["evaluation/**", "data/**"]
+  exposure:
+    contextArtifacts:
+      - id: task_data
+        path: data
+        role: data
+        readonly: true
 
 workspace:
   copy:

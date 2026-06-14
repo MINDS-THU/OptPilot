@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List
 
 from optpilot.code_artifacts import CodeArtifactStore
@@ -26,8 +27,9 @@ class CodeArtifactEngine:
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         config = self.definition.get("config", {})
-        source_dir = self.study_spec.resolve_path(config["sourceDir"])
         runtime_context = study_state.get("runtime_context", {})
+        candidate_context = study_state.get("candidate_context") or runtime_context.get("candidate_context", {})
+        source_dir = self._resolve_source_dir(candidate_context)
         artifact_store_dir = runtime_context.get("artifact_store_dir")
         if not artifact_store_dir:
             raise ValueError("CodeArtifactEngine requires runtime_context.artifact_store_dir.")
@@ -76,3 +78,13 @@ class CodeArtifactEngine:
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observed.extend(observations)
+
+    def _resolve_source_dir(self, candidate_context: Dict[str, Any]) -> Path:
+        files = candidate_context.get("files", {})
+        root = str(files.get("root", "."))
+        for entry in candidate_context.get("workspace", {}).get("copy", []) or []:
+            if str(entry.get("to", ".")) == root:
+                source = Path(str(entry.get("from", ""))).resolve()
+                if source.is_dir():
+                    return source
+        raise ValueError("CodeArtifactEngine requires candidate_context.files.source backed by workspace.copy.")

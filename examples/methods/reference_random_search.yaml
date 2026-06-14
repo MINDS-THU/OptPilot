@@ -8,3 +8,9 @@ engine:
   implementation: builtin.reference_random_search
   config:
     batchSize: 4
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
+  requiredContext:
+    - parameters.schema

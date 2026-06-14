@@ -65,6 +65,10 @@ class StudyRunner:
             "prompt_store_dir": str(store.run_dir / "prompts"),
             "artifact_content_ref_mode": "absolute",
             "prompt_content_ref_mode": "absolute",
+            "candidate_context": dict(self.study_spec.primary_artifact.get("candidateContext", {})),
+            "environment_interfaces": list(
+                self.study_spec.target.get("adapter", {}).get("config", {}).get("interfaces", [])
+            ),
         }
 
         controller_def = self.study_spec.controllers[0]
@@ -126,6 +130,7 @@ class StudyRunner:
                 "failure_count": failure_count,
                 "best_metric": best_metric,
                 "best_trial_id": best_trial_id,
+                "candidate_context": runtime_context["candidate_context"],
                 "runtime_context": runtime_context,
             }
             decision_context = evidence_view.decision_context()

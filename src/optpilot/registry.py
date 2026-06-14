@@ -35,6 +35,9 @@ BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
         "builtin.schema_validation": "optpilot.artifacts:BoundsArtifactValidator",
         "builtin.workspace_policy": "optpilot.artifacts:CodeArtifactManifestValidator",
     },
+    "interface": {
+        "builtin.sqlite_query": "optpilot.adapters:ReadOnlySQLiteQuery",
+    },
 }
 
 

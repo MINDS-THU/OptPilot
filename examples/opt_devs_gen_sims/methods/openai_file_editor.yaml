@@ -20,8 +20,13 @@ engine:
     maxTokens: 4000
     apiKeyEnvVar: OPENROUTER_API_KEY
     apiBase: https://openrouter.ai/api/v1/chat/completions
-    sourceDir: ../../../resource/devs_gen_gallery/simulators/SA/simulator
-    systemPromptPath: ../prompts/sa_file_edit_system_prompt.md
     includeBaselineCandidate: true
-    targetFiles:
-      - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable
+  optionalContext:
+    - exposure.instructions

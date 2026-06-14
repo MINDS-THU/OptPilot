@@ -220,6 +220,7 @@ class BoundsArtifactValidator:
             return ValidationReport(metadata={"implementation": self.definition.get("implementation")})
 
         search_space = _collect_search_space(self.study_spec.engines)
+        constraints = list(config.get("constraints", []) or [])
         errors: List[str] = []
         for name, value in artifact.get("spec", {}).items():
             parameter_def = search_space.get(name)
@@ -238,6 +239,18 @@ class BoundsArtifactValidator:
                 if value not in values:
                     errors.append(f"{name}={value!r} is not one of {values!r}.")
 
+        for constraint in constraints:
+            try:
+                accepted = _evaluate_constraint(constraint.get("expr", {}), artifact.get("spec", {}))
+            except Exception as exc:
+                errors.append(f"Constraint {constraint.get('id', '<unknown>')!r} could not be evaluated: {exc}")
+                continue
+            if not accepted:
+                errors.append(
+                    f"Constraint {constraint.get('id', '<unknown>')!r} failed: "
+                    f"{constraint.get('description', 'no description')}"
+                )
+
         return ValidationReport(
             accepted=not errors,
             errors=errors,
@@ -245,6 +258,7 @@ class BoundsArtifactValidator:
                 "implementation": self.definition.get("implementation"),
                 "enforceBounds": True,
                 "checkedParameters": sorted(search_space.keys()),
+                "checkedConstraints": [constraint.get("id") for constraint in constraints],
             },
         )
 
@@ -254,6 +268,77 @@ def _collect_search_space(engines: List[JsonDict]) -> JsonDict:
     for engine in engines:
         search_space.update(engine.get("config", {}).get("searchSpace", {}))
     return search_space
+
+
+def _evaluate_constraint(expr: Any, values: JsonDict) -> bool:
+    if not isinstance(expr, dict):
+        return False
+    if "compare" in expr:
+        compare = expr["compare"]
+        left = _eval_scalar(compare.get("left"), values)
+        right = _eval_scalar(compare.get("right"), values)
+        op = compare.get("op")
+        if op == "<":
+            return left < right
+        if op == "<=":
+            return left <= right
+        if op == ">":
+            return left > right
+        if op == ">=":
+            return left >= right
+        if op == "==":
+            return left == right
+        if op == "!=":
+            return left != right
+        if op == "in":
+            return left in right
+        if op == "not_in":
+            return left not in right
+        return False
+    if "all" in expr:
+        return all(_evaluate_constraint(item, values) for item in expr["all"])
+    if "any" in expr:
+        return any(_evaluate_constraint(item, values) for item in expr["any"])
+    if "not" in expr:
+        return not _evaluate_constraint(expr["not"], values)
+    return False
+
+
+def _eval_scalar(expr: Any, values: JsonDict) -> Any:
+    if not isinstance(expr, dict):
+        return expr
+    if "param" in expr:
+        name = expr["param"]
+        if name not in values:
+            raise ValueError(f"Constraint references missing parameter {name!r}.")
+        return values[name]
+    if "const" in expr:
+        return expr["const"]
+    op = expr.get("op")
+    if op in {"add", "sub", "mul", "div"}:
+        args = [_eval_scalar(arg, values) for arg in expr.get("args", [])]
+        if not args:
+            raise ValueError(f"Constraint numeric op {op!r} requires at least one argument.")
+        if op == "add":
+            result = args[0]
+            for value in args[1:]:
+                result += value
+            return result
+        if op == "sub":
+            result = args[0]
+            for value in args[1:]:
+                result -= value
+            return result
+        if op == "mul":
+            result = args[0]
+            for value in args[1:]:
+                result *= value
+            return result
+        result = args[0]
+        for value in args[1:]:
+            result /= value
+        return result
+    raise ValueError("Unsupported constraint scalar expression.")
 
 
 def _copy_directory_contents(source: Path, destination: Path) -> None:

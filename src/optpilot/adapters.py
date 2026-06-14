@@ -333,10 +333,69 @@ class CLITargetAdapter:
         }
 
 
+class ReadOnlySQLiteQuery:
+    """Read-only SQLite query capability for method-visible data artifacts."""
+
+    WRITE_KEYWORDS = {
+        "attach",
+        "create",
+        "delete",
+        "detach",
+        "drop",
+        "insert",
+        "pragma",
+        "replace",
+        "update",
+        "vacuum",
+    }
+
+    def __init__(self, definition: Dict[str, Any], study_spec=None):
+        config = definition.get("config", definition)
+        database = config.get("path") or config.get("database")
+        if not database:
+            raise ValueError("ReadOnlySQLiteQuery requires config.path or config.database.")
+        if study_spec is not None:
+            self.database = study_spec.resolve_path(str(database))
+        else:
+            self.database = Path(str(database)).resolve()
+        self.max_rows = int(config.get("maxRows", 1000) or 1000)
+
+    def query(self, sql: str, params: Optional[List[Any]] = None, *, max_rows: Optional[int] = None) -> Dict[str, Any]:
+        statement = str(sql).strip()
+        if not statement:
+            raise ValueError("SQL query must be non-empty.")
+        _reject_mutating_sql(statement)
+        limit = int(max_rows or self.max_rows)
+        uri = f"file:{self.database}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            cursor = connection.execute(statement, list(params or []))
+            rows = cursor.fetchmany(limit + 1)
+        truncated = len(rows) > limit
+        rows = rows[:limit]
+        return {
+            "database": str(self.database),
+            "columns": list(rows[0].keys()) if rows else [],
+            "rows": [dict(row) for row in rows],
+            "row_count": len(rows),
+            "truncated": truncated,
+        }
+
+
 def _format_command(command: Any, placeholders: Dict[str, str]) -> List[str]:
     if isinstance(command, str):
         return [_format_string(part, placeholders) for part in shlex.split(command)]
     return [_format_string(str(part), placeholders) for part in command]
+
+
+def _reject_mutating_sql(statement: str) -> None:
+    lowered = statement.lower()
+    stripped = lowered.lstrip()
+    if not (stripped.startswith("select") or stripped.startswith("with")):
+        raise ValueError("Only SELECT/WITH queries are allowed for read-only SQLite interfaces.")
+    for token in ReadOnlySQLiteQuery.WRITE_KEYWORDS:
+        if token in {part.strip(" ;\n\t\r(),") for part in lowered.split()}:
+            raise ValueError(f"SQL keyword {token!r} is not allowed in read-only SQLite interfaces.")
 
 
 def _absolute_pythonpath(value: str, base_dir: Path) -> str:

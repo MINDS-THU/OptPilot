@@ -291,13 +291,19 @@ function renderCatalog() {
   if (!state.catalog) return;
   renderCatalogList(els.environmentsList, state.catalog.environments || [], (item) => [
     item.summary.candidate_type,
+    item.summary.artifact_kind,
     item.summary.evaluate_type,
+    ...(item.summary.capabilities || []),
+    ...(item.summary.editable_files || []),
     ...(item.summary.metrics || []),
   ]);
   renderCatalogList(els.methodsList, state.catalog.methods || [], (item) => [
     item.summary.controller,
     item.summary.engine,
     item.summary.batch_size ? `batch ${item.summary.batch_size}` : null,
+    ...(item.summary.candidate_types || []),
+    ...(item.summary.artifact_kinds || []),
+    ...(item.summary.required_capabilities || []),
   ]);
   renderCatalogList(els.studiesList, state.catalog.studies || [], (item) => [
     item.summary.objective && item.summary.objective.metric,
@@ -503,4 +509,3 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
-

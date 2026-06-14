@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 
@@ -47,6 +49,100 @@ class EvidenceView:
 
     def artifacts(self, limit: Optional[int] = None) -> List[JsonDict]:
         return _limit_tail(self.store.read_artifacts(), limit)
+
+    def record_streams(
+        self,
+        name: Optional[str] = None,
+        *,
+        limit: Optional[int] = None,
+        status: Optional[str] = None,
+        trial_id: Optional[str] = None,
+        artifact_id: Optional[str] = None,
+    ) -> List[JsonDict]:
+        """Return extracted record stream metadata from observations.
+
+        Configured environments write CSV/JSONL/SQLite extracts as JSONL files
+        and attach a recordsToExtract report to each observation. This method
+        gives controllers and engines a stable way to discover those streams
+        without walking observation artifacts by hand.
+        """
+
+        streams: List[JsonDict] = []
+        for observation_index, observation in enumerate(self.store.read_observations()):
+            if status is not None and observation.get("status") != status:
+                continue
+            if trial_id is not None and observation.get("trial_id") != trial_id:
+                continue
+            if artifact_id is not None and observation.get("artifact_id") != artifact_id:
+                continue
+            for stream in _observation_record_streams(observation):
+                if name is not None and stream.get("name") != name:
+                    continue
+                streams.append(
+                    {
+                        "name": stream.get("name"),
+                        "source": stream.get("source"),
+                        "path": stream.get("path"),
+                        "contentRef": stream.get("contentRef"),
+                        "record_count": stream.get("record_count"),
+                        "trial_id": observation.get("trial_id"),
+                        "artifact_id": observation.get("artifact_id"),
+                        "status": observation.get("status"),
+                        "observation_index": observation_index,
+                    }
+                )
+        return _limit_tail(streams, limit)
+
+    def records(
+        self,
+        name: Optional[str] = None,
+        *,
+        limit: Optional[int] = None,
+        status: Optional[str] = None,
+        trial_id: Optional[str] = None,
+        artifact_id: Optional[str] = None,
+        newest_first: bool = False,
+    ) -> List[JsonDict]:
+        """Read rows from extracted record streams.
+
+        Returned items wrap the original row in ``record`` and include stream,
+        trial, and artifact provenance. Missing content refs are skipped so a
+        controller can safely query partial historical evidence.
+        """
+
+        rows: List[JsonDict] = []
+        for stream in self.record_streams(
+            name=name,
+            status=status,
+            trial_id=trial_id,
+            artifact_id=artifact_id,
+        ):
+            content_ref = stream.get("contentRef")
+            if not content_ref:
+                continue
+            path = _resolve_evidence_path(content_ref, self.store)
+            if not path.exists():
+                continue
+            for row_index, row in enumerate(_read_jsonl_rows(path)):
+                rows.append(
+                    {
+                        "name": stream.get("name"),
+                        "source": stream.get("source"),
+                        "trial_id": stream.get("trial_id"),
+                        "artifact_id": stream.get("artifact_id"),
+                        "status": stream.get("status"),
+                        "row_index": row_index,
+                        "record": row,
+                    }
+                )
+        if newest_first:
+            rows.reverse()
+            if limit is None:
+                return rows
+            if limit <= 0:
+                return []
+            return rows[:limit]
+        return _limit_tail(rows, limit)
 
     def controller_decisions(self, limit: Optional[int] = None) -> List[JsonDict]:
         return _limit_tail(self.store.read_controller_decisions(), limit)
@@ -190,6 +286,53 @@ def _limit_tail(items: List[JsonDict], limit: Optional[int]) -> List[JsonDict]:
     if limit <= 0:
         return []
     return items[-limit:]
+
+
+def _observation_record_streams(observation: JsonDict) -> List[JsonDict]:
+    report = observation.get("event_summary", {}).get("recordsToExtract")
+    if isinstance(report, dict) and isinstance(report.get("streams"), list):
+        return [dict(stream) for stream in report["streams"] if isinstance(stream, dict)]
+    for artifact in observation.get("artifacts", []) or []:
+        if not isinstance(artifact, dict):
+            continue
+        if artifact.get("name") != "records_to_extract_report":
+            continue
+        path = artifact.get("path")
+        if not path:
+            continue
+        report_path = Path(path)
+        if not report_path.exists():
+            continue
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        streams = payload.get("streams") if isinstance(payload, dict) else None
+        if isinstance(streams, list):
+            return [dict(stream) for stream in streams if isinstance(stream, dict)]
+    return []
+
+
+def _resolve_evidence_path(value: str, store) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    run_dir = Path(getattr(store, "run_dir", "."))
+    return (run_dir / path).resolve()
+
+
+def _read_jsonl_rows(path: Path) -> List[JsonDict]:
+    rows: List[JsonDict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                rows.append({"value": item})
+    return rows
 
 
 EVENT_TYPE_ALIASES = {

@@ -12,3 +12,9 @@ engine:
     candidates:
       - {x: 4.2, y: 7, mode: balanced}
       - {x: 2.0, y: 4, mode: conservative}
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
+  requiredContext:
+    - parameters.schema

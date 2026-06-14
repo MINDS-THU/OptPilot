@@ -21,12 +21,12 @@ class OpenAIFileEditEngine:
         self.study_spec = study_spec
         self.rng = rng
         self.config = dict(definition.get("config", {}))
-        self.target_files = [str(path) for path in self.config.get("targetFiles", [])]
+        self.candidate_context = dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+        self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
-            raise ValueError("OpenAIFileEditEngine requires config.targetFiles.")
-        self.source_dir = self.study_spec.resolve_path(self.config["sourceDir"])
-        if not self.source_dir.exists():
-            raise FileNotFoundError(f"OpenAIFileEditEngine sourceDir does not exist: {self.source_dir}")
+            raise ValueError("OpenAIFileEditEngine requires candidate_context.files.editable.")
+        self.source_dir = self._resolve_source_dir()
+        self.source_files = self._resolve_source_files()
         self.primary_metric = str(self.study_spec.objective["primaryMetric"]["name"])
         self.primary_direction = str(self.study_spec.objective["primaryMetric"]["direction"])
         self.include_baseline = bool(self.config.get("includeBaselineCandidate", True))
@@ -78,7 +78,7 @@ class OpenAIFileEditEngine:
 
     def _build_baseline_candidate(self, artifact_store: CodeArtifactStore) -> Dict[str, Any]:
         mappings = [
-            CodeFileMapping(source=self.source_dir / relative_path, path=relative_path)
+            CodeFileMapping(source=self._source_file_for(relative_path), path=relative_path)
             for relative_path in self.target_files
         ]
         return artifact_store.store_files(
@@ -113,15 +113,16 @@ class OpenAIFileEditEngine:
         return messages
 
     def _load_system_prompt(self) -> str:
-        prompt_path = self.config.get("systemPromptPath")
-        if prompt_path:
-            return self.study_spec.resolve_path(prompt_path).read_text(encoding="utf-8")
+        exposure = self.candidate_context.get("exposure", {})
+        instructions = exposure.get("instructions", []) or []
+        if instructions:
+            return Path(str(instructions[0])).read_text(encoding="utf-8")
         return str(self.config.get("systemPrompt", "Return JSON with full updated file contents."))
 
     def _render_source_snapshot(self) -> str:
         blocks = []
         for relative_path in self.target_files:
-            source_text = (self.source_dir / relative_path).read_text(encoding="utf-8")
+            source_text = self._source_file_for(relative_path).read_text(encoding="utf-8")
             blocks.append(f"FILE: {relative_path}\n```python\n{source_text}\n```")
         return "\n\n".join(blocks)
 
@@ -253,7 +254,7 @@ class OpenAIFileEditEngine:
             tmp_root = Path(tmp_dir)
             mappings: List[CodeFileMapping] = []
             for relative_path in self.target_files:
-                source_path = self.source_dir / relative_path
+                source_path = self._source_file_for(relative_path)
                 destination = tmp_root / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(edited_files.get(relative_path, source_path.read_text(encoding="utf-8")), encoding="utf-8")
@@ -287,6 +288,35 @@ class OpenAIFileEditEngine:
                 metadata={"summary": summary},
             )
 
+    def _resolve_source_dir(self) -> Path | None:
+        files = self.candidate_context.get("files", {})
+        root = str(files.get("root", "."))
+        for entry in self.candidate_context.get("workspace", {}).get("copy", []) or []:
+            if str(entry.get("to", ".")) == root:
+                source_dir = Path(str(entry["from"])).resolve()
+                if source_dir.is_dir():
+                    return source_dir
+        return None
+
+    def _resolve_source_files(self) -> Dict[str, Path]:
+        source_files: Dict[str, Path] = {}
+        workspace_copy = self.candidate_context.get("workspace", {}).get("copy", []) or []
+        for relative_path in self.target_files:
+            source = None
+            if self.source_dir is not None:
+                source = self.source_dir / relative_path
+            else:
+                source = _source_for_workspace_file(relative_path, workspace_copy)
+            if source is None or not source.exists():
+                raise FileNotFoundError(
+                    f"OpenAIFileEditEngine could not resolve source for editable file {relative_path!r}."
+                )
+            source_files[relative_path] = source
+        return source_files
+
+    def _source_file_for(self, relative_path: str) -> Path:
+        return self.source_files[relative_path]
+
 
 def _is_better(candidate: float, incumbent: float, direction: str) -> bool:
     if direction == "minimize":
@@ -310,4 +340,28 @@ def _read_dotenv_value(path: Path, env_var_name: str) -> str | None:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
             return value[1:-1]
         return value
+    return None
+
+
+def _editable_paths_from_context(candidate_context: Dict[str, Any]) -> List[str]:
+    files = candidate_context.get("files", {})
+    editable = files.get("editable", []) or []
+    paths = [str(item["path"]) for item in editable if isinstance(item, dict) and item.get("path")]
+    if paths:
+        return paths
+    return [str(path) for path in files.get("required", []) or []]
+
+
+def _source_for_workspace_file(relative_path: str, copy_entries: List[Dict[str, Any]]) -> Path | None:
+    for entry in copy_entries:
+        source = Path(str(entry.get("from", ""))).resolve()
+        destination = str(entry.get("to", ""))
+        if destination == relative_path and source.is_file():
+            return source
+        if source.is_dir():
+            try:
+                rel = Path(relative_path).relative_to(destination)
+            except ValueError:
+                continue
+            return source / rel
     return None

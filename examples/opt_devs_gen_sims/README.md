@@ -87,8 +87,9 @@ useful.
 The shipped example now narrows the editable surface to
 `MissionController.py` only. That makes the example cheaper to run, reduces
 prompt size, and makes it less likely that an LLM rewrite will destabilize the
-simulator. If you want to broaden the search space later, edit the `targetFiles`
-list in `examples/opt_devs_gen_sims/methods/openai_file_editor.yaml`.
+simulator. If you want to broaden the search space later, edit
+`candidate.files.editable`, `candidate.files.required`, and `candidate.files.allow`
+in `examples/opt_devs_gen_sims/environments/sa_simulator.yaml`.
 
 ## 1. Clone The Repositories
 
@@ -349,9 +350,14 @@ Edit `examples/opt_devs_gen_sims/methods/openai_file_editor.yaml`:
 
 ### Change which files the LLM may edit
 
-Edit the `targetFiles` list in the same method config.
+Edit the file candidate contract in
+`examples/opt_devs_gen_sims/environments/sa_simulator.yaml`:
 
-The default example keeps that list intentionally narrow for stability. Add
+- add files to `candidate.files.editable`
+- add required materialized files to `candidate.files.required`
+- widen `candidate.files.allow` if the engine may return those paths
+
+The default example keeps that surface intentionally narrow for stability. Add
 other files only after you have a stable baseline workflow.
 
 ### Change the optimization objective

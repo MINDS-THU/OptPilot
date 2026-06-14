@@ -22,18 +22,21 @@ evaluate:
 
 candidate:
   type: parameters
-  schema:
-    x:
-      type: float
-      min: 0.0
-      max: 8.0
-    y:
-      type: int
-      min: 1
-      max: 10
-    mode:
-      type: categorical
-      values: [balanced, aggressive, conservative]
+  artifactKind: parameter_spec
+  description: Search parameters accepted by the CLI toy factory evaluator.
+  parameters:
+    schema:
+      x:
+        type: float
+        min: 0.0
+        max: 8.0
+      y:
+        type: int
+        min: 1
+        max: 10
+      mode:
+        type: categorical
+        values: [balanced, aggressive, conservative]
 
 metrics:
   source: file

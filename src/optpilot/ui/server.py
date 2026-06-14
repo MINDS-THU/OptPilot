@@ -421,16 +421,35 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
         "summary": {},
     }
     if kind == "EnvironmentConfig":
+        candidate = raw.get("candidate", {})
+        candidate_type = candidate.get("type")
+        artifact_kind = candidate.get("artifactKind")
+        editable = []
+        files = candidate.get("files", {}) if isinstance(candidate.get("files"), dict) else candidate
+        for item in files.get("editable", []) or []:
+            if isinstance(item, dict) and item.get("path"):
+                editable.append(str(item["path"]))
         entry["summary"] = {
             "evaluate_type": raw.get("evaluate", {}).get("type"),
-            "candidate_type": raw.get("candidate", {}).get("type"),
+            "candidate_type": candidate_type,
+            "artifact_kind": artifact_kind,
+            "editable_files": editable,
+            "capabilities": [
+                interface.get("capability")
+                for interface in raw.get("interfaces", []) or []
+                if isinstance(interface, dict) and interface.get("capability")
+            ],
             "metrics": list(raw.get("metrics", {}).get("keys", []) or []),
         }
     elif kind == "MethodConfig":
+        compatibility = raw.get("compatibility", {}) if isinstance(raw.get("compatibility"), dict) else {}
         entry["summary"] = {
             "controller": raw.get("controller", {}).get("implementation", "builtin.single_engine_controller"),
             "engine": raw.get("engine", {}).get("implementation"),
             "batch_size": raw.get("engine", {}).get("config", {}).get("batchSize"),
+            "candidate_types": list(compatibility.get("candidateTypes", []) or []),
+            "artifact_kinds": list(compatibility.get("artifactKinds", []) or []),
+            "required_capabilities": list(compatibility.get("requiredCapabilities", []) or []),
         }
     elif kind == "StudyConfig":
         entry["summary"] = {

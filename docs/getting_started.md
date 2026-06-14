@@ -86,18 +86,21 @@ evaluate:
 
 candidate:
   type: parameters
-  schema:
-    x:
-      type: float
-      min: 0.0
-      max: 8.0
-    y:
-      type: int
-      min: 1
-      max: 10
-    mode:
-      type: categorical
-      values: [balanced, aggressive, conservative]
+  artifactKind: parameter_spec
+  description: Search parameters accepted by the toy factory evaluator.
+  parameters:
+    schema:
+      x:
+        type: float
+        min: 0.0
+        max: 8.0
+      y:
+        type: int
+        min: 1
+        max: 10
+      mode:
+        type: categorical
+        values: [balanced, aggressive, conservative]
 
 metrics:
   source: return
@@ -128,6 +131,10 @@ engine:
   implementation: builtin.reference_random_search
   config:
     batchSize: 4
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 User-owned example:
@@ -144,6 +151,10 @@ engine:
     candidates:
       - {x: 4.2, y: 7, mode: balanced}
       - {x: 2.0, y: 4, mode: conservative}
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
 ```
 
 ### StudyConfig

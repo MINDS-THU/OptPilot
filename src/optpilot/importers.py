@@ -67,10 +67,27 @@ def build_frontier_unified_study_config(
             },
             "candidate": {
                 "type": "files",
-                "root": ".",
-                "required": [candidate_destination],
-                "entrypoint": candidate_destination,
-                "allow": ["**/*"],
+                "artifactKind": "code_bundle",
+                "description": "Frontier benchmark candidate files.",
+                "files": {
+                    "root": ".",
+                    "source": {
+                        "type": "workspace_copy",
+                        "root": ".",
+                    },
+                    "editable": [
+                        {
+                            "path": candidate_destination,
+                            "language": _language_for_path(candidate_destination),
+                            "role": "candidate_program",
+                        }
+                    ],
+                    "required": [candidate_destination],
+                    "allow": ["**/*"],
+                },
+                "exposure": {
+                    "contextFiles": [str((benchmark_dir / path).resolve()) for path in agent_files],
+                },
             },
             "workspace": {
                 "copy": [
@@ -96,12 +113,18 @@ def build_frontier_unified_study_config(
             "engine": {
                 "implementation": engine_implementation,
                 "config": {
-                    "artifactKind": "files",
+                    "artifactKind": "code_bundle",
                     "candidateDestination": candidate_destination,
                     "initialProgram": str((benchmark_dir / initial_program).resolve()),
                     "agentFiles": [str((benchmark_dir / path).resolve()) for path in agent_files],
                     "constraints": constraints_text,
                 },
+            },
+            "compatibility": {
+                "candidateTypes": ["files"],
+                "artifactKinds": ["code_bundle"],
+                "requiredContext": ["files.source", "files.editable"],
+                "optionalContext": ["exposure.contextFiles"],
             },
         },
         "objective": {
@@ -141,7 +164,7 @@ def build_frontier_initial_artifact(
         raise FileNotFoundError(f"Frontier initial program does not exist: {initial_program}")
     return {
         "artifact_id": artifact_id,
-        "artifact_kind": "files",
+        "artifact_kind": "code_bundle",
         "spec": {
             "bundleRef": str(initial_path.parent),
             "entrypoint": candidate_destination,
@@ -235,6 +258,21 @@ def _read_int(path: Path, *, default: int) -> int:
 
 def _slugify(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-").lower() or "benchmark"
+
+
+def _language_for_path(value: str) -> str:
+    suffix = Path(value).suffix.lower()
+    return {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".sh": "shell",
+        ".java": "java",
+        ".cpp": "cpp",
+        ".cc": "cpp",
+        ".c": "c",
+        ".rs": "rust",
+    }.get(suffix, "")
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
