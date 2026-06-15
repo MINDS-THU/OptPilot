@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import importlib
+import inspect
 import csv
 import os
 import shlex
@@ -222,7 +223,7 @@ class ConfiguredEnvironmentTargetAdapter:
         elif source == "sqlite":
             payload = _query_sqlite_metrics(_workspace_path(workspace, metrics["database"]), metrics["query"])
         elif source == "custom":
-            raise NotImplementedError("metrics.source custom is reserved for a user-owned extractor adapter.")
+            payload = _run_custom_metrics_extractor(metrics, workspace, cwd, python_result, process_result)
         else:
             raise ValueError(f"Unsupported metrics.source: {source!r}")
         if not isinstance(payload, dict):
@@ -499,17 +500,11 @@ def _extract_records(workspace: Path, records: List[Dict[str, Any]]) -> Optional
         source = record.get("source")
         name = str(record["name"])
         if source == "custom":
-            streams.append(
-                {
-                    "name": name,
-                    "source": source,
-                    "status": "skipped",
-                    "reason": "custom record extractors are user-owned and not implemented by the built-in adapter",
-                }
-            )
-            continue
-        path = _workspace_path(workspace, record["path"])
-        rows = _read_record_rows(path, record)
+            rows, source_path = _run_custom_record_extractor(record, workspace)
+        else:
+            path = _workspace_path(workspace, record["path"])
+            rows = _read_record_rows(path, record)
+            source_path = str(path)
         output_path = workspace / "extracted_records" / f"{name}.jsonl"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding="utf-8") as handle:
@@ -519,12 +514,88 @@ def _extract_records(workspace: Path, records: List[Dict[str, Any]]) -> Optional
             {
                 "name": name,
                 "source": source,
-                "path": str(path),
+                "path": source_path,
                 "record_count": len(rows),
                 "contentRef": str(output_path),
             }
         )
     return {"streams": streams}
+
+
+def _run_custom_metrics_extractor(
+    metrics: Dict[str, Any],
+    workspace: Path,
+    cwd: Path,
+    python_result: Optional[Dict[str, Any]],
+    process_result,
+) -> Dict[str, Any]:
+    component = _load_python_component(metrics["implementation"])
+    payload = {
+        "workspace": str(workspace),
+        "cwd": str(cwd),
+        "metrics": dict(metrics),
+        "config": dict(metrics.get("config", {})),
+        "python_result": python_result,
+        "process_result": _process_result_payload(process_result),
+    }
+    result = _invoke_custom_component(component, payload, method_name="extract")
+    if not isinstance(result, dict):
+        raise TypeError("Custom metrics extractor must return a dict.")
+    return result
+
+
+def _run_custom_record_extractor(record: Dict[str, Any], workspace: Path) -> tuple[List[Dict[str, Any]], str]:
+    component = _load_python_component(record["implementation"])
+    payload = {
+        "workspace": str(workspace),
+        "record": dict(record),
+        "config": dict(record.get("config", {})),
+    }
+    result = _invoke_custom_component(component, payload, method_name="extract")
+    source_path = str(workspace)
+    if isinstance(result, dict):
+        source_path = str(result.get("path") or result.get("source_path") or source_path)
+        rows = result.get("rows", result.get("records"))
+    else:
+        rows = result
+    if not isinstance(rows, list):
+        raise TypeError("Custom record extractor must return a list of rows or a dict containing rows.")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise TypeError("Custom record extractor rows must be JSON objects.")
+    return rows, source_path
+
+
+def _load_python_component(implementation: str):
+    if not str(implementation).startswith("python:"):
+        raise ValueError(f"Custom implementation must start with 'python:': {implementation!r}")
+    module_name, _, attr = str(implementation)[len("python:") :].partition(":")
+    if not module_name or not attr:
+        raise ValueError(f"Custom implementation must use python:module:object format: {implementation!r}")
+    module = importlib.import_module(module_name)
+    return getattr(module, attr)
+
+
+def _invoke_custom_component(component, payload: Dict[str, Any], *, method_name: str):
+    target = component
+    if inspect.isclass(component):
+        target = component(payload.get("config", {}))
+    if hasattr(target, method_name):
+        return getattr(target, method_name)(payload)
+    if callable(target):
+        return target(payload)
+    raise TypeError(f"Custom component must be callable or define {method_name}().")
+
+
+def _process_result_payload(process_result) -> Optional[Dict[str, Any]]:
+    if process_result is None:
+        return None
+    return {
+        "returncode": process_result.returncode,
+        "stdout": process_result.stdout,
+        "stderr": process_result.stderr,
+        "args": list(process_result.args) if isinstance(process_result.args, list) else process_result.args,
+    }
 
 
 def _read_record_rows(path: Path, record: Dict[str, Any]) -> List[Dict[str, Any]]:

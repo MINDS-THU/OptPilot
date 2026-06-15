@@ -19,18 +19,18 @@ ENVIRONMENT_KIND = "EnvironmentConfig"
 METHOD_KIND = "MethodConfig"
 STUDY_KIND = "StudyConfig"
 
-EVALUATE_TYPES = {"command", "python", "custom"}
+EVALUATE_TYPES = {"command", "custom", "python"}
 METHOD_IMPLEMENTATION_TYPES = {"command", "python"}
-METHOD_PROTOCOLS = {"optpilot.method.batch.v1"}
+METHOD_PROTOCOLS = {"optpilot.method.batch.v1", "optpilot.method.session.v1"}
 METHOD_RUNTIME_TYPES = {"container", "host", "local", "process"}
 CANDIDATE_TYPES = {"parameters", "files", "opaque"}
-METRIC_SOURCES = {"return", "file", "stdout", "sqlite", "custom"}
+METRIC_SOURCES = {"custom", "return", "file", "stdout", "sqlite"}
 INSTANCE_SOURCES = {"none", "inline", "files", "sampler"}
 OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
-AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last"}
+AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
 BACKENDS = {"local", "local_subprocess", "container", "custom"}
 EVIDENCE_LEVELS = {"minimal", "standard", "full"}
-RECORD_SOURCES = {"jsonl", "csv", "sqlite_table", "sqlite_query", "custom"}
+RECORD_SOURCES = {"custom", "jsonl", "csv", "sqlite_table", "sqlite_query"}
 
 
 def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
@@ -163,7 +163,8 @@ def _validate_environment(environment: Dict[str, Any], path: Path | None) -> Non
     if evaluate_type == "python":
         _require_field(evaluate, "callable", f"{location} evaluate")
     if evaluate_type == "custom":
-        _require_field(evaluate, "implementation", f"{location} evaluate")
+        implementation = _require_field(evaluate, "implementation", f"{location} evaluate")
+        _require_python_component_ref(implementation, f"{location} evaluate.implementation")
 
     normalized_candidate = _normalize_candidate(candidate)
     candidate_type = normalized_candidate.get("type")
@@ -187,7 +188,8 @@ def _validate_environment(environment: Dict[str, Any], path: Path | None) -> Non
         _require_field(metrics, "database", f"{location} metrics")
         _require_field(metrics, "query", f"{location} metrics")
     if metric_source == "custom":
-        _require_field(metrics, "implementation", f"{location} metrics")
+        implementation = _require_field(metrics, "implementation", f"{location} metrics")
+        _require_python_component_ref(implementation, f"{location} metrics.implementation")
 
     for record in environment.get("recordsToExtract", []) or []:
         if not isinstance(record, dict):
@@ -196,14 +198,15 @@ def _validate_environment(environment: Dict[str, Any], path: Path | None) -> Non
         if source not in RECORD_SOURCES:
             raise ValueError(f"{location} recordsToExtract.source must be one of {sorted(RECORD_SOURCES)}.")
         _require_field(record, "name", f"{location} recordsToExtract")
-        if source != "custom":
+        if source == "custom":
+            implementation = _require_field(record, "implementation", f"{location} recordsToExtract")
+            _require_python_component_ref(implementation, f"{location} recordsToExtract.implementation")
+        else:
             _require_field(record, "path", f"{location} recordsToExtract")
         if source == "sqlite_table":
             _require_field(record, "table", f"{location} recordsToExtract")
         if source == "sqlite_query":
             _require_field(record, "query", f"{location} recordsToExtract")
-        if source == "custom":
-            _require_field(record, "implementation", f"{location} recordsToExtract")
 
     for interface in environment.get("interfaces", []) or []:
         if not isinstance(interface, dict):
@@ -335,6 +338,8 @@ def _validate_method(method: Dict[str, Any], path: Path | None) -> None:
     if implementation_type == "python":
         _require_field(implementation, "callable", f"{location} implementation")
     if implementation_type == "command":
+        if protocol != "optpilot.method.batch.v1":
+            raise ValueError(f"{location} command methods only support protocol optpilot.method.batch.v1.")
         command = implementation.get("command")
         if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
             raise ValueError(f"{location} implementation.command must be a non-empty list of strings.")
@@ -457,15 +462,35 @@ def _validate_study(study: Dict[str, Any], path: Path) -> None:
     source = instances.get("source", "none")
     if source not in INSTANCE_SOURCES:
         raise ValueError(f"{location} instances.source must be one of {sorted(INSTANCE_SOURCES)}.")
+    if source == "sampler":
+        implementation = instances.get("implementation", "builtin.parameter_sampler")
+        if implementation != "builtin.parameter_sampler":
+            _require_python_component_ref(implementation, f"{location} instances.implementation")
+        if not isinstance(instances.get("config", {}), dict):
+            raise ValueError(f"{location} instances.config must be an object.")
+        if int(instances.get("count", 1) or 1) < 1:
+            raise ValueError(f"{location} instances.count must be a positive integer.")
 
     execution = study.get("execution", {})
+    if execution and not isinstance(execution, dict):
+        raise ValueError(f"{location} execution must be an object.")
     if execution and execution.get("backend", "local") not in BACKENDS:
         raise ValueError(f"{location} execution.backend must be one of {sorted(BACKENDS)}.")
     if execution and execution.get("backend", "local") == "container":
         config = execution.get("config", {})
         if config is not None and not isinstance(config, dict):
             raise ValueError(f"{location} execution.config must be an object.")
-        _validate_container_build((config or {}).get("build", {}), f"{location} execution.config")
+        config = config or {}
+        _validate_container_build(config.get("build", {}), f"{location} execution.config")
+        build = config.get("build", {}) if isinstance(config.get("build", {}), dict) else {}
+        if not (config.get("image") or build.get("tag")):
+            raise ValueError(f"{location} execution.config must define image or build.tag for container backend.")
+    if execution and execution.get("backend", "local") == "custom":
+        implementation = execution.get("implementation")
+        if not implementation:
+            raise ValueError(f"{location} execution.implementation is required for custom backend.")
+        if not (str(implementation).startswith("builtin.") or str(implementation).startswith("python:")):
+            raise ValueError(f"{location} execution.implementation must start with 'builtin.' or 'python:'.")
     evidence = study.get("evidence", {})
     if evidence and evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
@@ -598,8 +623,7 @@ def _resolve_interfaces(interfaces: list, workspace: Dict[str, Any], base_path: 
 
 def _compile_target(environment: Dict[str, Any], environment_path: Path | None, candidate: Dict[str, Any]) -> Dict[str, Any]:
     evaluate = deepcopy(environment["evaluate"])
-    evaluate_type = evaluate["type"]
-    if evaluate_type == "custom":
+    if evaluate["type"] == "custom":
         adapter = {
             "type": "custom",
             "implementation": evaluate["implementation"],
@@ -903,9 +927,16 @@ def _resolve_path(value: Any, base_path: Path) -> Path:
     return (base_dir / path).resolve()
 
 
-def _require_field(data: Dict[str, Any], field: str, location: str) -> None:
+def _require_field(data: Dict[str, Any], field: str, location: str) -> Any:
     if field not in data or data[field] in {None, ""}:
         raise ValueError(f"{location} must define {field}.")
+    return data[field]
+
+
+def _require_python_component_ref(value: Any, location: str) -> None:
+    text = str(value)
+    if not text.startswith("python:"):
+        raise ValueError(f"{location} must start with 'python:'.")
 
 
 def _require_mapping(data: Dict[str, Any], field: str, location: str) -> Dict[str, Any]:

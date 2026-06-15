@@ -22,6 +22,7 @@
           <button class="nav-button" data-view="methods" type="button">Methods</button>
           <button class="nav-button" data-view="builder" type="button">Study Builder</button>
           <button class="nav-button" data-view="runs" type="button">Runs</button>
+          <button class="nav-button" data-view="config" type="button">Config Editor</button>
         </nav>
         <div class="sidebar-foot">
           <div class="muted">Local server</div>
@@ -133,11 +134,48 @@
                       <option value="local">local</option>
                       <option value="local_subprocess">local_subprocess</option>
                       <option value="container">container</option>
+                      <option value="custom">custom</option>
                     </select>
                   </label>
                   <label>
                     <span>Parallelism</span>
                     <input id="builderParallelism" type="number" min="1" value="1" />
+                  </label>
+                </div>
+                <div id="containerBackendFields" class="conditional-fields">
+                  <div class="form-row">
+                    <label>
+                      <span>Container image</span>
+                      <input id="builderContainerImage" type="text" placeholder="python:3.11-slim" />
+                    </label>
+                    <label>
+                      <span>Container executable</span>
+                      <input id="builderContainerExecutable" type="text" value="docker" />
+                    </label>
+                  </div>
+                  <div class="form-row">
+                    <label>
+                      <span>Build context</span>
+                      <input id="builderContainerBuildContext" type="text" placeholder="." />
+                    </label>
+                    <label>
+                      <span>Build dockerfile</span>
+                      <input id="builderContainerBuildDockerfile" type="text" placeholder="Dockerfile" />
+                    </label>
+                  </div>
+                  <label>
+                    <span>Build tag</span>
+                    <input id="builderContainerBuildTag" type="text" placeholder="optpilot-study-runtime" />
+                  </label>
+                </div>
+                <div id="customBackendFields" class="conditional-fields">
+                  <label>
+                    <span>Custom backend implementation</span>
+                    <input id="builderCustomBackendImplementation" type="text" placeholder="python:package.module:Backend" />
+                  </label>
+                  <label>
+                    <span>Custom backend config JSON</span>
+                    <textarea id="builderCustomBackendConfig" rows="3" placeholder='{"key": "value"}'></textarea>
                   </label>
                 </div>
                 <div class="form-row">
@@ -201,9 +239,36 @@
               <div id="runDetail" class="detail-content"></div>
             </section>
           </div>
+          <section class="panel compare-panel">
+            <div class="panel-header"><h2>Compare Runs</h2></div>
+            <div class="compare-controls">
+              <select id="compareRunA"></select>
+              <select id="compareRunB"></select>
+              <button id="compareRunsButton" class="ghost-button" type="button">Compare</button>
+            </div>
+            <div id="compareRunsResult" class="compare-result"></div>
+          </section>
           <section class="panel jobs-panel">
             <div class="panel-header"><h2>UI Jobs</h2></div>
             <div id="jobsList" class="compact-list"></div>
+          </section>
+        </section>
+
+        <section id="configView" class="view">
+          <section class="panel">
+            <div class="panel-header"><h2>Lightweight Config Editor</h2></div>
+            <div class="config-editor">
+              <label>
+                <span>File path</span>
+                <input id="configEditorPath" type="text" placeholder="examples/studies/toy_random_search.yaml" />
+              </label>
+              <div class="form-actions">
+                <button id="configOpenButton" class="ghost-button" type="button">Open</button>
+                <button id="configSaveButton" class="primary-button" type="button">Save</button>
+              </div>
+              <div id="configEditorStatus" class="validation-box"></div>
+              <textarea id="configEditorContent" class="config-textarea" spellcheck="false"></textarea>
+            </div>
           </section>
         </section>
       </main>

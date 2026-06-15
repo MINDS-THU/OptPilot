@@ -725,10 +725,30 @@ def _aggregate_values(values: List[float], aggregation: str, objective: Dict[str
         return values[-1]
     if aggregation == "weighted_mean":
         weights = objective.get("aggregation", {}).get("weights", {})
-        default_weight = 1.0
-        weighted_values = [value * float(weights.get(metric_name, default_weight)) for value in values]
-        return sum(weighted_values) / len(weighted_values)
+        resolved_weights = _aggregation_weights(weights, metric_name, len(values))
+        total_weight = sum(resolved_weights)
+        if total_weight == 0:
+            raise ValueError("weighted_mean aggregation requires non-zero total weight.")
+        return sum(value * weight for value, weight in zip(values, resolved_weights)) / total_weight
     raise NotImplementedError(f"Unsupported aggregation mode: {aggregation}")
+
+
+def _aggregation_weights(weights: Any, metric_name: str, count: int) -> List[float]:
+    if isinstance(weights, list):
+        if len(weights) != count:
+            raise ValueError(f"weighted_mean weights length {len(weights)} does not match value count {count}.")
+        return [float(weight) for weight in weights]
+    if isinstance(weights, dict):
+        metric_weights = weights.get(metric_name, weights.get("*"))
+        if isinstance(metric_weights, list):
+            if len(metric_weights) != count:
+                raise ValueError(
+                    f"weighted_mean weights for {metric_name!r} length {len(metric_weights)} does not match value count {count}."
+                )
+            return [float(weight) for weight in metric_weights]
+        if metric_weights is not None:
+            return [float(metric_weights)] * count
+    return [1.0] * count
 
 
 def _validation_exception_report(exc: Exception) -> ValidationReport:

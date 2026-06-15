@@ -28,7 +28,16 @@ from optpilot.provenance import PromptStore, build_generator_record, build_model
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
-from optpilot.ui.server import UiState, _catalog_payload, _compatibility_payload, _draft_study, _list_runs, _validate_study
+from optpilot.ui.server import (
+    UiState,
+    _catalog_payload,
+    _compatibility_payload,
+    _draft_study,
+    _list_runs,
+    _read_editable_config_file,
+    _validate_study,
+    _write_editable_config_file,
+)
 
 
 class MvpIntegrationTest(unittest.TestCase):
@@ -194,6 +203,48 @@ class MvpIntegrationTest(unittest.TestCase):
                     "aggregation": {"mode": mode},
                 }
                 self.assertEqual(_aggregate_metric_values(instance_results, objective)["score"], value)
+
+    def test_authoring_config_accepts_weighted_mean_aggregation(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "weighted_mean_study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "weighted-mean-study",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "objective": {
+                            "metric": "throughput",
+                            "direction": "maximize",
+                            "aggregation": "weighted_mean",
+                        },
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            spec = compile_authoring_config(study_path)
+
+        self.assertEqual(spec["objective"]["aggregation"]["mode"], "weighted_mean")
+
+    def test_weighted_mean_supports_per_instance_weights(self) -> None:
+        instance_results = [
+            {"metric_values": {"score": 1.0}},
+            {"metric_values": {"score": 3.0}},
+            {"metric_values": {"score": 7.0}},
+            {"metric_values": {"score": 9.0}},
+        ]
+        objective = {
+            "primaryMetric": {"name": "score", "direction": "maximize"},
+            "aggregation": {"mode": "weighted_mean", "weights": {"score": [1, 1, 2, 2]}},
+        }
+
+        self.assertEqual(_aggregate_metric_values(instance_results, objective)["score"], 6.0)
 
     def test_candidate_parallelism_reduces_elapsed_time(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1267,7 +1318,7 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         for implementation in [
             {"type": "service", "endpoint": "http://127.0.0.1:9999"},
-            {"type": "python", "callable": "builtin.reference_random_search", "protocol": "optpilot.method.session.v1"},
+            {"type": "command", "command": ["python", "method.py"], "protocol": "optpilot.method.session.v1"},
         ]:
             with self.subTest(implementation=implementation):
                 with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1296,7 +1347,285 @@ class MvpIntegrationTest(unittest.TestCase):
                         ),
                         encoding="utf-8",
                     )
-                    with self.assertRaisesRegex(ValueError, "implementation"):
+                    with self.assertRaisesRegex(ValueError, "implementation|command methods"):
+                        compile_authoring_config(study_path)
+
+    def test_python_session_method_protocol_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "session_method.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "session-method",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "MethodConfig",
+                            "id": "session-method",
+                            "implementation": {
+                                "type": "python",
+                                "callable": "python:tests.fixtures.bad_targets:SessionMethod",
+                                "protocol": "optpilot.method.session.v1",
+                            },
+                            "config": {"batchSize": 2},
+                            "compatibility": {
+                                "candidateTypes": ["parameters"],
+                                "artifactKinds": ["parameter_spec"],
+                            },
+                        },
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 2},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=tmp_dir)
+            run_dir = Path(summary.run_dir)
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
+            method_events = self._read_jsonl(run_dir / "method_events.jsonl")
+
+        self.assertEqual(summary.completed_trials, 2)
+        self.assertEqual(method_calls[0]["payload"]["protocol"], "optpilot.method.session.v1")
+        self.assertEqual(method_calls[0]["payload"]["interface"], "session")
+        self.assertEqual(method_events[0]["event"], "session_started")
+
+    def test_custom_environment_adapter_runs_through_component_registry(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "custom_environment_adapter.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "custom-environment-adapter",
+                        "environment": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "EnvironmentConfig",
+                            "id": "custom-adapter-env",
+                            "evaluate": {
+                                "type": "custom",
+                                "implementation": "python:tests.fixtures.bad_targets:CustomAdapter",
+                            },
+                            "candidate": {
+                                "type": "parameters",
+                                "artifactKind": "parameter_spec",
+                                "description": "Toy parameters.",
+                                "parameters": {"schema": {"x": {"type": "float", "min": 0.0, "max": 8.0}}},
+                            },
+                            "metrics": {"source": "return", "keys": ["throughput"]},
+                        },
+                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=tmp_dir)
+
+        self.assertEqual(summary.best_metric, 12.5)
+
+    def test_custom_metric_and_record_extractors_run(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "custom_extractors.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "custom-extractors",
+                        "environment": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "EnvironmentConfig",
+                            "id": "custom-extractor-env",
+                            "evaluate": {"type": "python", "callable": "optpilot.examples.toy_factory_env:evaluate"},
+                            "candidate": {
+                                "type": "parameters",
+                                "artifactKind": "parameter_spec",
+                                "description": "Toy parameters.",
+                                "parameters": {
+                                    "schema": {
+                                        "x": {"type": "float", "min": 0.0, "max": 8.0},
+                                        "y": {"type": "int", "min": 1, "max": 10},
+                                    },
+                                },
+                            },
+                            "metrics": {
+                                "source": "custom",
+                                "implementation": "python:tests.fixtures.bad_targets:custom_metrics",
+                                "keys": ["throughput"],
+                            },
+                            "recordsToExtract": [
+                                {
+                                    "name": "custom_events",
+                                    "source": "custom",
+                                    "implementation": "python:tests.fixtures.bad_targets:CustomRecordExtractor",
+                                    "config": {"value": "recorded"},
+                                }
+                            ],
+                        },
+                        "method": str(repo_root / "examples" / "methods" / "fixed_parameter_method.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {
+                            "source": "files",
+                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                        },
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=tmp_dir)
+            observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
+            records = EvidenceView(LocalEvidenceStore.open_run_dir(Path(summary.run_dir)), load_study_spec(str(study_path))).records("custom_events")
+
+        self.assertEqual(summary.best_metric, 33.0)
+        self.assertEqual(observations[0]["metric_values"]["throughput"], 33.0)
+        self.assertEqual([row["record"]["value"] for row in records], ["recorded", "recorded"])
+
+    def test_custom_sampler_generates_instance_batch(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "custom_sampler.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "custom-sampler",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {
+                            "source": "sampler",
+                            "implementation": "python:tests.fixtures.bad_targets:CustomSampler",
+                            "count": 2,
+                            "config": {"base": 4.0},
+                        },
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            study_spec = load_study_spec(str(study_path))
+
+        self.assertEqual(
+            study_spec.build_instance_batch(__import__("random").Random(0)),
+            [{"target_x": 4.0, "target_y": 7}, {"target_x": 5.0, "target_y": 7}],
+        )
+
+    def test_environment_config_rejects_malformed_custom_hook_refs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        cases = [
+            (
+                {"type": "custom", "implementation": "custom:Adapter"},
+                {"source": "return", "keys": ["throughput"]},
+                [],
+                "evaluate.implementation",
+            ),
+            (
+                {"type": "python", "callable": "examples.toy_factory_env:evaluate"},
+                {"source": "custom", "implementation": "custom:Metrics", "keys": ["throughput"]},
+                [],
+                "metrics.implementation",
+            ),
+            (
+                {"type": "python", "callable": "examples.toy_factory_env:evaluate"},
+                {"source": "return", "keys": ["throughput"]},
+                [{"name": "events", "source": "custom", "implementation": "custom:Records"}],
+                "recordsToExtract.implementation",
+            ),
+        ]
+        for evaluate, metrics, records, error in cases:
+            with self.subTest(error=error):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    study_path = Path(tmp_dir) / "malformed_environment_hook.yaml"
+                    study_path.write_text(
+                        yaml.safe_dump(
+                            {
+                                "apiVersion": "optpilot.io/v3alpha1",
+                                "kind": "StudyConfig",
+                                "name": "malformed-environment-hook",
+                                "environment": {
+                                    "apiVersion": "optpilot.io/v3alpha1",
+                                    "kind": "EnvironmentConfig",
+                                    "id": "malformed-hook-env",
+                                    "evaluate": evaluate,
+                                    "candidate": {
+                                        "type": "parameters",
+                                        "artifactKind": "parameter_spec",
+                                        "description": "Toy parameters.",
+                                        "parameters": {"schema": {"x": {"type": "float", "min": 0.0, "max": 8.0}}},
+                                    },
+                                    "metrics": metrics,
+                                    "recordsToExtract": records,
+                                },
+                                "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                                "objective": {"metric": "throughput", "direction": "maximize"},
+                                "budget": {"maxTrials": 1},
+                            },
+                            sort_keys=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, error):
+                        compile_authoring_config(study_path)
+
+    def test_study_config_rejects_unimplemented_or_incomplete_runtime_shapes(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        cases = [
+            (
+                {
+                    "execution": {"backend": "container", "parallelism": 1},
+                },
+                "execution.config",
+            ),
+            (
+                {
+                    "execution": {"backend": "custom", "parallelism": 1},
+                },
+                "execution.implementation",
+            ),
+            (
+                {
+                    "instances": {
+                        "source": "sampler",
+                        "implementation": "custom:Sampler",
+                        "config": {"target_x": [1, 2]},
+                    },
+                },
+                "instances.implementation",
+            ),
+        ]
+        for overrides, error in cases:
+            with self.subTest(error=error):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    payload = {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "unsupported-runtime-shape",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    }
+                    payload.update(overrides)
+                    study_path = Path(tmp_dir) / "unsupported_runtime_shape.yaml"
+                    study_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+                    with self.assertRaisesRegex(ValueError, error):
                         compile_authoring_config(study_path)
 
     def test_run_can_resume_existing_evidence_store(self) -> None:
@@ -2196,6 +2525,89 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(draft["validation"]["valid"], draft)
             self.assertTrue(Path(draft["path"]).exists())
             self.assertEqual(draft["draft"]["name"], "ui-draft-toy")
+
+            sa_draft = _draft_study(
+                state,
+                {
+                    "environment_path": str(repo_root / "examples" / "opt_devs_gen_sims" / "environments" / "sa_simulator.yaml"),
+                    "method_path": str(repo_root / "examples" / "opt_devs_gen_sims" / "methods" / "openai_file_editor.yaml"),
+                    "name": "ui-draft-sa",
+                    "metric": "service_score",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "local",
+                    "parallelism": 1,
+                    "timeoutSeconds": 180,
+                    "instances": "",
+                },
+            )
+
+            self.assertTrue(sa_draft["validation"]["valid"], sa_draft)
+            self.assertEqual(sa_draft["draft"]["instances"]["source"], "files")
+            self.assertEqual(
+                sa_draft["draft"]["instances"]["paths"],
+                [str(repo_root / "examples" / "opt_devs_gen_sims" / "instances" / "sa_default.yaml")],
+            )
+
+            container_draft = _draft_study(
+                state,
+                {
+                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "name": "ui-container-draft",
+                    "metric": "throughput",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "container",
+                    "containerImage": "python:3.11-slim",
+                    "containerExecutable": "docker",
+                    "parallelism": 1,
+                    "timeoutSeconds": 120,
+                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                },
+            )
+            self.assertTrue(container_draft["validation"]["valid"], container_draft)
+            self.assertEqual(container_draft["draft"]["execution"]["config"]["image"], "python:3.11-slim")
+            self.assertEqual(container_draft["draft"]["execution"]["config"]["containerExecutable"], "docker")
+
+            custom_draft = _draft_study(
+                state,
+                {
+                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "name": "ui-custom-draft",
+                    "metric": "throughput",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "custom",
+                    "customBackendImplementation": "python:tests.fixtures.bad_targets:CustomAdapter",
+                    "customBackendConfig": '{"queue": "local"}',
+                    "parallelism": 1,
+                    "timeoutSeconds": 120,
+                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                },
+            )
+            self.assertTrue(custom_draft["validation"]["valid"], custom_draft)
+            self.assertEqual(custom_draft["draft"]["execution"]["implementation"], "python:tests.fixtures.bad_targets:CustomAdapter")
+            self.assertEqual(custom_draft["draft"]["execution"]["config"], {"queue": "local"})
+
+    def test_ui_config_editor_reads_and_writes_workspace_text_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(dir=repo_root) as tmp_dir:
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            config_path = Path(tmp_dir) / "editable.yaml"
+            config_path.write_text("name: before\n", encoding="utf-8")
+
+            opened = _read_editable_config_file(state, config_path)
+            saved = _write_editable_config_file(state, config_path, "name: after\n")
+            reopened = _read_editable_config_file(state, config_path)
+            invalid = _write_editable_config_file(state, config_path, "name: [broken\n")
+
+        self.assertTrue(opened["validation"]["valid"])
+        self.assertTrue(saved["saved"])
+        self.assertIn("name: after", reopened["content"])
+        self.assertFalse(invalid["saved"])
+        self.assertFalse(invalid["validation"]["valid"])
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

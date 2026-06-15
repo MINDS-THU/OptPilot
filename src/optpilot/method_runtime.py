@@ -34,8 +34,10 @@ class MethodRuntime:
     def propose(self, n_candidates: int, study_state: Dict[str, Any], evidence_view=None) -> List[Dict[str, Any]]:
         implementation = self.definition.get("implementation", {})
         protocol = implementation.get("protocol", "optpilot.method.batch.v1")
+        if protocol == "optpilot.method.session.v1":
+            return self._session_propose(n_candidates, study_state, evidence_view)
         if protocol != "optpilot.method.batch.v1":
-            raise NotImplementedError(f"Method protocol {protocol!r} is not implemented yet.")
+            raise NotImplementedError(f"Method protocol {protocol!r} is not implemented.")
 
         if implementation.get("type") == "command":
             return self._command_batch_propose(n_candidates, study_state, evidence_view)
@@ -58,6 +60,40 @@ class MethodRuntime:
         raise TypeError(
             f"Method {self.method_id!r} must implement propose/observe, start/poll/finalize, or command batch protocol."
         )
+
+    def _session_propose(self, n_candidates: int, study_state: Dict[str, Any], evidence_view=None) -> List[Dict[str, Any]]:
+        implementation = self.definition.get("implementation", {})
+        if implementation.get("type") != "python":
+            raise TypeError("optpilot.method.session.v1 currently requires a Python method implementation.")
+        if self.method is None:
+            raise TypeError(f"Method {self.method_id!r} has no Python implementation instance.")
+        session = MethodSession(
+            method_id=self.method_id,
+            definition=self.definition,
+            study_spec=self.study_spec,
+            study_state=study_state,
+            evidence_view=evidence_view,
+            n_candidates=n_candidates,
+            record_event=self._record_event,
+        )
+        if hasattr(self.method, "run"):
+            result = self.method.run(session)
+        elif callable(self.method):
+            result = self.method(session)
+        else:
+            raise TypeError(f"Session method {self.method_id!r} must implement run(session) or be callable.")
+        candidates = [*session.candidates, *_extract_candidate_artifacts(result)]
+        self._record_call(
+            "completed",
+            {
+                "protocol": "optpilot.method.session.v1",
+                "interface": "session",
+                "candidate_count": len(candidates),
+                "study_state": dict(study_state),
+                "events": len(session.events),
+            },
+        )
+        return candidates
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         if self.method is not None and hasattr(self.method, "observe"):
@@ -284,6 +320,66 @@ class MethodRuntime:
                 "created_at": utc_now_iso(),
             }
         )
+
+
+class MethodSession:
+    """Small active proposal surface for Python session methods."""
+
+    def __init__(
+        self,
+        *,
+        method_id: str,
+        definition: Dict[str, Any],
+        study_spec,
+        study_state: Dict[str, Any],
+        evidence_view,
+        n_candidates: int,
+        record_event,
+    ):
+        self.method_id = method_id
+        self.definition = definition
+        self.study_spec = study_spec
+        self.study_state = dict(study_state)
+        self.n_candidates = n_candidates
+        self._evidence_view = evidence_view
+        self._record_event = record_event
+        self._candidates: List[Dict[str, Any]] = []
+        self._events: List[Dict[str, Any]] = []
+
+    @property
+    def evidence(self) -> Dict[str, Any]:
+        if self._evidence_view is None:
+            return {}
+        return self._evidence_view.decision_context()
+
+    @property
+    def candidate_context(self) -> Dict[str, Any]:
+        return dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+
+    @property
+    def config(self) -> Dict[str, Any]:
+        return dict(self.definition.get("config", {}))
+
+    @property
+    def candidates(self) -> List[Dict[str, Any]]:
+        return [dict(candidate) for candidate in self._candidates]
+
+    @property
+    def events(self) -> List[Dict[str, Any]]:
+        return [dict(event) for event in self._events]
+
+    def submit(self, candidate_or_candidates: Any) -> None:
+        if isinstance(candidate_or_candidates, dict) and not (
+            "artifacts" in candidate_or_candidates or "candidates" in candidate_or_candidates
+        ):
+            self._candidates.append(dict(candidate_or_candidates))
+            return
+        self._candidates.extend(_extract_candidate_artifacts(candidate_or_candidates))
+
+    def event(self, payload: Dict[str, Any]) -> None:
+        event = dict(payload)
+        self._events.append(event)
+        self._record_event(event)
 
 
 def _call_with_optional_evidence(function, n_candidates: int, study_state: Dict[str, Any], evidence_view) -> List[Dict[str, Any]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -147,6 +148,9 @@ class StudySpec:
             sampler = definition.get("sampler", {})
             config = sampler.get("config", {})
             sample_count = int(definition.get("sampleCount", 1))
+            implementation = sampler.get("implementation", "builtin.parameter_sampler")
+            if implementation != "builtin.parameter_sampler":
+                return _sample_custom_distribution(implementation, config, sample_count, rng)
             return [_sample_distribution_instance(config, rng) for _ in range(sample_count)]
         raise NotImplementedError(f"Unsupported evaluationScope mode: {mode}")
 
@@ -163,6 +167,30 @@ def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]
             continue
         result[key] = value
     return result
+
+
+def _sample_custom_distribution(implementation: str, config: Dict[str, Any], sample_count: int, rng) -> List[Dict[str, Any]]:
+    from .registry import resolve_component
+
+    component = resolve_component("sampler", implementation)
+    payload = {"config": dict(config), "sample_count": sample_count, "rng": rng}
+    target = component
+    if inspect.isclass(component):
+        target = component(config)
+    if hasattr(target, "sample_batch"):
+        samples = target.sample_batch(sample_count, rng)
+    elif hasattr(target, "sample"):
+        samples = [target.sample(rng) for _ in range(sample_count)]
+    elif callable(target):
+        samples = target(payload)
+    else:
+        raise TypeError("Custom sampler must be callable or implement sample/sample_batch.")
+    if not isinstance(samples, list):
+        raise TypeError("Custom sampler must return a list of instance dictionaries.")
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise TypeError("Custom sampler returned a non-object instance.")
+    return samples
 
 
 def load_study_spec(path: str) -> StudySpec:

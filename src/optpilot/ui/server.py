@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 import webbrowser
+from copy import deepcopy
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -284,6 +285,10 @@ def _handler_factory(state: UiState):
                 if path == "/api/compatibility":
                     self._send_json(_compatibility_payload(state))
                     return
+                if path == "/api/config/file":
+                    requested = _resolve_user_path(query.get("path", [""])[0], state.cwd)
+                    self._send_json(_read_editable_config_file(state, requested))
+                    return
                 if path == "/api/runs":
                     self._send_json({"runs": _list_runs(state)})
                     return
@@ -326,6 +331,11 @@ def _handler_factory(state: UiState):
                         target_id=validation.get("target_id"),
                     )
                     self._send_json({"job": job.to_dict()}, status=HTTPStatus.CREATED)
+                    return
+                if parsed.path == "/api/config/file":
+                    payload = self._read_json_body()
+                    requested = _resolve_user_path(payload.get("path"), state.cwd)
+                    self._send_json(_write_editable_config_file(state, requested, str(payload.get("content", ""))))
                     return
                 if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/stop"):
                     job_id = parsed.path.split("/")[3]
@@ -693,6 +703,8 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
     parallelism = int(payload.get("parallelism", 1) or 1)
     timeout = int(payload.get("timeoutSeconds", payload.get("timeout_seconds", 120)) or 120)
     instances = _draft_instances(payload, state.cwd)
+    if instances.get("source") == "none":
+        instances = _matching_study_instances(state, environment_path, method_path) or instances
     draft = {
         "apiVersion": AUTHORING_API_VERSION,
         "kind": "StudyConfig",
@@ -704,6 +716,11 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         "budget": {"maxTrials": max_trials},
         "execution": {"backend": backend, "parallelism": parallelism, "timeoutSeconds": timeout},
     }
+    execution_config = _draft_execution_config(payload)
+    if execution_config:
+        draft["execution"]["config"] = execution_config
+    if backend == "custom" and payload.get("customBackendImplementation"):
+        draft["execution"]["implementation"] = str(payload["customBackendImplementation"])
     if payload.get("seed") not in (None, ""):
         draft["reproducibility"] = {"seed": int(payload.get("seed"))}
     draft_yaml = yaml.safe_dump(draft, sort_keys=False)
@@ -733,6 +750,77 @@ def _draft_instances(payload: JsonDict, cwd: Path) -> JsonDict:
             "paths": [str(_resolve_user_path(path, cwd)) for path in paths],
         }
     return {"source": "none"}
+
+
+def _draft_execution_config(payload: JsonDict) -> JsonDict:
+    backend = str(payload.get("backend") or "local")
+    config = payload.get("executionConfig")
+    if isinstance(config, dict):
+        result = deepcopy(config)
+    else:
+        result = {}
+    if backend == "container":
+        for source, target in (
+            ("containerImage", "image"),
+            ("containerExecutable", "containerExecutable"),
+            ("containerNetworkPolicy", "networkPolicy"),
+        ):
+            value = payload.get(source)
+            if value not in (None, ""):
+                result[target] = str(value)
+        build = result.get("build") if isinstance(result.get("build"), dict) else {}
+        for source, target in (
+            ("containerBuildContext", "context"),
+            ("containerBuildDockerfile", "dockerfile"),
+            ("containerBuildTag", "tag"),
+        ):
+            value = payload.get(source)
+            if value not in (None, ""):
+                build[target] = str(value)
+        if build:
+            result["build"] = build
+    if backend == "custom" and payload.get("customBackendConfig") not in (None, ""):
+        custom_config = _parse_json_object(str(payload.get("customBackendConfig")), "custom backend config")
+        result.update(custom_config)
+    return result
+
+
+def _matching_study_instances(state: UiState, environment_path: Path, method_path: Path) -> Optional[JsonDict]:
+    for entry in _scan_catalog(state.catalog_roots):
+        if entry["kind"] != "StudyConfig":
+            continue
+        study_path = Path(entry["path"])
+        study = _read_yaml(study_path)
+        if _study_ref_matches(study.get("environment"), study_path, environment_path) and _study_ref_matches(
+            study.get("method"), study_path, method_path
+        ):
+            instances = study.get("instances")
+            if isinstance(instances, dict) and instances.get("source", "none") != "none":
+                return _resolve_study_instances(instances, study_path)
+    return None
+
+
+def _resolve_study_instances(instances: JsonDict, study_path: Path) -> JsonDict:
+    resolved = deepcopy(instances)
+    if resolved.get("source") == "files":
+        resolved["paths"] = [
+            str(_resolve_config_path(path, study_path))
+            for path in resolved.get("paths", []) or []
+        ]
+    return resolved
+
+
+def _study_ref_matches(value: Any, study_path: Path, expected_path: Path) -> bool:
+    if not value:
+        return False
+    return _resolve_config_path(value, study_path) == expected_path.resolve()
+
+
+def _resolve_config_path(value: Any, config_path: Path) -> Path:
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        path = config_path.parent / path
+    return path.resolve()
 
 
 def _first_metric(environment: JsonDict) -> Optional[str]:
@@ -1004,6 +1092,92 @@ def _read_yaml(path: Path) -> JsonDict:
     if not isinstance(payload, dict):
         return {}
     return payload
+
+
+EDITABLE_FILE_SUFFIXES = {
+    ".json",
+    ".md",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+
+
+def _read_editable_config_file(state: UiState, path: Path) -> JsonDict:
+    _require_editable_file(state, path, must_exist=True)
+    content = path.read_text(encoding="utf-8", errors="replace")
+    return {
+        "path": str(path),
+        "relative_path": _relative_or_absolute(path, state.cwd),
+        "content": content,
+        "validation": _validate_editable_content(path, content),
+    }
+
+
+def _write_editable_config_file(state: UiState, path: Path, content: str) -> JsonDict:
+    _require_editable_file(state, path, must_exist=False)
+    validation = _validate_editable_content(path, content)
+    if not validation["valid"]:
+        return {
+            "path": str(path),
+            "relative_path": _relative_or_absolute(path, state.cwd),
+            "saved": False,
+            "validation": validation,
+        }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {
+        "path": str(path),
+        "relative_path": _relative_or_absolute(path, state.cwd),
+        "saved": True,
+        "validation": validation,
+    }
+
+
+def _require_editable_file(state: UiState, path: Path, *, must_exist: bool) -> None:
+    path = path.resolve()
+    if not _is_relative_to(path, state.cwd):
+        raise PermissionError("Config editor can only access files inside the workspace.")
+    if any(part in EXCLUDED_SCAN_DIRS for part in path.relative_to(state.cwd).parts):
+        raise PermissionError("Config editor cannot edit ignored workspace directories.")
+    if must_exist and not path.is_file():
+        raise FileNotFoundError(f"File not found: {path}")
+    name = path.name.lower()
+    if path.suffix.lower() not in EDITABLE_FILE_SUFFIXES and not name.startswith("dockerfile"):
+        raise ValueError("Config editor only supports text/config files.")
+    if path.exists() and path.stat().st_size > 300_000:
+        raise ValueError("File is too large for the lightweight editor.")
+
+
+def _validate_editable_content(path: Path, content: str) -> JsonDict:
+    if len(content.encode("utf-8")) > 300_000:
+        return {"valid": False, "errors": ["File content is too large for the lightweight editor."]}
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        try:
+            yaml.safe_load(content) if content.strip() else None
+        except yaml.YAMLError as exc:
+            return {"valid": False, "errors": [str(exc)]}
+    if path.suffix.lower() == ".json":
+        try:
+            json.loads(content) if content.strip() else None
+        except json.JSONDecodeError as exc:
+            return {"valid": False, "errors": [str(exc)]}
+    return {"valid": True, "errors": []}
+
+
+def _parse_json_object(value: str, label: str) -> JsonDict:
+    if not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be a JSON object: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object.")
+    return parsed
 
 
 def _resolve_user_path(value: Any, cwd: Path) -> Path:

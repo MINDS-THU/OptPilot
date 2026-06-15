@@ -13,6 +13,7 @@ const state = {
   activeRunTab: "overview",
   draft: null,
   pendingJobId: null,
+  configEditorPath: "",
 };
 
 const els = {};
@@ -51,6 +52,15 @@ function cacheElements() {
     "builderDirection",
     "builderMaxTrials",
     "builderBackend",
+    "containerBackendFields",
+    "builderContainerImage",
+    "builderContainerExecutable",
+    "builderContainerBuildContext",
+    "builderContainerBuildDockerfile",
+    "builderContainerBuildTag",
+    "customBackendFields",
+    "builderCustomBackendImplementation",
+    "builderCustomBackendConfig",
     "builderParallelism",
     "builderTimeout",
     "builderOutputRoot",
@@ -66,7 +76,16 @@ function cacheElements() {
     "runFilter",
     "runsTable",
     "runDetail",
+    "compareRunA",
+    "compareRunB",
+    "compareRunsButton",
+    "compareRunsResult",
     "jobsList",
+    "configEditorPath",
+    "configOpenButton",
+    "configSaveButton",
+    "configEditorStatus",
+    "configEditorContent",
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -95,6 +114,10 @@ function bindEvents() {
   });
   els.draftButton.addEventListener("click", generateDraft);
   els.builderForm.addEventListener("submit", launchDraft);
+  els.builderBackend.addEventListener("change", renderBackendFields);
+  els.compareRunsButton.addEventListener("click", compareRuns);
+  els.configOpenButton.addEventListener("click", () => openConfigPath(els.configEditorPath.value));
+  els.configSaveButton.addEventListener("click", saveConfigFile);
 }
 
 async function loadAll() {
@@ -184,6 +207,7 @@ function setView(view) {
     methods: ["Methods", "Inspect optimization methods and their compatible environments."],
     builder: ["Study Builder", "Create a valid study from an environment and method."],
     runs: ["Runs", "Monitor jobs, compare outcomes, and inspect run evidence."],
+    config: ["Config Editor", "Open and lightly edit YAML, JSON, and small support files."],
   };
   els.pageTitle.textContent = titles[view][0];
   els.pageSubtitle.textContent = titles[view][1];
@@ -286,6 +310,7 @@ function renderEnvironmentDetail() {
       renderBuilder();
     });
   }
+  bindConfigEditButtons();
 }
 
 function renderMethods() {
@@ -352,12 +377,14 @@ function renderMethodDetail() {
       renderBuilder();
     });
   }
+  bindConfigEditButtons();
 }
 
 function renderBuilder() {
   renderBuilderOptions();
   fillBuilderDefaults();
   renderBuilderCompatibility();
+  renderBackendFields();
 }
 
 function renderBuilderOptions() {
@@ -397,6 +424,12 @@ function renderBuilderCompatibility() {
     return;
   }
   els.builderCompatibility.innerHTML = compatibilityBox(pair);
+}
+
+function renderBackendFields() {
+  const backend = els.builderBackend.value;
+  els.containerBackendFields.classList.toggle("active", backend === "container");
+  els.customBackendFields.classList.toggle("active", backend === "custom");
 }
 
 async function generateDraft() {
@@ -443,6 +476,13 @@ function builderPayload() {
     direction: els.builderDirection.value,
     maxTrials: Number(els.builderMaxTrials.value || 1),
     backend: els.builderBackend.value,
+    containerImage: els.builderContainerImage.value.trim(),
+    containerExecutable: els.builderContainerExecutable.value.trim(),
+    containerBuildContext: els.builderContainerBuildContext.value.trim(),
+    containerBuildDockerfile: els.builderContainerBuildDockerfile.value.trim(),
+    containerBuildTag: els.builderContainerBuildTag.value.trim(),
+    customBackendImplementation: els.builderCustomBackendImplementation.value.trim(),
+    customBackendConfig: els.builderCustomBackendConfig.value.trim(),
     parallelism: Number(els.builderParallelism.value || 1),
     timeoutSeconds: Number(els.builderTimeout.value || 120),
     instances: els.builderInstances.value,
@@ -468,6 +508,33 @@ function renderRuns() {
   document.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
   });
+  renderCompareOptions();
+}
+
+function renderCompareOptions() {
+  const previousA = els.compareRunA.value;
+  const previousB = els.compareRunB.value;
+  const options = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.name)}</option>`).join("");
+  els.compareRunA.innerHTML = options;
+  els.compareRunB.innerHTML = options;
+  if (previousA && state.runs.some((run) => run.id === previousA)) els.compareRunA.value = previousA;
+  else if (state.runs[0]) els.compareRunA.value = state.runs[0].id;
+  if (previousB && state.runs.some((run) => run.id === previousB)) els.compareRunB.value = previousB;
+  else if (state.runs[1]) els.compareRunB.value = state.runs[1].id;
+}
+
+async function compareRuns() {
+  const firstId = els.compareRunA.value;
+  const secondId = els.compareRunB.value;
+  if (!firstId || !secondId) {
+    els.compareRunsResult.innerHTML = emptyInline("Select two runs to compare.");
+    return;
+  }
+  const [first, second] = await Promise.all([
+    getJson(`/api/runs/${encodeURIComponent(firstId)}`),
+    getJson(`/api/runs/${encodeURIComponent(secondId)}`),
+  ]);
+  els.compareRunsResult.innerHTML = runComparisonTable(first.run, second.run);
 }
 
 async function loadRunDetail(runId, options = {}) {
@@ -666,10 +733,22 @@ function entityHeader(item) {
         <h2>${escapeHtml(item.label)}</h2>
         <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
       </div>
-      <div class="item-meta">${(item.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+      <div class="detail-actions">
+        <div class="item-meta">${(item.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+        <button class="ghost-button edit-config-button" data-config-path="${escapeHtml(item.path)}" type="button">Edit config</button>
+      </div>
     </div>
     ${item.description ? `<p class="detail-description">${escapeHtml(item.description)}</p>` : ""}
   `;
+}
+
+function bindConfigEditButtons() {
+  document.querySelectorAll(".edit-config-button").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await openConfigPath(button.dataset.configPath);
+      setView("config");
+    });
+  });
 }
 
 function compatList(pairs, target) {
@@ -788,6 +867,60 @@ function validationHtml(result) {
     </div>
     ${valid || result && result.launched ? `<p class="path-text">${escapeHtml(shortPath(result.path || result.job_id || ""))}</p>` : `<ul class="error-list">${errors || "<li>Validation failed.</li>"}</ul>`}
   `;
+}
+
+function runComparisonTable(first, second) {
+  const rows = [
+    ["Name", first.name, second.name],
+    ["Status", first.status, second.status],
+    ["Best metric", formatMetric(first.best_metric), formatMetric(second.best_metric)],
+    ["Trials", first.completed_trials ?? 0, second.completed_trials ?? 0],
+    ["Failures", first.failure_count ?? 0, second.failure_count ?? 0],
+    ["Method", first.method && first.method.id || "-", second.method && second.method.id || "-"],
+    ["Environment", first.target_id || "-", second.target_id || "-"],
+  ];
+  return `
+    <div class="table-wrap embedded">
+      <table>
+        <thead><tr><th>Field</th><th>${escapeHtml(first.name)}</th><th>${escapeHtml(second.name)}</th></tr></thead>
+        <tbody>${rows.map(([label, a, b]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(a)}</td><td>${escapeHtml(b)}</td></tr>`).join("")}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function openConfigPath(path) {
+  const cleanPath = String(path || "").trim();
+  if (!cleanPath) {
+    els.configEditorStatus.innerHTML = validationHtml({ valid: false, errors: ["Enter a file path."] });
+    return;
+  }
+  try {
+    const response = await getJson(`/api/config/file?path=${encodeURIComponent(cleanPath)}`);
+    state.configEditorPath = response.path;
+    els.configEditorPath.value = response.relative_path || response.path;
+    els.configEditorContent.value = response.content || "";
+    els.configEditorStatus.innerHTML = validationHtml(response.validation || { valid: true, path: response.path });
+  } catch (error) {
+    els.configEditorStatus.innerHTML = validationHtml({ valid: false, errors: [String(error.message || error)] });
+  }
+}
+
+async function saveConfigFile() {
+  const response = await postJson("/api/config/file", {
+    path: els.configEditorPath.value,
+    content: els.configEditorContent.value,
+  }, { tolerateError: true });
+  const result = response.validation || response;
+  els.configEditorStatus.innerHTML = validationHtml({
+    valid: Boolean(response.saved && result.valid),
+    errors: result.errors || [response.error || "Save failed."],
+    path: response.relative_path || response.path,
+  });
+  if (response.saved) {
+    await loadCatalogAndCompatibility();
+    renderAll();
+  }
 }
 
 function compatibleMethodsForEnvironment(uid) {

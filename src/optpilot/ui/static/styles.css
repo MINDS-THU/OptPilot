@@ -307,6 +307,19 @@ h3 {
   gap: 10px;
 }
 
+.conditional-fields {
+  display: none;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fafb;
+}
+
+.conditional-fields.active {
+  display: grid;
+}
+
 .table-wrap {
   max-height: calc(100vh - 280px);
   overflow: auto;
@@ -386,6 +399,12 @@ th {
   justify-content: space-between;
   gap: 14px;
   padding: 14px;
+}
+
+.detail-actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
 }
 
 .detail-description {
@@ -720,6 +739,58 @@ th {
   margin-top: 14px;
 }
 
+.compare-panel {
+  margin-top: 14px;
+}
+
+.compare-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.compare-controls select,
+.config-editor input,
+.config-editor textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.compare-result {
+  padding: 14px;
+}
+
+.config-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.config-editor label {
+  display: grid;
+  gap: 6px;
+}
+
+.config-editor label span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.config-textarea {
+  min-height: 580px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @media (max-width: 1180px) {
   .home-grid,
   .builder-grid,
@@ -744,7 +815,7 @@ th {
   }
 
   .nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .nav-button {
@@ -759,6 +830,7 @@ th {
   .detail-stats,
   .detail-grid,
   .form-row,
+  .compare-controls,
   .action-grid,
   .file-layout {
     grid-template-columns: 1fr;

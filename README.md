@@ -109,7 +109,7 @@ Every OptPilot study is built from three small config files.
 
 1. `EnvironmentConfig`
    Defines how OptPilot evaluates candidates. The current alpha supports Python
-   callables, external commands, and custom adapters.
+   callables and external commands.
 2. `MethodConfig`
    Defines the optimization method. This can point at a built-in reference
    method, user-owned Python classes, or command methods. Command methods can
@@ -146,7 +146,7 @@ For the full schema, see [docs/config_files_v3alpha.md](docs/config_files_v3alph
 
 ## User-Owned Python Hooks
 
-OptPilot is designed so users own the search algorithm and, when needed, the environment adapter.
+OptPilot is designed so users own the search algorithm and the callable or command code used to evaluate an environment.
 
 - Environment callables use `module:function` for `evaluate.type: python`.
 - Methods use `python:module:Class`.

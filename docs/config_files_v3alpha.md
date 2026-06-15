@@ -32,7 +32,11 @@ metrics:
   keys: [throughput]
 ```
 
-Supported evaluator types are `python`, `command`, and `custom`.
+Supported evaluator types are `python`, `command`, and `custom`. `custom` evaluators use a component reference such as `python:my_lab.envs:Adapter`; the adapter receives the target definition and study spec, and implements `evaluate(artifact_spec, instance, context)`.
+
+Supported metric sources are `return`, `file`, `stdout`, `sqlite`, and `custom`. Custom metric extractors use `python:module:function_or_class` and receive workspace, evaluator result, process result, and extractor config.
+
+Record extraction supports `jsonl`, `csv`, `sqlite_table`, `sqlite_query`, and `custom`. Custom record extractors return rows directly or a dict containing `rows`/`records`.
 
 Supported candidate types are `parameters`, `files`, and `opaque`. `artifactKind` and `description` are required for all candidates.
 
@@ -64,7 +68,12 @@ compatibility:
 - `python`: instantiate a `python:module:Class` or `builtin.*` method.
 - `command`: run an external command using the batch protocol.
 
-`implementation.protocol` is `optpilot.method.batch.v1` today. The method receives study state, candidate context, objective, evidence summary, and method config, then returns candidate artifact manifests.
+`implementation.protocol` can be:
+
+- `optpilot.method.batch.v1`: the method is passively called by OptPilot to propose a batch.
+- `optpilot.method.session.v1`: a Python method receives a small active session object and submits candidates through `session.submit(...)`.
+
+Both protocols flow into the same evaluator and scheduler path. Batch command methods can either read/write JSON through stdin/stdout or explicit request/response files. Session methods are Python-only in the current implementation.
 
 For parameter candidates, OptPilot injects `candidate.parameters.schema` into `method.config.searchSpace` when the method did not provide a search space explicitly.
 
@@ -114,6 +123,8 @@ implementation:
 
 The response must contain `candidates` or `artifacts`, each entry being a candidate artifact manifest. Optional `method_events` entries are recorded in `method_events.jsonl`.
 
+Python session methods implement `run(session)` or are callable. The session exposes `study_state`, `evidence`, `candidate_context`, `config`, `n_candidates`, `submit(...)`, and `event(...)`.
+
 ## StudyConfig
 
 ```yaml
@@ -127,6 +138,7 @@ method: ../methods/reference_random_search.yaml
 objective:
   metric: throughput
   direction: maximize
+  aggregation: mean
 
 instances:
   source: files
@@ -145,7 +157,11 @@ reproducibility:
   seed: 7
 ```
 
-Supported execution backends are `local`, `local_subprocess`, `container`, and `custom`. `parallelism` controls candidate evaluation parallelism.
+Supported objective aggregation modes are `mean`, `median`, `min`, `max`, `sum`, `last`, and `weighted_mean`.
+
+`weighted_mean` accepts `objective.aggregation.weights` as a list, a scalar per metric, or a dict keyed by metric name with `*` as a fallback.
+
+Supported execution backends are `local`, `local_subprocess`, `container`, and `custom`. `parallelism` controls candidate evaluation parallelism. `custom` requires an explicit `implementation` value that resolves through the component registry, such as `python:my_lab.backends:Backend`.
 
 Container execution uses a Docker/Podman-compatible CLI and runs the same OptPilot worker contract as `local_subprocess`:
 

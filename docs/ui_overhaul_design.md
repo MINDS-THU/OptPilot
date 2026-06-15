@@ -137,11 +137,6 @@ Content:
 - Recently edited studies.
 - Best recent results.
 - Runtime health, including local Python and Docker availability.
-- Quick actions:
-  - Add environment
-  - Add method
-  - Create study
-  - Open run
 
 This page should not be a marketing landing page. It should be an operational dashboard.
 
@@ -388,7 +383,6 @@ Left navigation:
 Main:
 - Running jobs table
 - Recent runs table
-- Quick actions
 - Runtime health
 ```
 
@@ -488,15 +482,17 @@ POST /api/studies/validate
 POST /api/studies/launch
 GET  /api/runs
 GET  /api/runs/{id}
-GET  /api/runs/{id}/files
 GET  /api/runs/{id}/file?path=...
-GET  /api/runs/compare?ids=...
+GET  /api/config/file?path=...
+POST /api/config/file
 GET  /api/runtime/health
 ```
 
 `/api/compatibility` should return pairwise environment/method compatibility with reasons.
 
 `/api/studies/draft` should accept structured builder input and return a generated StudyConfig draft plus validation results.
+
+Run comparison can be computed client-side from `GET /api/runs/{id}` payloads for selected runs.
 
 ## Data Model For UI State
 
