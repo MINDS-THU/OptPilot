@@ -1,13 +1,18 @@
 const state = {
-  view: "studies",
-  cwd: null,
+  view: "home",
+  workspace: null,
+  runtime: null,
+  catalog: { environments: [], methods: [], studies: [], builtins: {} },
+  compatibility: { pairs: [] },
   runs: [],
-  catalog: null,
   jobs: [],
-  pendingJobId: null,
+  selectedEnvironmentUid: null,
+  selectedMethodUid: null,
   selectedRunId: null,
   selectedRun: null,
-  activeDetailTab: "observations",
+  activeRunTab: "overview",
+  draft: null,
+  pendingJobId: null,
 };
 
 const els = {};
@@ -25,33 +30,42 @@ function cacheElements() {
     "pageTitle",
     "pageSubtitle",
     "refreshButton",
+    "homeEnvironmentCount",
+    "homeMethodCount",
+    "homeRunCount",
+    "homeRunningCount",
+    "runtimeHealth",
+    "homeRecentRuns",
+    "environmentFilter",
+    "environmentsList",
+    "environmentDetail",
+    "methodFilter",
+    "methodsList",
+    "methodDetail",
+    "builderForm",
+    "builderEnvironment",
+    "builderMethod",
+    "builderCompatibility",
+    "builderName",
+    "builderMetric",
+    "builderDirection",
+    "builderMaxTrials",
+    "builderBackend",
+    "builderParallelism",
+    "builderTimeout",
+    "builderOutputRoot",
+    "builderInstances",
+    "draftButton",
+    "launchDraftButton",
+    "builderValidation",
+    "builderYaml",
     "totalRuns",
     "runningRuns",
     "completedTrials",
     "failureCount",
     "runFilter",
     "runsTable",
-    "runDetailEmpty",
     "runDetail",
-    "detailName",
-    "detailPath",
-    "detailStatus",
-    "detailBest",
-    "detailTrials",
-    "detailFailures",
-    "detailObjective",
-    "metricChart",
-    "detailTabContent",
-    "environmentsList",
-    "methodsList",
-    "studiesList",
-    "builtinsList",
-    "launchForm",
-    "studyPathInput",
-    "studySuggestions",
-    "outputRootInput",
-    "validateButton",
-    "validationResult",
     "jobsList",
   ]) {
     els[id] = document.getElementById(id);
@@ -62,37 +76,51 @@ function bindEvents() {
   document.querySelectorAll(".nav-button").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
   });
-  document.querySelectorAll(".tab").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.activeDetailTab = button.dataset.tab;
-      document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      renderDetailTab();
-    });
+  document.querySelectorAll("[data-view-target]").forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.viewTarget));
   });
   els.refreshButton.addEventListener("click", loadAll);
+  els.environmentFilter.addEventListener("input", renderEnvironments);
+  els.methodFilter.addEventListener("input", renderMethods);
   els.runFilter.addEventListener("input", renderRuns);
-  els.validateButton.addEventListener("click", validateStudy);
-  els.launchForm.addEventListener("submit", launchStudy);
+  els.builderEnvironment.addEventListener("change", () => {
+    state.selectedEnvironmentUid = els.builderEnvironment.value || state.selectedEnvironmentUid;
+    fillBuilderDefaults();
+    renderBuilderCompatibility();
+  });
+  els.builderMethod.addEventListener("change", () => {
+    state.selectedMethodUid = els.builderMethod.value || state.selectedMethodUid;
+    fillBuilderDefaults();
+    renderBuilderCompatibility();
+  });
+  els.draftButton.addEventListener("click", generateDraft);
+  els.builderForm.addEventListener("submit", launchDraft);
 }
 
 async function loadAll() {
-  await Promise.all([loadHealth(), loadCatalog(), loadRunsAndJobs()]);
+  await Promise.all([loadWorkspace(), loadRuntimeHealth(), loadCatalogAndCompatibility(), loadRunsAndJobs()]);
+  chooseDefaults();
+  renderAll();
 }
 
-async function loadHealth() {
+async function loadWorkspace() {
   try {
-    const payload = await getJson("/api/health");
-    state.cwd = payload.cwd || null;
-    els.healthStatus.textContent = payload.ok ? "Ready" : "Unavailable";
+    state.workspace = await getJson("/api/workspace");
+    els.healthStatus.textContent = "Ready";
   } catch (error) {
+    state.workspace = null;
     els.healthStatus.textContent = "Unavailable";
   }
 }
 
-async function loadCatalog() {
-  state.catalog = await getJson("/api/catalog");
-  renderCatalog();
+async function loadRuntimeHealth() {
+  state.runtime = await getJson("/api/runtime/health");
+}
+
+async function loadCatalogAndCompatibility() {
+  const [catalog, compatibility] = await Promise.all([getJson("/api/catalog"), getJson("/api/compatibility")]);
+  state.catalog = catalog;
+  state.compatibility = compatibility;
 }
 
 async function loadRunsAndJobs() {
@@ -100,30 +128,46 @@ async function loadRunsAndJobs() {
   state.runs = runsPayload.runs || [];
   state.jobs = jobsPayload.jobs || [];
   if (state.pendingJobId) {
-    const pendingJob = state.jobs.find((job) => job.job_id === state.pendingJobId);
-    if (pendingJob) {
-      const focused = await focusJobRun(pendingJob);
-      if (focused) {
+    const job = state.jobs.find((item) => item.job_id === state.pendingJobId);
+    if (job && job.run_dir) {
+      const run = state.runs.find((item) => item.path === job.run_dir);
+      if (run) {
         state.pendingJobId = null;
-        setView("studies");
+        await loadRunDetail(run.id);
+        setView("runs");
       }
-    } else {
-      state.pendingJobId = null;
     }
   }
+  renderHome();
   renderRuns();
   renderJobs();
-  if (state.selectedRunId && state.runs.some((run) => run.id === state.selectedRunId)) {
-    await loadRunDetail(state.selectedRunId, { keepTab: true });
-    return;
+}
+
+function chooseDefaults() {
+  if (!state.selectedEnvironmentUid && state.catalog.environments.length) {
+    state.selectedEnvironmentUid = state.catalog.environments[0].uid;
   }
-  if (state.runs.length) {
-    await loadRunDetail(state.runs[0].id, { keepTab: true });
-    return;
+  if (!state.selectedMethodUid && state.catalog.methods.length) {
+    const compatible = compatibleMethodsForEnvironment(state.selectedEnvironmentUid);
+    state.selectedMethodUid = compatible[0] ? compatible[0].method.uid : state.catalog.methods[0].uid;
   }
-  state.selectedRunId = null;
-  state.selectedRun = null;
-  renderRunDetail();
+  if (!state.selectedRunId && state.runs.length) {
+    state.selectedRunId = state.runs[0].id;
+  }
+}
+
+function renderAll() {
+  renderHome();
+  renderEnvironments();
+  renderMethods();
+  renderBuilder();
+  renderRuns();
+  renderJobs();
+  if (state.selectedRunId) {
+    loadRunDetail(state.selectedRunId, { keepTab: true });
+  } else {
+    renderRunDetail();
+  }
 }
 
 function setView(view) {
@@ -135,46 +179,292 @@ function setView(view) {
     section.classList.toggle("active-view", section.id === `${view}View`);
   });
   const titles = {
-    studies: ["Studies", "Monitor running studies and inspect previous runs."],
-    catalog: ["Catalog", "Browse available environments, methods, studies, and built-ins."],
-    builder: ["Builder", "Validate and launch existing StudyConfig files."],
+    home: ["Home", "Connect methods to environments, launch studies, and inspect evidence."],
+    environments: ["Environments", "Inspect candidate contracts and see compatible methods."],
+    methods: ["Methods", "Inspect optimization methods and their compatible environments."],
+    builder: ["Study Builder", "Create a valid study from an environment and method."],
+    runs: ["Runs", "Monitor jobs, compare outcomes, and inspect run evidence."],
   };
   els.pageTitle.textContent = titles[view][0];
   els.pageSubtitle.textContent = titles[view][1];
 }
 
+function renderHome() {
+  els.homeEnvironmentCount.textContent = String(state.catalog.environments.length);
+  els.homeMethodCount.textContent = String(state.catalog.methods.length);
+  els.homeRunCount.textContent = String(state.runs.length);
+  els.homeRunningCount.textContent = String(state.runs.filter((run) => run.status === "running").length);
+  renderRuntimeHealth();
+  els.homeRecentRuns.innerHTML = state.runs.slice(0, 6).map(renderRunCard).join("") || emptyInline("No runs discovered yet.");
+  document.querySelectorAll(".home-run-card").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await loadRunDetail(button.dataset.runId);
+      setView("runs");
+    });
+  });
+}
+
+function renderRuntimeHealth() {
+  if (!state.runtime) {
+    els.runtimeHealth.innerHTML = emptyState("Runtime health is unavailable.");
+    return;
+  }
+  const items = [
+    ["Python", state.runtime.python],
+    ["Docker", state.runtime.docker],
+    ["Podman", state.runtime.podman],
+  ];
+  els.runtimeHealth.innerHTML = items
+    .map(([label, info]) => `
+      <div class="list-item compact">
+        <div class="row-between">
+          <strong>${escapeHtml(label)}</strong>
+          ${statusPill(info && info.ok ? "ready" : "unavailable")}
+        </div>
+        <p class="path-text">${escapeHtml((info && (info.version || info.path)) || "Not found")}</p>
+      </div>
+    `)
+    .join("");
+}
+
+function renderEnvironments() {
+  const query = els.environmentFilter.value.trim().toLowerCase();
+  const environments = state.catalog.environments.filter((item) => searchable(item).includes(query));
+  els.environmentsList.innerHTML = environments.map((item) => entityButton(item, "environment")).join("") || emptyInline("No environments match.");
+  document.querySelectorAll("[data-environment-uid]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedEnvironmentUid = button.dataset.environmentUid;
+      renderEnvironments();
+      fillBuilderFromSelection();
+    });
+  });
+  renderEnvironmentDetail();
+}
+
+function renderEnvironmentDetail() {
+  const env = environmentByUid(state.selectedEnvironmentUid);
+  if (!env) {
+    els.environmentDetail.innerHTML = emptyState("Select an environment to inspect its contract.");
+    return;
+  }
+  const compatible = compatibleMethodsForEnvironment(env.uid);
+  const incompatible = incompatibleMethodsForEnvironment(env.uid);
+  els.environmentDetail.innerHTML = `
+    ${entityHeader(env)}
+    <div class="detail-grid">
+      ${kvPanel("Candidate Contract", [
+        ["Type", env.summary.candidate_type],
+        ["Artifact kind", env.summary.artifact_kind],
+        ["Metrics", (env.summary.metrics || []).join(", ") || "-"],
+        ["Evaluator", env.summary.evaluate_type],
+      ])}
+      ${kvPanel("Runtime", [
+        ["Evaluator type", env.summary.runtime && env.summary.runtime.evaluate_type],
+        ["Timeout", env.summary.runtime && env.summary.runtime.timeoutSeconds],
+        ["Python path", env.summary.runtime && env.summary.runtime.has_python_path ? "configured" : "default"],
+      ])}
+    </div>
+    <div class="panel-section">
+      <div class="section-heading">
+        <h3>Compatible Methods</h3>
+        <button class="ghost-button create-from-env" type="button">Create study</button>
+      </div>
+      ${compatList(compatible, "method")}
+    </div>
+    <div class="panel-section">
+      <h3>Incompatible Methods</h3>
+      ${compatList(incompatible, "method")}
+    </div>
+  `;
+  const create = document.querySelector(".create-from-env");
+  if (create) {
+    create.addEventListener("click", () => {
+      const compatibleMethod = compatible[0];
+      if (compatibleMethod) state.selectedMethodUid = compatibleMethod.method.uid;
+      state.selectedEnvironmentUid = env.uid;
+      setView("builder");
+      renderBuilder();
+    });
+  }
+}
+
+function renderMethods() {
+  const query = els.methodFilter.value.trim().toLowerCase();
+  const methods = state.catalog.methods.filter((item) => searchable(item).includes(query));
+  els.methodsList.innerHTML = methods.map((item) => entityButton(item, "method")).join("") || emptyInline("No methods match.");
+  document.querySelectorAll("[data-method-uid]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedMethodUid = button.dataset.methodUid;
+      renderMethods();
+      fillBuilderFromSelection();
+    });
+  });
+  renderMethodDetail();
+}
+
+function renderMethodDetail() {
+  const method = methodByUid(state.selectedMethodUid);
+  if (!method) {
+    els.methodDetail.innerHTML = emptyState("Select a method to inspect compatibility.");
+    return;
+  }
+  const compatible = compatibleEnvironmentsForMethod(method.uid);
+  const incompatible = incompatibleEnvironmentsForMethod(method.uid);
+  els.methodDetail.innerHTML = `
+    ${entityHeader(method)}
+    <div class="detail-grid">
+      ${kvPanel("Implementation", [
+        ["Type", method.summary.implementation_type],
+        ["Protocol", method.summary.protocol],
+        ["Batch size", method.summary.batch_size],
+      ])}
+      ${kvPanel("Runtime", [
+        ["Runtime", method.summary.runtime && method.summary.runtime.type],
+        ["Image", method.summary.runtime && method.summary.runtime.image],
+        ["Build", method.summary.runtime && method.summary.runtime.has_build ? "configured" : "not configured"],
+        ["Network", method.summary.runtime && method.summary.runtime.networkPolicy],
+      ])}
+      ${kvPanel("Compatibility", [
+        ["Candidate types", (method.summary.candidate_types || []).join(", ")],
+        ["Artifact kinds", (method.summary.artifact_kinds || []).join(", ")],
+        ["Capabilities", (method.summary.required_capabilities || []).join(", ") || "-"],
+      ])}
+    </div>
+    <div class="panel-section">
+      <div class="section-heading">
+        <h3>Compatible Environments</h3>
+        <button class="ghost-button create-from-method" type="button">Create study</button>
+      </div>
+      ${compatList(compatible, "environment")}
+    </div>
+    <div class="panel-section">
+      <h3>Incompatible Environments</h3>
+      ${compatList(incompatible, "environment")}
+    </div>
+  `;
+  const create = document.querySelector(".create-from-method");
+  if (create) {
+    create.addEventListener("click", () => {
+      const compatibleEnvironment = compatible[0];
+      if (compatibleEnvironment) state.selectedEnvironmentUid = compatibleEnvironment.environment.uid;
+      state.selectedMethodUid = method.uid;
+      setView("builder");
+      renderBuilder();
+    });
+  }
+}
+
+function renderBuilder() {
+  renderBuilderOptions();
+  fillBuilderDefaults();
+  renderBuilderCompatibility();
+}
+
+function renderBuilderOptions() {
+  els.builderEnvironment.innerHTML = state.catalog.environments.map((env) => option(env, state.selectedEnvironmentUid)).join("");
+  const compatible = new Set(compatibleMethodsForEnvironment(state.selectedEnvironmentUid).map((pair) => pair.method.uid));
+  els.builderMethod.innerHTML = state.catalog.methods
+    .map((method) => {
+      const label = compatible.has(method.uid) ? method.label : `${method.label} (incompatible)`;
+      return `<option value="${escapeHtml(method.uid)}" ${method.uid === state.selectedMethodUid ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+}
+
+function fillBuilderDefaults() {
+  const env = environmentByUid(els.builderEnvironment.value || state.selectedEnvironmentUid);
+  const method = methodByUid(els.builderMethod.value || state.selectedMethodUid);
+  if (env) state.selectedEnvironmentUid = env.uid;
+  if (method) state.selectedMethodUid = method.uid;
+  if (!els.builderName.value && env && method) {
+    els.builderName.value = `${env.id}-${method.id}`;
+  }
+  if (env && (!els.builderMetric.value || !((env.summary.metrics || []).includes(els.builderMetric.value)))) {
+    els.builderMetric.value = (env.summary.metrics || [])[0] || "score";
+  }
+}
+
+function fillBuilderFromSelection() {
+  els.builderName.value = "";
+  els.builderMetric.value = "";
+  renderBuilder();
+}
+
+function renderBuilderCompatibility() {
+  const pair = pairFor(state.selectedEnvironmentUid, state.selectedMethodUid);
+  if (!pair) {
+    els.builderCompatibility.innerHTML = `<div class="compat-warning">Select an environment and method.</div>`;
+    return;
+  }
+  els.builderCompatibility.innerHTML = compatibilityBox(pair);
+}
+
+async function generateDraft() {
+  const result = await postJson("/api/studies/draft", builderPayload(), { tolerateError: true });
+  state.draft = result;
+  renderDraft(result);
+  return result;
+}
+
+async function launchDraft(event) {
+  event.preventDefault();
+  const result = state.draft && state.draft.path ? state.draft : await generateDraft();
+  if (!result.path || (result.validation && !result.validation.valid)) {
+    renderDraft(result);
+    return;
+  }
+  const launched = await postJson("/api/studies/launch", {
+    study_path: result.path,
+    output_root: els.builderOutputRoot.value.trim() || "runs",
+  }, { tolerateError: true });
+  if (launched.job) {
+    state.pendingJobId = launched.job.job_id;
+    els.builderValidation.innerHTML = validationHtml({
+      valid: true,
+      launched: true,
+      name: launched.job.study_name,
+      path: launched.job.study_path,
+      target_id: launched.job.target_id,
+      job_id: launched.job.job_id,
+    });
+    await loadRunsAndJobs();
+    setView("runs");
+  } else {
+    els.builderValidation.innerHTML = validationHtml(launched);
+  }
+}
+
+function builderPayload() {
+  return {
+    environment_path: environmentByUid(els.builderEnvironment.value).path,
+    method_path: methodByUid(els.builderMethod.value).path,
+    name: els.builderName.value.trim(),
+    metric: els.builderMetric.value.trim(),
+    direction: els.builderDirection.value,
+    maxTrials: Number(els.builderMaxTrials.value || 1),
+    backend: els.builderBackend.value,
+    parallelism: Number(els.builderParallelism.value || 1),
+    timeoutSeconds: Number(els.builderTimeout.value || 120),
+    instances: els.builderInstances.value,
+  };
+}
+
+function renderDraft(result) {
+  els.builderYaml.textContent = result.yaml || "";
+  els.builderValidation.innerHTML = validationHtml(result.validation || result);
+  if (result.compatibility) {
+    els.builderCompatibility.innerHTML = compatibilityBox(result.compatibility);
+  }
+}
+
 function renderRuns() {
   const query = els.runFilter.value.trim().toLowerCase();
-  const runs = state.runs.filter((run) => {
-    const haystack = `${run.name} ${run.path} ${run.status} ${run.target_id || ""}`.toLowerCase();
-    return haystack.includes(query);
-  });
+  const runs = state.runs.filter((run) => `${run.name} ${run.path} ${run.status} ${run.target_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
   els.totalRuns.textContent = String(state.runs.length);
   els.runningRuns.textContent = String(state.runs.filter((run) => run.status === "running").length);
   els.completedTrials.textContent = String(sum(state.runs.map((run) => Number(run.completed_trials || 0))));
   els.failureCount.textContent = String(sum(state.runs.map((run) => Number(run.failure_count || 0))));
-  els.runsTable.innerHTML = runs
-    .map(
-      (run) => `
-        <tr class="run-row ${run.id === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}">
-          <td>
-            <div class="run-summary-cell">
-              <strong class="run-name" title="${escapeHtml(run.name)}">${escapeHtml(run.name)}</strong>
-              <div class="path-text clamp-1" title="${escapeHtml(run.path)}">${escapeHtml(shortPath(run.path))}</div>
-            </div>
-          </td>
-          <td>${statusPill(run.status)}</td>
-          <td>${escapeHtml(run.completed_trials ?? 0)}</td>
-          <td>${formatMetric(run.best_metric)}</td>
-          <td>${escapeHtml(run.target_id || "-")}</td>
-          <td>${formatTime(run.finished_at || run.started_at || run.updated_at)}</td>
-        </tr>
-      `
-    )
-    .join("");
-  if (!runs.length) {
-    els.runsTable.innerHTML = `<tr><td colspan="6"><div class="empty-inline">No runs match the current filter.</div></td></tr>`;
-  }
+  els.runsTable.innerHTML = runs.map(runRow).join("") || `<tr><td colspan="6">${emptyInline("No runs match.")}</td></tr>`;
   document.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
   });
@@ -183,12 +473,7 @@ function renderRuns() {
 async function loadRunDetail(runId, options = {}) {
   state.selectedRunId = runId;
   state.selectedRun = await getJson(`/api/runs/${encodeURIComponent(runId)}`);
-  if (!options.keepTab) {
-    state.activeDetailTab = "observations";
-    document.querySelectorAll(".tab").forEach((button) => {
-      button.classList.toggle("active", button.dataset.tab === "observations");
-    });
-  }
+  if (!options.keepTab) state.activeRunTab = "overview";
   renderRuns();
   renderRunDetail();
 }
@@ -196,318 +481,158 @@ async function loadRunDetail(runId, options = {}) {
 function renderRunDetail() {
   const detail = state.selectedRun;
   if (!detail) {
-    els.runDetailEmpty.classList.remove("hidden");
-    els.runDetail.classList.add("hidden");
+    els.runDetail.innerHTML = emptyState("Select a run to inspect observations, artifacts, events, and files.");
     return;
   }
   const run = detail.run;
-  const objective = run.objective || {};
-  els.runDetailEmpty.classList.add("hidden");
-  els.runDetail.classList.remove("hidden");
-  els.detailName.textContent = run.name;
-  els.detailName.title = run.name;
-  els.detailName.classList.add("detail-title");
-  els.detailPath.textContent = shortPath(run.path);
-  els.detailPath.title = run.path;
-  els.detailStatus.innerHTML = statusText(run.status);
-  setStatusClass(els.detailStatus, run.status);
-  els.detailBest.textContent = formatMetric(run.best_metric);
-  els.detailTrials.textContent = String(run.completed_trials || 0);
-  els.detailFailures.textContent = String(run.failure_count || 0);
-  els.detailObjective.textContent = objective.name ? `${objective.name} ${objective.direction || ""}` : "-";
-  renderMetricChart(detail.observations || [], objective.name);
-  renderDetailTab();
-}
-
-function renderMetricChart(observations, metricName) {
-  const points = observations
-    .map((observation, index) => ({
-      index,
-      value: Number(observation.metric_values && observation.metric_values[metricName]),
-    }))
-    .filter((point) => Number.isFinite(point.value));
-  if (!metricName || points.length === 0) {
-    els.metricChart.innerHTML = `<div class="empty-state"><p>No metric values to chart.</p></div>`;
-    return;
-  }
-  const width = 640;
-  const height = 140;
-  const pad = 18;
-  const min = Math.min(...points.map((point) => point.value));
-  const max = Math.max(...points.map((point) => point.value));
-  const span = max - min || 1;
-  const x = (point) => pad + (point.index / Math.max(1, observations.length - 1)) * (width - pad * 2);
-  const y = (point) => height - pad - ((point.value - min) / span) * (height - pad * 2);
-  const polyline = points.map((point) => `${x(point)},${y(point)}`).join(" ");
-  const circles = points
-    .map((point) => `<circle cx="${x(point)}" cy="${y(point)}" r="3"><title>${metricName}: ${point.value}</title></circle>`)
-    .join("");
-  els.metricChart.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(metricName)} over trials">
-      <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" stroke="#d9e1e5" />
-      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" stroke="#d9e1e5" />
-      <polyline points="${polyline}" fill="none" stroke="#087f8c" stroke-width="2.5" />
-      <g fill="#2d6cdf">${circles}</g>
-      <text x="${pad}" y="13" font-size="11" fill="#66747c">${escapeHtml(metricName)} max ${formatMetric(max)} min ${formatMetric(min)}</text>
-    </svg>
-  `;
-}
-
-function renderDetailTab() {
-  const detail = state.selectedRun;
-  if (!detail) return;
-  if (state.activeDetailTab === "observations") {
-    els.detailTabContent.innerHTML = tableFromRows(detail.observations || [], [
-      ["trial_id", "Trial"],
-      ["status", "Status"],
-      ["metric_values", "Metrics"],
-      ["resource_usage", "Resources"],
-    ]);
-    return;
-  }
-  if (state.activeDetailTab === "artifacts") {
-    els.detailTabContent.innerHTML = tableFromRows(detail.artifacts || [], [
-      ["artifact_id", "Artifact"],
-      ["artifact_kind", "Kind"],
-      ["validation", "Validation"],
-      ["generator_record", "Generator"],
-    ]);
-    return;
-  }
-  if (state.activeDetailTab === "events") {
-    const events = [
-      ...(detail.controller_decisions || []).map((record) => ({ type: "controller", ...record })),
-      ...(detail.engine_snapshots || []).map((record) => ({ type: "engine", ...record })),
-      ...(detail.scheduler_events || []).map((record) => ({ type: "scheduler", ...record })),
-    ];
-    els.detailTabContent.innerHTML = tableFromRows(events, [
-      ["type", "Type"],
-      ["event", "Event"],
-      ["engine_id", "Engine"],
-      ["created_at", "Created"],
-      ["reason", "Reason"],
-    ]);
-    return;
-  }
-  renderFilesTab(detail);
-}
-
-function renderFilesTab(detail) {
-  const files = detail.files || [];
-  els.detailTabContent.innerHTML = `
-    <div class="list">
-      ${files
-        .map(
-          (file) => `
-            <button class="file-button" type="button" data-file-path="${escapeHtml(file.relative_path)}">
-              ${escapeHtml(file.relative_path)}
-              <span class="muted">${formatBytes(file.size)}</span>
-            </button>
-          `
-        )
-        .join("")}
+  els.runDetail.innerHTML = `
+    <div class="detail-heading">
+      <div>
+        <h2>${escapeHtml(run.name)}</h2>
+        <p class="path-text">${escapeHtml(shortPath(run.path))}</p>
+      </div>
+      ${statusPill(run.status)}
     </div>
-    <div id="filePreview"></div>
+    <div class="detail-stats">
+      <div><span>Best metric</span><strong>${formatMetric(run.best_metric)}</strong></div>
+      <div><span>Trials</span><strong>${escapeHtml(run.completed_trials || 0)}</strong></div>
+      <div><span>Failures</span><strong>${escapeHtml(run.failure_count || 0)}</strong></div>
+      <div><span>Method</span><strong>${escapeHtml(run.method && run.method.id || "-")}</strong></div>
+    </div>
+    ${metricChart(detail.observations || [], run.objective && run.objective.name)}
+    <div class="tabs">
+      ${["overview", "trials", "artifacts", "events", "runtime", "files"].map((tab) => `<button class="tab ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button">${capitalize(tab)}</button>`).join("")}
+    </div>
+    <div class="tab-content">${runTabContent(detail)}</div>
   `;
+  document.querySelectorAll("[data-run-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.activeRunTab = button.dataset.runTab;
+      renderRunDetail();
+    });
+  });
   document.querySelectorAll(".file-button").forEach((button) => {
     button.addEventListener("click", async () => {
-      const response = await getJson(
-        `/api/runs/${encodeURIComponent(detail.run.id)}/file?path=${encodeURIComponent(button.dataset.filePath)}`
-      );
-      document.getElementById("filePreview").innerHTML = `
-        <h3>${escapeHtml(response.relative_path)}</h3>
-        <pre class="code-box">${escapeHtml(response.content)}</pre>
-      `;
+      const response = await getJson(`/api/runs/${encodeURIComponent(detail.run.id)}/file?path=${encodeURIComponent(button.dataset.filePath)}`);
+      const preview = document.getElementById("filePreview");
+      preview.innerHTML = `<h3>${escapeHtml(response.relative_path)}</h3><pre class="code-box">${escapeHtml(response.content)}</pre>`;
     });
   });
 }
 
-function renderCatalog() {
-  if (!state.catalog) return;
-  renderCatalogList(els.environmentsList, state.catalog.environments || [], (item) => [
-    item.summary.candidate_type,
-    item.summary.artifact_kind,
-    item.summary.evaluate_type,
-    ...(item.summary.capabilities || []),
-    ...(item.summary.editable_files || []),
-    ...(item.summary.metrics || []),
-  ]);
-  renderCatalogList(els.methodsList, state.catalog.methods || [], (item) => [
-    item.summary.controller,
-    item.summary.engine,
-    item.summary.batch_size ? `batch ${item.summary.batch_size}` : null,
-    ...(item.summary.candidate_types || []),
-    ...(item.summary.artifact_kinds || []),
-    ...(item.summary.required_capabilities || []),
-  ]);
-  renderCatalogList(els.studiesList, state.catalog.studies || [], (item) => [
-    item.summary.objective && item.summary.objective.metric,
-    item.summary.objective && item.summary.objective.direction,
-    item.summary.budget && item.summary.budget.maxTrials ? `${item.summary.budget.maxTrials} trials` : null,
-  ]);
-  els.builtinsList.innerHTML = Object.entries(state.catalog.builtins || {})
-    .map(
-      ([category, values]) => `
-        <div class="list-item">
-          <h3>${escapeHtml(category)}</h3>
-          <div class="item-meta">${values.map((value) => `<span class="tag">${escapeHtml(value)}</span>`).join("")}</div>
-        </div>
-      `
-    )
-    .join("");
-  renderBuilderSuggestions();
-}
-
-function renderCatalogList(container, items, metaFn) {
-  if (!items.length) {
-    container.innerHTML = `<div class="empty-state"><p>No entries discovered.</p></div>`;
-    return;
+function runTabContent(detail) {
+  if (state.activeRunTab === "overview") {
+    return kvPanel("Run", [
+      ["Environment", detail.run.target_id],
+      ["Objective", `${detail.run.objective && detail.run.objective.name || "-"} ${detail.run.objective && detail.run.objective.direction || ""}`],
+      ["Best trial", detail.run.best_trial_id],
+      ["Best artifact", detail.run.best_artifact_id],
+    ]);
   }
-  container.innerHTML = items
-    .map((item) => {
-      const meta = metaFn(item).filter(Boolean);
-      return `
-        <div class="list-item">
-          <h3>${escapeHtml(item.label)}</h3>
-          <p class="path-text" title="${escapeHtml(item.path)}">${escapeHtml(shortPath(item.path))}</p>
-          ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
-          <div class="item-meta">
-            ${item.tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
-            ${meta.map((value) => `<span class="tag">${escapeHtml(String(value))}</span>`).join("")}
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function renderBuilderSuggestions() {
-  const studies = state.catalog && state.catalog.studies ? state.catalog.studies : [];
-  const preferred = studies
-    .slice()
-    .sort((left, right) => scoreStudy(right) - scoreStudy(left) || left.label.localeCompare(right.label));
-  els.studySuggestions.innerHTML = studies
-    .map((item) => `<option value="${escapeHtml(relativeToCwd(item.path))}"></option>`)
-    .join("");
-  if (!els.studyPathInput.value && preferred.length) {
-    els.studyPathInput.value = relativeToCwd(preferred[0].path);
+  if (state.activeRunTab === "trials") {
+    return tableFromRows(trialRows(detail), [
+      ["trial_id", "Trial"],
+      ["status", "Status"],
+      ["artifact_id", "Artifact"],
+      ["backend", "Backend"],
+      ["budget", "Budget"],
+      ["error", "Error"],
+    ]);
   }
-  if (!els.outputRootInput.value) {
-    els.outputRootInput.value = "runs";
+  if (state.activeRunTab === "artifacts") {
+    return tableFromRows(detail.artifacts || [], [["artifact_id", "Artifact"], ["artifact_kind", "Kind"], ["validation", "Validation"], ["generator_record", "Generator"]]);
   }
-}
-
-async function validateStudy() {
-  const payload = { study_path: els.studyPathInput.value.trim() };
-  const result = await postJson("/api/studies/validate", payload, { tolerateError: true });
-  renderValidation(result);
-}
-
-async function launchStudy(event) {
-  event.preventDefault();
-  const payload = {
-    study_path: els.studyPathInput.value.trim(),
-    output_root: els.outputRootInput.value.trim(),
-  };
-  const result = await postJson("/api/studies/launch", payload, { tolerateError: true });
-  if (result.job) {
-    state.pendingJobId = result.job.job_id;
-    renderValidation({
-      valid: true,
-      errors: [],
-      name: result.job.study_name || "Launched",
-      path: result.job.study_path,
-      target_id: result.job.target_id,
-      launched: true,
-      job_id: result.job.job_id,
-      output_root: result.job.output_root,
-    });
-    await loadRunsAndJobs();
-    const focused = await focusJobRun(result.job);
-    setView(focused ? "studies" : "builder");
-    return;
+  if (state.activeRunTab === "events") {
+    const events = [
+      ...(detail.method_calls || []).map((record) => ({ type: "method call", ...record })),
+      ...(detail.method_events || []).map((record) => ({ type: "method event", ...record })),
+      ...(detail.scheduler_events || []).map((record) => ({ type: "scheduler", ...record })),
+    ];
+    return tableFromRows(events, [["type", "Type"], ["event", "Event"], ["method_id", "Method"], ["created_at", "Created"], ["payload", "Payload"]]);
   }
-  renderValidation(result);
+  if (state.activeRunTab === "runtime") {
+    return `<pre class="code-box">${escapeHtml(JSON.stringify({
+      policy: detail.run_policy,
+      environment_snapshot: detail.environment_snapshot,
+      lineage: detail.run_lineage,
+    }, null, 2))}</pre>`;
+  }
+  return filesTab(detail);
 }
 
-function renderValidation(result) {
-  const valid = Boolean(result.valid);
-  const objective = result.objective && result.objective.name
-    ? `${result.objective.name} ${result.objective.direction || ""}`.trim()
-    : "-";
-  const errors = (result.errors || []).map((error) => `<li>${escapeHtml(String(error))}</li>`).join("");
-  const pathLabel = result.path || result.output_root || "-";
-  const pathTitle = result.path || result.output_root || "";
-  els.validationResult.innerHTML = `
-    <div class="validation-header">
-      <div class="${valid ? "status-completed" : "status-failed"} status-pill">${result.launched ? "Launched" : valid ? "Valid" : "Invalid"}</div>
-      ${result.name ? `<strong>${escapeHtml(result.name)}</strong>` : ""}
+function trialRows(detail) {
+  const observationsByTrial = new Map((detail.observations || []).map((observation) => [observation.trial_id, observation]));
+  return (detail.trials || []).map((trial) => {
+    const observation = observationsByTrial.get(trial.trial_id) || {};
+    return {
+      trial_id: trial.trial_id,
+      status: trial.status || observation.status,
+      artifact_id: trial.artifact_id || observation.artifact_id,
+      backend: backendSummary(trial.backend_worker || observation.provenance && observation.provenance.backend_worker),
+      budget: budgetSummary(trial, observation),
+      error: errorSummary(observation) || errorSummary(trial),
+    };
+  });
+}
+
+function backendSummary(worker) {
+  if (!worker || typeof worker !== "object") return "-";
+  const backend = worker.backend || worker.worker_pool || "-";
+  const details = [
+    worker.worker_pool && worker.worker_pool !== backend ? worker.worker_pool : "",
+    worker.pid ? `pid ${worker.pid}` : "",
+    worker.timeoutSeconds ? `${worker.timeoutSeconds}s limit` : "",
+  ].filter(Boolean);
+  return details.length ? `${backend} (${details.join(", ")})` : backend;
+}
+
+function budgetSummary(trial, observation) {
+  const requested = trial.resource_profile || observation.resource_usage && observation.resource_usage.requested || {};
+  const timeout = requested.timeoutSeconds ? `${requested.timeoutSeconds}s requested` : "";
+  const elapsed = observation.resource_usage && Number.isFinite(Number(observation.resource_usage.wallClockSeconds))
+    ? `${Number(observation.resource_usage.wallClockSeconds).toFixed(1)}s elapsed`
+    : "";
+  return [timeout, elapsed].filter(Boolean).join(", ") || "-";
+}
+
+function errorSummary(record) {
+  const summary = record && record.event_summary || {};
+  const error = summary.error || summary.errors && summary.errors[0] || record && record.error;
+  if (!error) return "-";
+  const phase = error.phase ? `${error.phase}: ` : "";
+  const kind = error.type || "Error";
+  const message = error.message ? ` - ${error.message}` : "";
+  return `${phase}${kind}${message}`;
+}
+
+function filesTab(detail) {
+  const files = detail.files || [];
+  return `
+    <div class="file-layout">
+      <div class="file-list">
+        ${files.map((file) => `<button class="file-button" type="button" data-file-path="${escapeHtml(file.relative_path)}">${escapeHtml(file.relative_path)}<span>${formatBytes(file.size)}</span></button>`).join("") || emptyInline("No files found.")}
+      </div>
+      <div id="filePreview" class="file-preview"></div>
     </div>
-    ${
-      valid
-        ? `
-          <div class="validation-summary">
-            <div><span>Target</span><strong>${escapeHtml(result.target_id || "-")}</strong></div>
-            <div><span>${result.launched ? "Job" : "Objective"}</span><strong>${escapeHtml(result.launched ? result.job_id || "-" : objective)}</strong></div>
-            <div><span>${result.launched ? "Output root" : "Max trials"}</span><strong>${escapeHtml(result.launched ? shortPath(result.output_root || "-") : result.max_trials ?? "-")}</strong></div>
-            <div><span>Path</span><strong title="${escapeHtml(pathTitle)}">${escapeHtml(shortPath(pathLabel))}</strong></div>
-          </div>
-        `
-        : `${errors ? `<ul class="error-list">${errors}</ul>` : `<p class="muted">No validation details returned.</p>`}`
-    }
-    <details class="details-block">
-      <summary>Raw details</summary>
-      <pre class="code-box">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
-    </details>
   `;
 }
 
 function renderJobs() {
-  if (!state.jobs.length) {
-    els.jobsList.innerHTML = `<div class="empty-state"><p>No UI-launched jobs yet.</p></div>`;
-    return;
-  }
-  els.jobsList.innerHTML = state.jobs
-    .map((job) => {
-      const matchingRun = findRunForJob(job);
-      return `
-        <div class="list-item">
-          <div class="detail-heading">
-            <div class="job-copy">
-              <h3 class="run-name" title="${escapeHtml(job.study_name || job.job_id)}">${escapeHtml(job.study_name || job.job_id)}</h3>
-              <p class="path-text clamp-1">${escapeHtml(job.job_id)}</p>
-              <p class="path-text clamp-1" title="${escapeHtml(job.study_path)}">${escapeHtml(shortPath(job.study_path))}</p>
-            </div>
-            ${statusPill(job.status)}
-          </div>
-          <div class="item-meta">
-            <span class="tag">pid ${escapeHtml(job.process_id || "-")}</span>
-            <span class="tag">exit ${escapeHtml(job.exit_code ?? "-")}</span>
-            <span class="tag">target ${escapeHtml(job.target_id || "-")}</span>
-          </div>
-          ${job.run_dir ? `<p class="path-text clamp-1" title="${escapeHtml(job.run_dir)}">${escapeHtml(shortPath(job.run_dir))}</p>` : `<p class="muted">Run directory will appear once the first evidence files are created.</p>`}
-          <div class="job-actions">
-          ${
-            matchingRun
-              ? `<button type="button" class="icon-button inspect-run" data-run-id="${escapeHtml(matchingRun.id)}">Inspect run</button>`
-              : ""
-          }
-          ${
-            job.status === "running"
-              ? `<button type="button" class="icon-button stop-job" data-job-id="${escapeHtml(job.job_id)}">Stop</button>`
-              : ""
-          }
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-  document.querySelectorAll(".inspect-run").forEach((button) => {
-    button.addEventListener("click", async () => {
-      setView("studies");
-      await loadRunDetail(button.dataset.runId);
-    });
-  });
+  els.jobsList.innerHTML = state.jobs.map((job) => `
+    <div class="compact-card">
+      <div class="row-between">
+        <strong>${escapeHtml(job.study_name || job.job_id)}</strong>
+        ${statusPill(job.status)}
+      </div>
+      <p class="path-text">${escapeHtml(shortPath(job.study_path))}</p>
+      <div class="item-meta">
+        <span class="tag">pid ${escapeHtml(job.process_id || "-")}</span>
+        <span class="tag">exit ${escapeHtml(job.exit_code ?? "-")}</span>
+        ${job.run_dir ? `<span class="tag">${escapeHtml(shortPath(job.run_dir))}</span>` : ""}
+      </div>
+      ${job.status === "running" ? `<button class="ghost-button stop-job" data-job-id="${escapeHtml(job.job_id)}" type="button">Stop</button>` : ""}
+    </div>
+  `).join("") || emptyInline("No UI-launched jobs yet.");
   document.querySelectorAll(".stop-job").forEach((button) => {
     button.addEventListener("click", async () => {
       await postJson(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}/stop`, {});
@@ -516,39 +641,185 @@ function renderJobs() {
   });
 }
 
-function tableFromRows(rows, columns) {
-  if (!rows.length) {
-    return `<div class="empty-state"><p>No records found.</p></div>`;
-  }
+function entityButton(item, kind) {
+  const selected = kind === "environment" ? item.uid === state.selectedEnvironmentUid : item.uid === state.selectedMethodUid;
+  const summary = item.summary || {};
+  const tags = [
+    summary.candidate_type,
+    summary.artifact_kind,
+    summary.implementation_type,
+    summary.runtime && summary.runtime.type,
+  ].filter(Boolean);
   return `
-    <div class="table-wrap">
+    <button class="entity-button ${selected ? "selected" : ""}" data-${kind}-uid="${escapeHtml(item.uid)}" type="button">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span class="path-text">${escapeHtml(shortPath(item.path))}</span>
+      <span class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
+    </button>
+  `;
+}
+
+function entityHeader(item) {
+  return `
+    <div class="detail-heading">
+      <div>
+        <h2>${escapeHtml(item.label)}</h2>
+        <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
+      </div>
+      <div class="item-meta">${(item.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+    </div>
+    ${item.description ? `<p class="detail-description">${escapeHtml(item.description)}</p>` : ""}
+  `;
+}
+
+function compatList(pairs, target) {
+  if (!pairs.length) return emptyInline("No entries.");
+  return `<div class="compat-list">${pairs.map((pair) => {
+    const item = target === "method" ? pair.method : pair.environment;
+    return `
+      <div class="compat-item ${pair.compatible ? "compatible" : "incompatible"}">
+        <div class="row-between">
+          <strong>${escapeHtml(item.label)}</strong>
+          ${statusPill(pair.compatible ? "compatible" : "incompatible")}
+        </div>
+        <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
+        <ul>${pair.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+      </div>
+    `;
+  }).join("")}</div>`;
+}
+
+function compatibilityBox(pair) {
+  return `
+    <div class="${pair.compatible ? "compat-ok" : "compat-warning"}">
+      <strong>${pair.compatible ? "Compatible" : "Not compatible"}</strong>
+      <ul>${(pair.checks || []).map((check) => `<li>${check.ok ? "OK" : "Issue"}: ${escapeHtml(check.message)}</li>`).join("")}</ul>
+    </div>
+  `;
+}
+
+function kvPanel(title, rows) {
+  return `
+    <section class="kv-panel">
+      <h3>${escapeHtml(title)}</h3>
+      <dl>
+        ${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value ?? "-")}</dd></div>`).join("")}
+      </dl>
+    </section>
+  `;
+}
+
+function runRow(run) {
+  return `
+    <tr class="run-row ${run.id === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}">
+      <td><strong>${escapeHtml(run.name)}</strong><div class="path-text">${escapeHtml(shortPath(run.path))}</div></td>
+      <td>${statusPill(run.status)}</td>
+      <td>${escapeHtml(run.method && run.method.id || "-")}</td>
+      <td>${escapeHtml(run.completed_trials ?? 0)}</td>
+      <td>${formatMetric(run.best_metric)}</td>
+      <td>${escapeHtml(run.target_id || "-")}</td>
+    </tr>
+  `;
+}
+
+function renderRunCard(run) {
+  return `
+    <button class="compact-card home-run-card" data-run-id="${escapeHtml(run.id)}" type="button">
+      <div class="row-between">
+        <strong>${escapeHtml(run.name)}</strong>
+        ${statusPill(run.status)}
+      </div>
+      <p>${escapeHtml(run.target_id || "-")} / ${escapeHtml(run.method && run.method.id || "-")}</p>
+      <div class="item-meta">
+        <span class="tag">best ${escapeHtml(formatMetric(run.best_metric))}</span>
+        <span class="tag">${escapeHtml(run.completed_trials || 0)} trials</span>
+      </div>
+    </button>
+  `;
+}
+
+function metricChart(observations, metricName) {
+  const points = observations
+    .map((observation, index) => ({ index, value: Number(observation.metric_values && observation.metric_values[metricName]) }))
+    .filter((point) => Number.isFinite(point.value));
+  if (!metricName || points.length === 0) {
+    return `<div class="chart empty-chart">No metric values to chart.</div>`;
+  }
+  const width = 720;
+  const height = 150;
+  const pad = 20;
+  const min = Math.min(...points.map((point) => point.value));
+  const max = Math.max(...points.map((point) => point.value));
+  const span = max - min || 1;
+  const x = (point) => pad + (point.index / Math.max(1, observations.length - 1)) * (width - pad * 2);
+  const y = (point) => height - pad - ((point.value - min) / span) * (height - pad * 2);
+  return `
+    <div class="chart">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(metricName)} over trials">
+        <line x1="${pad}" y1="${height - pad}" x2="${width - pad}" y2="${height - pad}" />
+        <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${height - pad}" />
+        <polyline points="${points.map((point) => `${x(point)},${y(point)}`).join(" ")}" />
+        ${points.map((point) => `<circle cx="${x(point)}" cy="${y(point)}" r="3"><title>${metricName}: ${point.value}</title></circle>`).join("")}
+        <text x="${pad}" y="14">${escapeHtml(metricName)} max ${formatMetric(max)} min ${formatMetric(min)}</text>
+      </svg>
+    </div>
+  `;
+}
+
+function tableFromRows(rows, columns) {
+  if (!rows.length) return emptyInline("No records found.");
+  return `
+    <div class="table-wrap embedded">
       <table>
         <thead><tr>${columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead>
-        <tbody>
-          ${rows
-            .map(
-              (row) => `
-                <tr>
-                  ${columns.map(([key]) => `<td>${formatCell(row[key])}</td>`).join("")}
-                </tr>
-              `
-            )
-            .join("")}
-        </tbody>
+        <tbody>${rows.map((row) => `<tr>${columns.map(([key]) => `<td>${formatCell(row[key])}</td>`).join("")}</tr>`).join("")}</tbody>
       </table>
     </div>
   `;
 }
 
-function formatCell(value) {
-  if (value == null || value === "") return "-";
-  if (typeof value === "object") {
-    return `<pre class="path-text">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
-  }
-  if (String(value).length > 80) {
-    return `<span class="path-text">${escapeHtml(String(value))}</span>`;
-  }
-  return escapeHtml(String(value));
+function validationHtml(result) {
+  const valid = Boolean(result && result.valid);
+  const errors = (result && result.errors || []).map((error) => `<li>${escapeHtml(error)}</li>`).join("");
+  return `
+    <div class="validation-header">
+      ${statusPill(result && result.launched ? "launched" : valid ? "valid" : "invalid")}
+      ${result && result.name ? `<strong>${escapeHtml(result.name)}</strong>` : ""}
+    </div>
+    ${valid || result && result.launched ? `<p class="path-text">${escapeHtml(shortPath(result.path || result.job_id || ""))}</p>` : `<ul class="error-list">${errors || "<li>Validation failed.</li>"}</ul>`}
+  `;
+}
+
+function compatibleMethodsForEnvironment(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.environment.uid === uid && pair.compatible);
+}
+
+function incompatibleMethodsForEnvironment(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.environment.uid === uid && !pair.compatible);
+}
+
+function compatibleEnvironmentsForMethod(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.method.uid === uid && pair.compatible);
+}
+
+function incompatibleEnvironmentsForMethod(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.method.uid === uid && !pair.compatible);
+}
+
+function pairFor(environmentUid, methodUid) {
+  return (state.compatibility.pairs || []).find((pair) => pair.environment.uid === environmentUid && pair.method.uid === methodUid);
+}
+
+function environmentByUid(uid) {
+  return (state.catalog.environments || []).find((item) => item.uid === uid) || null;
+}
+
+function methodByUid(uid) {
+  return (state.catalog.methods || []).find((item) => item.uid === uid) || null;
+}
+
+function option(item, selectedUid) {
+  return `<option value="${escapeHtml(item.uid)}" ${item.uid === selectedUid ? "selected" : ""}>${escapeHtml(item.label)}</option>`;
 }
 
 async function getJson(url) {
@@ -571,27 +842,19 @@ async function postJson(url, payload, options = {}) {
 }
 
 function statusPill(status) {
-  return `<span class="status-pill status-${escapeHtml(status || "incomplete")}">${statusText(status)}</span>`;
+  return `<span class="status-pill status-${escapeHtml(status || "unknown")}">${escapeHtml(status || "unknown")}</span>`;
 }
 
-function statusText(status) {
-  return escapeHtml(status || "incomplete");
-}
-
-function setStatusClass(element, status) {
-  element.className = `status-pill status-${status || "incomplete"}`;
+function formatCell(value) {
+  if (value == null || value === "") return "-";
+  if (typeof value === "object") return `<pre class="path-text">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+  if (String(value).length > 80) return `<span class="path-text">${escapeHtml(String(value))}</span>`;
+  return escapeHtml(String(value));
 }
 
 function formatMetric(value) {
   if (value == null || Number.isNaN(Number(value))) return "-";
   return Number(value).toFixed(4).replace(/\.?0+$/, "");
-}
-
-function formatTime(value) {
-  if (!value) return "-";
-  if (typeof value === "number") return new Date(value * 1000).toLocaleString();
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? String(value) : new Date(parsed).toLocaleString();
 }
 
 function formatBytes(value) {
@@ -601,8 +864,33 @@ function formatBytes(value) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function shortPath(path) {
+  if (!path) return "";
+  const cwd = state.workspace && state.workspace.cwd;
+  if (cwd && String(path).startsWith(`${cwd}/`)) return String(path).slice(cwd.length + 1);
+  const parts = String(path).split("/").filter(Boolean);
+  if (parts.length <= 4) return String(path);
+  return `.../${parts.slice(-4).join("/")}`;
+}
+
+function searchable(item) {
+  return `${item.label} ${item.id} ${item.path} ${JSON.stringify(item.summary || {})}`.toLowerCase();
+}
+
+function emptyState(message) {
+  return `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
+}
+
+function emptyInline(message) {
+  return `<div class="empty-inline">${escapeHtml(message)}</div>`;
+}
+
 function sum(values) {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function capitalize(value) {
+  return String(value).charAt(0).toUpperCase() + String(value).slice(1);
 }
 
 function escapeHtml(value) {
@@ -612,58 +900,4 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function relativeToCwd(path) {
-  if (!path) return "";
-  if (state.cwd && path.startsWith(`${state.cwd}/`)) {
-    return path.slice(state.cwd.length + 1);
-  }
-  return String(path);
-}
-
-function shortPath(path) {
-  const relative = relativeToCwd(path);
-  if (relative !== path) return relative;
-  const parts = String(path || "").split("/").filter(Boolean);
-  if (parts.length <= 4) return String(path || "");
-  return `.../${parts.slice(-4).join("/")}`;
-}
-
-function scoreStudy(item) {
-  const tags = new Set(item.tags || []);
-  let score = 0;
-  if (String(item.path || "").includes("/examples/studies/")) score += 8;
-  if (tags.has("mvp")) score += 6;
-  if (tags.has("toy")) score += 4;
-  if (tags.has("reference-engine")) score += 3;
-  if (tags.has("external-project")) score -= 10;
-  if (tags.has("llm")) score -= 4;
-  return score;
-}
-
-function findRunForJob(job) {
-  if (!job) return null;
-  if (job.run_dir) {
-    const direct = state.runs.find((run) => run.path === job.run_dir);
-    if (direct) return direct;
-  }
-  const candidates = state.runs.filter((run) => {
-    if (run.job && run.job.job_id === job.job_id) return true;
-    if (job.study_name && run.name === job.study_name) {
-      return Number(new Date(run.updated_at || run.finished_at || 0)) >= ((job.started_at || 0) * 1000 - 1000);
-    }
-    return false;
-  });
-  if (!candidates.length) return null;
-  return candidates.sort((left, right) => Date.parse(right.finished_at || right.started_at || right.updated_at || 0) - Date.parse(left.finished_at || left.started_at || left.updated_at || 0))[0];
-}
-
-async function focusJobRun(job) {
-  const matchingRun = findRunForJob(job);
-  if (!matchingRun) {
-    return false;
-  }
-  await loadRunDetail(matchingRun.id);
-  return true;
 }

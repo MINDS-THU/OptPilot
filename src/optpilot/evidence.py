@@ -1,4 +1,4 @@
-"""Evidence query views exposed to controllers and engines."""
+"""Evidence query views exposed to methods and analysis tools."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ class EvidenceSummary:
     completed_trials: int
     observation_count: int
     artifact_count: int
-    decision_count: int
+    method_call_count: int
     scheduler_event_count: int
-    engine_snapshot_count: int
+    method_event_count: int
     status_counts: JsonDict
     best_trial_id: Optional[str]
     best_artifact_id: Optional[str]
@@ -63,7 +63,7 @@ class EvidenceView:
 
         Configured environments write CSV/JSONL/SQLite extracts as JSONL files
         and attach a recordsToExtract report to each observation. This method
-        gives controllers and engines a stable way to discover those streams
+        gives methods and analysis tools a stable way to discover those streams
         without walking observation artifacts by hand.
         """
 
@@ -107,7 +107,7 @@ class EvidenceView:
 
         Returned items wrap the original row in ``record`` and include stream,
         trial, and artifact provenance. Missing content refs are skipped so a
-        controller can safely query partial historical evidence.
+        method can safely query partial historical evidence.
         """
 
         rows: List[JsonDict] = []
@@ -144,28 +144,28 @@ class EvidenceView:
             return rows[:limit]
         return _limit_tail(rows, limit)
 
-    def controller_decisions(self, limit: Optional[int] = None) -> List[JsonDict]:
-        return _limit_tail(self.store.read_controller_decisions(), limit)
+    def method_calls(self, limit: Optional[int] = None) -> List[JsonDict]:
+        return _limit_tail(self.store.read_method_calls(), limit)
 
     def scheduler_events(self, limit: Optional[int] = None) -> List[JsonDict]:
         if not hasattr(self.store, "read_scheduler_events"):
             return []
         return _limit_tail(self.store.read_scheduler_events(), limit)
 
-    def engine_snapshots(
+    def method_events(
         self,
         limit: Optional[int] = None,
-        engine_id: Optional[str] = None,
+        method_id: Optional[str] = None,
         event: Optional[str] = None,
     ) -> List[JsonDict]:
-        if not hasattr(self.store, "read_engine_snapshots"):
+        if not hasattr(self.store, "read_method_events"):
             return []
-        snapshots = self.store.read_engine_snapshots()
-        if engine_id is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.get("engine_id") == engine_id]
+        events = self.store.read_method_events()
+        if method_id is not None:
+            events = [item for item in events if item.get("method_id") == method_id]
         if event is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.get("event") == event]
-        return _limit_tail(snapshots, limit)
+            events = [item for item in events if item.get("event") == event]
+        return _limit_tail(events, limit)
 
     def query_events(
         self,
@@ -175,13 +175,13 @@ class EvidenceView:
         status: Optional[str] = None,
         trial_id: Optional[str] = None,
         artifact_id: Optional[str] = None,
-        engine_id: Optional[str] = None,
+        method_id: Optional[str] = None,
         event: Optional[str] = None,
         newest_first: bool = False,
     ) -> List[JsonDict]:
         """Query normalized evidence records across local event streams.
 
-        This is intentionally a small read API: it gives controllers and
+        This is intentionally a small read API: it gives methods and
         analysis tools one stable shape without hiding the original record.
         """
 
@@ -195,7 +195,7 @@ class EvidenceView:
                     status=status,
                     trial_id=trial_id,
                     artifact_id=artifact_id,
-                    engine_id=engine_id,
+                method_id=method_id,
                     event=event,
                 ):
                     continue
@@ -208,9 +208,9 @@ class EvidenceView:
     def summary(self) -> EvidenceSummary:
         observations = self.store.read_observations()
         artifacts = self.store.read_artifacts()
-        decisions = self.store.read_controller_decisions()
+        method_calls = self.store.read_method_calls()
         scheduler_events = self.scheduler_events()
-        engine_snapshots = self.engine_snapshots()
+        method_events = self.method_events()
         primary_metric = self.study_spec.primary_metric_name
         direction = self.study_spec.primary_metric_direction
         status_counts: JsonDict = {}
@@ -232,9 +232,9 @@ class EvidenceView:
             completed_trials=len(observations),
             observation_count=len(observations),
             artifact_count=len(artifacts),
-            decision_count=len(decisions),
+            method_call_count=len(method_calls),
             scheduler_event_count=len(scheduler_events),
-            engine_snapshot_count=len(engine_snapshots),
+            method_event_count=len(method_events),
             status_counts=status_counts,
             best_trial_id=best_trial_id,
             best_artifact_id=best_artifact_id,
@@ -271,12 +271,12 @@ class EvidenceView:
             return self.store.read_trials()
         if event_type == "artifact":
             return self.store.read_artifacts()
-        if event_type == "controller_decision":
-            return self.store.read_controller_decisions()
+        if event_type == "method_call":
+            return self.store.read_method_calls()
         if event_type == "scheduler_event":
             return self.scheduler_events()
-        if event_type == "engine_snapshot":
-            return self.engine_snapshots()
+        if event_type == "method_event":
+            return self.method_events()
         raise ValueError(f"Unsupported evidence event type: {event_type!r}")
 
 
@@ -339,18 +339,19 @@ EVENT_TYPE_ALIASES = {
     "observations": "observation",
     "trials": "trial",
     "artifacts": "artifact",
-    "controller_decisions": "controller_decision",
-    "decisions": "controller_decision",
+    "method_calls": "method_call",
+    "calls": "method_call",
     "scheduler_events": "scheduler_event",
-    "engine_snapshots": "engine_snapshot",
+    "method_events": "method_event",
+    "events": "method_event",
 }
 EVENT_TYPES = [
     "observation",
     "trial",
     "artifact",
-    "controller_decision",
+    "method_call",
     "scheduler_event",
-    "engine_snapshot",
+    "method_event",
 ]
 
 
@@ -377,7 +378,7 @@ def _normalize_event_record(event_type: str, payload: JsonDict, source_index: in
         "created_at": payload.get("created_at") or payload.get("finished_at") or payload.get("started_at"),
         "trial_id": payload.get("trial_id"),
         "artifact_id": payload.get("artifact_id"),
-        "engine_id": payload.get("engine_id"),
+        "method_id": payload.get("method_id"),
         "status": payload.get("status"),
         "event": payload.get("event"),
         "record": dict(payload),
@@ -390,7 +391,7 @@ def _matches_event(
     status: Optional[str],
     trial_id: Optional[str],
     artifact_id: Optional[str],
-    engine_id: Optional[str],
+    method_id: Optional[str],
     event: Optional[str],
 ) -> bool:
     if status is not None and item.get("status") != status:
@@ -399,7 +400,7 @@ def _matches_event(
         return False
     if artifact_id is not None and item.get("artifact_id") != artifact_id:
         return False
-    if engine_id is not None and item.get("engine_id") != engine_id:
+    if method_id is not None and item.get("method_id") != method_id:
         return False
     if event is not None and item.get("event") != event:
         return False

@@ -1,6 +1,6 @@
-"""Example user-owned lifecycle engine.
+"""Example user-owned lifecycle method.
 
-This demonstrates the long-running engine shape without putting optimization
+This demonstrates the long-running method shape without putting optimization
 logic into OptPilot core.
 """
 
@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Dict, List
 
 
-class LifecycleFixedParameterEngine:
+class LifecycleFixedParameterMethod:
     def __init__(self, definition: Dict[str, Any], study_spec, rng):
         self.definition = definition
         self.study_spec = study_spec
@@ -18,16 +18,16 @@ class LifecycleFixedParameterEngine:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self.observed: List[Dict[str, Any]] = []
         if not self.candidates:
-            raise ValueError("LifecycleFixedParameterEngine requires config.candidates.")
+            raise ValueError("LifecycleFixedParameterMethod requires config.candidates.")
 
-    def start(self, engine_input: Dict[str, Any]) -> str:
-        handle = f"engine-run-{uuid.uuid4().hex[:12]}"
-        n_candidates = int(engine_input.get("n_candidates", 1))
+    def start(self, method_input: Dict[str, Any]) -> str:
+        handle = f"method-run-{uuid.uuid4().hex[:12]}"
+        n_candidates = int(method_input.get("n_candidates", 1))
         self._runs[handle] = {
             "state": "running",
             "poll_count": 0,
             "n_candidates": n_candidates,
-            "study_state": dict(engine_input.get("study_state", {})),
+            "study_state": dict(method_input.get("study_state", {})),
         }
         return handle
 
@@ -56,13 +56,14 @@ class LifecycleFixedParameterEngine:
                     "artifact_id": f"lifecycle-artifact-{uuid.uuid4().hex[:12]}",
                     "artifact_kind": artifact_kind,
                     "spec": spec,
-                    "lineage": {"parents": [], "source": "examples.user_engines.lifecycle_fixed_engine"},
+                    "lineage": {"parents": [], "source": "examples.user_methods.lifecycle_fixed_method"},
                     "generator_record": {
-                        "engine_id": self.definition["id"],
-                        "strategy": "lifecycle_fixed_parameter_user_engine",
+                        "method_id": self.definition["id"],
+                        "strategy": "lifecycle_fixed_parameter_user_method",
                         "owned_by": "user",
                         "handle": handle,
                     },
                 }
             )
         return {"artifacts": artifacts}
+

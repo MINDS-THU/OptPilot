@@ -11,17 +11,8 @@ from .models import Observation, TrialSpec
 JsonDict = Dict[str, Any]
 
 
-class Controller(Protocol):
-    def decide(self, study_state: JsonDict, engines: List[JsonDict], evidence_view: Any = None) -> Any:
-        ...
-
-
-class CandidateProposalEngine(Protocol):
-    """Simple synchronous engine shape used by the runner.
-
-    This is enough for reference fixtures and lightweight user engines. More
-    general engines should use the lifecycle-oriented ``Engine`` protocol below.
-    """
+class CandidateProposalMethod(Protocol):
+    """Simple synchronous method shape used by the runner."""
 
     def propose(self, n_candidates: int, study_state: JsonDict) -> List[JsonDict]:
         ...
@@ -30,10 +21,10 @@ class CandidateProposalEngine(Protocol):
         ...
 
 
-class Engine(Protocol):
-    """General lifecycle-oriented engine interface from the V3 platform design."""
+class Method(Protocol):
+    """Lifecycle-oriented method interface for longer-running workflows."""
 
-    def start(self, engine_input: JsonDict) -> str:
+    def start(self, method_input: JsonDict) -> str:
         ...
 
     def poll(self, handle: str) -> JsonDict:
@@ -107,13 +98,13 @@ class EvidenceStore(Protocol):
     def record_artifact(self, artifact: JsonDict) -> None:
         ...
 
-    def record_controller_decision(self, decision: JsonDict) -> None:
+    def record_method_call(self, call: JsonDict) -> None:
         ...
 
     def record_scheduler_event(self, event: JsonDict) -> None:
         ...
 
-    def record_engine_snapshot(self, snapshot: JsonDict) -> None:
+    def record_method_event(self, event: JsonDict) -> None:
         ...
 
     def record_trial(self, trial: JsonDict) -> None:
@@ -128,13 +119,13 @@ class EvidenceStore(Protocol):
     def create_trial_workspace(self, trial_id: str) -> Path:
         ...
 
-    def read_controller_decisions(self) -> List[JsonDict]:
+    def read_method_calls(self) -> List[JsonDict]:
         ...
 
     def read_scheduler_events(self) -> List[JsonDict]:
         ...
 
-    def read_engine_snapshots(self) -> List[JsonDict]:
+    def read_method_events(self) -> List[JsonDict]:
         ...
 
     def read_artifacts(self) -> List[JsonDict]:

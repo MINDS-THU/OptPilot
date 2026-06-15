@@ -1,4 +1,4 @@
-"""Example user-owned engine implementation.
+"""Example user-owned method implementation.
 
 This lives outside ``src/optpilot`` on purpose: OptPilot owns the interface and
 execution/evidence protocol; users own the optimization algorithm.
@@ -10,7 +10,7 @@ import uuid
 from typing import Any, Dict, List
 
 
-class FixedParameterEngine:
+class FixedParameterMethod:
     def __init__(self, definition: Dict[str, Any], study_spec, rng):
         self.definition = definition
         self.study_spec = study_spec
@@ -18,7 +18,7 @@ class FixedParameterEngine:
         self._cursor = 0
         self.observed: List[Dict[str, Any]] = []
         if not self.candidates:
-            raise ValueError("FixedParameterEngine requires config.candidates.")
+            raise ValueError("FixedParameterMethod requires config.candidates.")
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         artifact_kind = self.study_spec.primary_artifact.get("kind", "parameter_spec")
@@ -31,10 +31,10 @@ class FixedParameterEngine:
                     "artifact_id": f"user-artifact-{uuid.uuid4().hex[:12]}",
                     "artifact_kind": artifact_kind,
                     "spec": spec,
-                    "lineage": {"parents": [], "source": "examples.user_engines"},
+                    "lineage": {"parents": [], "source": "examples.user_methods"},
                     "generator_record": {
-                        "engine_id": self.definition["id"],
-                        "strategy": "fixed_parameter_user_engine",
+                        "method_id": self.definition["id"],
+                        "strategy": "fixed_parameter_user_method",
                         "owned_by": "user",
                     },
                 }
@@ -43,3 +43,4 @@ class FixedParameterEngine:
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observed.extend(observations)
+

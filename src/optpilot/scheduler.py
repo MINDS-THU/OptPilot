@@ -33,7 +33,7 @@ class LocalTrialScheduler:
             record = {
                 "handle": handle,
                 "trial_id": trial_spec.trial_id,
-                "engine_id": trial_spec.engine_id,
+                "method_id": trial_spec.method_id,
                 "artifact_id": trial_spec.artifact["artifact_id"],
                 "trial_spec": trial_spec,
             }
@@ -108,7 +108,7 @@ class LocalTrialScheduler:
             current_record = {
                 "handle": next_handle,
                 "trial_id": next_trial_spec.trial_id,
-                "engine_id": next_trial_spec.engine_id,
+                "method_id": next_trial_spec.method_id,
                 "artifact_id": next_trial_spec.artifact["artifact_id"],
                 "trial_spec": next_trial_spec,
             }

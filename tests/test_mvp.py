@@ -28,7 +28,7 @@ from optpilot.provenance import PromptStore, build_generator_record, build_model
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
-from optpilot.ui.server import UiState, _catalog_payload, _list_runs, _validate_study
+from optpilot.ui.server import UiState, _catalog_payload, _compatibility_payload, _draft_study, _list_runs, _validate_study
 
 
 class MvpIntegrationTest(unittest.TestCase):
@@ -45,9 +45,8 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue((run_dir / "study_spec.json").exists())
             self.assertTrue((run_dir / "observations.jsonl").exists())
             self.assertTrue((run_dir / "summary.json").exists())
-            self.assertTrue((run_dir / "controller_decisions.jsonl").exists())
+            self.assertTrue((run_dir / "method_calls.jsonl").exists())
             self.assertTrue((run_dir / "scheduler_events.jsonl").exists())
-            self.assertTrue((run_dir / "engine_snapshots.jsonl").exists())
             self.assertTrue((run_dir / "trials.jsonl").exists())
             self.assertTrue((run_dir / "artifacts.jsonl").exists())
             self.assertTrue((run_dir / "run_policy.json").exists())
@@ -66,16 +65,14 @@ class MvpIntegrationTest(unittest.TestCase):
 
             observations = self._read_jsonl(run_dir / "observations.jsonl")
             trials = self._read_jsonl(run_dir / "trials.jsonl")
-            decisions = self._read_jsonl(run_dir / "controller_decisions.jsonl")
             scheduler_events = self._read_jsonl(run_dir / "scheduler_events.jsonl")
-            engine_snapshots = self._read_jsonl(run_dir / "engine_snapshots.jsonl")
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
             artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
             run_policy = json.loads((run_dir / "run_policy.json").read_text(encoding="utf-8"))
             self.assertEqual(len(observations), 12)
             self.assertEqual(len(trials), 12)
-            self.assertEqual(len(decisions), 3)
             self.assertEqual(len(scheduler_events), 6)
-            self.assertEqual(len(engine_snapshots), 6)
+            self.assertEqual(len(method_calls), 6)
             self.assertEqual(len(artifacts), 12)
             self.assertEqual(run_policy["target"]["mutationPolicy"], "NoMutation")
             self.assertEqual(run_policy["execution"]["backend"]["implementation"], "builtin.local_backend")
@@ -83,8 +80,8 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(scheduler_events[0]["event"], "batch_submitted")
             self.assertEqual(scheduler_events[1]["event"], "batch_collected")
             self.assertEqual(scheduler_events[1]["observation_count"], 4)
-            self.assertEqual(engine_snapshots[0]["event"], "proposed")
-            self.assertEqual(engine_snapshots[1]["event"], "observed")
+            self.assertEqual(method_calls[0]["event"], "proposed")
+            self.assertEqual(method_calls[1]["event"], "observed")
             self.assertEqual(artifacts[0]["validation"]["accepted"], True)
             self.assertEqual(artifacts[0]["materialization"]["runtime_spec"], artifacts[0]["spec"])
             self.assertIn("materialization_plan", artifacts[0])
@@ -126,7 +123,7 @@ class MvpIntegrationTest(unittest.TestCase):
             },
         }
         base_spec["stopping"]["maxTrials"] = 8
-        base_spec["engines"][0]["config"]["batchSize"] = 4
+        base_spec["method"]["config"]["batchSize"] = 4
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "distribution.yaml"
@@ -156,7 +153,7 @@ class MvpIntegrationTest(unittest.TestCase):
             },
         }
         base_spec["stopping"]["maxTrials"] = 8
-        base_spec["engines"][0]["config"]["batchSize"] = 4
+        base_spec["method"]["config"]["batchSize"] = 4
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -209,7 +206,7 @@ class MvpIntegrationTest(unittest.TestCase):
             },
         }
         base_spec["stopping"]["maxTrials"] = 4
-        base_spec["engines"][0]["config"]["batchSize"] = 4
+        base_spec["method"]["config"]["batchSize"] = 4
         base_spec["execution"]["parallelism"]["candidateParallelism"] = 4
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -333,7 +330,11 @@ class MvpIntegrationTest(unittest.TestCase):
                         "kind": "MethodConfig",
                         "id": "parameter-method",
                         "description": "Parameter method.",
-                        "engine": {"implementation": "builtin.reference_random_search"},
+                        "implementation": {
+                            "type": "python",
+                            "callable": "builtin.reference_random_search",
+                            "protocol": "optpilot.method.batch.v1",
+                        },
                         "compatibility": {
                             "candidateTypes": ["parameters"],
                             "artifactKinds": ["parameter_spec"],
@@ -372,7 +373,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 {},
             )
 
-            self.assertEqual(raw_spec["engines"][0]["config"]["searchSpace"]["x"]["max"], 10.0)
+            self.assertEqual(raw_spec["method"]["config"]["searchSpace"]["x"]["max"], 10.0)
             self.assertEqual(raw_spec["artifacts"]["primaryArtifact"]["candidateContext"]["parameters"]["schema"]["mode"]["values"], ["safe", "fast"])
             self.assertFalse(report.accepted)
             self.assertTrue(any("fast_requires_large_x" in error for error in report.errors))
@@ -455,7 +456,11 @@ class MvpIntegrationTest(unittest.TestCase):
                         "kind": "MethodConfig",
                         "id": "file-editor",
                         "description": "File editor.",
-                        "engine": {"implementation": "python:examples.user_engines.code_artifact_engine:CodeArtifactEngine"},
+                        "implementation": {
+                            "type": "python",
+                            "callable": "python:examples.user_methods.code_artifact_method:CodeArtifactMethod",
+                            "protocol": "optpilot.method.batch.v1",
+                        },
                         "compatibility": {
                             "candidateTypes": ["files"],
                             "artifactKinds": ["code_bundle"],
@@ -605,7 +610,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 generated,
                 artifact_id="artifact-generated-001",
                 entrypoint="solver:solve",
-                generator_record={"engine_id": "llm_engine", "strategy": "unit_test"},
+                generator_record={"method_id": "llm_method", "strategy": "unit_test"},
             )
 
             study_spec = StudySpec(path=tmp_path / "study.yaml", raw={})
@@ -693,7 +698,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 invocation_id="invocation-001",
             )
             generator_record = build_generator_record(
-                engine_id="llm_engine",
+                method_id="llm_method",
                 strategy="code_evolution",
                 prompt_record=prompt_record,
                 model_record=model_record,
@@ -781,7 +786,7 @@ class MvpIntegrationTest(unittest.TestCase):
             scripts.mkdir()
             (benchmark / "README.md").write_text("benchmark instructions", encoding="utf-8")
             initial_program = scripts / "init.py"
-            initial_program.write_text("def controller():\n    return 1\n", encoding="utf-8")
+            initial_program.write_text("def policy():\n    return 1\n", encoding="utf-8")
             (metadata / "initial_program.txt").write_text("scripts/init.py\n", encoding="utf-8")
             (metadata / "candidate_destination.txt").write_text("scripts/init.py\n", encoding="utf-8")
             (metadata / "eval_command.txt").write_text(
@@ -808,7 +813,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 study_spec.target["adapter"]["config"]["candidate"]["files"]["required"],
                 ["scripts/init.py"],
             )
-            self.assertEqual(study_spec.engines[0]["implementation"], "python:my_lab.engines:FrontierCodeEngine")
+            self.assertEqual(study_spec.method["implementation"]["callable"], "python:my_lab.methods:FrontierCodeMethod")
 
             artifact = build_frontier_initial_artifact(benchmark)
             materializer = WorkspaceBundleMaterializer(
@@ -833,7 +838,7 @@ class MvpIntegrationTest(unittest.TestCase):
             metadata.mkdir(parents=True)
             scripts.mkdir()
             (benchmark / "README.md").write_text("benchmark instructions", encoding="utf-8")
-            (scripts / "init.py").write_text("def controller():\n    return 1\n", encoding="utf-8")
+            (scripts / "init.py").write_text("def policy():\n    return 1\n", encoding="utf-8")
             (metadata / "initial_program.txt").write_text("scripts/init.py\n", encoding="utf-8")
             (metadata / "candidate_destination.txt").write_text("scripts/init.py\n", encoding="utf-8")
             (metadata / "eval_command.txt").write_text(
@@ -863,11 +868,11 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(study_spec.stopping["maxTrials"], 5)
             self.assertEqual(study_spec.target["adapter"]["implementation"], "builtin.configured_environment")
             self.assertEqual(study_spec.primary_artifact["kind"], "code_bundle")
-            self.assertEqual(study_spec.engines[0]["config"]["candidateDestination"], "scripts/init.py")
+            self.assertEqual(study_spec.method["config"]["candidateDestination"], "scripts/init.py")
 
     def test_cli_run_loads_user_owned_components_from_current_working_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_user_engine.yaml"
+        spec_path = repo_root / "examples" / "studies" / "toy_user_method.yaml"
         original_cwd = Path.cwd()
         original_sys_path = list(sys.path)
 
@@ -928,9 +933,9 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("wrote", stdout_path.read_text(encoding="utf-8"))
             self.assertEqual(artifacts[0]["materialization"]["runtime_spec"], artifacts[0]["spec"])
 
-    def test_user_owned_engine_loads_through_python_hook(self) -> None:
+    def test_user_owned_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_user_engine.yaml"
+        spec_path = repo_root / "examples" / "studies" / "toy_user_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
@@ -942,17 +947,366 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(artifacts[0]["generator_record"]["owned_by"], "user")
             self.assertEqual(
                 observations[0]["provenance"]["generator_record"]["strategy"],
-                "fixed_parameter_user_engine",
+                "fixed_parameter_user_method",
             )
+
+    def test_command_method_reads_request_from_stdin_and_records_events(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            method_script = tmp_path / "command_method.py"
+            method_script.write_text(
+                "\n".join(
+                    [
+                        "import json, sys",
+                        "request = json.loads(sys.stdin.read())",
+                        "candidates = []",
+                        "for index in range(int(request['n_candidates'])):",
+                        "    candidates.append({",
+                        "        'artifact_id': f\"cmd-stdin-{index}\",",
+                        "        'artifact_kind': 'parameter_spec',",
+                        "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
+                        "        'lineage': {'parents': []},",
+                        "        'generator_record': {'method_id': 'command-stdin-method', 'strategy': 'stdin_command'},",
+                        "    })",
+                        "json.dump({",
+                        "    'candidates': candidates,",
+                        "    'method_events': [{'event': 'script_completed', 'n_candidates': len(candidates)}],",
+                        "}, sys.stdout)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            study_path = tmp_path / "command_stdin_study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "command-stdin-study",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "MethodConfig",
+                            "id": "command-stdin-method",
+                            "implementation": {
+                                "type": "command",
+                                "command": [sys.executable, str(method_script)],
+                                "protocol": "optpilot.method.batch.v1",
+                            },
+                            "config": {"batchSize": 2},
+                            "compatibility": {
+                                "candidateTypes": ["parameters"],
+                                "artifactKinds": ["parameter_spec"],
+                                "requiredContext": ["parameters.schema"],
+                            },
+                        },
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {
+                            "source": "files",
+                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                        },
+                        "budget": {"maxTrials": 2},
+                        "execution": {"backend": "local", "parallelism": 2, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=tmp_dir)
+            run_dir = Path(summary.run_dir)
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
+            method_events = self._read_jsonl(run_dir / "method_events.jsonl")
+            observations = self._read_jsonl(run_dir / "observations.jsonl")
+
+            self.assertEqual(summary.completed_trials, 2)
+            self.assertTrue(all(observation["status"] == "success" for observation in observations))
+            self.assertEqual([call["event"] for call in method_calls], ["completed", "observed"])
+            self.assertEqual(method_events[0]["event"], "script_completed")
+            self.assertTrue(Path(method_calls[0]["payload"]["input_path"]).exists())
+            self.assertTrue(Path(method_calls[0]["payload"]["output_path"]).exists())
+
+    def test_command_method_can_use_request_and_response_file_placeholders(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            method_script = tmp_path / "file_command_method.py"
+            method_script.write_text(
+                "\n".join(
+                    [
+                        "import json, pathlib, sys",
+                        "request_path = pathlib.Path(sys.argv[1])",
+                        "response_path = pathlib.Path(sys.argv[2])",
+                        "request = json.loads(request_path.read_text(encoding='utf-8'))",
+                        "response_path.write_text(json.dumps({",
+                        "    'artifacts': [{",
+                        "        'artifact_id': 'cmd-file-0',",
+                        "        'artifact_kind': 'parameter_spec',",
+                        "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
+                        "        'lineage': {'parents': []},",
+                        "        'generator_record': {'method_id': 'command-file-method', 'strategy': request['request_id']},",
+                        "    }],",
+                        "}), encoding='utf-8')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            study_path = tmp_path / "command_file_study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "command-file-study",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "MethodConfig",
+                            "id": "command-file-method",
+                            "implementation": {
+                                "type": "command",
+                                "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
+                                "protocol": "optpilot.method.batch.v1",
+                            },
+                            "config": {"batchSize": 1},
+                            "compatibility": {
+                                "candidateTypes": ["parameters"],
+                                "artifactKinds": ["parameter_spec"],
+                                "requiredContext": ["parameters.schema"],
+                            },
+                        },
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {
+                            "source": "files",
+                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                        },
+                        "budget": {"maxTrials": 1},
+                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=tmp_dir)
+            method_calls = self._read_jsonl(Path(summary.run_dir) / "method_calls.jsonl")
+            artifacts = self._read_jsonl(Path(summary.run_dir) / "artifacts.jsonl")
+
+            self.assertEqual(summary.completed_trials, 1)
+            self.assertEqual(method_calls[0]["event"], "completed")
+            self.assertEqual(artifacts[0]["generator_record"]["method_id"], "command-file-method")
+            self.assertTrue(Path(method_calls[0]["payload"]["output_path"]).exists())
+
+    def test_command_method_can_run_inside_container_runtime(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            method_script = tmp_path / "container_method.py"
+            method_script.write_text(
+                "\n".join(
+                    [
+                        "import json, os, pathlib, sys",
+                        "request_path = pathlib.Path(sys.argv[1])",
+                        "response_path = pathlib.Path(sys.argv[2])",
+                        "request = json.loads(request_path.read_text(encoding='utf-8'))",
+                        "assert os.environ['OPTPILOT_METHOD_TEST_TOKEN'] == 'secret-token'",
+                        "assert os.environ['OPTPILOT_METHOD_STATIC_ENV'] == 'static-value'",
+                        "response_path.write_text(json.dumps({",
+                        "    'candidates': [{",
+                        "        'artifact_id': 'cmd-container-0',",
+                        "        'artifact_kind': 'parameter_spec',",
+                        "        'spec': {'x': 3.5, 'y': 7, 'mode': 'balanced'},",
+                        "        'lineage': {'parents': []},",
+                        "        'generator_record': {'method_id': 'command-container-method', 'strategy': request['runtime_context']['method_workspace']},",
+                        "    }],",
+                        "    'method_events': [{'event': 'container_method_finished'}],",
+                        "}), encoding='utf-8')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            fake_container = tmp_path / "fake_method_container.py"
+            fake_log = tmp_path / "fake_method_container_log.jsonl"
+            fake_container.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env python3",
+                        "import json, os, pathlib, subprocess, sys",
+                        "log_path = pathlib.Path(os.environ['OPTPILOT_FAKE_METHOD_CONTAINER_LOG'])",
+                        "args = sys.argv[1:]",
+                        "with log_path.open('a', encoding='utf-8') as handle:",
+                        "    handle.write(json.dumps(args) + '\\n')",
+                        "if not args or args[0] != 'run':",
+                        "    raise SystemExit(0 if args and args[0] == 'build' else 2)",
+                        "env = os.environ.copy()",
+                        "cwd = None",
+                        "index = 1",
+                        "value_options = {'--name', '--network', '-v', '--volume'}",
+                        "while index < len(args):",
+                        "    arg = args[index]",
+                        "    if arg in {'--rm', '-i'}:",
+                        "        index += 1",
+                        "        continue",
+                        "    if arg in {'-w', '--workdir'}:",
+                        "        cwd = args[index + 1]",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg in {'-e', '--env'}:",
+                        "        key, value = args[index + 1].split('=', 1)",
+                        "        env[key] = value",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg in value_options:",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg.startswith('-'):",
+                        "        index += 1",
+                        "        continue",
+                        "    image = arg",
+                        "    command = args[index + 1:]",
+                        "    break",
+                        "else:",
+                        "    raise SystemExit(3)",
+                        "completed = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True)",
+                        "sys.stdout.write(completed.stdout)",
+                        "sys.stderr.write(completed.stderr)",
+                        "raise SystemExit(completed.returncode)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            fake_container.chmod(0o755)
+            (tmp_path / "Dockerfile.method").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+            study_path = tmp_path / "container_method_study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v3alpha1",
+                        "kind": "StudyConfig",
+                        "name": "container-method-study",
+                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "method": {
+                            "apiVersion": "optpilot.io/v3alpha1",
+                            "kind": "MethodConfig",
+                            "id": "command-container-method",
+                            "implementation": {
+                                "type": "command",
+                                "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
+                                "protocol": "optpilot.method.batch.v1",
+                            },
+                            "runtime": {
+                                "type": "container",
+                                "image": "optpilot-method-test-image",
+                                "containerExecutable": str(fake_container),
+                                "networkPolicy": "disabled",
+                                "build": {
+                                    "context": str(tmp_path),
+                                    "dockerfile": "Dockerfile.method",
+                                    "tag": "optpilot-method-test-image",
+                                    "args": {"METHOD": "test"},
+                                },
+                                "env": {"OPTPILOT_METHOD_STATIC_ENV": "static-value"},
+                                "envFromHost": ["OPTPILOT_METHOD_TEST_TOKEN"],
+                            },
+                            "config": {"batchSize": 1},
+                            "compatibility": {
+                                "candidateTypes": ["parameters"],
+                                "artifactKinds": ["parameter_spec"],
+                                "requiredContext": ["parameters.schema"],
+                            },
+                        },
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {
+                            "source": "files",
+                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                        },
+                        "budget": {"maxTrials": 1},
+                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            old_log_env = os.environ.get("OPTPILOT_FAKE_METHOD_CONTAINER_LOG")
+            old_token_env = os.environ.get("OPTPILOT_METHOD_TEST_TOKEN")
+            os.environ["OPTPILOT_FAKE_METHOD_CONTAINER_LOG"] = str(fake_log)
+            os.environ["OPTPILOT_METHOD_TEST_TOKEN"] = "secret-token"
+            try:
+                summary = run_study(str(study_path), output_root=tmp_dir)
+            finally:
+                if old_log_env is None:
+                    os.environ.pop("OPTPILOT_FAKE_METHOD_CONTAINER_LOG", None)
+                else:
+                    os.environ["OPTPILOT_FAKE_METHOD_CONTAINER_LOG"] = old_log_env
+                if old_token_env is None:
+                    os.environ.pop("OPTPILOT_METHOD_TEST_TOKEN", None)
+                else:
+                    os.environ["OPTPILOT_METHOD_TEST_TOKEN"] = old_token_env
+
+            run_dir = Path(summary.run_dir)
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
+            method_events = self._read_jsonl(run_dir / "method_events.jsonl")
+            artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
+            fake_invocations = [json.loads(line) for line in fake_log.read_text(encoding="utf-8").splitlines()]
+
+            self.assertEqual(summary.completed_trials, 1)
+            self.assertEqual([call["event"] for call in method_calls], ["runtime_built", "completed", "observed"])
+            self.assertEqual(method_calls[0]["payload"]["runtime"], "container")
+            self.assertEqual(method_calls[1]["payload"]["runtime"]["container_image"], "optpilot-method-test-image")
+            self.assertEqual(method_calls[1]["payload"]["runtime"]["build"]["status"], "built")
+            self.assertEqual(method_events[0]["event"], "container_method_finished")
+            self.assertEqual(artifacts[0]["artifact_id"], "cmd-container-0")
+            self.assertEqual(fake_invocations[0][0], "build")
+            self.assertIn("--build-arg", fake_invocations[0])
+            self.assertIn("optpilot-method-test-image", fake_invocations[-1])
+            self.assertIn("--network", fake_invocations[-1])
+            self.assertIn("OPTPILOT_METHOD_TEST_TOKEN=secret-token", fake_invocations[-1])
+
+    def test_method_config_rejects_unimplemented_shapes(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        for implementation in [
+            {"type": "service", "endpoint": "http://127.0.0.1:9999"},
+            {"type": "python", "callable": "builtin.reference_random_search", "protocol": "optpilot.method.session.v1"},
+        ]:
+            with self.subTest(implementation=implementation):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    study_path = Path(tmp_dir) / "unsupported_method.yaml"
+                    study_path.write_text(
+                        yaml.safe_dump(
+                            {
+                                "apiVersion": "optpilot.io/v3alpha1",
+                                "kind": "StudyConfig",
+                                "name": "unsupported-method-shape",
+                                "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                                "method": {
+                                    "apiVersion": "optpilot.io/v3alpha1",
+                                    "kind": "MethodConfig",
+                                    "id": "unsupported-method",
+                                    "implementation": implementation,
+                                    "compatibility": {
+                                        "candidateTypes": ["parameters"],
+                                        "artifactKinds": ["parameter_spec"],
+                                    },
+                                },
+                                "objective": {"metric": "throughput", "direction": "maximize"},
+                                "budget": {"maxTrials": 1},
+                            },
+                            sort_keys=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "implementation"):
+                        compile_authoring_config(study_path)
 
     def test_run_can_resume_existing_evidence_store(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-resume-run"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -975,12 +1329,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_run_can_branch_from_existing_evidence_store(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-branch-run"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -995,7 +1349,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(lineage["mode"], "branch")
             self.assertEqual(lineage["parent"]["run_dir"], parent.run_dir)
 
-    def test_user_owned_code_artifact_engine_uses_run_artifact_store(self) -> None:
+    def test_user_owned_code_artifact_method_uses_run_artifact_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             source_dir = tmp_path / "candidate_source"
@@ -1020,7 +1374,7 @@ class MvpIntegrationTest(unittest.TestCase):
             spec = {
                 "apiVersion": "optpilot/v3alpha",
                 "kind": "StudySpec",
-                "metadata": {"name": "code-artifact-engine"},
+                "metadata": {"name": "code-artifact-method"},
                 "target": {
                     "targetId": "code-artifact-evaluator",
                     "accessPolicy": "CodeAwareReadOnly",
@@ -1085,27 +1439,22 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                     }
                 },
-                "controllers": [
-                    {
-                        "id": "controller",
-                        "implementation": "builtin.single_engine_controller",
-                        "config": {"engineId": "code_engine"},
-                    }
-                ],
-                "engines": [
-                    {
-                        "id": "code_engine",
-                        "implementation": "python:examples.user_engines.code_artifact_engine:CodeArtifactEngine",
-                        "config": {
-                            "entrypoint": "solver:solve",
-                            "provider": "example",
-                            "model": "example-code-model",
-                            "promptMessages": [
-                                {"role": "system", "content": "Store this generated solver."},
-                            ],
-                        },
-                    }
-                ],
+                "method": {
+                    "id": "code_method",
+                    "implementation": {
+                        "type": "python",
+                        "callable": "python:examples.user_methods.code_artifact_method:CodeArtifactMethod",
+                        "protocol": "optpilot.method.batch.v1",
+                    },
+                    "config": {
+                        "entrypoint": "solver:solve",
+                        "provider": "example",
+                        "model": "example-code-model",
+                        "promptMessages": [
+                            {"role": "system", "content": "Store this generated solver."},
+                        ],
+                    },
+                },
                 "execution": {
                     "backend": {"implementation": "builtin.local_backend", "config": {}},
                     "scheduler": {"implementation": "builtin.local_scheduler", "config": {}},
@@ -1115,7 +1464,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 "reproducibility": {"seed": 0},
                 "stopping": {"maxTrials": 1},
             }
-            spec_path = tmp_path / "code_engine.yaml"
+            spec_path = tmp_path / "code_method.yaml"
             spec_path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
 
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
@@ -1131,41 +1480,140 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(Path(prompt_record["contentRef"]).exists())
             self.assertEqual(artifacts[0]["generator_record"]["model_record"]["model"], "example-code-model")
 
-    def test_user_owned_lifecycle_engine_loads_through_python_hook(self) -> None:
+    def test_user_owned_lifecycle_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_lifecycle_engine.yaml"
+        spec_path = repo_root / "examples" / "studies" / "toy_lifecycle_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
             run_dir = Path(summary.run_dir)
             observations = self._read_jsonl(run_dir / "observations.jsonl")
             artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
-            engine_snapshots = self._read_jsonl(run_dir / "engine_snapshots.jsonl")
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
 
             self.assertEqual(summary.completed_trials, 2)
             self.assertEqual(len(observations), 2)
             self.assertEqual(len(artifacts), 2)
             self.assertEqual(
-                [snapshot["event"] for snapshot in engine_snapshots],
+                [snapshot["event"] for snapshot in method_calls],
                 ["started", "polled", "finalized", "observed"],
             )
-            self.assertEqual(engine_snapshots[0]["payload"]["interface"], "lifecycle")
+            self.assertEqual(method_calls[0]["payload"]["interface"], "lifecycle")
             self.assertEqual(artifacts[0]["generator_record"]["owned_by"], "user")
             self.assertEqual(
                 observations[0]["provenance"]["generator_record"]["strategy"],
-                "lifecycle_fixed_parameter_user_engine",
+                "lifecycle_fixed_parameter_user_method",
             )
 
-    def test_study_spec_rejects_unimplemented_builtin_docker_backend(self) -> None:
+    def test_container_backend_runs_trial_through_container_cli(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
-        raw_spec["execution"]["backend"]["implementation"] = "builtin.docker_backend"
+        raw_spec["metadata"]["name"] = "toy-container-backend"
+        raw_spec["stopping"]["maxTrials"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
+        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            spec_path = Path(tmp_dir) / "docker.yaml"
+            tmp_path = Path(tmp_dir)
+            fake_container = tmp_path / "fake_container.py"
+            fake_log = tmp_path / "fake_container_log.jsonl"
+            fake_container.write_text(
+                "\n".join(
+                    [
+                        "#!/usr/bin/env python3",
+                        "import json, os, pathlib, subprocess, sys",
+                        "log_path = pathlib.Path(os.environ['OPTPILOT_FAKE_CONTAINER_LOG'])",
+                        "args = sys.argv[1:]",
+                        "with log_path.open('a', encoding='utf-8') as handle:",
+                        "    handle.write(json.dumps(args) + '\\n')",
+                        "if args[:2] == ['rm', '-f']:",
+                        "    raise SystemExit(0)",
+                        "if args and args[0] == 'build':",
+                        "    raise SystemExit(0)",
+                        "if not args or args[0] != 'run':",
+                        "    raise SystemExit(2)",
+                        "env = os.environ.copy()",
+                        "cwd = None",
+                        "index = 1",
+                        "value_options = {'--name', '--network', '-v', '--volume', '--cpus', '--memory'}",
+                        "while index < len(args):",
+                        "    arg = args[index]",
+                        "    if arg == '--rm':",
+                        "        index += 1",
+                        "        continue",
+                        "    if arg in {'-w', '--workdir'}:",
+                        "        cwd = args[index + 1]",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg in {'-e', '--env'}:",
+                        "        key, value = args[index + 1].split('=', 1)",
+                        "        env[key] = value",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg in value_options:",
+                        "        index += 2",
+                        "        continue",
+                        "    if arg.startswith('-'):",
+                        "        index += 1",
+                        "        continue",
+                        "    image = arg",
+                        "    command = args[index + 1:]",
+                        "    break",
+                        "else:",
+                        "    raise SystemExit(3)",
+                        "completed = subprocess.run(command, cwd=cwd, env=env, check=False)",
+                        "raise SystemExit(completed.returncode)",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            fake_container.chmod(0o755)
+            (tmp_path / "Dockerfile.worker").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+            raw_spec["execution"]["backend"] = {
+                "type": "container",
+                "implementation": "builtin.container_backend",
+                "config": {
+                    "containerExecutable": str(fake_container),
+                    "image": "optpilot-test-image",
+                    "pythonExecutable": sys.executable,
+                    "build": {
+                        "context": str(tmp_path),
+                        "dockerfile": "Dockerfile.worker",
+                        "tag": "optpilot-test-image",
+                        "args": {"WORKER": "test"},
+                    },
+                },
+            }
+            raw_spec["execution"]["defaults"]["sandboxSpec"]["runtimeType"] = "container"
+            spec_path = tmp_path / "container.yaml"
             spec_path.write_text(yaml.safe_dump(raw_spec, sort_keys=False), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "builtin.docker_backend is not implemented"):
-                load_expanded_study_spec(str(spec_path))
+            old_log_env = os.environ.get("OPTPILOT_FAKE_CONTAINER_LOG")
+            os.environ["OPTPILOT_FAKE_CONTAINER_LOG"] = str(fake_log)
+            try:
+                summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
+            finally:
+                if old_log_env is None:
+                    os.environ.pop("OPTPILOT_FAKE_CONTAINER_LOG", None)
+                else:
+                    os.environ["OPTPILOT_FAKE_CONTAINER_LOG"] = old_log_env
+
+            run_dir = Path(summary.run_dir)
+            observations = self._read_jsonl(run_dir / "observations.jsonl")
+            trials = self._read_jsonl(run_dir / "trials.jsonl")
+            fake_invocations = [json.loads(line) for line in fake_log.read_text(encoding="utf-8").splitlines()]
+
+            self.assertEqual(summary.completed_trials, 1)
+            self.assertEqual(observations[0]["status"], "success")
+            self.assertEqual(observations[0]["provenance"]["backend_worker"]["backend"], "local_container")
+            self.assertEqual(trials[0]["backend_worker"]["container_image"], "optpilot-test-image")
+            self.assertEqual(trials[0]["backend_worker"]["container_build"]["status"], "built")
+            self.assertEqual(trials[0]["sandbox_spec"]["runtimeType"], "container")
+            self.assertEqual(fake_invocations[0][0], "build")
+            self.assertIn("--build-arg", fake_invocations[0])
+            self.assertIn("optpilot-test-image", fake_invocations[-1])
+            self.assertIn("--network", fake_invocations[-1])
 
     def test_study_spec_rejects_unknown_target_policy(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1180,11 +1628,11 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_invalid_artifact_records_invalid_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-invalid-artifact"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
-        raw_spec["engines"][0]["config"]["candidates"] = [{"x": 99.0, "y": 7, "mode": "balanced"}]
+        raw_spec["method"]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["candidates"] = [{"x": 99.0, "y": 7, "mode": "balanced"}]
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
@@ -1206,12 +1654,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_max_failures_stops_study_after_failed_trial(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-max-failures"
         raw_spec["stopping"]["maxTrials"] = 3
         raw_spec["stopping"]["maxFailures"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
-        raw_spec["engines"][0]["config"]["candidates"] = [
+        raw_spec["method"]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["candidates"] = [
             {"x": 99.0, "y": 7, "mode": "balanced"},
             {"x": 4.2, "y": 7, "mode": "balanced"},
         ]
@@ -1225,13 +1673,13 @@ class MvpIntegrationTest(unittest.TestCase):
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
             run_dir = Path(summary.run_dir)
             observations = self._read_jsonl(run_dir / "observations.jsonl")
-            decisions = self._read_jsonl(run_dir / "controller_decisions.jsonl")
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
             summary_payload = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
 
             self.assertEqual(summary.completed_trials, 1)
             self.assertEqual(summary.failure_count, 1)
             self.assertEqual(len(observations), 1)
-            self.assertEqual(len(decisions), 1)
+            self.assertEqual([call["event"] for call in method_calls], ["proposed", "observed"])
             self.assertEqual(observations[0]["status"], "invalid")
             self.assertEqual(summary_payload["failure_count"], 1)
 
@@ -1240,7 +1688,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-cli-failure"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
@@ -1268,7 +1716,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-invalid-target-output"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
@@ -1290,7 +1738,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-cli-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
@@ -1316,12 +1764,12 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-resource-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
-        raw_spec["engines"][0].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
+        raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
         raw_spec["target"]["runtimeContract"] = {"timeoutSeconds": 30}
         raw_spec["target"]["adapter"]["config"]["evaluate"].pop("timeoutSeconds", None)
         raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
@@ -1405,7 +1853,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-subprocess-success"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
             repo_root / "examples" / "instances" / "toy_factory_case.yaml"
@@ -1428,7 +1876,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-subprocess-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
-        raw_spec["engines"][0]["config"]["batchSize"] = 1
+        raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"] = {
             "mode": "FixedInstance",
             "definition": {
@@ -1437,7 +1885,7 @@ class MvpIntegrationTest(unittest.TestCase):
         }
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
-        raw_spec["engines"][0].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
+        raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
         raw_spec["target"]["runtimeContract"] = {"timeoutSeconds": 30}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1516,20 +1964,15 @@ class MvpIntegrationTest(unittest.TestCase):
                         "materializationPlan": {"implementation": "builtin.parameter_to_config", "config": {}},
                     }
                 },
-                "controllers": [
-                    {
-                        "id": "controller",
-                        "implementation": "builtin.single_engine_controller",
-                        "config": {"engineId": "engine"},
-                    }
-                ],
-                "engines": [
-                    {
-                        "id": "engine",
-                        "implementation": "python:examples.user_engines.fixed_parameter_engine:FixedParameterEngine",
-                        "config": {"batchSize": 1, "candidates": [{"x": 1}]},
-                    }
-                ],
+                "method": {
+                    "id": "method",
+                    "implementation": {
+                        "type": "python",
+                        "callable": "python:examples.user_methods.fixed_parameter_method:FixedParameterMethod",
+                        "protocol": "optpilot.method.batch.v1",
+                    },
+                    "config": {"batchSize": 1, "candidates": [{"x": 1}]},
+                },
                 "execution": {
                     "backend": {"implementation": "builtin.local_backend", "config": {}},
                     "scheduler": {
@@ -1560,11 +2003,11 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_mixed_success_and_invalid_batch_continues_and_records_all_trials(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_engine.yaml")
+        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-mixed-batch"
         raw_spec["stopping"]["maxTrials"] = 2
-        raw_spec["engines"][0]["config"]["batchSize"] = 2
-        raw_spec["engines"][0]["config"]["candidates"] = [
+        raw_spec["method"]["config"]["batchSize"] = 2
+        raw_spec["method"]["config"]["candidates"] = [
             {"x": 4.2, "y": 7, "mode": "balanced"},
             {"x": 99.0, "y": 7, "mode": "balanced"},
         ]
@@ -1584,25 +2027,21 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(trials), 2)
             self.assertIsNotNone(summary.best_metric)
 
-    def test_user_owned_controller_reads_prior_evidence(self) -> None:
+    def test_user_owned_method_reads_prior_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_evidence_aware_controller.yaml"
+        spec_path = repo_root / "examples" / "studies" / "toy_evidence_aware_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
             run_dir = Path(summary.run_dir)
             observations = self._read_jsonl(run_dir / "observations.jsonl")
-            decisions = self._read_jsonl(run_dir / "controller_decisions.jsonl")
+            method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
 
             self.assertEqual(summary.completed_trials, 2)
             self.assertEqual([observation["status"] for observation in observations], ["invalid", "success"])
-            self.assertEqual(len(decisions), 2)
-            first_context = decisions[0]["metadata"]["evidence_context"]
-            second_context = decisions[1]["metadata"]["evidence_context"]
-            self.assertEqual(first_context["summary"]["observation_count"], 0)
-            self.assertEqual(second_context["summary"]["status_counts"]["invalid"], 1)
-            self.assertEqual(second_context["recent_failure_count"], 1)
-            self.assertEqual(decisions[1]["metadata"]["recent_failure_count"], 1)
+            self.assertEqual([call["event"] for call in method_calls], ["proposed", "observed", "proposed", "observed"])
+            self.assertEqual(method_calls[0]["payload"]["study_state"]["completed_trials"], 0)
+            self.assertEqual(method_calls[2]["payload"]["study_state"]["completed_trials"], 1)
 
     def test_local_evidence_store_read_api_and_summary_view(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1653,16 +2092,16 @@ class MvpIntegrationTest(unittest.TestCase):
                 }
             )
             store.record_artifact({"artifact_id": "artifact-a"})
-            store.record_controller_decision({"engine_id": "engine-a"})
+            store.record_method_call({"method_id": "method-a", "event": "proposed"})
             store.record_scheduler_event({"event": "batch_submitted"})
-            store.record_engine_snapshot({"engine_id": "engine-a", "event": "proposed"})
+            store.record_method_event({"method_id": "method-a", "event": "debug"})
             store.write_environment_snapshot({"python": {"version": "test"}, "packages": []})
 
             evidence_view = EvidenceView(store, study_spec)
             summary = evidence_view.summary()
             context = evidence_view.decision_context()
             failed_events = evidence_view.query_events("observation", status="failed")
-            engine_events = evidence_view.query_events(["controller_decision", "engine_snapshot"], engine_id="engine-a")
+            method_events = evidence_view.query_events(["method_call", "method_event"], method_id="method-a")
             scheduler_events = evidence_view.query_events("scheduler_event", event="batch_submitted")
             record_streams = evidence_view.record_streams("machine_events")
             extracted_records = evidence_view.records("machine_events")
@@ -1670,9 +2109,9 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(store.read_observations()), 2)
             self.assertEqual(summary.observation_count, 2)
             self.assertEqual(summary.artifact_count, 1)
-            self.assertEqual(summary.decision_count, 1)
+            self.assertEqual(summary.method_call_count, 1)
             self.assertEqual(summary.scheduler_event_count, 1)
-            self.assertEqual(summary.engine_snapshot_count, 1)
+            self.assertEqual(summary.method_event_count, 1)
             self.assertEqual(summary.status_counts["success"], 1)
             self.assertEqual(summary.status_counts["failed"], 1)
             self.assertEqual(summary.best_metric, 12.5)
@@ -1680,8 +2119,8 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(failed_events), 1)
             self.assertEqual(failed_events[0]["event_type"], "observation")
             self.assertEqual(failed_events[0]["record"]["trial_id"], "trial-b")
-            self.assertEqual(len(engine_events), 2)
-            self.assertEqual({event["event_type"] for event in engine_events}, {"controller_decision", "engine_snapshot"})
+            self.assertEqual(len(method_events), 2)
+            self.assertEqual({event["event_type"] for event in method_events}, {"method_call", "method_event"})
             self.assertEqual(scheduler_events[0]["record"]["event"], "batch_submitted")
             self.assertEqual(len(record_streams), 1)
             self.assertEqual(record_streams[0]["trial_id"], "trial-a")
@@ -1709,9 +2148,54 @@ class MvpIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(sa_method["summary"]["candidate_types"], ["files"])
         self.assertTrue(any(item["label"] == "toy-random-search" for item in catalog["studies"]))
-        self.assertIn("builtin.reference_random_search", catalog["builtins"]["engine"])
+        self.assertIn("builtin.reference_random_search", catalog["builtins"]["method"])
         self.assertTrue(validation["valid"], validation)
         self.assertEqual(validation["target_id"], "toy-factory")
+
+    def test_ui_compatibility_payload_and_study_draft(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            state.jobs_dir = Path(tmp_dir) / "jobs"
+            state.jobs_dir.mkdir(parents=True, exist_ok=True)
+
+            compatibility = _compatibility_payload(state)
+            toy_pair = next(
+                item
+                for item in compatibility["pairs"]
+                if item["environment"]["id"] == "toy-factory"
+                and item["method"]["id"] == "reference-random-search"
+            )
+            incompatible = next(
+                item
+                for item in compatibility["pairs"]
+                if item["environment"]["id"] == "sa-simulator-code-edit"
+                and item["method"]["id"] == "reference-random-search"
+            )
+
+            self.assertTrue(toy_pair["compatible"], toy_pair)
+            self.assertFalse(incompatible["compatible"], incompatible)
+            self.assertTrue(any(not check["ok"] for check in incompatible["checks"]))
+
+            draft = _draft_study(
+                state,
+                {
+                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "name": "ui-draft-toy",
+                    "metric": "throughput",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "local",
+                    "parallelism": 1,
+                    "timeoutSeconds": 120,
+                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                },
+            )
+
+            self.assertTrue(draft["validation"]["valid"], draft)
+            self.assertTrue(Path(draft["path"]).exists())
+            self.assertEqual(draft["draft"]["name"], "ui-draft-toy")
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

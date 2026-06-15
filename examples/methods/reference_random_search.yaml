@@ -4,13 +4,17 @@ id: reference-random-search
 description: Built-in reference random search for examples and tests
 tags: [reference]
 
-engine:
-  implementation: builtin.reference_random_search
-  config:
-    batchSize: 4
+implementation:
+  type: python
+  callable: builtin.reference_random_search
+  protocol: optpilot.method.batch.v1
+
+config:
+  batchSize: 4
 
 compatibility:
   candidateTypes: [parameters]
   artifactKinds: [parameter_spec]
   requiredContext:
     - parameters.schema
+

@@ -40,9 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
     frontier_parser.add_argument("--repo-root", help="Frontier-Engineering repository root")
     frontier_parser.add_argument("--study-name", help="Override generated study name")
     frontier_parser.add_argument(
-        "--engine-implementation",
-        default="python:my_lab.engines:FrontierCodeEngine",
-        help="User-owned engine implementation to place in the draft",
+        "--method-implementation",
+        default="python:my_lab.methods:FrontierCodeMethod",
+        help="User-owned method implementation to place in the draft",
     )
     frontier_parser.add_argument("--max-trials", type=int, default=20, help="Study stopping.maxTrials value")
     frontier_parser.add_argument(
@@ -82,7 +82,7 @@ def main(argv=None) -> int:
             args.benchmark,
             repo_root=args.repo_root,
             study_name=args.study_name,
-            engine_implementation=args.engine_implementation,
+            method_implementation=args.method_implementation,
             max_trials=args.max_trials,
             candidate_parallelism=args.candidate_parallelism,
         )

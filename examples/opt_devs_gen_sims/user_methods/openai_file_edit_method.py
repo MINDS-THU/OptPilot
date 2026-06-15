@@ -1,4 +1,4 @@
-"""User-owned OpenAI-backed file edit engine for the SA simulator example."""
+"""User-owned OpenAI-backed file edit method for the SA simulator example."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from optpilot.code_artifacts import CodeArtifactStore, CodeFileMapping
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
-class OpenAIFileEditEngine:
+class OpenAIFileEditMethod:
     def __init__(self, definition: Dict[str, Any], study_spec, rng):
         self.definition = definition
         self.study_spec = study_spec
@@ -24,7 +24,7 @@ class OpenAIFileEditEngine:
         self.candidate_context = dict(self.study_spec.primary_artifact.get("candidateContext", {}))
         self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
-            raise ValueError("OpenAIFileEditEngine requires candidate_context.files.editable.")
+            raise ValueError("OpenAIFileEditMethod requires candidate_context.files.editable.")
         self.source_dir = self._resolve_source_dir()
         self.source_files = self._resolve_source_files()
         self.primary_metric = str(self.study_spec.objective["primaryMetric"]["name"])
@@ -37,7 +37,7 @@ class OpenAIFileEditEngine:
         runtime_context = dict(study_state.get("runtime_context", {}))
         artifact_store_dir = runtime_context.get("artifact_store_dir")
         if not artifact_store_dir:
-            raise ValueError("OpenAIFileEditEngine requires runtime_context.artifact_store_dir.")
+            raise ValueError("OpenAIFileEditMethod requires runtime_context.artifact_store_dir.")
 
         artifact_store = CodeArtifactStore(
             artifact_store_dir,
@@ -63,7 +63,7 @@ class OpenAIFileEditEngine:
             prompt_record = (
                 prompt_store.store_prompt(
                     messages=prompt_messages,
-                    metadata={"engine_id": self.definition["id"], "target_files": list(self.target_files)},
+                    metadata={"method_id": self.definition["id"], "target_files": list(self.target_files)},
                 )
                 if prompt_store is not None
                 else None
@@ -87,7 +87,7 @@ class OpenAIFileEditEngine:
             artifact_kind="code_bundle",
             lineage={"parents": [], "source": "baseline_source_tree"},
             generator_record={
-                "engine_id": self.definition["id"],
+                "method_id": self.definition["id"],
                 "strategy": "baseline_source_snapshot",
                 "owned_by": "user",
             },
@@ -183,7 +183,7 @@ class OpenAIFileEditEngine:
         api_key = os.environ.get(api_key_env_var) or self._read_api_key_from_dotenv(api_key_env_var)
         if not api_key:
             raise ValueError(
-                f"OpenAIFileEditEngine requires {api_key_env_var} in the environment or a .env file."
+                f"OpenAIFileEditMethod requires {api_key_env_var} in the environment or a .env file."
             )
 
         payload = {
@@ -275,7 +275,7 @@ class OpenAIFileEditEngine:
                 artifact_kind="code_bundle",
                 lineage={"parents": [best["artifact_id"]] if best else []},
                 generator_record=build_generator_record(
-                    engine_id=self.definition["id"],
+                    method_id=self.definition["id"],
                     strategy="openai_file_edit",
                     prompt_record=prompt_record,
                     model_record=model_record,
@@ -309,7 +309,7 @@ class OpenAIFileEditEngine:
                 source = _source_for_workspace_file(relative_path, workspace_copy)
             if source is None or not source.exists():
                 raise FileNotFoundError(
-                    f"OpenAIFileEditEngine could not resolve source for editable file {relative_path!r}."
+                    f"OpenAIFileEditMethod could not resolve source for editable file {relative_path!r}."
                 )
             source_files[relative_path] = source
         return source_files

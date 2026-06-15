@@ -17,8 +17,7 @@ REQUIRED_TOP_LEVEL = {
     "objective",
     "evaluationScope",
     "artifacts",
-    "controllers",
-    "engines",
+    "method",
     "execution",
     "evidence",
     "reproducibility",
@@ -36,8 +35,7 @@ SUPPORTED_MUTATION_POLICIES = {
     "NoMutation",
     "StudyArtifactOnly",
     "StudyWorkspaceOnly",
-    "EngineConfigOnly",
-    "ControllerConfigOnly",
+    "MethodConfigOnly",
 }
 SUPPORTED_EVALUATION_SCOPES = {"FixedInstance", "InstanceSet", "Distribution"}
 SUPPORTED_DIRECTIONS = {"maximize", "minimize"}
@@ -78,12 +76,8 @@ class StudySpec:
         return self.raw["artifacts"]
 
     @property
-    def controllers(self) -> List[Dict[str, Any]]:
-        return self.raw["controllers"]
-
-    @property
-    def engines(self) -> List[Dict[str, Any]]:
-        return self.raw["engines"]
+    def method(self) -> Dict[str, Any]:
+        return self.raw["method"]
 
     @property
     def execution(self) -> Dict[str, Any]:
@@ -202,10 +196,8 @@ def study_spec_from_raw(spec_path: Path, raw: Dict[str, Any]) -> StudySpec:
         raise ValueError(f"StudySpec missing required top-level keys: {sorted(missing)}")
     if raw.get("kind") != "StudySpec":
         raise ValueError("kind must be 'StudySpec'")
-    if not raw.get("controllers"):
-        raise ValueError("StudySpec must define at least one controller")
-    if not raw.get("engines"):
-        raise ValueError("StudySpec must define at least one engine")
+    if not raw.get("method"):
+        raise ValueError("StudySpec must define method")
     _validate_study_spec(raw)
     return StudySpec(path=spec_path, raw=raw)
 
@@ -242,17 +234,7 @@ def _validate_study_spec(raw: Dict[str, Any]) -> None:
     _require_component("execution.backend", raw["execution"].get("backend", {}))
     if "scheduler" in raw["execution"]:
         _require_component("execution.scheduler", raw["execution"].get("scheduler", {}))
-    for controller in raw["controllers"]:
-        _require_component(f"controllers[{controller.get('id', '?')}]", controller)
-    for engine in raw["engines"]:
-        _require_component(f"engines[{engine.get('id', '?')}]", engine)
-
-    backend_impl = raw["execution"]["backend"].get("implementation")
-    if backend_impl == "builtin.docker_backend":
-        raise ValueError(
-            "builtin.docker_backend is not implemented. Use builtin.local_backend or a user-owned "
-            "python:module:Class backend."
-        )
+    _require_method("method", raw["method"])
 
     candidate_parallelism = int(raw["execution"].get("parallelism", {}).get("candidateParallelism", 1))
     if candidate_parallelism < 1:
@@ -265,5 +247,26 @@ def _require_component(location: str, definition: Dict[str, Any]) -> None:
         raise ValueError(f"{location} must define an implementation.")
     if not (implementation.startswith("builtin.") or implementation.startswith("python:")):
         raise ValueError(
-            f"{location}.implementation must start with 'builtin.' or 'python:'; got {implementation!r}."
-        )
+        f"{location}.implementation must start with 'builtin.' or 'python:'; got {implementation!r}."
+    )
+
+
+def _require_method(location: str, definition: Dict[str, Any]) -> None:
+    implementation = definition.get("implementation")
+    if not isinstance(implementation, dict):
+        raise ValueError(f"{location}.implementation must be an object.")
+    implementation_type = implementation.get("type")
+    if implementation_type not in {"python", "command"}:
+        raise ValueError(f"{location}.implementation.type must be one of ['command', 'python'].")
+    if implementation_type == "python":
+        callable_ref = implementation.get("callable") or implementation.get("implementation")
+        if not callable_ref:
+            raise ValueError(f"{location}.implementation must define callable for type 'python'.")
+        if not (str(callable_ref).startswith("builtin.") or str(callable_ref).startswith("python:")):
+            raise ValueError(
+                f"{location}.implementation.callable must start with 'builtin.' or 'python:'; got {callable_ref!r}."
+            )
+    if implementation_type == "command":
+        command = implementation.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+            raise ValueError(f"{location}.implementation.command must be a non-empty list of strings.")

@@ -35,7 +35,7 @@ class MaterializationRecord:
         return asdict(self)
 
 
-def normalize_optimizable_artifact(artifact: JsonDict, study_spec, engine_id: str) -> JsonDict:
+def normalize_optimizable_artifact(artifact: JsonDict, study_spec, method_id: str) -> JsonDict:
     primary_artifact = study_spec.primary_artifact
     normalized = dict(artifact)
     normalized.setdefault("artifact_id", artifact.get("id"))
@@ -47,7 +47,7 @@ def normalize_optimizable_artifact(artifact: JsonDict, study_spec, engine_id: st
     normalized.setdefault(
         "generator_record",
         {
-            "engine_id": engine_id,
+            "method_id": method_id,
             "strategy": "external",
         },
     )
@@ -219,7 +219,7 @@ class BoundsArtifactValidator:
         if not config.get("enforceBounds", False):
             return ValidationReport(metadata={"implementation": self.definition.get("implementation")})
 
-        search_space = _collect_search_space(self.study_spec.engines)
+        search_space = _collect_search_space(self.study_spec.method)
         constraints = list(config.get("constraints", []) or [])
         errors: List[str] = []
         for name, value in artifact.get("spec", {}).items():
@@ -263,11 +263,8 @@ class BoundsArtifactValidator:
         )
 
 
-def _collect_search_space(engines: List[JsonDict]) -> JsonDict:
-    search_space: JsonDict = {}
-    for engine in engines:
-        search_space.update(engine.get("config", {}).get("searchSpace", {}))
-    return search_space
+def _collect_search_space(method: JsonDict) -> JsonDict:
+    return dict(method.get("config", {}).get("searchSpace", {}))
 
 
 def _evaluate_constraint(expr: Any, values: JsonDict) -> bool:

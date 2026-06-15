@@ -1,4 +1,4 @@
-"""Example user-owned engine that returns stored code artifact manifests."""
+"""Example user-owned method that returns stored code artifact manifests."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from optpilot.code_artifacts import CodeArtifactStore
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
-class CodeArtifactEngine:
+class CodeArtifactMethod:
     """Stores a configured source directory as a code artifact candidate.
 
     This is deliberately not an optimizer. It demonstrates how a user-owned
-    code generation or search engine can use OptPilot's artifact helper while
+    code generation or search method can use OptPilot's artifact helper while
     still returning only a manifest to the core runner.
     """
 
@@ -32,7 +32,7 @@ class CodeArtifactEngine:
         source_dir = self._resolve_source_dir(candidate_context)
         artifact_store_dir = runtime_context.get("artifact_store_dir")
         if not artifact_store_dir:
-            raise ValueError("CodeArtifactEngine requires runtime_context.artifact_store_dir.")
+            raise ValueError("CodeArtifactMethod requires runtime_context.artifact_store_dir.")
 
         artifact_store = CodeArtifactStore(
             artifact_store_dir,
@@ -46,7 +46,7 @@ class CodeArtifactEngine:
             )
             prompt_record = prompt_store.store_prompt(
                 messages=list(config["promptMessages"]),
-                metadata={"engine_id": self.definition["id"]},
+                metadata={"method_id": self.definition["id"]},
             )
         model_record = None
         if config.get("model"):
@@ -65,7 +65,7 @@ class CodeArtifactEngine:
                 artifact_kind=config.get("artifactKind", "code_bundle"),
                 lineage={"parents": list(config.get("parents", []))},
                 generator_record=build_generator_record(
-                    engine_id=self.definition["id"],
+                    method_id=self.definition["id"],
                     strategy="stored_directory_example",
                     prompt_record=prompt_record,
                     model_record=model_record,
@@ -87,4 +87,5 @@ class CodeArtifactEngine:
                 source = Path(str(entry.get("from", ""))).resolve()
                 if source.is_dir():
                     return source
-        raise ValueError("CodeArtifactEngine requires candidate_context.files.source backed by workspace.copy.")
+        raise ValueError("CodeArtifactMethod requires candidate_context.files.source backed by workspace.copy.")
+

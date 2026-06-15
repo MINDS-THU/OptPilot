@@ -20,12 +20,15 @@ METHOD_KIND = "MethodConfig"
 STUDY_KIND = "StudyConfig"
 
 EVALUATE_TYPES = {"command", "python", "custom"}
+METHOD_IMPLEMENTATION_TYPES = {"command", "python"}
+METHOD_PROTOCOLS = {"optpilot.method.batch.v1"}
+METHOD_RUNTIME_TYPES = {"container", "host", "local", "process"}
 CANDIDATE_TYPES = {"parameters", "files", "opaque"}
 METRIC_SOURCES = {"return", "file", "stdout", "sqlite", "custom"}
 INSTANCE_SOURCES = {"none", "inline", "files", "sampler"}
 OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
 AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last"}
-BACKENDS = {"local", "local_subprocess", "custom"}
+BACKENDS = {"local", "local_subprocess", "container", "custom"}
 EVIDENCE_LEVELS = {"minimal", "standard", "full"}
 RECORD_SOURCES = {"jsonl", "csv", "sqlite_table", "sqlite_query", "custom"}
 
@@ -64,8 +67,7 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
             f"EnvironmentConfig metrics.keys {sorted(metric_keys)!r}."
         )
 
-    engines = [_compile_engine(method, candidate)]
-    controllers = [_compile_controller(method)]
+    compiled_method = _compile_method(method, candidate)
     execution = _compile_execution(study)
 
     spec = {
@@ -82,8 +84,7 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
         "artifacts": {
             "primaryArtifact": _compile_primary_artifact(environment, environment_path, candidate),
         },
-        "controllers": controllers,
-        "engines": engines,
+        "method": compiled_method,
         "execution": execution,
         "evidence": _compile_evidence(study, config_path),
         "reproducibility": _compile_reproducibility(study),
@@ -324,14 +325,21 @@ def _validate_exposure(exposure: Any, location: str) -> None:
 def _validate_method(method: Dict[str, Any], path: Path | None) -> None:
     location = str(path or f"<inline {METHOD_KIND}>")
     _require_field(method, "id", location)
-    engine = _require_mapping(method, "engine", location)
-    _require_field(engine, "implementation", f"{location} engine")
+    implementation = _require_mapping(method, "implementation", location)
+    implementation_type = implementation.get("type")
+    if implementation_type not in METHOD_IMPLEMENTATION_TYPES:
+        raise ValueError(f"{location} implementation.type must be one of {sorted(METHOD_IMPLEMENTATION_TYPES)}.")
+    protocol = implementation.get("protocol", "optpilot.method.batch.v1")
+    if protocol not in METHOD_PROTOCOLS:
+        raise ValueError(f"{location} implementation.protocol must be one of {sorted(METHOD_PROTOCOLS)}.")
+    if implementation_type == "python":
+        _require_field(implementation, "callable", f"{location} implementation")
+    if implementation_type == "command":
+        command = implementation.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
+            raise ValueError(f"{location} implementation.command must be a non-empty list of strings.")
+    _validate_method_runtime(method.get("runtime", {}), method.get("resourceProfile", {}), location)
     compatibility = _require_mapping(method, "compatibility", location)
-    controller = method.get("controller")
-    if controller is not None:
-        if not isinstance(controller, dict):
-            raise ValueError(f"{location} controller must be an object.")
-        _require_field(controller, "implementation", f"{location} controller")
     candidate_types = compatibility.get("candidateTypes", [])
     if not isinstance(candidate_types, list) or not candidate_types:
         raise ValueError(f"{location} compatibility.candidateTypes must be a non-empty list.")
@@ -341,6 +349,50 @@ def _validate_method(method: Dict[str, Any], path: Path | None) -> None:
         value = compatibility.get(key, [])
         if value is not None and not isinstance(value, list):
             raise ValueError(f"{location} compatibility.{key} must be a list.")
+
+
+def _validate_method_runtime(runtime: Any, resource_profile: Any, location: str) -> None:
+    if runtime in (None, {}):
+        return
+    if not isinstance(runtime, dict):
+        raise ValueError(f"{location} runtime must be an object.")
+    runtime_type = runtime.get("type", "host")
+    if runtime_type not in METHOD_RUNTIME_TYPES:
+        raise ValueError(f"{location} runtime.type must be one of {sorted(METHOD_RUNTIME_TYPES)}.")
+    if runtime_type == "container":
+        resource_profile = resource_profile if isinstance(resource_profile, dict) else {}
+        build = runtime.get("build", {})
+        if not (
+            runtime.get("image")
+            or runtime.get("runtimeImage")
+            or (isinstance(build, dict) and build.get("tag"))
+            or resource_profile.get("runtimeImage")
+        ):
+            raise ValueError(f"{location} runtime.type container requires runtime.image, runtime.build.tag, or resourceProfile.runtimeImage.")
+        for key in ("readOnlyMounts", "writableMounts", "extraArgs", "envFromHost"):
+            value = runtime.get(key, [])
+            if value is not None and not isinstance(value, list):
+                raise ValueError(f"{location} runtime.{key} must be a list.")
+        for key in ("env", "environmentVariables"):
+            value = runtime.get(key, {})
+            if value is not None and not isinstance(value, dict):
+                raise ValueError(f"{location} runtime.{key} must be an object.")
+        _validate_container_build(runtime.get("build", {}), f"{location} runtime")
+
+
+def _validate_container_build(build: Any, location: str) -> None:
+    if build in (None, {}):
+        return
+    if not isinstance(build, dict):
+        raise ValueError(f"{location}.build must be an object.")
+    for key in ("context", "dockerfile", "tag", "target", "platform"):
+        value = build.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{location}.build.{key} must be a string.")
+    if build.get("args") is not None and not isinstance(build.get("args"), dict):
+        raise ValueError(f"{location}.build.args must be an object.")
+    if build.get("extraArgs") is not None and not isinstance(build.get("extraArgs"), list):
+        raise ValueError(f"{location}.build.extraArgs must be a list.")
 
 
 def _validate_method_environment_compatibility(
@@ -409,6 +461,11 @@ def _validate_study(study: Dict[str, Any], path: Path) -> None:
     execution = study.get("execution", {})
     if execution and execution.get("backend", "local") not in BACKENDS:
         raise ValueError(f"{location} execution.backend must be one of {sorted(BACKENDS)}.")
+    if execution and execution.get("backend", "local") == "container":
+        config = execution.get("config", {})
+        if config is not None and not isinstance(config, dict):
+            raise ValueError(f"{location} execution.config must be an object.")
+        _validate_container_build((config or {}).get("build", {}), f"{location} execution.config")
     evidence = study.get("evidence", {})
     if evidence and evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
@@ -668,31 +725,21 @@ def _compile_primary_artifact(
     }
 
 
-def _compile_engine(method: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
-    engine = deepcopy(method["engine"])
-    config = dict(engine.get("config", {}))
+def _compile_method(method: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
+    implementation = deepcopy(method["implementation"])
+    implementation.setdefault("protocol", "optpilot.method.batch.v1")
+    config = dict(method.get("config", {}))
     parameters = candidate.get("parameters", {})
     if candidate["type"] == "parameters" and parameters.get("schema") and "searchSpace" not in config:
         config["searchSpace"] = deepcopy(parameters["schema"])
     return {
-        "id": str(engine.get("id", "engine_main")),
-        "type": str(engine.get("type", "user_engine")),
-        "implementation": engine["implementation"],
+        "id": str(method["id"]),
+        "implementation": implementation,
+        "runtime": deepcopy(method.get("runtime", {})),
         "config": config,
-        "resourceProfile": dict(engine.get("resourceProfile", {})),
-        "sandboxSpec": dict(engine.get("sandboxSpec", {})),
-    }
-
-
-def _compile_controller(method: Dict[str, Any]) -> Dict[str, Any]:
-    controller = deepcopy(method.get("controller", {}))
-    return {
-        "id": str(controller.get("id", "controller_main")),
-        "type": str(controller.get("type", "single_engine")),
-        "implementation": controller.get("implementation", "builtin.single_engine_controller"),
-        "config": dict(controller.get("config", {})),
-        "inputs": {"evidenceViews": ["summary_metrics"]},
-        "outputs": {"allowedActions": ["launch_engine", "stop_study"]},
+        "compatibility": deepcopy(method.get("compatibility", {})),
+        "resourceProfile": dict(method.get("resourceProfile", {})),
+        "sandboxSpec": dict(method.get("sandboxSpec", {})),
     }
 
 
@@ -740,6 +787,8 @@ def _compile_execution(study: Dict[str, Any]) -> Dict[str, Any]:
     backend = execution.get("backend", "local")
     if backend == "custom":
         backend_impl = execution["implementation"]
+    elif backend == "container":
+        backend_impl = "builtin.container_backend"
     elif backend == "local_subprocess":
         backend_impl = "builtin.local_subprocess_backend"
     else:
@@ -766,7 +815,7 @@ def _compile_execution(study: Dict[str, Any]) -> Dict[str, Any]:
                 "timeoutSeconds": timeout,
             },
             "sandboxSpec": {
-                "runtimeType": "process",
+                "runtimeType": "container" if backend == "container" else "process",
                 "networkPolicy": "disabled",
                 "cleanupPolicy": "always",
             },
@@ -777,7 +826,7 @@ def _compile_execution(study: Dict[str, Any]) -> Dict[str, Any]:
         "parallelism": {
             "candidateParallelism": parallelism,
             "rolloutParallelism": 1,
-            "engineParallelism": 1,
+            "methodParallelism": 1,
         },
     }
 
@@ -792,8 +841,9 @@ def _compile_evidence(study: Dict[str, Any], study_path: Path) -> Dict[str, Any]
         },
         "retention": _retention_for_level(level),
         "capture": {
-            "controllerDecisions": level in {"standard", "full"},
-            "engineSnapshots": level in {"standard", "full"},
+            "methodCalls": level in {"standard", "full"},
+            "methodEvents": level in {"standard", "full"},
+            "runtimeManifests": level in {"standard", "full"},
             "validationOutputs": level in {"standard", "full"},
             "resourceAssignments": level in {"standard", "full"},
         },

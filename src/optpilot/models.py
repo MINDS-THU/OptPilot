@@ -99,7 +99,7 @@ class OptimizableArtifact:
 class TrialSpec:
     trial_id: str
     study_id: str
-    engine_id: str
+    method_id: str
     artifact: JsonDict
     instances: List[JsonDict]
     objective: JsonDict
@@ -122,17 +122,6 @@ class Observation:
     artifacts: List[JsonDict]
     event_summary: JsonDict
     provenance: JsonDict
-
-    def to_dict(self) -> JsonDict:
-        return asdict(self)
-
-
-@dataclass
-class ControllerDecision:
-    engine_id: str
-    batch_size: int
-    reason: str
-    metadata: JsonDict = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         return asdict(self)

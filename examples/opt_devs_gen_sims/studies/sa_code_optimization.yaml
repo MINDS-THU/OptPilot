@@ -1,7 +1,7 @@
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
 name: sa-code-optimization
-description: Use a user-owned LLM engine to rewrite selected SA simulator files and optimize service_score
+description: Use a user-owned LLM method to rewrite selected SA simulator files and optimize service_score
 tags: [external-project, llm, code-edit, simulator]
 
 environment: ../environments/sa_simulator.yaml

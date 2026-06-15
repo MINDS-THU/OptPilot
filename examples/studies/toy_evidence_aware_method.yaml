@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
-name: toy-user-engine
-description: Exercise a user-owned engine loaded through the python component hook
-tags: [mvp, toy, user-engine]
+name: toy-evidence-aware-method
+description: Exercise a user-owned method that reads prior evidence
+tags: [mvp, toy, user-method, evidence-view]
 
 environment: ../environments/toy_factory.yaml
-method: ../methods/fixed_parameter_engine.yaml
+method: ../methods/evidence_aware_method.yaml
 
 objective:
   metric: throughput
@@ -17,12 +17,13 @@ instances:
     - ../instances/toy_factory_case.yaml
 
 budget:
-  maxTrials: 3
+  maxTrials: 2
 
 execution:
   backend: local
-  parallelism: 3
+  parallelism: 1
   timeoutSeconds: 120
 
 reproducibility:
   seed: 7
+

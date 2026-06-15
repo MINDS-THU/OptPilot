@@ -9,11 +9,8 @@ from typing import Any, Dict, Type
 
 
 BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
-    "controller": {
-        "builtin.single_engine_controller": "optpilot.controllers:SingleEngineController",
-    },
-    "engine": {
-        "builtin.reference_random_search": "optpilot.engines:ReferenceRandomSearchEngine",
+    "method": {
+        "builtin.reference_random_search": "optpilot.methods:ReferenceRandomSearchMethod",
     },
     "adapter": {
         "builtin.configured_environment": "optpilot.adapters:ConfiguredEnvironmentTargetAdapter",
@@ -23,6 +20,7 @@ BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
     "backend": {
         "builtin.local_backend": "optpilot.execution:LocalExecutionBackend",
         "builtin.local_subprocess_backend": "optpilot.execution:LocalSubprocessExecutionBackend",
+        "builtin.container_backend": "optpilot.execution:LocalContainerExecutionBackend",
     },
     "scheduler": {
         "builtin.local_scheduler": "optpilot.scheduler:LocalTrialScheduler",

@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import mimetypes
+import shutil
 import subprocess
 import sys
 import threading
@@ -259,8 +260,29 @@ def _handler_factory(state: UiState):
                 if path == "/api/health":
                     self._send_json({"ok": True, "cwd": str(state.cwd)})
                     return
+                if path == "/api/workspace":
+                    self._send_json(_workspace_payload(state))
+                    return
+                if path == "/api/runtime/health":
+                    self._send_json(_runtime_health())
+                    return
                 if path == "/api/catalog":
                     self._send_json(_catalog_payload(state))
+                    return
+                if path == "/api/environments":
+                    self._send_json({"environments": _catalog_payload(state)["environments"]})
+                    return
+                if path.startswith("/api/environments/"):
+                    self._send_json(_catalog_detail(state, "EnvironmentConfig", path.split("/", 3)[3]))
+                    return
+                if path == "/api/methods":
+                    self._send_json({"methods": _catalog_payload(state)["methods"]})
+                    return
+                if path.startswith("/api/methods/"):
+                    self._send_json(_catalog_detail(state, "MethodConfig", path.split("/", 3)[3]))
+                    return
+                if path == "/api/compatibility":
+                    self._send_json(_compatibility_payload(state))
                     return
                 if path == "/api/runs":
                     self._send_json({"runs": _list_runs(state)})
@@ -284,6 +306,10 @@ def _handler_factory(state: UiState):
                     payload = self._read_json_body()
                     study_path = _resolve_user_path(payload.get("study_path"), state.cwd)
                     self._send_json(_validate_study(study_path))
+                    return
+                if parsed.path == "/api/studies/draft":
+                    payload = self._read_json_body()
+                    self._send_json(_draft_study(state, payload))
                     return
                 if parsed.path == "/api/studies/launch":
                     payload = self._read_json_body()
@@ -430,6 +456,7 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
     kind = raw["kind"]
     label = raw.get("name") or raw.get("id") or path.stem
     entry: JsonDict = {
+        "uid": _encode_id(path),
         "id": str(raw.get("id") or raw.get("name") or path.stem),
         "label": str(label),
         "kind": kind,
@@ -451,6 +478,7 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
             "evaluate_type": raw.get("evaluate", {}).get("type"),
             "candidate_type": candidate_type,
             "artifact_kind": artifact_kind,
+            "runtime": _environment_runtime_summary(raw),
             "editable_files": editable,
             "capabilities": [
                 interface.get("capability")
@@ -461,10 +489,14 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
         }
     elif kind == "MethodConfig":
         compatibility = raw.get("compatibility", {}) if isinstance(raw.get("compatibility"), dict) else {}
+        implementation = raw.get("implementation", {}) if isinstance(raw.get("implementation"), dict) else {}
+        config = raw.get("config", {}) if isinstance(raw.get("config"), dict) else {}
         entry["summary"] = {
-            "controller": raw.get("controller", {}).get("implementation", "builtin.single_engine_controller"),
-            "engine": raw.get("engine", {}).get("implementation"),
-            "batch_size": raw.get("engine", {}).get("config", {}).get("batchSize"),
+            "implementation_type": implementation.get("type"),
+            "implementation": implementation.get("callable") or implementation.get("command") or implementation.get("endpoint"),
+            "protocol": implementation.get("protocol", "optpilot.method.batch.v1"),
+            "runtime": _method_runtime_summary(raw),
+            "batch_size": config.get("batchSize"),
             "candidate_types": list(compatibility.get("candidateTypes", []) or []),
             "artifact_kinds": list(compatibility.get("artifactKinds", []) or []),
             "required_capabilities": list(compatibility.get("requiredCapabilities", []) or []),
@@ -477,6 +509,265 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
             "budget": raw.get("budget", {}),
         }
     return entry
+
+
+def _workspace_payload(state: UiState) -> JsonDict:
+    return {
+        "cwd": str(state.cwd),
+        "catalog_roots": [str(path) for path in state.catalog_roots],
+        "run_roots": [str(path) for path in state.run_roots],
+        "jobs_dir": str(state.jobs_dir),
+    }
+
+
+def _runtime_health() -> JsonDict:
+    docker = _executable_health("docker", ["docker", "--version"])
+    podman = _executable_health("podman", ["podman", "--version"])
+    return {
+        "python": {
+            "ok": True,
+            "executable": sys.executable,
+            "version": sys.version.split()[0],
+        },
+        "docker": docker,
+        "podman": podman,
+    }
+
+
+def _executable_health(name: str, command: List[str]) -> JsonDict:
+    path = shutil.which(name)
+    if not path:
+        return {"ok": False, "available": False, "path": None, "version": None}
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+    except Exception as exc:
+        return {"ok": False, "available": True, "path": path, "version": None, "error": str(exc)}
+    text = (completed.stdout or completed.stderr).strip().splitlines()
+    return {
+        "ok": completed.returncode == 0,
+        "available": True,
+        "path": path,
+        "version": text[0] if text else None,
+        "error": completed.stderr.strip() if completed.returncode else "",
+    }
+
+
+def _catalog_detail(state: UiState, expected_kind: str, uid: str) -> JsonDict:
+    path = _decode_id(uid)
+    raw = _read_yaml(path)
+    if raw.get("kind") != expected_kind or raw.get("apiVersion") != AUTHORING_API_VERSION:
+        raise FileNotFoundError(f"{expected_kind} not found: {path}")
+    entry = _catalog_entry(path, raw)
+    compatibility = _compatibility_payload(state)
+    if expected_kind == "EnvironmentConfig":
+        related = [
+            item for item in compatibility["pairs"]
+            if item["environment"]["uid"] == entry["uid"]
+        ]
+    else:
+        related = [
+            item for item in compatibility["pairs"]
+            if item["method"]["uid"] == entry["uid"]
+        ]
+    return {
+        "entry": entry,
+        "config": raw,
+        "compatibility": {
+            "compatible": [item for item in related if item["compatible"]],
+            "incompatible": [item for item in related if not item["compatible"]],
+        },
+    }
+
+
+def _compatibility_payload(state: UiState) -> JsonDict:
+    catalog = _catalog_payload(state)
+    pairs = []
+    for environment in catalog["environments"]:
+        env_raw = _read_yaml(Path(environment["path"]))
+        for method in catalog["methods"]:
+            method_raw = _read_yaml(Path(method["path"]))
+            result = _compatibility_result(environment, env_raw, method, method_raw)
+            pairs.append(result)
+    return {
+        "environments": catalog["environments"],
+        "methods": catalog["methods"],
+        "pairs": pairs,
+    }
+
+
+def _compatibility_result(environment: JsonDict, env_raw: JsonDict, method: JsonDict, method_raw: JsonDict) -> JsonDict:
+    candidate = env_raw.get("candidate", {}) if isinstance(env_raw.get("candidate"), dict) else {}
+    compatibility = method_raw.get("compatibility", {}) if isinstance(method_raw.get("compatibility"), dict) else {}
+    env_candidate_type = candidate.get("type")
+    env_artifact_kind = candidate.get("artifactKind")
+    method_candidate_types = list(compatibility.get("candidateTypes", []) or [])
+    method_artifact_kinds = list(compatibility.get("artifactKinds", []) or [])
+    required_context = list(compatibility.get("requiredContext", []) or [])
+    required_capabilities = list(compatibility.get("requiredCapabilities", []) or [])
+    env_context = _environment_context_paths(candidate)
+    env_capabilities = {
+        str(item.get("capability"))
+        for item in env_raw.get("interfaces", []) or []
+        if isinstance(item, dict) and item.get("capability")
+    }
+    checks = []
+    checks.append(_compat_check(
+        not method_candidate_types or env_candidate_type in method_candidate_types,
+        f"candidate type {env_candidate_type!r} is supported",
+        f"method supports candidateTypes {method_candidate_types!r}, environment uses {env_candidate_type!r}",
+    ))
+    checks.append(_compat_check(
+        not method_artifact_kinds or env_artifact_kind in method_artifact_kinds,
+        f"artifact kind {env_artifact_kind!r} is supported",
+        f"method supports artifactKinds {method_artifact_kinds!r}, environment uses {env_artifact_kind!r}",
+    ))
+    for required in required_context:
+        checks.append(_compat_check(
+            required in env_context,
+            f"required context {required!r} is available",
+            f"required context {required!r} is missing",
+        ))
+    for required in required_capabilities:
+        checks.append(_compat_check(
+            required in env_capabilities,
+            f"required capability {required!r} is available",
+            f"required capability {required!r} is missing",
+        ))
+    compatible = all(check["ok"] for check in checks)
+    return {
+        "compatible": compatible,
+        "environment": _compat_entity(environment),
+        "method": _compat_entity(method),
+        "checks": checks,
+        "reasons": [check["message"] for check in checks if not check["ok"]] or [check["message"] for check in checks],
+    }
+
+
+def _compat_entity(entry: JsonDict) -> JsonDict:
+    return {
+        "uid": entry["uid"],
+        "id": entry["id"],
+        "label": entry["label"],
+        "path": entry["path"],
+        "summary": entry.get("summary", {}),
+    }
+
+
+def _compat_check(ok: bool, success: str, failure: str) -> JsonDict:
+    return {"ok": ok, "message": success if ok else failure}
+
+
+def _environment_context_paths(candidate: JsonDict) -> set:
+    paths = {"type", "artifactKind"}
+    candidate_type = candidate.get("type")
+    if candidate_type:
+        paths.add(candidate_type)
+    for top_level in ("parameters", "files", "opaque", "exposure", "workspace", "interfaces"):
+        value = candidate.get(top_level)
+        if isinstance(value, dict) and value:
+            paths.add(top_level)
+            for key, nested in value.items():
+                if nested not in (None, [], {}):
+                    paths.add(f"{top_level}.{key}")
+        elif isinstance(value, list) and value:
+            paths.add(top_level)
+    return paths
+
+
+def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
+    environment_path = _resolve_user_path(payload.get("environment_path"), state.cwd)
+    method_path = _resolve_user_path(payload.get("method_path"), state.cwd)
+    environment = _read_yaml(environment_path)
+    method = _read_yaml(method_path)
+    compatibility = _compatibility_result(
+        _catalog_entry(environment_path, environment),
+        environment,
+        _catalog_entry(method_path, method),
+        method,
+    )
+    name = str(payload.get("name") or f"{environment.get('id', environment_path.stem)}-{method.get('id', method_path.stem)}")
+    metric = str(payload.get("metric") or _first_metric(environment) or "score")
+    direction = str(payload.get("direction") or "maximize")
+    max_trials = int(payload.get("maxTrials", payload.get("max_trials", 12)) or 12)
+    backend = str(payload.get("backend") or "local")
+    parallelism = int(payload.get("parallelism", 1) or 1)
+    timeout = int(payload.get("timeoutSeconds", payload.get("timeout_seconds", 120)) or 120)
+    instances = _draft_instances(payload, state.cwd)
+    draft = {
+        "apiVersion": AUTHORING_API_VERSION,
+        "kind": "StudyConfig",
+        "name": name,
+        "environment": str(environment_path),
+        "method": str(method_path),
+        "objective": {"metric": metric, "direction": direction},
+        "instances": instances,
+        "budget": {"maxTrials": max_trials},
+        "execution": {"backend": backend, "parallelism": parallelism, "timeoutSeconds": timeout},
+    }
+    if payload.get("seed") not in (None, ""):
+        draft["reproducibility"] = {"seed": int(payload.get("seed"))}
+    draft_yaml = yaml.safe_dump(draft, sort_keys=False)
+    draft_path = state.jobs_dir / f"draft-{uuid.uuid4().hex[:12]}.yaml"
+    draft_path.write_text(draft_yaml, encoding="utf-8")
+    validation = _validate_study(draft_path)
+    return {
+        "draft": draft,
+        "yaml": draft_yaml,
+        "path": str(draft_path),
+        "compatibility": compatibility,
+        "validation": validation,
+    }
+
+
+def _draft_instances(payload: JsonDict, cwd: Path) -> JsonDict:
+    instance_paths = payload.get("instance_paths") or payload.get("instances")
+    if isinstance(instance_paths, str) and instance_paths.strip():
+        paths = [item.strip() for item in instance_paths.splitlines() if item.strip()]
+    elif isinstance(instance_paths, list):
+        paths = [str(item) for item in instance_paths if str(item).strip()]
+    else:
+        paths = []
+    if paths:
+        return {
+            "source": "files",
+            "paths": [str(_resolve_user_path(path, cwd)) for path in paths],
+        }
+    return {"source": "none"}
+
+
+def _first_metric(environment: JsonDict) -> Optional[str]:
+    metrics = environment.get("metrics", {}) if isinstance(environment.get("metrics"), dict) else {}
+    keys = metrics.get("keys", [])
+    if isinstance(keys, list) and keys:
+        return str(keys[0])
+    return None
+
+
+def _relative_or_absolute(path: Path, cwd: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(cwd.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _environment_runtime_summary(raw: JsonDict) -> JsonDict:
+    evaluate = raw.get("evaluate", {}) if isinstance(raw.get("evaluate"), dict) else {}
+    return {
+        "evaluate_type": evaluate.get("type"),
+        "timeoutSeconds": evaluate.get("timeoutSeconds"),
+        "has_python_path": bool(evaluate.get("pythonPath")),
+    }
+
+
+def _method_runtime_summary(raw: JsonDict) -> JsonDict:
+    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    implementation = raw.get("implementation", {}) if isinstance(raw.get("implementation"), dict) else {}
+    return {
+        "type": runtime.get("type", "host" if implementation.get("type") == "command" else "process"),
+        "image": runtime.get("image") or runtime.get("runtimeImage"),
+        "has_build": bool(runtime.get("build")),
+        "networkPolicy": runtime.get("networkPolicy"),
+    }
 
 
 def _list_runs(state: UiState) -> List[JsonDict]:
@@ -539,8 +830,8 @@ def _run_detail(run_dir: Path) -> JsonDict:
         "observations": observations,
         "trials": trials,
         "artifacts": artifacts,
-        "controller_decisions": _read_jsonl(run_dir / "controller_decisions.jsonl"),
-        "engine_snapshots": _read_jsonl(run_dir / "engine_snapshots.jsonl"),
+        "method_calls": _read_jsonl(run_dir / "method_calls.jsonl"),
+        "method_events": _read_jsonl(run_dir / "method_events.jsonl"),
         "scheduler_events": _read_jsonl(run_dir / "scheduler_events.jsonl"),
         "files": _list_run_files(run_dir),
     }
@@ -643,11 +934,13 @@ def _run_status(summary: JsonDict, job: Optional[JsonDict]) -> str:
 
 
 def _method_summary(study_spec: JsonDict) -> JsonDict:
-    controllers = study_spec.get("controllers", [])
-    engines = study_spec.get("engines", [])
+    method = study_spec.get("method", {}) if isinstance(study_spec.get("method"), dict) else {}
+    implementation = method.get("implementation", {}) if isinstance(method.get("implementation"), dict) else {}
     return {
-        "controller": controllers[0].get("implementation") if controllers else None,
-        "engine": engines[0].get("implementation") if engines else None,
+        "id": method.get("id"),
+        "implementation_type": implementation.get("type"),
+        "implementation": implementation.get("callable") or implementation.get("command") or implementation.get("endpoint"),
+        "protocol": implementation.get("protocol", "optpilot.method.batch.v1"),
     }
 
 

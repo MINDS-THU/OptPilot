@@ -32,7 +32,7 @@ class CodeFileMapping:
 class CodeArtifactStore:
     """Copy generated code into a stable artifact folder and build a manifest.
 
-    Engines remain user-owned, but many engines need the same mundane workflow:
+    Methods remain user-owned, but many methods need the same mundane workflow:
     generate one or more files, store them durably, and return a code artifact
     manifest with ``contentRef`` and ``sha256`` fields. This helper owns that
     storage shape without owning the search algorithm.

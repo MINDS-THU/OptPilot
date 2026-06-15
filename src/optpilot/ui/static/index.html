@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OptPilot UI</title>
+    <title>OptPilot Workbench</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
@@ -13,13 +13,15 @@
           <div class="brand-mark">OP</div>
           <div>
             <div class="brand-title">OptPilot</div>
-            <div class="brand-subtitle">Study Console</div>
+            <div class="brand-subtitle">Workbench</div>
           </div>
         </div>
         <nav class="nav" aria-label="Main navigation">
-          <button class="nav-button active" data-view="studies" type="button">Studies</button>
-          <button class="nav-button" data-view="catalog" type="button">Catalog</button>
-          <button class="nav-button" data-view="builder" type="button">Builder</button>
+          <button class="nav-button active" data-view="home" type="button">Home</button>
+          <button class="nav-button" data-view="environments" type="button">Environments</button>
+          <button class="nav-button" data-view="methods" type="button">Methods</button>
+          <button class="nav-button" data-view="builder" type="button">Study Builder</button>
+          <button class="nav-button" data-view="runs" type="button">Runs</button>
         </nav>
         <div class="sidebar-foot">
           <div class="muted">Local server</div>
@@ -30,35 +32,150 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <h1 id="pageTitle">Studies</h1>
-            <p id="pageSubtitle">Monitor running studies and inspect previous runs.</p>
+            <h1 id="pageTitle">Home</h1>
+            <p id="pageSubtitle">Connect methods to environments, launch studies, and inspect evidence.</p>
           </div>
           <div class="topbar-actions">
-            <button id="refreshButton" class="icon-button" type="button" title="Refresh">Refresh</button>
+            <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
           </div>
         </header>
 
-        <section id="studiesView" class="view active-view">
+        <section id="homeView" class="view active-view">
           <div class="summary-grid">
-            <div class="metric-tile">
-              <span class="tile-label">Runs</span>
-              <strong id="totalRuns">0</strong>
-            </div>
-            <div class="metric-tile">
-              <span class="tile-label">Running</span>
-              <strong id="runningRuns">0</strong>
-            </div>
-            <div class="metric-tile">
-              <span class="tile-label">Completed Trials</span>
-              <strong id="completedTrials">0</strong>
-            </div>
-            <div class="metric-tile">
-              <span class="tile-label">Failures</span>
-              <strong id="failureCount">0</strong>
-            </div>
+            <div class="metric-tile"><span>Environments</span><strong id="homeEnvironmentCount">0</strong></div>
+            <div class="metric-tile"><span>Methods</span><strong id="homeMethodCount">0</strong></div>
+            <div class="metric-tile"><span>Runs</span><strong id="homeRunCount">0</strong></div>
+            <div class="metric-tile"><span>Running</span><strong id="homeRunningCount">0</strong></div>
           </div>
+          <div class="home-grid">
+            <section class="panel">
+              <div class="panel-header"><h2>Runtime Health</h2></div>
+              <div id="runtimeHealth" class="list"></div>
+            </section>
+          </div>
+          <section class="panel">
+            <div class="panel-header"><h2>Recent Runs</h2></div>
+            <div id="homeRecentRuns" class="compact-list"></div>
+          </section>
+        </section>
 
-          <div class="split-layout">
+        <section id="environmentsView" class="view">
+          <div class="entity-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Environments</h2>
+                <input id="environmentFilter" class="search-input" type="search" placeholder="Filter" />
+              </div>
+              <div id="environmentsList" class="entity-list"></div>
+            </section>
+            <section class="panel detail-panel">
+              <div id="environmentDetail" class="detail-content"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="methodsView" class="view">
+          <div class="entity-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>Methods</h2>
+                <input id="methodFilter" class="search-input" type="search" placeholder="Filter" />
+              </div>
+              <div id="methodsList" class="entity-list"></div>
+            </section>
+            <section class="panel detail-panel">
+              <div id="methodDetail" class="detail-content"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="builderView" class="view">
+          <div class="builder-grid">
+            <section class="panel">
+              <div class="panel-header"><h2>Study Builder</h2></div>
+              <form id="builderForm" class="form-stack">
+                <label>
+                  <span>Environment</span>
+                  <select id="builderEnvironment"></select>
+                </label>
+                <label>
+                  <span>Method</span>
+                  <select id="builderMethod"></select>
+                </label>
+                <div id="builderCompatibility" class="compat-box"></div>
+                <div class="form-row">
+                  <label>
+                    <span>Study name</span>
+                    <input id="builderName" type="text" />
+                  </label>
+                  <label>
+                    <span>Metric</span>
+                    <input id="builderMetric" type="text" />
+                  </label>
+                </div>
+                <div class="form-row">
+                  <label>
+                    <span>Direction</span>
+                    <select id="builderDirection">
+                      <option value="maximize">maximize</option>
+                      <option value="minimize">minimize</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Max trials</span>
+                    <input id="builderMaxTrials" type="number" min="1" value="12" />
+                  </label>
+                </div>
+                <div class="form-row">
+                  <label>
+                    <span>Backend</span>
+                    <select id="builderBackend">
+                      <option value="local">local</option>
+                      <option value="local_subprocess">local_subprocess</option>
+                      <option value="container">container</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Parallelism</span>
+                    <input id="builderParallelism" type="number" min="1" value="1" />
+                  </label>
+                </div>
+                <div class="form-row">
+                  <label>
+                    <span>Timeout seconds</span>
+                    <input id="builderTimeout" type="number" min="1" value="120" />
+                  </label>
+                  <label>
+                    <span>Output root</span>
+                    <input id="builderOutputRoot" type="text" value="runs" />
+                  </label>
+                </div>
+                <label>
+                  <span>Instance paths</span>
+                  <textarea id="builderInstances" rows="3" placeholder="One instance file path per line"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button id="draftButton" type="button">Generate draft</button>
+                  <button id="launchDraftButton" class="primary-button" type="submit">Launch draft</button>
+                </div>
+              </form>
+            </section>
+            <section class="panel">
+              <div class="panel-header"><h2>Generated StudyConfig</h2></div>
+              <div id="builderValidation" class="validation-box"></div>
+              <pre id="builderYaml" class="code-box yaml-preview"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section id="runsView" class="view">
+          <div class="summary-grid">
+            <div class="metric-tile"><span>Runs</span><strong id="totalRuns">0</strong></div>
+            <div class="metric-tile"><span>Running</span><strong id="runningRuns">0</strong></div>
+            <div class="metric-tile"><span>Completed Trials</span><strong id="completedTrials">0</strong></div>
+            <div class="metric-tile"><span>Failures</span><strong id="failureCount">0</strong></div>
+          </div>
+          <div class="runs-layout">
             <section class="panel">
               <div class="panel-header">
                 <h2>Study Runs</h2>
@@ -70,98 +187,24 @@
                     <tr>
                       <th>Name</th>
                       <th>Status</th>
+                      <th>Method</th>
                       <th>Trials</th>
                       <th>Best</th>
                       <th>Environment</th>
-                      <th>Updated</th>
                     </tr>
                   </thead>
                   <tbody id="runsTable"></tbody>
                 </table>
               </div>
             </section>
-
             <section class="panel detail-panel">
-              <div id="runDetailEmpty" class="empty-state">
-                <h2>No run selected</h2>
-                <p>Select a run to inspect observations, artifacts, events, and files.</p>
-              </div>
-              <div id="runDetail" class="hidden">
-                <div class="detail-heading">
-                  <div>
-                    <h2 id="detailName"></h2>
-                    <p id="detailPath" class="path-text"></p>
-                  </div>
-                  <span id="detailStatus" class="status-pill"></span>
-                </div>
-                <div class="detail-stats">
-                  <div><span>Best metric</span><strong id="detailBest">-</strong></div>
-                  <div><span>Trials</span><strong id="detailTrials">0</strong></div>
-                  <div><span>Failures</span><strong id="detailFailures">0</strong></div>
-                  <div><span>Objective</span><strong id="detailObjective">-</strong></div>
-                </div>
-                <div id="metricChart" class="chart"></div>
-                <div class="tabs" role="tablist">
-                  <button class="tab active" data-tab="observations" type="button">Observations</button>
-                  <button class="tab" data-tab="artifacts" type="button">Artifacts</button>
-                  <button class="tab" data-tab="events" type="button">Events</button>
-                  <button class="tab" data-tab="files" type="button">Files</button>
-                </div>
-                <div id="detailTabContent" class="tab-content"></div>
-              </div>
+              <div id="runDetail" class="detail-content"></div>
             </section>
           </div>
-        </section>
-
-        <section id="catalogView" class="view">
-          <div class="catalog-grid">
-            <section class="panel">
-              <div class="panel-header"><h2>Environments</h2></div>
-              <div id="environmentsList" class="list"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-header"><h2>Methods</h2></div>
-              <div id="methodsList" class="list"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-header"><h2>Studies</h2></div>
-              <div id="studiesList" class="list"></div>
-            </section>
-          </div>
-          <section class="panel builtin-panel">
-            <div class="panel-header"><h2>Built-In Components</h2></div>
-            <div id="builtinsList" class="builtin-grid"></div>
+          <section class="panel jobs-panel">
+            <div class="panel-header"><h2>UI Jobs</h2></div>
+            <div id="jobsList" class="compact-list"></div>
           </section>
-        </section>
-
-        <section id="builderView" class="view">
-          <div class="builder-layout">
-            <section class="panel">
-              <div class="panel-header"><h2>Launch Study</h2></div>
-              <form id="launchForm" class="form-stack">
-                <label>
-                  <span>StudyConfig path</span>
-                  <input id="studyPathInput" type="text" list="studySuggestions" placeholder="examples/studies/toy_random_search.yaml" />
-                  <datalist id="studySuggestions"></datalist>
-                  <span class="field-hint">Discovered StudyConfig paths appear here as suggestions.</span>
-                </label>
-                <label>
-                  <span>Output root</span>
-                  <input id="outputRootInput" type="text" placeholder="runs" />
-                  <span class="field-hint">Relative paths are resolved from the directory where the UI was started.</span>
-                </label>
-                <div class="form-actions">
-                  <button id="validateButton" type="button">Validate</button>
-                  <button id="launchButton" type="submit" class="primary-button">Launch</button>
-                </div>
-              </form>
-              <div id="validationResult" class="validation-box"></div>
-            </section>
-            <section class="panel">
-              <div class="panel-header"><h2>UI Jobs</h2></div>
-              <div id="jobsList" class="list"></div>
-            </section>
-          </div>
         </section>
       </main>
     </div>
@@ -169,4 +212,3 @@
     <script src="/static/app.js"></script>
   </body>
 </html>
-

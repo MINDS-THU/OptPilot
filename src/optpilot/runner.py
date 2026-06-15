@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import random
-import inspect
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .artifacts import normalize_optimizable_artifact
-from .engine_runtime import EngineRuntime
 from .environment import build_environment_snapshot
 from .evidence import EvidenceView
 from .execution import Evaluator
+from .method_runtime import MethodRuntime
 from .models import RunSummary, SandboxSpec, TrialSpec, ResourceProfile, utc_now_iso
 from .registry import resolve_component
 from .spec import StudySpec, load_study_spec
@@ -71,10 +70,6 @@ class StudyRunner:
             ),
         }
 
-        controller_def = self.study_spec.controllers[0]
-        controller_cls = resolve_component("controller", controller_def["implementation"])
-        controller = controller_cls(controller_def, self.study_spec)
-
         target_cls = resolve_component("adapter", self.study_spec.target["adapter"]["implementation"])
         target_adapter = target_cls(self.study_spec.target["adapter"], self.study_spec)
 
@@ -86,11 +81,14 @@ class StudyRunner:
         validator_cls = resolve_component("validator", validator_def["implementation"])
         validator = validator_cls(validator_def, self.study_spec)
 
-        engine_instances = {}
-        for engine_def in self.study_spec.engines:
-            engine_cls = resolve_component("engine", engine_def["implementation"])
-            engine = engine_cls(engine_def, self.study_spec, rng)
-            engine_instances[engine_def["id"]] = EngineRuntime(engine_def, engine, store, self.study_spec)
+        method_def = self.study_spec.method
+        method_impl = method_def.get("implementation", {})
+        method_instance = None
+        if method_impl.get("type") == "python":
+            method_ref = method_impl.get("callable") or method_impl.get("implementation")
+            method_cls = resolve_component("method", method_ref)
+            method_instance = method_cls(method_def, self.study_spec, rng)
+        method_runtime = MethodRuntime(method_def, method_instance, store, self.study_spec)
 
         backend_def = self.study_spec.execution["backend"]
         evaluator = Evaluator(self.study_spec, target_adapter, store, materializer, validator)
@@ -133,38 +131,33 @@ class StudyRunner:
                 "candidate_context": runtime_context["candidate_context"],
                 "runtime_context": runtime_context,
             }
-            decision_context = evidence_view.decision_context()
-            decision = _call_controller_decide(controller, study_state, self.study_spec.engines, evidence_view)
-            decision_record = decision.to_dict()
-            decision_record.setdefault("metadata", {})
-            decision_record["metadata"].setdefault("evidence_context", decision_context)
-            store.record_controller_decision(decision_record)
-            engine = engine_instances[decision.engine_id]
-            remaining = max_trials - completed_trials if max_trials else decision.batch_size
-            batch_size = min(decision.batch_size, remaining) if max_trials else decision.batch_size
-            candidate_artifacts = engine.propose(batch_size, study_state, evidence_view)
+            configured_batch_size = int(method_def.get("config", {}).get("batchSize", 1) or 1)
+            remaining = max_trials - completed_trials if max_trials else configured_batch_size
+            batch_size = min(configured_batch_size, remaining) if max_trials else configured_batch_size
+            candidate_artifacts = method_runtime.propose(batch_size, study_state, evidence_view)
+            if not candidate_artifacts:
+                break
             trial_specs = []
             for artifact in candidate_artifacts:
-                normalized_artifact = normalize_optimizable_artifact(artifact, self.study_spec, decision.engine_id)
+                normalized_artifact = normalize_optimizable_artifact(artifact, self.study_spec, method_def["id"])
                 trial_spec = TrialSpec(
                     trial_id=f"trial-{uuid.uuid4().hex[:12]}",
                     study_id=study_id,
-                    engine_id=decision.engine_id,
+                    method_id=method_def["id"],
                     artifact=normalized_artifact,
                     instances=self.study_spec.build_instance_batch(rng),
                     objective=self.study_spec.objective,
-                    resource_profile=_resolve_resource_profile(self.study_spec.execution, self.study_spec.engines, decision.engine_id),
-                    sandbox_spec=_resolve_sandbox_spec(self.study_spec.execution, self.study_spec.engines, decision.engine_id),
+                    resource_profile=_resolve_resource_profile(self.study_spec.execution, method_def),
+                    sandbox_spec=_resolve_sandbox_spec(self.study_spec.execution, method_def),
                     metadata={
                         "seed": seed,
-                        "controller_id": controller_def["id"],
                         "backend_identity": _backend_identity(backend_def),
                         "scheduler_identity": _scheduler_identity(scheduler_def),
                     },
                 )
                 trial_specs.append(trial_spec)
             batch_observations = scheduler.run_batch(trial_specs)
-            engine.observe([observation.to_dict() for observation in batch_observations])
+            method_runtime.observe([observation.to_dict() for observation in batch_observations])
             for observation in batch_observations:
                 if _is_failure_status(observation.status):
                     failure_count += 1
@@ -246,28 +239,18 @@ def run_expanded_study_spec(
     return runner.run()
 
 
-def _call_controller_decide(controller, study_state: Dict[str, Any], engines: List[Dict[str, Any]], evidence_view):
-    parameters = inspect.signature(controller.decide).parameters
-    if len(parameters) >= 3:
-        return controller.decide(study_state, engines, evidence_view)
-    return controller.decide(study_state, engines)
-
-
-
-def _resolve_resource_profile(execution: Dict[str, Any], engines: List[Dict[str, Any]], engine_id: str) -> ResourceProfile:
+def _resolve_resource_profile(execution: Dict[str, Any], method: Dict[str, Any]) -> ResourceProfile:
     defaults = execution.get("defaults", {}).get("resourceProfile", {})
-    engine_def = next(engine for engine in engines if engine["id"] == engine_id)
     merged = dict(defaults)
-    merged.update(engine_def.get("resourceProfile", {}))
+    merged.update(method.get("resourceProfile", {}))
     return ResourceProfile.from_dict(merged)
 
 
 
-def _resolve_sandbox_spec(execution: Dict[str, Any], engines: List[Dict[str, Any]], engine_id: str) -> SandboxSpec:
+def _resolve_sandbox_spec(execution: Dict[str, Any], method: Dict[str, Any]) -> SandboxSpec:
     defaults = execution.get("defaults", {}).get("sandboxSpec", {})
-    engine_def = next(engine for engine in engines if engine["id"] == engine_id)
     merged = dict(defaults)
-    merged.update(engine_def.get("sandboxSpec", {}))
+    merged.update(method.get("sandboxSpec", {}))
     return SandboxSpec.from_dict(merged)
 
 

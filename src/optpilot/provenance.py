@@ -103,14 +103,14 @@ def build_model_record(
 
 def build_generator_record(
     *,
-    engine_id: str,
+    method_id: str,
     strategy: str,
     prompt_record: Optional[JsonDict] = None,
     model_record: Optional[JsonDict] = None,
     extra: Optional[JsonDict] = None,
 ) -> JsonDict:
     record = {
-        "engine_id": engine_id,
+        "method_id": method_id,
         "strategy": strategy,
     }
     if prompt_record is not None:

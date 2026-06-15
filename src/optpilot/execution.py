@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .artifacts import MaterializationRecord, ValidationReport
+from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import Observation, ResourceProfile, SandboxSpec, TrialSpec, utc_now_iso
 
 
@@ -152,7 +153,7 @@ class Evaluator:
             {
                 "trial_id": trial_spec.trial_id,
                 "study_id": trial_spec.study_id,
-                "engine_id": trial_spec.engine_id,
+                "method_id": trial_spec.method_id,
                 "artifact_id": trial_spec.artifact["artifact_id"],
                 "artifact_kind": trial_spec.artifact["artifact_kind"],
                 "artifact": dict(trial_spec.artifact),
@@ -207,7 +208,7 @@ class Evaluator:
                 "errors": failure_events,
             },
             provenance={
-                "engine_id": trial_spec.engine_id,
+                "method_id": trial_spec.method_id,
                 "target_version": self.study_spec.target.get("targetVersion"),
                 "seed": trial_spec.metadata.get("seed"),
                 "resource_profile": trial_spec.resource_profile.to_dict(),
@@ -288,7 +289,7 @@ class Evaluator:
                 "errors": [error],
             },
             provenance={
-                "engine_id": trial_spec.engine_id,
+                "method_id": trial_spec.method_id,
                 "target_version": self.study_spec.target.get("targetVersion"),
                 "seed": trial_spec.metadata.get("seed"),
                 "resource_profile": trial_spec.resource_profile.to_dict(),
@@ -483,6 +484,208 @@ class LocalSubprocessExecutionBackend:
         return [observation]
 
 
+class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
+    """Run each trial worker through a Docker/Podman-compatible container CLI.
+
+    The backend intentionally reuses the JSON worker contract from
+    ``LocalSubprocessExecutionBackend``. Host paths are mounted at the same
+    absolute paths inside the container, which keeps compiled configs and trial
+    evidence paths stable across local and container execution.
+    """
+
+    def __init__(self, definition: Dict[str, Any], evaluator: Evaluator, max_workers: int = 1):
+        super().__init__(definition, evaluator, max_workers=max_workers)
+        self.config = dict(definition.get("config", {}))
+        self.container_executable = str(self.config.get("containerExecutable", "docker"))
+        self.python_executable = str(self.config.get("pythonExecutable", "python"))
+        self._build_lock = threading.Lock()
+        self._built_image_keys = set()
+
+    def submit(self, trial_spec: TrialSpec) -> str:
+        handle = f"handle-{uuid.uuid4().hex[:12]}"
+        handle_dir = self.handles_dir / handle
+        handle_dir.mkdir(parents=True, exist_ok=False)
+        input_path = handle_dir / "worker_input.json"
+        output_path = handle_dir / "worker_output.json"
+        stdout_path = handle_dir / "worker_stdout.log"
+        stderr_path = handle_dir / "worker_stderr.log"
+        container_name = _container_name(handle)
+        image = _container_image(self.config, trial_spec)
+        build_metadata = self._ensure_container_image(image, trial_spec)
+        worker_metadata = {
+            "handle": handle,
+            "backend": "local_container",
+            "container_executable": self.container_executable,
+            "container_image": image,
+            "container_build": build_metadata,
+            "container_name": container_name,
+            "worker_process": "python -m optpilot.worker",
+            "submitted_at": utc_now_iso(),
+            "timeoutSeconds": trial_spec.resource_profile.timeout_seconds,
+            "input_path": str(input_path),
+            "output_path": str(output_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+        }
+        trial_spec.metadata["backend_worker"] = dict(worker_metadata)
+        input_payload = {
+            "study_spec_path": str(self.evaluator.study_spec.path),
+            "study_spec_raw": self.evaluator.study_spec.raw,
+            "run_dir": str(self.run_dir),
+            "trial_spec": trial_spec_to_dict(trial_spec),
+            "output_path": str(output_path),
+        }
+        input_path.write_text(json.dumps(input_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+        command = self._container_command(
+            trial_spec,
+            container_name=container_name,
+            image=image,
+            input_path=input_path,
+        )
+        worker_metadata["command"] = list(command)
+        stdout_handle = stdout_path.open("w", encoding="utf-8")
+        stderr_handle = stderr_path.open("w", encoding="utf-8")
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(Path.cwd()),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+            )
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+        worker_metadata["pid"] = process.pid
+        with self._lock:
+            self._processes[handle] = process
+            self._metadata[handle] = worker_metadata
+            self._trial_specs[handle] = trial_spec
+            self._paths[handle] = {
+                "output": output_path,
+                "stdout": stdout_path,
+                "stderr": stderr_path,
+            }
+        return handle
+
+    def _ensure_container_image(self, image: str, trial_spec: TrialSpec) -> Dict[str, Any]:
+        build = self.config.get("build")
+        if not build:
+            return {}
+        if not isinstance(build, dict):
+            raise ValueError("execution.config.build must be an object.")
+        key = (self.container_executable, image, json.dumps(build, sort_keys=True))
+        with self._build_lock:
+            if key in self._built_image_keys:
+                return {"configured": True, "status": "already_built", "image": image}
+            metadata = build_container_image(
+                executable=self.container_executable,
+                image=image,
+                build=build,
+                base_dir=self.evaluator.study_spec.base_dir,
+                timeout=int(build.get("timeoutSeconds", 0) or trial_spec.resource_profile.timeout_seconds or 0) or None,
+            )
+            self._built_image_keys.add(key)
+        return {
+            "configured": True,
+            "status": "built",
+            "image": image,
+            "command": metadata.get("command", []),
+            "returncode": metadata.get("returncode"),
+        }
+
+    def cancel(self, handle: str) -> None:
+        self._force_remove_container(handle)
+        super().cancel(handle)
+
+    def collect(self, handle: str) -> List[Observation]:
+        process = self._processes[handle]
+        trial_spec = self._trial_specs[handle]
+        paths = self._paths[handle]
+        timeout_seconds = max(1, int(trial_spec.resource_profile.timeout_seconds))
+        started = time.monotonic()
+        try:
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            self._force_remove_container(handle)
+            process.kill()
+            process.wait()
+            elapsed = time.monotonic() - started
+            observation = _backend_timeout_observation(
+                self.evaluator.study_spec,
+                trial_spec,
+                elapsed,
+                _worker_artifacts(paths),
+                exc,
+            )
+            self.evaluator._record_trial(trial_spec, observation.status)
+            self.evaluator.evidence_store.record_observation(observation.to_dict())
+            return [observation]
+
+        if paths["output"].exists():
+            payload = json.loads(paths["output"].read_text(encoding="utf-8"))
+            return [Observation(**item) for item in payload.get("observations", [])]
+        elapsed = time.monotonic() - started
+        error = RuntimeError(f"Container worker exited with code {returncode} without writing output.")
+        observation = _backend_failure_observation(
+            self.evaluator.study_spec,
+            trial_spec,
+            elapsed,
+            _worker_artifacts(paths),
+            error,
+        )
+        self.evaluator._record_trial(trial_spec, observation.status)
+        self.evaluator.evidence_store.record_observation(observation.to_dict())
+        return [observation]
+
+    def _container_command(
+        self,
+        trial_spec: TrialSpec,
+        *,
+        container_name: str,
+        image: str,
+        input_path: Path,
+    ) -> List[str]:
+        command = [
+            self.container_executable,
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+        ]
+        command.extend(network_args(trial_spec.sandbox_spec.network_policy))
+        for host_path, mode in _container_mounts(self.evaluator.study_spec, self.run_dir, trial_spec.sandbox_spec):
+            command.extend(["-v", f"{host_path}:{host_path}:{mode}"])
+        command.extend(["-w", str(Path.cwd().resolve())])
+        env = {
+            "PYTHONPATH": container_pythonpath(),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            **{str(key): str(value) for key, value in trial_spec.sandbox_spec.environment_variables.items()},
+        }
+        for key, value in env.items():
+            command.extend(["-e", f"{key}={value}"])
+        if trial_spec.resource_profile.cpu:
+            command.extend(["--cpus", str(trial_spec.resource_profile.cpu)])
+        if trial_spec.resource_profile.memory_gib:
+            command.extend(["--memory", f"{trial_spec.resource_profile.memory_gib}g"])
+        command.extend(list(self.config.get("extraArgs", []) or []))
+        command.extend([image, self.python_executable, "-m", "optpilot.worker", str(input_path)])
+        return command
+
+    def _force_remove_container(self, handle: str) -> None:
+        metadata = self._metadata.get(handle, {})
+        container_name = metadata.get("container_name")
+        if not container_name:
+            return
+        subprocess.run(
+            [self.container_executable, "rm", "-f", str(container_name)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+
 def _aggregate_metric_values(instance_results: List[Dict[str, Any]], objective: Dict[str, Any]) -> Dict[str, Any]:
     if not instance_results:
         return {}
@@ -629,6 +832,32 @@ def _worker_artifacts(paths: Dict[str, Path]) -> List[Dict[str, Any]]:
     return artifacts
 
 
+def _container_image(config: Dict[str, Any], trial_spec: TrialSpec) -> str:
+    build = config.get("build", {}) if isinstance(config.get("build", {}), dict) else {}
+    image = config.get("image") or build.get("tag") or trial_spec.resource_profile.runtime_image
+    if not image:
+        raise ValueError("Container backend requires execution.config.image, execution.config.build.tag, or resourceProfile.runtimeImage.")
+    return str(image)
+
+
+def _container_name(handle: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in handle.lower())
+    return f"optpilot-{safe}"
+
+
+def _container_mounts(study_spec, run_dir: Path, sandbox_spec: SandboxSpec) -> List[tuple[str, str]]:
+    mounts: List[tuple[Path, str]] = [
+        (Path.cwd().resolve(), "ro"),
+        (Path(run_dir).resolve(), "rw"),
+        (study_spec.base_dir.resolve(), "ro"),
+    ]
+    for value in sandbox_spec.read_only_mounts:
+        mounts.append((Path(str(value)).resolve(), "ro"))
+    if sandbox_spec.writable_workspace:
+        mounts.append((Path(str(sandbox_spec.writable_workspace)).resolve(), "rw"))
+    return [(str(path), mode) for path, mode in dedupe_mounts(mounts)]
+
+
 def _backend_timeout_observation(
     study_spec,
     trial_spec: TrialSpec,
@@ -692,7 +921,7 @@ def _backend_terminal_observation(
             "errors": [error],
         },
         provenance={
-            "engine_id": trial_spec.engine_id,
+            "method_id": trial_spec.method_id,
             "target_version": study_spec.target.get("targetVersion"),
             "seed": trial_spec.metadata.get("seed"),
             "resource_profile": trial_spec.resource_profile.to_dict(),
@@ -717,7 +946,7 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
     return TrialSpec(
         trial_id=payload["trial_id"],
         study_id=payload["study_id"],
-        engine_id=payload["engine_id"],
+        method_id=payload["method_id"],
         artifact=dict(payload["artifact"]),
         instances=list(payload["instances"]),
         objective=dict(payload["objective"]),

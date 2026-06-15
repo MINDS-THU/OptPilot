@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: evidence-aware-method
+description: User-owned method reading prior evidence
+tags: [user-method, evidence-view]
+
+implementation:
+  type: python
+  callable: python:examples.user_methods.evidence_aware_method:EvidenceAwareMethod
+  protocol: optpilot.method.batch.v1
+
+config:
+  batchSize: 1
+  candidates:
+    - {x: 99.0, y: 7, mode: balanced}
+    - {x: 4.2, y: 7, mode: balanced}
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
+  requiredContext:
+    - parameters.schema

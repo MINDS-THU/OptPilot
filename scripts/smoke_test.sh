@@ -20,9 +20,9 @@ export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/optpilot-pycache}"
 for study in \
   examples/studies/toy_random_search.yaml \
   examples/studies/toy_cli_random_search.yaml \
-  examples/studies/toy_user_engine.yaml \
-  examples/studies/toy_lifecycle_engine.yaml \
-  examples/studies/toy_evidence_aware_controller.yaml
+  examples/studies/toy_user_method.yaml \
+  examples/studies/toy_lifecycle_method.yaml \
+  examples/studies/toy_evidence_aware_method.yaml
 do
   optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
 done

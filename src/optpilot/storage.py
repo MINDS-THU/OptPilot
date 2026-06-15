@@ -40,14 +40,14 @@ class LocalEvidenceStore:
     def write_run_lineage(self, lineage: Dict[str, Any]) -> None:
         self._write_json(self.run_dir / "run_lineage.json", lineage)
 
-    def record_controller_decision(self, decision: Dict[str, Any]) -> None:
-        self._append_jsonl(self.run_dir / "controller_decisions.jsonl", decision)
+    def record_method_call(self, call: Dict[str, Any]) -> None:
+        self._append_jsonl(self.run_dir / "method_calls.jsonl", call)
 
     def record_scheduler_event(self, event: Dict[str, Any]) -> None:
         self._append_jsonl(self.run_dir / "scheduler_events.jsonl", event)
 
-    def record_engine_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        self._append_jsonl(self.run_dir / "engine_snapshots.jsonl", snapshot)
+    def record_method_event(self, event: Dict[str, Any]) -> None:
+        self._append_jsonl(self.run_dir / "method_events.jsonl", event)
 
     def record_artifact(self, artifact: Dict[str, Any]) -> None:
         self._append_jsonl(self.run_dir / "artifacts.jsonl", artifact)
@@ -66,14 +66,14 @@ class LocalEvidenceStore:
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace
 
-    def read_controller_decisions(self) -> List[Dict[str, Any]]:
-        return self._read_jsonl(self.run_dir / "controller_decisions.jsonl")
+    def read_method_calls(self) -> List[Dict[str, Any]]:
+        return self._read_jsonl(self.run_dir / "method_calls.jsonl")
 
     def read_scheduler_events(self) -> List[Dict[str, Any]]:
         return self._read_jsonl(self.run_dir / "scheduler_events.jsonl")
 
-    def read_engine_snapshots(self) -> List[Dict[str, Any]]:
-        return self._read_jsonl(self.run_dir / "engine_snapshots.jsonl")
+    def read_method_events(self) -> List[Dict[str, Any]]:
+        return self._read_jsonl(self.run_dir / "method_events.jsonl")
 
     def read_artifacts(self) -> List[Dict[str, Any]]:
         return self._read_jsonl(self.run_dir / "artifacts.jsonl")

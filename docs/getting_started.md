@@ -1,289 +1,113 @@
 # Getting Started With OptPilot
 
-This guide shows the current alpha workflow for installing OptPilot, running a
-study, and authoring your own configs.
+OptPilot orchestrates iterative optimization studies. You provide an environment evaluator and a user-owned method. OptPilot runs candidates, records observations, and keeps the evidence trail reproducible.
 
-## 1. What OptPilot Does
-
-OptPilot orchestrates iterative optimization studies over measured objectives,
-typically by evaluating candidates against external target environments or
-evaluation harnesses. It does four main jobs:
-
-1. Loads a small user-facing study definition.
-2. Invokes a controller and engine to propose candidates.
-3. Evaluates those candidates in a target environment.
-4. Records normalized evidence, lineage, and reproducibility metadata.
-
-OptPilot does not own your optimization algorithm. It owns the runtime and the
-study protocol around that algorithm.
-
-## 2. Prerequisites
-
-- Python 3.10 or newer
-- `uv`
-
-From the repository root, create the local environment:
+## Install
 
 ```bash
 uv sync
-```
-
-Check that the CLI is available:
-
-```bash
 uv run optpilot --help
 ```
 
-## 3. Run The First Example
-
-The fastest way to understand the platform is to run the reference study:
+## Run A Study
 
 ```bash
 uv run optpilot run examples/studies/toy_random_search.yaml
 ```
 
-That study uses:
+The run creates a directory containing `study_spec.json`, `summary.json`, `observations.jsonl`, `trials.jsonl`, `artifacts.jsonl`, `method_calls.jsonl`, `scheduler_events.jsonl`, and environment snapshot files.
 
-- a toy Python environment in `examples/environments/toy_factory.yaml`
-- the built-in reference random-search engine in
-  `examples/methods/reference_random_search.yaml`
-- one fixed instance in `examples/instances/toy_factory_case.yaml`
+Other examples:
 
-The CLI prints a JSON summary like this shape:
-
-```json
-{
-  "study_id": "study-...",
-  "run_dir": "/tmp/...",
-  "completed_trials": 12,
-  "best_metric": 98.49,
-  "best_trial_id": "trial-...",
-  "best_artifact_id": "artifact-..."
-}
+```bash
+uv run optpilot run examples/studies/toy_cli_random_search.yaml
+uv run optpilot run examples/studies/toy_user_method.yaml
+uv run optpilot run examples/studies/toy_lifecycle_method.yaml
+uv run optpilot run examples/studies/toy_evidence_aware_method.yaml
 ```
 
-The exact values vary by run, but the key fields are stable for the alpha CLI.
+## The Three Configs
 
-## 4. Understand The Three Config Files
-
-OptPilot expects you to author three config kinds.
-
-### EnvironmentConfig
-
-`EnvironmentConfig` defines how the target environment is evaluated and what
-kind of candidate it accepts.
-
-Example:
+`EnvironmentConfig` defines the evaluator and candidate contract.
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: EnvironmentConfig
 id: toy-factory
-
 evaluate:
   type: python
   callable: optpilot.examples.toy_factory_env:evaluate
-
 candidate:
   type: parameters
   artifactKind: parameter_spec
-  description: Search parameters accepted by the toy factory evaluator.
+  description: Toy factory parameters.
   parameters:
     schema:
-      x:
-        type: float
-        min: 0.0
-        max: 8.0
-      y:
-        type: int
-        min: 1
-        max: 10
-      mode:
-        type: categorical
-        values: [balanced, aggressive, conservative]
-
+      x: {type: float, min: 0.0, max: 8.0}
 metrics:
   source: return
-  keys: [throughput, cycle_time]
+  keys: [throughput]
 ```
 
-Current alpha support:
-
-- `evaluate.type: python`
-- `evaluate.type: command`
-- `evaluate.type: custom`
-- `candidate.type: parameters`
-- `candidate.type: files`
-- `candidate.type: opaque`
-
-### MethodConfig
-
-`MethodConfig` defines the controller and engine used to propose candidates.
-
-Built-in reference example:
+`MethodConfig` defines the optimization method.
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: MethodConfig
 id: reference-random-search
-
-engine:
-  implementation: builtin.reference_random_search
-  config:
-    batchSize: 4
-
+implementation:
+  type: python
+  callable: builtin.reference_random_search
+  protocol: optpilot.method.batch.v1
+config:
+  batchSize: 4
 compatibility:
   candidateTypes: [parameters]
   artifactKinds: [parameter_spec]
 ```
 
-User-owned example:
-
-```yaml
-apiVersion: optpilot.io/v3alpha1
-kind: MethodConfig
-id: fixed-parameter-engine
-
-engine:
-  implementation: python:examples.user_engines.fixed_parameter_engine:FixedParameterEngine
-  config:
-    batchSize: 3
-    candidates:
-      - {x: 4.2, y: 7, mode: balanced}
-      - {x: 2.0, y: 4, mode: conservative}
-
-compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
-```
-
-### StudyConfig
-
-`StudyConfig` ties everything together.
+`StudyConfig` binds one environment to one method.
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
 name: toy-random-search
-
 environment: ../environments/toy_factory.yaml
 method: ../methods/reference_random_search.yaml
-
 objective:
   metric: throughput
   direction: maximize
-
-instances:
-  source: files
-  paths:
-    - ../instances/toy_factory_case.yaml
-
 budget:
   maxTrials: 12
-
-execution:
-  backend: local
-  parallelism: 4
-  timeoutSeconds: 120
-
-reproducibility:
-  seed: 7
 ```
 
-OptPilot expands these authoring files into an internal `StudySpec` and stores
-that expanded representation in the run evidence.
+## User-Owned Methods
 
-## 5. Write Your Own Study
+Python methods use `python:module:Class`. A simple method implements:
 
-The normal workflow is:
+```python
+class MyMethod:
+    def __init__(self, definition, study_spec, rng):
+        self.definition = definition
 
-1. Define how the environment is evaluated in an `EnvironmentConfig`.
-2. Define how candidates are proposed in a `MethodConfig`.
-3. Bind them together in a `StudyConfig`.
-4. Run the study with `uv run optpilot run path/to/study.yaml`.
+    def propose(self, n_candidates, study_state):
+        return [...]
 
-When choosing the environment contract, start with the narrowest useful form:
-
-- Use `evaluate.type: python` if you already have a Python callable.
-- Use `evaluate.type: command` if your benchmark is a script or CLI tool.
-- Use `candidate.type: parameters` if the search object is structured data.
-- Use `candidate.type: files` if you are evolving source files or bundles.
-
-## 6. Plug In User-Owned Python Code
-
-Two extension forms matter for most users.
-
-Environment callable:
-
-```text
-module:function
+    def observe(self, observations):
+        pass
 ```
 
-Controller or engine class:
+Longer-running methods can implement `start`, `poll`, `finalize`, and optionally `intervene`.
 
-```text
-python:module:Class
-```
-
-The repository examples are intentionally outside `src/optpilot` to show the
-ownership boundary. OptPilot owns the protocol. You own the optimization logic.
-
-If you run from the repository root with `uv run`, the `examples` package is
-importable for the bundled examples.
-
-## 7. Inspect Run Outputs
-
-Each study run creates a run directory that contains the normalized audit trail
-for the study. Common files include:
-
-- `study_spec.json`
-- `summary.json`
-- `observations.jsonl`
-- `trials.jsonl`
-- `artifacts.jsonl`
-- `controller_decisions.jsonl`
-- `engine_snapshots.jsonl`
-- `scheduler_events.jsonl`
-- `environment_snapshot.json`
-- `run_policy.json`
-
-These files are the main product of OptPilot. They let you inspect what was
-proposed, what was evaluated, what succeeded or failed, and how the run can be
-reproduced later.
-
-## 8. Common CLI Workflows
-
-Run a study:
-
-```bash
-uv run optpilot run path/to/study.yaml
-```
-
-Resume a run in place:
-
-```bash
-uv run optpilot run path/to/study.yaml \
-  --resume-run-dir path/to/existing-run
-```
-
-Branch a new run from an earlier run:
-
-```bash
-uv run optpilot run path/to/study.yaml \
-  --branch-from-run-dir path/to/existing-run
-```
-
-Start the lightweight local UI for browsing catalog entries and run outputs:
+## UI
 
 ```bash
 uv run optpilot ui --open-browser
-uv run optpilot ui --catalog examples --runs examples/runs
 ```
 
-By default, the UI binds to `127.0.0.1:8765`. Use `--catalog` and `--runs` to
-point it at additional config roots and run roots.
+The UI scans configs, launches studies, shows running jobs, and inspects previous run evidence.
 
-Generate a draft config from a Frontier-Engineering benchmark:
+## Frontier Draft Import
 
 ```bash
 uv run optpilot import-frontier \
@@ -291,33 +115,5 @@ uv run optpilot import-frontier \
   --output frontier_pid_study.yaml
 ```
 
-The importer is only useful when that external project exists locally under
-`resource/`.
+See [config_files_v3alpha.md](config_files_v3alpha.md) for schema details.
 
-## 9. Validate The Repository
-
-The repository checks are also `uv`-first:
-
-```bash
-uv run python -m unittest discover -s tests -p 'test_*.py'
-uv run python -m compileall src/optpilot
-./scripts/smoke_test.sh
-```
-
-The smoke script will re-run itself under `uv` if needed.
-
-## 10. Current Boundaries
-
-The intended stable alpha user surface is:
-
-- `StudyConfig`, `EnvironmentConfig`, and `MethodConfig`
-- `optpilot run`
-- `optpilot ui`
-- `optpilot import-frontier`
-- `optpilot.runner.run_study`
-
-Internal execution details may still change between alpha revisions. In
-particular, treat the expanded `StudySpec`, low-level adapters, and the exact
-local evidence-store layout as implementation details.
-
-For the full schema, see [config_files_v3alpha.md](config_files_v3alpha.md).

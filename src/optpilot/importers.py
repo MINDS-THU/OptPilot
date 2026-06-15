@@ -17,13 +17,13 @@ def build_frontier_unified_study_config(
     *,
     repo_root: str | Path | None = None,
     study_name: str | None = None,
-    engine_implementation: str = "python:my_lab.engines:FrontierCodeEngine",
+    method_implementation: str = "python:my_lab.methods:FrontierCodeMethod",
     max_trials: int = 20,
     candidate_parallelism: int = 1,
 ) -> JsonDict:
     """Build an OptPilot StudyConfig draft from Frontier unified metadata.
 
-    The returned config is intentionally a draft: users still provide the engine
+    The returned config is intentionally a draft: users still provide the method
     that proposes file artifact manifests. OptPilot owns validation,
     materialization, evaluator execution, and official observation records.
     """
@@ -109,16 +109,18 @@ def build_frontier_unified_study_config(
         "method": {
             "apiVersion": "optpilot.io/v3alpha1",
             "kind": "MethodConfig",
-            "id": "frontier-code-engine",
-            "engine": {
-                "implementation": engine_implementation,
-                "config": {
-                    "artifactKind": "code_bundle",
-                    "candidateDestination": candidate_destination,
-                    "initialProgram": str((benchmark_dir / initial_program).resolve()),
-                    "agentFiles": [str((benchmark_dir / path).resolve()) for path in agent_files],
-                    "constraints": constraints_text,
-                },
+            "id": "frontier-code-method",
+            "implementation": {
+                "type": "python",
+                "callable": method_implementation,
+                "protocol": "optpilot.method.batch.v1",
+            },
+            "config": {
+                "artifactKind": "code_bundle",
+                "candidateDestination": candidate_destination,
+                "initialProgram": str((benchmark_dir / initial_program).resolve()),
+                "agentFiles": [str((benchmark_dir / path).resolve()) for path in agent_files],
+                "constraints": constraints_text,
             },
             "compatibility": {
                 "candidateTypes": ["files"],
@@ -180,7 +182,7 @@ def build_frontier_initial_artifact(
             "parents": [],
         },
         "generator_record": {
-            "engine_id": "frontier_importer",
+            "method_id": "frontier_importer",
             "strategy": "initial_program",
         },
     }
