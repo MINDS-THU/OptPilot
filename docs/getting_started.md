@@ -273,6 +273,16 @@ uv run optpilot run path/to/study.yaml \
   --branch-from-run-dir path/to/existing-run
 ```
 
+Start the lightweight local UI for browsing catalog entries and run outputs:
+
+```bash
+uv run optpilot ui --open-browser
+uv run optpilot ui --catalog examples --runs examples/runs
+```
+
+By default, the UI binds to `127.0.0.1:8765`. Use `--catalog` and `--runs` to
+point it at additional config roots and run roots.
+
 Generate a draft config from a Frontier-Engineering benchmark:
 
 ```bash
@@ -302,6 +312,7 @@ The intended stable alpha user surface is:
 
 - `StudyConfig`, `EnvironmentConfig`, and `MethodConfig`
 - `optpilot run`
+- `optpilot ui`
 - `optpilot import-frontier`
 - `optpilot.runner.run_study`
 

@@ -141,11 +141,14 @@
               <form id="launchForm" class="form-stack">
                 <label>
                   <span>StudyConfig path</span>
-                  <input id="studyPathInput" type="text" placeholder="examples/studies/toy_random_search.yaml" />
+                  <input id="studyPathInput" type="text" list="studySuggestions" placeholder="examples/studies/toy_random_search.yaml" />
+                  <datalist id="studySuggestions"></datalist>
+                  <span class="field-hint">Discovered StudyConfig paths appear here as suggestions.</span>
                 </label>
                 <label>
                   <span>Output root</span>
                   <input id="outputRootInput" type="text" placeholder="runs" />
+                  <span class="field-hint">Relative paths are resolved from the directory where the UI was started.</span>
                 </label>
                 <div class="form-actions">
                   <button id="validateButton" type="button">Validate</button>

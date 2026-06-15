@@ -56,6 +56,8 @@ class UiJob:
     process: subprocess.Popen
     stdout_path: Path
     stderr_path: Path
+    study_name: Optional[str] = None
+    target_id: Optional[str] = None
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
     run_dir: Optional[Path] = None
@@ -67,6 +69,8 @@ class UiJob:
             "job_id": self.job_id,
             "study_path": str(self.study_path),
             "output_root": str(self.output_root),
+            "study_name": self.study_name,
+            "target_id": self.target_id,
             "process_id": self.process.pid,
             "status": status,
             "exit_code": self.process.poll(),
@@ -104,7 +108,14 @@ class UiState:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
-    def launch_study(self, study_path: Path, output_root: Optional[Path]) -> UiJob:
+    def launch_study(
+        self,
+        study_path: Path,
+        output_root: Optional[Path],
+        *,
+        study_name: Optional[str] = None,
+        target_id: Optional[str] = None,
+    ) -> UiJob:
         study_path = study_path.resolve()
         output_root = (output_root or self.cwd / "runs").resolve()
         output_root.mkdir(parents=True, exist_ok=True)
@@ -143,6 +154,8 @@ class UiState:
             process=process,
             stdout_path=stdout_path,
             stderr_path=stderr_path,
+            study_name=study_name,
+            target_id=target_id,
         )
         with self._lock:
             self.jobs[job_id] = job
@@ -280,7 +293,12 @@ def _handler_factory(state: UiState):
                     if not validation["valid"]:
                         self._send_json(validation, status=HTTPStatus.BAD_REQUEST)
                         return
-                    job = state.launch_study(study_path, output_root)
+                    job = state.launch_study(
+                        study_path,
+                        output_root,
+                        study_name=validation.get("name"),
+                        target_id=validation.get("target_id"),
+                    )
                     self._send_json({"job": job.to_dict()}, status=HTTPStatus.CREATED)
                     return
                 if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/stop"):

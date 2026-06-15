@@ -65,7 +65,7 @@ Settings     catalog roots, run roots, Python environment, server mode
 
 ## 4. Launch Model
 
-Add a new CLI command:
+The current implementation uses this CLI command:
 
 ```bash
 uv run optpilot ui

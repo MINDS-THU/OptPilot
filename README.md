@@ -11,7 +11,7 @@ This repository is at an initial alpha stage. The intended user-facing surface t
 - `EnvironmentConfig`: describes how an environment evaluates candidates and produces metrics and artifacts.
 - `MethodConfig`: describes the user-owned controller and engine method.
 - `StudyConfig`: binds one method to one environment with an objective, instances, and budget.
-- CLI: `optpilot run`, `optpilot import-frontier`
+- CLI: `optpilot run`, `optpilot ui`, `optpilot import-frontier`
 - Python entrypoint: `optpilot.runner.run_study`
 
 OptPilot compiles the three authoring files above into an internal `StudySpec` that is recorded in the run evidence. Most users should author the public configs, not hand-write `StudySpec`.
@@ -26,6 +26,7 @@ Included in the current alpha:
 - pluggable controllers and engines through `python:module:Class`
 - reference random search for examples and smoke tests
 - resume and branch lineage metadata
+- lightweight local UI for browsing catalog entries and run directories
 - prompt and model provenance helpers for user-owned LLM-style engines
 - Frontier-Engineering draft import support
 
@@ -34,7 +35,7 @@ Not included in the current alpha:
 - built-in Bayesian optimization, RL, or LLM search algorithms
 - remote execution backends
 - strong sandbox isolation
-- UI
+- multi-user UI auth and permissions
 
 ## Install With uv
 
@@ -91,6 +92,12 @@ uv run optpilot run examples/studies/toy_evidence_aware_controller.yaml
 For an external-project code-edit example that uses an LLM engine to modify a
 discrete-event simulator generated in another repository, see
 [examples/opt_devs_gen_sims/README.md](examples/opt_devs_gen_sims/README.md).
+
+To browse local studies and run directories in the lightweight UI:
+
+```bash
+uv run optpilot ui --open-browser
+```
 
 ## Authoring Model
 
@@ -157,6 +164,13 @@ Branch a new run from an earlier run:
 ```bash
 uv run optpilot run examples/studies/toy_user_engine.yaml \
   --branch-from-run-dir path/to/existing-run
+```
+
+Start the lightweight local UI:
+
+```bash
+uv run optpilot ui --open-browser
+uv run optpilot ui --catalog examples --runs examples/runs
 ```
 
 Generate a Frontier-Engineering draft config when a local copy of that external project exists under `resource/`:

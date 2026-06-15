@@ -1,8 +1,10 @@
 const state = {
   view: "studies",
+  cwd: null,
   runs: [],
   catalog: null,
   jobs: [],
+  pendingJobId: null,
   selectedRunId: null,
   selectedRun: null,
   activeDetailTab: "observations",
@@ -46,6 +48,7 @@ function cacheElements() {
     "builtinsList",
     "launchForm",
     "studyPathInput",
+    "studySuggestions",
     "outputRootInput",
     "validateButton",
     "validationResult",
@@ -80,6 +83,7 @@ async function loadAll() {
 async function loadHealth() {
   try {
     const payload = await getJson("/api/health");
+    state.cwd = payload.cwd || null;
     els.healthStatus.textContent = payload.ok ? "Ready" : "Unavailable";
   } catch (error) {
     els.healthStatus.textContent = "Unavailable";
@@ -95,11 +99,31 @@ async function loadRunsAndJobs() {
   const [runsPayload, jobsPayload] = await Promise.all([getJson("/api/runs"), getJson("/api/jobs")]);
   state.runs = runsPayload.runs || [];
   state.jobs = jobsPayload.jobs || [];
+  if (state.pendingJobId) {
+    const pendingJob = state.jobs.find((job) => job.job_id === state.pendingJobId);
+    if (pendingJob) {
+      const focused = await focusJobRun(pendingJob);
+      if (focused) {
+        state.pendingJobId = null;
+        setView("studies");
+      }
+    } else {
+      state.pendingJobId = null;
+    }
+  }
   renderRuns();
   renderJobs();
   if (state.selectedRunId && state.runs.some((run) => run.id === state.selectedRunId)) {
     await loadRunDetail(state.selectedRunId, { keepTab: true });
+    return;
   }
+  if (state.runs.length) {
+    await loadRunDetail(state.runs[0].id, { keepTab: true });
+    return;
+  }
+  state.selectedRunId = null;
+  state.selectedRun = null;
+  renderRunDetail();
 }
 
 function setView(view) {
@@ -133,7 +157,12 @@ function renderRuns() {
     .map(
       (run) => `
         <tr class="run-row ${run.id === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}">
-          <td><strong>${escapeHtml(run.name)}</strong><div class="path-text">${escapeHtml(run.path)}</div></td>
+          <td>
+            <div class="run-summary-cell">
+              <strong class="run-name" title="${escapeHtml(run.name)}">${escapeHtml(run.name)}</strong>
+              <div class="path-text clamp-1" title="${escapeHtml(run.path)}">${escapeHtml(shortPath(run.path))}</div>
+            </div>
+          </td>
           <td>${statusPill(run.status)}</td>
           <td>${escapeHtml(run.completed_trials ?? 0)}</td>
           <td>${formatMetric(run.best_metric)}</td>
@@ -143,6 +172,9 @@ function renderRuns() {
       `
     )
     .join("");
+  if (!runs.length) {
+    els.runsTable.innerHTML = `<tr><td colspan="6"><div class="empty-inline">No runs match the current filter.</div></td></tr>`;
+  }
   document.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
   });
@@ -173,7 +205,10 @@ function renderRunDetail() {
   els.runDetailEmpty.classList.add("hidden");
   els.runDetail.classList.remove("hidden");
   els.detailName.textContent = run.name;
-  els.detailPath.textContent = run.path;
+  els.detailName.title = run.name;
+  els.detailName.classList.add("detail-title");
+  els.detailPath.textContent = shortPath(run.path);
+  els.detailPath.title = run.path;
   els.detailStatus.innerHTML = statusText(run.status);
   setStatusClass(els.detailStatus, run.status);
   els.detailBest.textContent = formatMetric(run.best_metric);
@@ -320,6 +355,7 @@ function renderCatalog() {
       `
     )
     .join("");
+  renderBuilderSuggestions();
 }
 
 function renderCatalogList(container, items, metaFn) {
@@ -333,7 +369,7 @@ function renderCatalogList(container, items, metaFn) {
       return `
         <div class="list-item">
           <h3>${escapeHtml(item.label)}</h3>
-          <p class="path-text">${escapeHtml(item.path)}</p>
+          <p class="path-text" title="${escapeHtml(item.path)}">${escapeHtml(shortPath(item.path))}</p>
           ${item.description ? `<p>${escapeHtml(item.description)}</p>` : ""}
           <div class="item-meta">
             ${item.tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}
@@ -343,6 +379,22 @@ function renderCatalogList(container, items, metaFn) {
       `;
     })
     .join("");
+}
+
+function renderBuilderSuggestions() {
+  const studies = state.catalog && state.catalog.studies ? state.catalog.studies : [];
+  const preferred = studies
+    .slice()
+    .sort((left, right) => scoreStudy(right) - scoreStudy(left) || left.label.localeCompare(right.label));
+  els.studySuggestions.innerHTML = studies
+    .map((item) => `<option value="${escapeHtml(relativeToCwd(item.path))}"></option>`)
+    .join("");
+  if (!els.studyPathInput.value && preferred.length) {
+    els.studyPathInput.value = relativeToCwd(preferred[0].path);
+  }
+  if (!els.outputRootInput.value) {
+    els.outputRootInput.value = "runs";
+  }
 }
 
 async function validateStudy() {
@@ -359,9 +411,20 @@ async function launchStudy(event) {
   };
   const result = await postJson("/api/studies/launch", payload, { tolerateError: true });
   if (result.job) {
-    renderValidation({ valid: true, errors: [], name: "Launched", path: result.job.study_path });
+    state.pendingJobId = result.job.job_id;
+    renderValidation({
+      valid: true,
+      errors: [],
+      name: result.job.study_name || "Launched",
+      path: result.job.study_path,
+      target_id: result.job.target_id,
+      launched: true,
+      job_id: result.job.job_id,
+      output_root: result.job.output_root,
+    });
     await loadRunsAndJobs();
-    setView("studies");
+    const focused = await focusJobRun(result.job);
+    setView(focused ? "studies" : "builder");
     return;
   }
   renderValidation(result);
@@ -369,9 +432,33 @@ async function launchStudy(event) {
 
 function renderValidation(result) {
   const valid = Boolean(result.valid);
+  const objective = result.objective && result.objective.name
+    ? `${result.objective.name} ${result.objective.direction || ""}`.trim()
+    : "-";
+  const errors = (result.errors || []).map((error) => `<li>${escapeHtml(String(error))}</li>`).join("");
+  const pathLabel = result.path || result.output_root || "-";
+  const pathTitle = result.path || result.output_root || "";
   els.validationResult.innerHTML = `
-    <div class="${valid ? "status-completed" : "status-failed"} status-pill">${valid ? "Valid" : "Invalid"}</div>
-    <pre class="code-box">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
+    <div class="validation-header">
+      <div class="${valid ? "status-completed" : "status-failed"} status-pill">${result.launched ? "Launched" : valid ? "Valid" : "Invalid"}</div>
+      ${result.name ? `<strong>${escapeHtml(result.name)}</strong>` : ""}
+    </div>
+    ${
+      valid
+        ? `
+          <div class="validation-summary">
+            <div><span>Target</span><strong>${escapeHtml(result.target_id || "-")}</strong></div>
+            <div><span>${result.launched ? "Job" : "Objective"}</span><strong>${escapeHtml(result.launched ? result.job_id || "-" : objective)}</strong></div>
+            <div><span>${result.launched ? "Output root" : "Max trials"}</span><strong>${escapeHtml(result.launched ? shortPath(result.output_root || "-") : result.max_trials ?? "-")}</strong></div>
+            <div><span>Path</span><strong title="${escapeHtml(pathTitle)}">${escapeHtml(shortPath(pathLabel))}</strong></div>
+          </div>
+        `
+        : `${errors ? `<ul class="error-list">${errors}</ul>` : `<p class="muted">No validation details returned.</p>`}`
+    }
+    <details class="details-block">
+      <summary>Raw details</summary>
+      <pre class="code-box">${escapeHtml(JSON.stringify(result, null, 2))}</pre>
+    </details>
   `;
 }
 
@@ -381,29 +468,46 @@ function renderJobs() {
     return;
   }
   els.jobsList.innerHTML = state.jobs
-    .map(
-      (job) => `
+    .map((job) => {
+      const matchingRun = findRunForJob(job);
+      return `
         <div class="list-item">
           <div class="detail-heading">
-            <div>
-              <h3>${escapeHtml(job.job_id)}</h3>
-              <p class="path-text">${escapeHtml(job.study_path)}</p>
+            <div class="job-copy">
+              <h3 class="run-name" title="${escapeHtml(job.study_name || job.job_id)}">${escapeHtml(job.study_name || job.job_id)}</h3>
+              <p class="path-text clamp-1">${escapeHtml(job.job_id)}</p>
+              <p class="path-text clamp-1" title="${escapeHtml(job.study_path)}">${escapeHtml(shortPath(job.study_path))}</p>
             </div>
             ${statusPill(job.status)}
           </div>
           <div class="item-meta">
             <span class="tag">pid ${escapeHtml(job.process_id || "-")}</span>
             <span class="tag">exit ${escapeHtml(job.exit_code ?? "-")}</span>
+            <span class="tag">target ${escapeHtml(job.target_id || "-")}</span>
           </div>
+          ${job.run_dir ? `<p class="path-text clamp-1" title="${escapeHtml(job.run_dir)}">${escapeHtml(shortPath(job.run_dir))}</p>` : `<p class="muted">Run directory will appear once the first evidence files are created.</p>`}
+          <div class="job-actions">
+          ${
+            matchingRun
+              ? `<button type="button" class="icon-button inspect-run" data-run-id="${escapeHtml(matchingRun.id)}">Inspect run</button>`
+              : ""
+          }
           ${
             job.status === "running"
               ? `<button type="button" class="icon-button stop-job" data-job-id="${escapeHtml(job.job_id)}">Stop</button>`
               : ""
           }
+          </div>
         </div>
-      `
-    )
+      `;
+    })
     .join("");
+  document.querySelectorAll(".inspect-run").forEach((button) => {
+    button.addEventListener("click", async () => {
+      setView("studies");
+      await loadRunDetail(button.dataset.runId);
+    });
+  });
   document.querySelectorAll(".stop-job").forEach((button) => {
     button.addEventListener("click", async () => {
       await postJson(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}/stop`, {});
@@ -508,4 +612,58 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function relativeToCwd(path) {
+  if (!path) return "";
+  if (state.cwd && path.startsWith(`${state.cwd}/`)) {
+    return path.slice(state.cwd.length + 1);
+  }
+  return String(path);
+}
+
+function shortPath(path) {
+  const relative = relativeToCwd(path);
+  if (relative !== path) return relative;
+  const parts = String(path || "").split("/").filter(Boolean);
+  if (parts.length <= 4) return String(path || "");
+  return `.../${parts.slice(-4).join("/")}`;
+}
+
+function scoreStudy(item) {
+  const tags = new Set(item.tags || []);
+  let score = 0;
+  if (String(item.path || "").includes("/examples/studies/")) score += 8;
+  if (tags.has("mvp")) score += 6;
+  if (tags.has("toy")) score += 4;
+  if (tags.has("reference-engine")) score += 3;
+  if (tags.has("external-project")) score -= 10;
+  if (tags.has("llm")) score -= 4;
+  return score;
+}
+
+function findRunForJob(job) {
+  if (!job) return null;
+  if (job.run_dir) {
+    const direct = state.runs.find((run) => run.path === job.run_dir);
+    if (direct) return direct;
+  }
+  const candidates = state.runs.filter((run) => {
+    if (run.job && run.job.job_id === job.job_id) return true;
+    if (job.study_name && run.name === job.study_name) {
+      return Number(new Date(run.updated_at || run.finished_at || 0)) >= ((job.started_at || 0) * 1000 - 1000);
+    }
+    return false;
+  });
+  if (!candidates.length) return null;
+  return candidates.sort((left, right) => Date.parse(right.finished_at || right.started_at || right.updated_at || 0) - Date.parse(left.finished_at || left.started_at || left.updated_at || 0))[0];
+}
+
+async function focusJobRun(job) {
+  const matchingRun = findRunForJob(job);
+  if (!matchingRun) {
+    return false;
+  }
+  await loadRunDetail(matchingRun.id);
+  return true;
 }

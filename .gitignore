@@ -13,3 +13,5 @@ examples/runs/
 examples/**/runs/
 frontier_pid_study.yaml
 *.env
+**/runs/
+.optpilot-ui/jobs/
