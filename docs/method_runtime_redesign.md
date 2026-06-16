@@ -21,7 +21,7 @@ flowchart LR
 ## Authoring Shape
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: baseline-file-copy
 

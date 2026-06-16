@@ -212,7 +212,7 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "weighted-mean-study",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
@@ -329,7 +329,7 @@ class MvpIntegrationTest(unittest.TestCase):
             environment_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "EnvironmentConfig",
                         "id": "nested-parameters",
                         "description": "Nested parameter contract.",
@@ -378,7 +378,7 @@ class MvpIntegrationTest(unittest.TestCase):
             method_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "MethodConfig",
                         "id": "parameter-method",
                         "description": "Parameter method.",
@@ -400,7 +400,7 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "nested-parameter-study",
                         "environment": "environment.yaml",
@@ -447,7 +447,7 @@ class MvpIntegrationTest(unittest.TestCase):
             environment_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "EnvironmentConfig",
                         "id": "nested-files",
                         "description": "Nested file contract.",
@@ -504,7 +504,7 @@ class MvpIntegrationTest(unittest.TestCase):
             method_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "MethodConfig",
                         "id": "file-editor",
                         "description": "File editor.",
@@ -527,7 +527,7 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "nested-file-study",
                         "environment": "environment.yaml",
@@ -1033,12 +1033,12 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "command-stdin-study",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "MethodConfig",
                             "id": "command-stdin-method",
                             "implementation": {
@@ -1108,12 +1108,12 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "command-file-study",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "MethodConfig",
                             "id": "command-file-method",
                             "implementation": {
@@ -1234,12 +1234,12 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "container-method-study",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "MethodConfig",
                             "id": "command-container-method",
                             "implementation": {
@@ -1327,12 +1327,12 @@ class MvpIntegrationTest(unittest.TestCase):
                     study_path.write_text(
                         yaml.safe_dump(
                             {
-                                "apiVersion": "optpilot.io/v3alpha1",
+                                "apiVersion": "optpilot.io/v1",
                                 "kind": "StudyConfig",
                                 "name": "unsupported-method-shape",
                                 "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                                 "method": {
-                                    "apiVersion": "optpilot.io/v3alpha1",
+                                    "apiVersion": "optpilot.io/v1",
                                     "kind": "MethodConfig",
                                     "id": "unsupported-method",
                                     "implementation": implementation,
@@ -1358,12 +1358,12 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "session-method",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "MethodConfig",
                             "id": "session-method",
                             "implementation": {
@@ -1402,11 +1402,11 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "custom-environment-adapter",
                         "environment": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "EnvironmentConfig",
                             "id": "custom-adapter-env",
                             "evaluate": {
@@ -1441,11 +1441,11 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "custom-extractors",
                         "environment": {
-                            "apiVersion": "optpilot.io/v3alpha1",
+                            "apiVersion": "optpilot.io/v1",
                             "kind": "EnvironmentConfig",
                             "id": "custom-extractor-env",
                             "evaluate": {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
@@ -1502,7 +1502,7 @@ class MvpIntegrationTest(unittest.TestCase):
             study_path.write_text(
                 yaml.safe_dump(
                     {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "custom-sampler",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
@@ -1556,11 +1556,11 @@ class MvpIntegrationTest(unittest.TestCase):
                     study_path.write_text(
                         yaml.safe_dump(
                             {
-                                "apiVersion": "optpilot.io/v3alpha1",
+                                "apiVersion": "optpilot.io/v1",
                                 "kind": "StudyConfig",
                                 "name": "malformed-environment-hook",
                                 "environment": {
-                                    "apiVersion": "optpilot.io/v3alpha1",
+                                    "apiVersion": "optpilot.io/v1",
                                     "kind": "EnvironmentConfig",
                                     "id": "malformed-hook-env",
                                     "evaluate": evaluate,
@@ -1614,7 +1614,7 @@ class MvpIntegrationTest(unittest.TestCase):
             with self.subTest(error=error):
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     payload = {
-                        "apiVersion": "optpilot.io/v3alpha1",
+                        "apiVersion": "optpilot.io/v1",
                         "kind": "StudyConfig",
                         "name": "unsupported-runtime-shape",
                         "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
@@ -1702,7 +1702,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             spec = {
-                "apiVersion": "optpilot/v3alpha",
+                "apiVersion": "optpilot/v1",
                 "kind": "StudySpec",
                 "metadata": {"name": "code-artifact-method"},
                 "target": {
@@ -2255,7 +2255,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             spec = {
-                "apiVersion": "optpilot/v3alpha",
+                "apiVersion": "optpilot/v1",
                 "kind": "StudySpec",
                 "metadata": {"name": "retry-policy-check"},
                 "target": {

@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: EnvironmentConfig
 id: toy-factory
 description: Toy Python simulator used by the reference examples

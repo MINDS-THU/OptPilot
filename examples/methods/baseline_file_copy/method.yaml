@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: baseline-file-copy
 description: Emits the unmodified files declared by a file-candidate environment.

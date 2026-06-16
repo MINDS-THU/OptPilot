@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: toy-lifecycle-method
 description: Exercise a user-owned lifecycle method loaded through the python component hook

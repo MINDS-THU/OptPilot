@@ -1,8 +1,8 @@
 # OptPilot Release Checklist
 
-Use this checklist before publishing an alpha or stable release.
+Use this checklist before publishing a release.
 
-## Required For Alpha
+## Required Before Release
 
 - Refresh the local environment and lockfile as needed: `uv sync`
 - Run unit tests: `uv run python -m unittest discover -s tests -p 'test_*.py'`
@@ -14,7 +14,7 @@ Use this checklist before publishing an alpha or stable release.
 - Confirm generated run directories are not committed under repository-level `runs/`.
 - Confirm `.optpilot-ui/`, `.venv/`, `dist/`, and `*.egg-info/` are absent from commits.
 - Confirm local external projects are not committed under `resource/`.
-- Confirm public examples use only the v3alpha config design.
+- Confirm public examples use only the `optpilot.io/v1` config design.
 - Confirm user-facing examples live under `examples/environments`, `examples/methods`, and `examples/studies`.
 - Confirm test-only catalogs live under `tests/fixtures/catalog`, not under public `examples/`.
 - Confirm `README.md` and `docs/getting_started.md` describe public API boundaries and release blockers.
@@ -26,7 +26,7 @@ Use this checklist before publishing an alpha or stable release.
 - Rebuild distribution artifacts from a clean tree instead of reusing local `dist/` output.
 - Tag the release and publish from a clean working tree.
 
-## Not Required For Alpha
+## Not In Scope For This Release
 
 - Built-in Bayesian optimization, RL, or LLM agent algorithms.
 - Remote execution backends.

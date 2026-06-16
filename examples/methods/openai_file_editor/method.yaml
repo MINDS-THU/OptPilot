@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: openai-sa-file-editor
 description: User-owned LLM method that edits selected files in the SA simulator

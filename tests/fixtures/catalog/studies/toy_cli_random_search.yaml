@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: toy-cli-random-search
 description: Exercise command-based evaluation with a reference random-search fixture

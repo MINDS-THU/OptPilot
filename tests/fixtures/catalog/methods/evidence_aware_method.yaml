@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: evidence-aware-method
 description: User-owned method reading prior evidence

@@ -1,7 +1,7 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: toy-random-search
-description: Exercise the platform loop with the v3alpha authoring config
+description: Exercise the platform loop with the v1 authoring config
 tags: [mvp, toy, reference-method]
 
 environment: ../environments/toy_factory.yaml

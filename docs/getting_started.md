@@ -53,7 +53,7 @@ Each run creates a directory containing `study_spec.json`, `summary.json`, `obse
 `EnvironmentConfig` defines the evaluator and candidate contract.
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: EnvironmentConfig
 id: sa-simulator-code-edit
 evaluate:
@@ -70,7 +70,7 @@ metrics:
 `MethodConfig` defines the optimization method.
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: baseline-file-copy
 implementation:
@@ -85,7 +85,7 @@ compatibility:
 `StudyConfig` binds one environment config to one method config for a particular study.
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: sa-baseline
 environment: ../environments/strategic_airlift_devs/environment.yaml
@@ -139,4 +139,4 @@ uv run optpilot ui --open-browser
 
 By default, the UI scans `examples/` and `user_catalog/`. It launches studies, shows running jobs, and inspects previous run evidence.
 
-See [config_files_v3alpha.md](config_files_v3alpha.md) for schema details.
+See [config_files.md](config_files.md) for schema details.

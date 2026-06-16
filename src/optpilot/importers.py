@@ -46,13 +46,13 @@ def build_frontier_unified_study_config(
     artifacts_json = _read_scalar(metadata_dir / "artifacts_json.txt", default="artifacts.json")
 
     return {
-        "apiVersion": "optpilot.io/v3alpha1",
+        "apiVersion": "optpilot.io/v1",
         "kind": "StudyConfig",
         "name": study_name or f"frontier-{_slugify(benchmark_id)}",
         "description": f"Imported Frontier unified benchmark: {benchmark_id}",
         "tags": ["frontier", "code-evolution"],
         "environment": {
-            "apiVersion": "optpilot.io/v3alpha1",
+            "apiVersion": "optpilot.io/v1",
             "kind": "EnvironmentConfig",
             "id": f"frontier-{_slugify(benchmark_id)}",
             "evaluate": {
@@ -107,7 +107,7 @@ def build_frontier_unified_study_config(
             "filesToSave": [artifacts_json, *artifact_files],
         },
         "method": {
-            "apiVersion": "optpilot.io/v3alpha1",
+            "apiVersion": "optpilot.io/v1",
             "kind": "MethodConfig",
             "id": "frontier-code-method",
             "implementation": {

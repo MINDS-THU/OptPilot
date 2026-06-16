@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: EnvironmentConfig
 id: sa-simulator-code-edit
 description: Evaluate edited SA simulator source copied from the external devs_gen_gallery repository

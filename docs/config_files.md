@@ -1,4 +1,4 @@
-# OptPilot v3alpha Config Schema
+# OptPilot Config Schema
 
 OptPilot users author three config kinds:
 
@@ -31,7 +31,7 @@ Reference code with module paths such as `user_catalog.environments.my_environme
 ## EnvironmentConfig
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: EnvironmentConfig
 id: sa-simulator-code-edit
 
@@ -69,7 +69,7 @@ File candidates can declare `workspace.copy`, `candidate.files.editable`, `candi
 ## MethodConfig
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: baseline-file-copy
 
@@ -152,7 +152,7 @@ Python session methods implement `run(session)` or are callable. The session exp
 ## StudyConfig
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: sa-baseline
 

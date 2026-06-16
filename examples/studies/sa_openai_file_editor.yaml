@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: sa-openai-file-editor
 description: Use a user-owned LLM method to rewrite selected SA simulator files and optimize service_score

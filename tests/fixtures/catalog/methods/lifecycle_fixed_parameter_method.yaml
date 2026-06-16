@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: MethodConfig
 id: lifecycle-fixed-parameter-method
 description: User-owned lifecycle method

@@ -41,7 +41,7 @@ class PythonCallableTargetAdapter:
 
 
 class ConfiguredEnvironmentTargetAdapter:
-    """Evaluate environments described by the v3alpha EnvironmentConfig schema."""
+    """Evaluate environments described by the  EnvironmentConfig schema."""
 
     def __init__(self, definition: Dict[str, Any], study_spec):
         self.definition = definition

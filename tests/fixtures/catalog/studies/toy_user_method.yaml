@@ -1,4 +1,4 @@
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: toy-user-method
 description: Exercise a user-owned method loaded through the python component hook

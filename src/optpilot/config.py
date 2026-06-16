@@ -1,4 +1,4 @@
-"""User-facing v3alpha config compiler.
+"""User-facing config compiler.
 
 The runner consumes the expanded internal StudySpec. This module keeps the
 small authoring configs separate and compiles them into that canonical shape.
@@ -13,7 +13,7 @@ from typing import Any, Dict, Tuple
 import yaml
 
 
-AUTHORING_API_VERSION = "optpilot.io/v3alpha1"
+AUTHORING_API_VERSION = "optpilot.io/v1"
 
 ENVIRONMENT_KIND = "EnvironmentConfig"
 METHOD_KIND = "MethodConfig"

@@ -4,9 +4,9 @@ OptPilot is an orchestrator for AI-assisted iterative optimization over measured
 
 OptPilot is intentionally not an optimizer, simulator, RL framework, or LLM agent framework. Those parts remain user-owned. OptPilot provides the protocol that lets those components run as repeatable studies against a shared execution and evidence model.
 
-## Alpha Status
+## Project Status
 
-This repository is at an initial alpha stage. The intended user-facing surface today is small and explicit:
+The intended user-facing surface is small and explicit:
 
 - `EnvironmentConfig`: describes how an environment evaluates candidates and produces metrics and artifacts.
 - `MethodConfig`: describes the user-owned optimization method.
@@ -16,9 +16,9 @@ This repository is at an initial alpha stage. The intended user-facing surface t
 
 OptPilot compiles the three authoring files above into an internal `StudySpec` that is recorded in the run evidence. Most users should author the public configs, not hand-write `StudySpec`.
 
-Included in the current alpha:
+Included in the current release:
 
-- v3alpha config loader and compiler
+- config loader and compiler
 - `evaluate.type: python` and `evaluate.type: command`
 - parameter and file candidate materialization
 - candidate validation for parameter bounds and referenced file artifacts
@@ -31,9 +31,12 @@ Included in the current alpha:
 - resume and branch lineage metadata
 - lightweight local UI for browsing catalog entries and run directories
 - prompt and model provenance helpers for user-owned LLM-style methods
-- Frontier-Engineering draft import support
 
-Not included in the current alpha:
+Optional integration helpers:
+
+- Frontier-Engineering draft import support through `optpilot import-frontier`
+
+Not included in the current release:
 
 - built-in Bayesian optimization, RL, or LLM search algorithms
 - remote execution backends
@@ -104,7 +107,7 @@ uv run optpilot ui --open-browser
 Every OptPilot study is built from three small config files.
 
 1. `EnvironmentConfig`
-   Defines how OptPilot evaluates candidates. The current alpha supports Python
+   Defines how OptPilot evaluates candidates. The current release supports Python
    callables and external commands.
 2. `MethodConfig`
    Defines the optimization method. This can point at a built-in reference
@@ -117,7 +120,7 @@ Every OptPilot study is built from three small config files.
 An example study is exactly this pattern:
 
 ```yaml
-apiVersion: optpilot.io/v3alpha1
+apiVersion: optpilot.io/v1
 kind: StudyConfig
 name: sa-baseline
 
@@ -138,7 +141,7 @@ budget:
 ```
 
 For a full walkthrough, see [docs/getting_started.md](docs/getting_started.md).
-For the full schema, see [docs/config_files_v3alpha.md](docs/config_files_v3alpha.md).
+For the full schema, see [docs/config_files.md](docs/config_files.md).
 
 ## User-Owned Catalog And Code
 
@@ -245,6 +248,8 @@ uv run optpilot import-frontier \
 
 The `resource/` directory is intentionally ignored and is not part of the OptPilot release package.
 
+`import-frontier` is an optional compatibility helper for the Frontier unified benchmark metadata layout. It writes a draft `StudyConfig`; users still provide the method implementation that proposes candidate file artifacts.
+
 ## Development Checks
 
 Run the repository checks with `uv`:
@@ -260,7 +265,7 @@ The smoke script re-executes itself through `uv run` when needed.
 ## More Documentation
 
 - [docs/getting_started.md](docs/getting_started.md)
-- [docs/config_files_v3alpha.md](docs/config_files_v3alpha.md)
+- [docs/config_files.md](docs/config_files.md)
 - [docs/ui_overhaul_design.md](docs/ui_overhaul_design.md)
 - [docs/release_checklist.md](docs/release_checklist.md)
 
