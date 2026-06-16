@@ -219,8 +219,7 @@ def run_ui(
         server.server_close()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="optpilot ui")
+def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to bind")
     parser.add_argument(
@@ -232,6 +231,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
     parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
     return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="optpilot ui")
+    return add_ui_arguments(parser)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

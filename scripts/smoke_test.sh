@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_ROOT="${OPTPILOT_SMOKE_OUTPUT_ROOT:-/tmp/optpilot-smoke}"
-FRONTIER_DRAFT="${OPTPILOT_SMOKE_FRONTIER_DRAFT:-/tmp/optpilot-frontier-smoke.yaml}"
 
 cd "$ROOT_DIR"
 
@@ -26,13 +25,5 @@ for study in \
 do
   optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
 done
-
-if [ -d "resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning/frontier_eval" ]; then
-  optpilot import-frontier \
-    resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning \
-    --output "$FRONTIER_DRAFT" \
-    --force >/dev/null
-  "$PYTHON_BIN" -c "from optpilot.spec import load_study_spec; s = load_study_spec('$FRONTIER_DRAFT'); assert s.primary_metric_name == 'combined_score'"
-fi
 
 echo "OptPilot smoke test passed."

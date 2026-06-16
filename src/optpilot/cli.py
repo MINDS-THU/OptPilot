@@ -8,9 +8,8 @@ from pathlib import Path
 
 import yaml
 
-from .importers import build_frontier_unified_study_config
 from .runner import run_study
-from .ui.server import run_ui
+from .ui.server import add_ui_arguments, run_ui
 
 
 
@@ -25,38 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--branch-from-run-dir", help="Start a new run that records an existing run as its parent")
 
     ui_parser = subparsers.add_parser("ui", help="Start the lightweight local web UI")
-    ui_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
-    ui_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
-    ui_parser.add_argument(
-        "--catalog",
-        action="append",
-        default=[],
-        help="Catalog root to scan. Defaults to examples and user_catalog when present.",
-    )
-    ui_parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
-    ui_parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
+    add_ui_arguments(ui_parser)
 
-    frontier_parser = subparsers.add_parser(
-        "import-frontier",
-        help="Create a StudyConfig draft from a Frontier unified benchmark",
-    )
-    frontier_parser.add_argument("benchmark", help="Benchmark directory or frontier_eval metadata directory")
-    frontier_parser.add_argument("-o", "--output", required=True, help="Path for the generated integration draft YAML")
-    frontier_parser.add_argument("--repo-root", help="Frontier-Engineering repository root")
-    frontier_parser.add_argument("--study-name", help="Override generated study name")
-    frontier_parser.add_argument(
-        "--method-implementation",
-        default="python:my_lab.methods:FrontierCodeMethod",
-        help="User-owned method implementation to place in the draft",
-    )
-    frontier_parser.add_argument("--max-trials", type=int, default=20, help="Study stopping.maxTrials value")
-    frontier_parser.add_argument(
-        "--candidate-parallelism",
-        type=int,
-        default=1,
-        help="Study execution.parallelism.candidateParallelism value",
-    )
-    frontier_parser.add_argument("--force", action="store_true", help="Overwrite output if it already exists")
     return parser
 
 
@@ -81,22 +50,6 @@ def main(argv=None) -> int:
             run_roots=args.runs,
             open_browser=args.open_browser,
         )
-        return 0
-    if args.command == "import-frontier":
-        spec = build_frontier_unified_study_config(
-            args.benchmark,
-            repo_root=args.repo_root,
-            study_name=args.study_name,
-            method_implementation=args.method_implementation,
-            max_trials=args.max_trials,
-            candidate_parallelism=args.candidate_parallelism,
-        )
-        output_path = Path(args.output).resolve()
-        if output_path.exists() and not args.force:
-            parser.error(f"Output already exists: {output_path}. Use --force to overwrite.")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
-        print(str(output_path))
         return 0
     parser.error(f"Unsupported command: {args.command}")
     return 2

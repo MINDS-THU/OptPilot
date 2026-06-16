@@ -11,7 +11,7 @@ The intended user-facing surface is small and explicit:
 - `EnvironmentConfig`: describes how an environment evaluates candidates and produces metrics and artifacts.
 - `MethodConfig`: describes the user-owned optimization method.
 - `StudyConfig`: binds one method to one environment with an objective, instances, and budget.
-- CLI: `optpilot run`, `optpilot ui`, `optpilot import-frontier`
+- CLI: `optpilot run`, `optpilot ui`
 - Python entrypoint: `optpilot.runner.run_study`
 
 OptPilot compiles the three authoring files above into an internal `StudySpec` that is recorded in the run evidence. Most users should author the public configs, not hand-write `StudySpec`.
@@ -33,8 +33,6 @@ Included in the current release:
 - prompt and model provenance helpers for user-owned LLM-style methods
 
 Optional integration helpers:
-
-- Frontier-Engineering draft import support through `optpilot import-frontier`
 
 Not included in the current release:
 
@@ -238,17 +236,7 @@ runtime:
   envFromHost: [OPENAI_API_KEY]
 ```
 
-Generate a Frontier-Engineering draft config when a local copy of that external project exists under `resource/`:
-
-```bash
-uv run optpilot import-frontier \
-  resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning \
-  --output frontier_pid_study.yaml
-```
-
 The `resource/` directory is intentionally ignored and is not part of the OptPilot release package.
-
-`import-frontier` is an optional compatibility helper for the Frontier unified benchmark metadata layout. It writes a draft `StudyConfig`; users still provide the method implementation that proposes candidate file artifacts.
 
 ## Development Checks
 
@@ -266,8 +254,6 @@ The smoke script re-executes itself through `uv run` when needed.
 
 - [docs/getting_started.md](docs/getting_started.md)
 - [docs/config_files.md](docs/config_files.md)
-- [docs/ui_overhaul_design.md](docs/ui_overhaul_design.md)
-- [docs/release_checklist.md](docs/release_checklist.md)
 
 ## Release Note
 

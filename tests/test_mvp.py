@@ -23,7 +23,6 @@ from optpilot.config import compile_authoring_config
 from optpilot.evidence import EvidenceView
 from optpilot.environment import build_environment_snapshot
 from optpilot.execution import _aggregate_metric_values
-from optpilot.importers import build_frontier_initial_artifact, build_frontier_unified_study_config
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
@@ -852,75 +851,6 @@ class MvpIntegrationTest(unittest.TestCase):
             (metadata / "agent_files.txt").write_text("README.md\nscripts/init.py\n", encoding="utf-8")
             (metadata / "constraints.txt").write_text("Only modify scripts/init.py.", encoding="utf-8")
             (metadata / "run_eval.py").write_text("print('placeholder')\n", encoding="utf-8")
-
-            spec_dict = build_frontier_unified_study_config(benchmark, max_trials=3)
-            spec_path = root / "frontier_study.yaml"
-            spec_path.write_text(yaml.safe_dump(spec_dict, sort_keys=False), encoding="utf-8")
-            study_spec = load_study_spec(str(spec_path))
-
-            self.assertEqual(study_spec.name, "frontier-robotics-pidtuning")
-            self.assertEqual(study_spec.primary_artifact["kind"], "code_bundle")
-            self.assertEqual(study_spec.target["adapter"]["implementation"], "builtin.configured_environment")
-            self.assertEqual(
-                study_spec.target["adapter"]["config"]["candidate"]["files"]["required"],
-                ["scripts/init.py"],
-            )
-            self.assertEqual(study_spec.method["implementation"]["callable"], "python:my_lab.methods:FrontierCodeMethod")
-
-            artifact = build_frontier_initial_artifact(benchmark)
-            materializer = WorkspaceBundleMaterializer(
-                study_spec.primary_artifact["materializationPlan"],
-                study_spec,
-            )
-            workspace = root / "trial-workspace"
-            record = materializer.materialize(artifact, workspace, {})
-            manifest = json.loads(Path(record.runtime_spec["manifestPath"]).read_text(encoding="utf-8"))
-
-            self.assertTrue((workspace / "README.md").exists())
-            self.assertEqual((workspace / "scripts" / "init.py").read_text(encoding="utf-8"), initial_program.read_text(encoding="utf-8"))
-            self.assertEqual(record.runtime_spec["files"][0]["path"], "scripts/init.py")
-            self.assertGreaterEqual(len(manifest["readonly_files"]), 2)
-
-    def test_cli_import_frontier_writes_study_config_yaml(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            benchmark = root / "Frontier-Engineering" / "benchmarks" / "Robotics" / "PIDTuning"
-            metadata = benchmark / "frontier_eval"
-            scripts = benchmark / "scripts"
-            metadata.mkdir(parents=True)
-            scripts.mkdir()
-            (benchmark / "README.md").write_text("benchmark instructions", encoding="utf-8")
-            (scripts / "init.py").write_text("def policy():\n    return 1\n", encoding="utf-8")
-            (metadata / "initial_program.txt").write_text("scripts/init.py\n", encoding="utf-8")
-            (metadata / "candidate_destination.txt").write_text("scripts/init.py\n", encoding="utf-8")
-            (metadata / "eval_command.txt").write_text(
-                "{python} frontier_eval/run_eval.py --candidate {candidate} --metrics-out metrics.json\n",
-                encoding="utf-8",
-            )
-            (metadata / "copy_files.txt").write_text(".\n", encoding="utf-8")
-            (metadata / "readonly_files.txt").write_text("README.md\n", encoding="utf-8")
-            (metadata / "agent_files.txt").write_text("README.md\nscripts/init.py\n", encoding="utf-8")
-            (metadata / "constraints.txt").write_text("Only modify scripts/init.py.", encoding="utf-8")
-            output = root / "generated" / "frontier.yaml"
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                exit_code = cli_main(
-                    [
-                        "import-frontier",
-                        str(benchmark),
-                        "--output",
-                        str(output),
-                        "--max-trials",
-                        "5",
-                    ]
-                )
-            study_spec = load_study_spec(str(output))
-
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(study_spec.stopping["maxTrials"], 5)
-            self.assertEqual(study_spec.target["adapter"]["implementation"], "builtin.configured_environment")
-            self.assertEqual(study_spec.primary_artifact["kind"], "code_bundle")
-            self.assertEqual(study_spec.method["config"]["candidateDestination"], "scripts/init.py")
 
     def test_cli_run_loads_user_owned_components_from_current_working_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
