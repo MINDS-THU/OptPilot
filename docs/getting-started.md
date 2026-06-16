@@ -139,4 +139,4 @@ uv run optpilot ui --open-browser
 
 By default, the UI scans `examples/` and `user_catalog/`. It launches studies, shows running jobs, and inspects previous run evidence.
 
-See [config_files.md](config_files.md) for schema details.
+See [configuration.md](configuration.md) for schema details.

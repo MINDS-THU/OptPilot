@@ -32,10 +32,16 @@ dependencies = [
   "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+]
+
 [project.urls]
-Homepage = "https://github.com/cyrilli/OptPilot"
-Repository = "https://github.com/cyrilli/OptPilot.git"
-Issues = "https://github.com/cyrilli/OptPilot/issues"
+Homepage = "https://github.com/MINDS-THU/OptPilot"
+Repository = "https://github.com/MINDS-THU/OptPilot.git"
+Issues = "https://github.com/MINDS-THU/OptPilot/issues"
 
 [project.scripts]
 optpilot = "optpilot.cli:main"

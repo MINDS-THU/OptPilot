@@ -1,0 +1,78 @@
+site_name: OptPilot
+site_url: https://MINDS-THU.github.io/OptPilot/
+site_description: Documentation for OptPilot, an orchestrator for AI-assisted iterative optimization studies.
+site_author: OptPilot contributors
+
+repo_name: MINDS-THU/OptPilot
+repo_url: https://github.com/MINDS-THU/OptPilot
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Concepts: concepts.md
+  - Configuration: configuration.md
+  - User Catalog: user-catalog.md
+  - Examples: examples.md
+  - Methods: methods.md
+  - UI: ui.md
+  - Evidence: evidence.md
+  - Development: development.md
+
+extra:
+  generator: false
+
+copyright: Apache License 2.0

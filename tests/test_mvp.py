@@ -827,31 +827,6 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(record.metadata["seed_file_count"], 2)
             self.assertEqual(record.metadata["readonly_file_count"], 1)
 
-    def test_frontier_unified_importer_builds_valid_study_config(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            benchmark = root / "Frontier-Engineering" / "benchmarks" / "Robotics" / "PIDTuning"
-            metadata = benchmark / "frontier_eval"
-            scripts = benchmark / "scripts"
-            metadata.mkdir(parents=True)
-            scripts.mkdir()
-            (benchmark / "README.md").write_text("benchmark instructions", encoding="utf-8")
-            initial_program = scripts / "init.py"
-            initial_program.write_text("def policy():\n    return 1\n", encoding="utf-8")
-            (metadata / "initial_program.txt").write_text("scripts/init.py\n", encoding="utf-8")
-            (metadata / "candidate_destination.txt").write_text("scripts/init.py\n", encoding="utf-8")
-            (metadata / "eval_command.txt").write_text(
-                "{python} frontier_eval/run_eval.py --candidate {candidate} --metrics-out metrics.json\n",
-                encoding="utf-8",
-            )
-            (metadata / "eval_cwd.txt").write_text(".\n", encoding="utf-8")
-            (metadata / "copy_files.txt").write_text(".\n", encoding="utf-8")
-            (metadata / "readonly_files.txt").write_text("README.md\nfrontier_eval\n", encoding="utf-8")
-            (metadata / "artifact_files.txt").write_text("# no extra artifacts\n", encoding="utf-8")
-            (metadata / "agent_files.txt").write_text("README.md\nscripts/init.py\n", encoding="utf-8")
-            (metadata / "constraints.txt").write_text("Only modify scripts/init.py.", encoding="utf-8")
-            (metadata / "run_eval.py").write_text("print('placeholder')\n", encoding="utf-8")
-
     def test_cli_run_loads_user_owned_components_from_current_working_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml"

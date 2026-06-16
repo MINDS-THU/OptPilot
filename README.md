@@ -32,8 +32,6 @@ Included in the current release:
 - lightweight local UI for browsing catalog entries and run directories
 - prompt and model provenance helpers for user-owned LLM-style methods
 
-Optional integration helpers:
-
 Not included in the current release:
 
 - built-in Bayesian optimization, RL, or LLM search algorithms
@@ -138,8 +136,8 @@ budget:
   maxTrials: 1
 ```
 
-For a full walkthrough, see [docs/getting_started.md](docs/getting_started.md).
-For the full schema, see [docs/config_files.md](docs/config_files.md).
+For a full walkthrough, see [docs/getting-started.md](docs/getting-started.md).
+For the full schema, see [docs/configuration.md](docs/configuration.md).
 
 ## User-Owned Catalog And Code
 
@@ -236,8 +234,6 @@ runtime:
   envFromHost: [OPENAI_API_KEY]
 ```
 
-The `resource/` directory is intentionally ignored and is not part of the OptPilot release package.
-
 ## Development Checks
 
 Run the repository checks with `uv`:
@@ -252,8 +248,14 @@ The smoke script re-executes itself through `uv run` when needed.
 
 ## More Documentation
 
-- [docs/getting_started.md](docs/getting_started.md)
-- [docs/config_files.md](docs/config_files.md)
+- [docs/getting-started.md](docs/getting-started.md)
+- [docs/configuration.md](docs/configuration.md)
+
+Build the documentation site locally:
+
+```bash
+uv run --extra docs mkdocs serve
+```
 
 ## Release Note
 
