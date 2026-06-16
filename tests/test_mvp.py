@@ -32,6 +32,7 @@ from optpilot.ui.server import (
     UiState,
     _catalog_payload,
     _compatibility_payload,
+    _default_catalog_roots,
     _draft_study,
     _list_runs,
     _read_editable_config_file,
@@ -43,7 +44,7 @@ from optpilot.ui.server import (
 class MvpIntegrationTest(unittest.TestCase):
     def test_sample_study_runs_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_random_search.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
             self.assertEqual(summary.completed_trials, 12)
@@ -116,7 +117,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_distribution_scope_is_reproducible(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        base_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-distribution-repro"
         base_spec["evaluationScope"] = {
             "mode": "Distribution",
@@ -152,7 +153,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_instance_set_aggregation_and_minimize_direction(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        base_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-instance-set-minimize"
         base_spec["objective"]["primaryMetric"] = {"name": "cycle_time", "direction": "minimize"}
         base_spec["evaluationScope"] = {
@@ -214,8 +215,8 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "weighted-mean-study",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {
                             "metric": "throughput",
                             "direction": "maximize",
@@ -248,7 +249,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_candidate_parallelism_reduces_elapsed_time(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        base_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-parallel-check"
         base_spec["evaluationScope"] = {
             "mode": "FixedInstance",
@@ -298,7 +299,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_bounds_validator_rejects_out_of_range_artifacts(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_random_search.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
         study_spec = StudySpec(path=spec_path, raw=raw_spec)
         validator = BoundsArtifactValidator(
@@ -509,7 +510,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "description": "File editor.",
                         "implementation": {
                             "type": "python",
-                            "callable": "python:examples.user_methods.code_artifact_method:CodeArtifactMethod",
+                            "callable": "python:tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
                             "protocol": "optpilot.method.batch.v1",
                         },
                         "compatibility": {
@@ -923,7 +924,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_cli_run_loads_user_owned_components_from_current_working_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_user_method.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml"
         original_cwd = Path.cwd()
         original_sys_path = list(sys.path)
 
@@ -952,11 +953,11 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_cli_target_adapter_runs_and_captures_process_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_cli_random_search.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
         raw_spec["stopping"]["maxTrials"] = 4
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -986,7 +987,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_user_owned_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_user_method.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
@@ -1035,7 +1036,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "command-stdin-study",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
                             "apiVersion": "optpilot.io/v3alpha1",
                             "kind": "MethodConfig",
@@ -1055,7 +1056,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
-                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
                         },
                         "budget": {"maxTrials": 2},
                         "execution": {"backend": "local", "parallelism": 2, "timeoutSeconds": 120},
@@ -1110,7 +1111,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "command-file-study",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
                             "apiVersion": "optpilot.io/v3alpha1",
                             "kind": "MethodConfig",
@@ -1130,7 +1131,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
-                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
                         },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
@@ -1236,7 +1237,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "container-method-study",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
                             "apiVersion": "optpilot.io/v3alpha1",
                             "kind": "MethodConfig",
@@ -1270,7 +1271,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
-                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
                         },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
@@ -1329,7 +1330,7 @@ class MvpIntegrationTest(unittest.TestCase):
                                 "apiVersion": "optpilot.io/v3alpha1",
                                 "kind": "StudyConfig",
                                 "name": "unsupported-method-shape",
-                                "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                                "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                                 "method": {
                                     "apiVersion": "optpilot.io/v3alpha1",
                                     "kind": "MethodConfig",
@@ -1360,7 +1361,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "session-method",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "method": {
                             "apiVersion": "optpilot.io/v3alpha1",
                             "kind": "MethodConfig",
@@ -1420,7 +1421,7 @@ class MvpIntegrationTest(unittest.TestCase):
                             },
                             "metrics": {"source": "return", "keys": ["throughput"]},
                         },
-                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
@@ -1447,7 +1448,7 @@ class MvpIntegrationTest(unittest.TestCase):
                             "apiVersion": "optpilot.io/v3alpha1",
                             "kind": "EnvironmentConfig",
                             "id": "custom-extractor-env",
-                            "evaluate": {"type": "python", "callable": "optpilot.examples.toy_factory_env:evaluate"},
+                            "evaluate": {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
                             "candidate": {
                                 "type": "parameters",
                                 "artifactKind": "parameter_spec",
@@ -1473,11 +1474,11 @@ class MvpIntegrationTest(unittest.TestCase):
                                 }
                             ],
                         },
-                        "method": str(repo_root / "examples" / "methods" / "fixed_parameter_method.yaml"),
+                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "fixed_parameter_method.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
-                            "paths": [str(repo_root / "examples" / "instances" / "toy_factory_case.yaml")],
+                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
                         },
                         "budget": {"maxTrials": 1},
                     },
@@ -1504,8 +1505,8 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "custom-sampler",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "sampler",
@@ -1536,13 +1537,13 @@ class MvpIntegrationTest(unittest.TestCase):
                 "evaluate.implementation",
             ),
             (
-                {"type": "python", "callable": "examples.toy_factory_env:evaluate"},
+                {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
                 {"source": "custom", "implementation": "custom:Metrics", "keys": ["throughput"]},
                 [],
                 "metrics.implementation",
             ),
             (
-                {"type": "python", "callable": "examples.toy_factory_env:evaluate"},
+                {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
                 {"source": "return", "keys": ["throughput"]},
                 [{"name": "events", "source": "custom", "implementation": "custom:Records"}],
                 "recordsToExtract.implementation",
@@ -1572,7 +1573,7 @@ class MvpIntegrationTest(unittest.TestCase):
                                     "metrics": metrics,
                                     "recordsToExtract": records,
                                 },
-                                "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                                "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                                 "objective": {"metric": "throughput", "direction": "maximize"},
                                 "budget": {"maxTrials": 1},
                             },
@@ -1616,8 +1617,8 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v3alpha1",
                         "kind": "StudyConfig",
                         "name": "unsupported-runtime-shape",
-                        "environment": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     }
@@ -1630,10 +1631,10 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_run_can_resume_existing_evidence_store(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-resume-run"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
@@ -1658,10 +1659,10 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_run_can_branch_from_existing_evidence_store(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-branch-run"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
@@ -1772,7 +1773,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "id": "code_method",
                     "implementation": {
                         "type": "python",
-                        "callable": "python:examples.user_methods.code_artifact_method:CodeArtifactMethod",
+                        "callable": "python:tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
                         "protocol": "optpilot.method.batch.v1",
                     },
                     "config": {
@@ -1811,7 +1812,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_user_owned_lifecycle_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_lifecycle_method.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_lifecycle_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
@@ -1836,12 +1837,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_container_backend_runs_trial_through_container_cli(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-container-backend"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1946,7 +1947,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_study_spec_rejects_unknown_target_policy(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         raw_spec["target"]["accessPolicy"] = "MagicAccess"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1957,13 +1958,13 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_invalid_artifact_records_invalid_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-invalid-artifact"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["method"]["config"]["candidates"] = [{"x": 99.0, "y": 7, "mode": "balanced"}]
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1983,7 +1984,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_max_failures_stops_study_after_failed_trial(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-max-failures"
         raw_spec["stopping"]["maxTrials"] = 3
         raw_spec["stopping"]["maxFailures"] = 1
@@ -1993,7 +1994,7 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 4.2, "y": 7, "mode": "balanced"},
         ]
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2014,12 +2015,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_cli_nonzero_exit_records_failed_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-cli-failure"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
             "python3",
@@ -2042,12 +2043,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_invalid_target_output_records_failed_observation(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-invalid-target-output"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["target"]["adapter"]["config"]["evaluate"]["callable"] = "tests.fixtures.bad_targets:non_numeric_metric"
 
@@ -2064,12 +2065,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_cli_timeout_records_timeout_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-cli-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["target"]["adapter"]["config"]["evaluate"]["timeoutSeconds"] = 1
         raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
@@ -2090,12 +2091,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_resource_profile_timeout_is_used_when_adapter_timeout_is_absent(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_cli_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-resource-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
         raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
@@ -2117,7 +2118,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(observations[0]["provenance"]["resource_profile"]["timeoutSeconds"], 1)
 
     def test_sa_example_evaluator_timeout_kills_simulator_process_group(self) -> None:
-        from examples.opt_devs_gen_sims.sa_eval import evaluate
+        from examples.environments.strategic_airlift_devs.evaluator import evaluate
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -2179,13 +2180,13 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_local_subprocess_backend_runs_successful_trial(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-subprocess-success"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2202,7 +2203,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_local_subprocess_backend_hard_times_out_python_callable_target(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         raw_spec["metadata"]["name"] = "toy-subprocess-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
@@ -2297,7 +2298,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "id": "method",
                     "implementation": {
                         "type": "python",
-                        "callable": "python:examples.user_methods.fixed_parameter_method:FixedParameterMethod",
+                        "callable": "python:tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod",
                         "protocol": "optpilot.method.batch.v1",
                     },
                     "config": {"batchSize": 1, "candidates": [{"x": 1}]},
@@ -2332,7 +2333,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_mixed_success_and_invalid_batch_continues_and_records_all_trials(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        raw_spec = compile_authoring_config(repo_root / "examples" / "studies" / "toy_user_method.yaml")
+        raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-mixed-batch"
         raw_spec["stopping"]["maxTrials"] = 2
         raw_spec["method"]["config"]["batchSize"] = 2
@@ -2341,7 +2342,7 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 99.0, "y": 7, "mode": "balanced"},
         ]
         raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
-            repo_root / "examples" / "instances" / "toy_factory_case.yaml"
+            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2358,7 +2359,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_user_owned_method_reads_prior_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec_path = repo_root / "examples" / "studies" / "toy_evidence_aware_method.yaml"
+        spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_evidence_aware_method.yaml"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
@@ -2374,7 +2375,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_local_evidence_store_read_api_and_summary_view(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        study_spec = load_study_spec(str(repo_root / "examples" / "studies" / "toy_random_search.yaml"))
+        study_spec = load_study_spec(str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"))
         with tempfile.TemporaryDirectory() as tmp_dir:
             store = LocalEvidenceStore(Path(tmp_dir), "evidence-read-api")
             extracted_dir = store.run_dir / "trials" / "trial-a" / "extracted_records"
@@ -2464,27 +2465,51 @@ class MvpIntegrationTest(unittest.TestCase):
         state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
 
         catalog = _catalog_payload(state)
-        validation = _validate_study(repo_root / "examples" / "studies" / "toy_random_search.yaml")
+        validation = _validate_study(repo_root / "examples" / "studies" / "sa_baseline.yaml")
 
-        self.assertTrue(any(item["id"] == "toy-factory" for item in catalog["environments"]))
-        self.assertTrue(any(item["id"] == "reference-random-search" for item in catalog["methods"]))
         sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
-        sa_method = next(item for item in catalog["methods"] if item["id"] == "openai-sa-file-editor")
+        method_ids = {item["id"] for item in catalog["methods"]}
         self.assertEqual(sa_environment["summary"]["artifact_kind"], "code_bundle")
         self.assertIn(
             "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
             sa_environment["summary"]["editable_files"],
         )
+        sa_method = next(item for item in catalog["methods"] if item["id"] == "openai-sa-file-editor")
         self.assertEqual(sa_method["summary"]["candidate_types"], ["files"])
-        self.assertTrue(any(item["label"] == "toy-random-search" for item in catalog["studies"]))
+        self.assertIn("baseline-file-copy", method_ids)
+        self.assertIn("openai-sa-file-editor", method_ids)
+        self.assertTrue(any(item["label"] == "sa-baseline" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "sa-openai-file-editor" for item in catalog["studies"]))
         self.assertIn("builtin.reference_random_search", catalog["builtins"]["method"])
         self.assertTrue(validation["valid"], validation)
-        self.assertEqual(validation["target_id"], "toy-factory")
+        self.assertEqual(validation["target_id"], "sa-simulator-code-edit")
+
+    def test_ui_default_catalog_roots_are_examples_and_user_catalog(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        roots = _default_catalog_roots(repo_root)
+        state = UiState(cwd=repo_root, catalog_roots=[], run_roots=[])
+
+        catalog = _catalog_payload(state)
+
+        self.assertEqual(
+            roots,
+            [repo_root / "examples", repo_root / "user_catalog"],
+        )
+        self.assertEqual(state.catalog_roots, roots)
+        self.assertEqual([item["id"] for item in catalog["environments"]], ["sa-simulator-code-edit"])
+        self.assertEqual(
+            sorted(item["id"] for item in catalog["methods"]),
+            ["baseline-file-copy", "openai-sa-file-editor"],
+        )
+        self.assertEqual(
+            sorted(item["label"] for item in catalog["studies"]),
+            ["sa-baseline", "sa-openai-file-editor"],
+        )
 
     def test_ui_compatibility_payload_and_study_draft(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
-            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
             state.jobs_dir = Path(tmp_dir) / "jobs"
             state.jobs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2495,22 +2520,14 @@ class MvpIntegrationTest(unittest.TestCase):
                 if item["environment"]["id"] == "toy-factory"
                 and item["method"]["id"] == "reference-random-search"
             )
-            incompatible = next(
-                item
-                for item in compatibility["pairs"]
-                if item["environment"]["id"] == "sa-simulator-code-edit"
-                and item["method"]["id"] == "reference-random-search"
-            )
 
             self.assertTrue(toy_pair["compatible"], toy_pair)
-            self.assertFalse(incompatible["compatible"], incompatible)
-            self.assertTrue(any(not check["ok"] for check in incompatible["checks"]))
 
             draft = _draft_study(
                 state,
                 {
-                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                     "name": "ui-draft-toy",
                     "metric": "throughput",
                     "direction": "maximize",
@@ -2518,7 +2535,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "backend": "local",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
-                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
 
@@ -2526,11 +2543,14 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(Path(draft["path"]).exists())
             self.assertEqual(draft["draft"]["name"], "ui-draft-toy")
 
+            examples_state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            examples_state.jobs_dir = Path(tmp_dir) / "example-jobs"
+            examples_state.jobs_dir.mkdir(parents=True, exist_ok=True)
             sa_draft = _draft_study(
-                state,
+                examples_state,
                 {
-                    "environment_path": str(repo_root / "examples" / "opt_devs_gen_sims" / "environments" / "sa_simulator.yaml"),
-                    "method_path": str(repo_root / "examples" / "opt_devs_gen_sims" / "methods" / "openai_file_editor.yaml"),
+                    "environment_path": str(repo_root / "examples" / "environments" / "strategic_airlift_devs" / "environment.yaml"),
+                    "method_path": str(repo_root / "examples" / "methods" / "openai_file_editor" / "method.yaml"),
                     "name": "ui-draft-sa",
                     "metric": "service_score",
                     "direction": "maximize",
@@ -2546,14 +2566,14 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(sa_draft["draft"]["instances"]["source"], "files")
             self.assertEqual(
                 sa_draft["draft"]["instances"]["paths"],
-                [str(repo_root / "examples" / "opt_devs_gen_sims" / "instances" / "sa_default.yaml")],
+                [str(repo_root / "examples" / "environments" / "strategic_airlift_devs" / "instances" / "sa_default.yaml")],
             )
 
             container_draft = _draft_study(
                 state,
                 {
-                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                     "name": "ui-container-draft",
                     "metric": "throughput",
                     "direction": "maximize",
@@ -2563,7 +2583,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "containerExecutable": "docker",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
-                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
             self.assertTrue(container_draft["validation"]["valid"], container_draft)
@@ -2573,8 +2593,8 @@ class MvpIntegrationTest(unittest.TestCase):
             custom_draft = _draft_study(
                 state,
                 {
-                    "environment_path": str(repo_root / "examples" / "environments" / "toy_factory.yaml"),
-                    "method_path": str(repo_root / "examples" / "methods" / "reference_random_search.yaml"),
+                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                     "name": "ui-custom-draft",
                     "metric": "throughput",
                     "direction": "maximize",
@@ -2584,7 +2604,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "customBackendConfig": '{"queue": "local"}',
                     "parallelism": 1,
                     "timeoutSeconds": 120,
-                    "instances": str(repo_root / "examples" / "instances" / "toy_factory_case.yaml"),
+                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
             self.assertTrue(custom_draft["validation"]["valid"], custom_draft)
@@ -2594,7 +2614,7 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_ui_config_editor_reads_and_writes_workspace_text_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(dir=repo_root) as tmp_dir:
-            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
             config_path = Path(tmp_dir) / "editable.yaml"
             config_path.write_text("name: before\n", encoding="utf-8")
 
@@ -2611,7 +2631,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        study_spec = load_study_spec(str(repo_root / "examples" / "studies" / "toy_random_search.yaml"))
+        study_spec = load_study_spec(str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"))
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             store = LocalEvidenceStore(tmp_path, "ui-run")
@@ -2635,7 +2655,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "failure_count": 0,
                 }
             )
-            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[tmp_path])
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[tmp_path])
 
             runs = _list_runs(state)
 

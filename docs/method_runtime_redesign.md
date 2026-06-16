@@ -23,22 +23,23 @@ flowchart LR
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: MethodConfig
-id: reference-random-search
+id: baseline-file-copy
 
 implementation:
   type: python
-  callable: builtin.reference_random_search
+  callable: python:examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
   protocol: optpilot.method.batch.v1
 
 config:
-  batchSize: 4
+  batchSize: 1
 
 compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext: [files.source, files.editable]
 ```
 
-`implementation.type` is `python` or `command`. Python and command batch methods are implemented today.
+`implementation.type` is `python` or `command`. Python methods support both batch and session protocols. Command methods support the batch protocol.
 
 Command methods can optionally declare an execution runtime:
 

@@ -1,1 +1,0 @@
-"""Example targets for OptPilot."""

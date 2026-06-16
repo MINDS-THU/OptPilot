@@ -126,6 +126,13 @@ flowchart TD
   Runs --> Evidence
 ```
 
+Default catalog discovery should be deliberately narrow:
+
+- `examples/` for curated built-in integrations.
+- `user_catalog/` for user-owned configs, assets, and implementation code.
+
+Users can still pass explicit `--catalog` roots for advanced workflows, but the default UI should not scan the entire repository.
+
 ### Workspace Home
 
 Purpose: provide a compact operational overview.
@@ -511,28 +518,39 @@ RuntimeHealth
 
 The backend should avoid forcing the frontend to parse YAML to answer compatibility questions. The server should compile and validate configs, then return structured summaries.
 
-## Implementation Plan
+## Current Backend Surface
 
-### Step 1: Compatibility Engine
+The local UI server provides the structured backend surface needed for this workbench:
 
-Implement server-side compatibility summaries:
+- catalog discovery from `examples/` and `user_catalog/`
+- environment, method, and study summaries
+- compatibility results for environment/method pairs
+- generated StudyConfig drafts
+- config file read/write with validation
+- UI-launched job tracking
+- run directory discovery and evidence inspection
+- run file browsing
+
+### Compatibility Checker
+
+Server-side compatibility summaries report:
 
 - Environment -> methods.
 - Method -> environments.
 - Reasons for incompatibility.
 - Tests around candidate type, artifact kind, required context, and capabilities.
 
-### Step 2: New Navigation And Catalog Pages
+### Catalog Pages
 
-Replace the current catalog page with:
+The UI should expose:
 
 - Environments list/detail.
 - Methods list/detail.
 - Compatibility sections.
 
-### Step 3: Study Builder
+### Study Builder
 
-Implement structured builder state:
+The study builder uses structured state:
 
 - Environment-first flow.
 - Method filtering.
@@ -540,18 +558,18 @@ Implement structured builder state:
 - Generated YAML preview.
 - Validate and launch.
 
-### Step 4: Run Detail And Evidence Explorer
+### Run Detail And Evidence Explorer
 
-Improve run detail:
+Run detail should expose:
 
 - Better trial table.
 - Runtime/build metadata.
 - Linked artifacts.
 - File tree and previews.
 
-### Step 5: Run Comparison
+### Run Comparison
 
-Add comparison for selected runs:
+Run comparison should summarize selected runs by:
 
 - Best metrics.
 - Failure counts.
@@ -559,9 +577,9 @@ Add comparison for selected runs:
 - Candidate summaries.
 - Runtime settings.
 
-### Step 6: Lightweight Editing
+### Lightweight Editing
 
-Add editor support for config files and small support files:
+Lightweight editor support should cover config files and small support files:
 
 - YAML validation.
 - Save with explicit user action.

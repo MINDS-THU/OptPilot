@@ -1,0 +1,20 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: baseline-file-copy
+description: Emits the unmodified files declared by a file-candidate environment.
+tags: [baseline, file-candidate, no-api]
+
+implementation:
+  type: python
+  callable: python:examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
+  protocol: optpilot.method.batch.v1
+
+config:
+  batchSize: 1
+
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable

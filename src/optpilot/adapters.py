@@ -89,9 +89,16 @@ class ConfiguredEnvironmentTargetAdapter:
         elif eval_type == "command":
             command = _format_command(evaluate["command"], placeholders)
             env = os.environ.copy()
+            declared_python_path = os.pathsep.join(str(path) for path in evaluate.get("pythonPath", []) or [] if path)
+            env.update({key: _format_string(str(value), placeholders) for key, value in evaluate.get("env", {}).items()})
             if env.get("PYTHONPATH"):
                 env["PYTHONPATH"] = _absolute_pythonpath(env["PYTHONPATH"], Path.cwd())
-            env.update({key: _format_string(str(value), placeholders) for key, value in evaluate.get("env", {}).items()})
+            if declared_python_path:
+                env["PYTHONPATH"] = (
+                    declared_python_path
+                    if not env.get("PYTHONPATH")
+                    else declared_python_path + os.pathsep + env["PYTHONPATH"]
+                )
             timeout = int(
                 evaluate.get(
                     "timeoutSeconds",

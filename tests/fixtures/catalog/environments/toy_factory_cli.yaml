@@ -1,0 +1,51 @@
+apiVersion: optpilot.io/v3alpha1
+kind: EnvironmentConfig
+id: toy-factory-cli
+description: Toy simulator invoked through a command
+tags: [toy, cli]
+
+evaluate:
+  type: command
+  pythonPath:
+    - ../../../..
+  command:
+    - "{python}"
+    - "-m"
+    - "tests.fixtures.catalog.cli_toy_factory_env"
+    - "--artifact"
+    - "{candidate_json}"
+    - "--instance"
+    - "{instance_file}"
+    - "--output"
+    - "{metrics_file}"
+    - "--instance-index"
+    - "{instance_index}"
+  timeoutSeconds: 120
+
+candidate:
+  type: parameters
+  artifactKind: parameter_spec
+  description: Search parameters accepted by the CLI toy factory evaluator.
+  parameters:
+    schema:
+      x:
+        type: float
+        min: 0.0
+        max: 8.0
+      y:
+        type: int
+        min: 1
+        max: 10
+      mode:
+        type: categorical
+        values: [balanced, aggressive, conservative]
+
+metrics:
+  source: file
+  path: metrics.json
+  keys: [throughput, cycle_time]
+
+filesToSave:
+  - "metrics.json"
+  - "stdout_*.log"
+  - "stderr_*.log"

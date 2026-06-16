@@ -1,0 +1,29 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: openai-sa-file-editor
+description: User-owned LLM method that edits selected files in the SA simulator
+tags: [user-method, llm, code-edit, external-project]
+
+implementation:
+  type: python
+  callable: python:examples.methods.openai_file_editor.method:OpenAIFileEditMethod
+  protocol: optpilot.method.batch.v1
+
+config:
+  batchSize: 1
+  provider: openrouter
+  model: openai/gpt-4.1-mini
+  temperature: 0.2
+  maxTokens: 4000
+  apiKeyEnvVar: OPENROUTER_API_KEY
+  apiBase: https://openrouter.ai/api/v1/chat/completions
+  includeBaselineCandidate: true
+
+compatibility:
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext:
+    - files.source
+    - files.editable
+  optionalContext:
+    - exposure.instructions

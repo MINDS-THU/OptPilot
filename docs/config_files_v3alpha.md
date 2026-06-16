@@ -8,28 +8,52 @@ OptPilot users author three config kinds:
 
 OptPilot compiles these authoring configs into an internal `StudySpec` and records that expanded spec in each run directory.
 
+The repository has two default catalog roots:
+
+- `examples/`: curated built-in integrations.
+- `user_catalog/`: the recommended place for user-owned configs, assets, and implementation code.
+
+Inside `examples/` and `user_catalog/`, environment and method directories should own both reusable configs and implementation code. Studies remain project-centric bindings:
+
+```text
+user_catalog/
+  environments/my_environment/
+    environment.yaml
+    evaluator.py
+  methods/my_method/
+    method.yaml
+    method.py
+  studies/my_study.yaml
+```
+
+Reference code with module paths such as `user_catalog.environments.my_environment.evaluator:evaluate` or `python:user_catalog.methods.my_method.method:MyMethod`.
+
 ## EnvironmentConfig
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: EnvironmentConfig
-id: toy-factory
+id: sa-simulator-code-edit
 
 evaluate:
   type: python
-  callable: optpilot.examples.toy_factory_env:evaluate
+  callable: examples.environments.strategic_airlift_devs.evaluator:evaluate
 
 candidate:
-  type: parameters
-  artifactKind: parameter_spec
-  description: Parameters accepted by the evaluator.
-  parameters:
-    schema:
-      x: {type: float, min: 0.0, max: 8.0}
+  type: files
+  artifactKind: code_bundle
+  description: SA simulator control logic files.
+  files:
+    root: simulator
+    source: {type: workspace_copy, root: simulator}
+    editable:
+      - path: devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+        language: python
+        role: control_logic
 
 metrics:
   source: return
-  keys: [throughput]
+  keys: [service_score]
 ```
 
 Supported evaluator types are `python`, `command`, and `custom`. `custom` evaluators use a component reference such as `python:my_lab.envs:Adapter`; the adapter receives the target definition and study spec, and implements `evaluate(artifact_spec, instance, context)`.
@@ -47,20 +71,20 @@ File candidates can declare `workspace.copy`, `candidate.files.editable`, `candi
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: MethodConfig
-id: reference-random-search
+id: baseline-file-copy
 
 implementation:
   type: python
-  callable: builtin.reference_random_search
+  callable: python:examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
   protocol: optpilot.method.batch.v1
 
 config:
-  batchSize: 4
+  batchSize: 1
 
 compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
-  requiredContext: [parameters.schema]
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
+  requiredContext: [files.source, files.editable]
 ```
 
 `implementation.type` is one of:
@@ -130,31 +154,31 @@ Python session methods implement `run(session)` or are callable. The session exp
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
-name: toy-random-search
+name: sa-baseline
 
-environment: ../environments/toy_factory.yaml
-method: ../methods/reference_random_search.yaml
+environment: ../environments/strategic_airlift_devs/environment.yaml
+method: ../methods/baseline_file_copy/method.yaml
 
 objective:
-  metric: throughput
+  metric: service_score
   direction: maximize
   aggregation: mean
 
 instances:
   source: files
   paths:
-    - ../instances/toy_factory_case.yaml
+    - ../environments/strategic_airlift_devs/instances/sa_default.yaml
 
 budget:
-  maxTrials: 12
+  maxTrials: 1
 
 execution:
   backend: local
-  parallelism: 4
-  timeoutSeconds: 120
+  parallelism: 1
+  timeoutSeconds: 180
 
 reproducibility:
-  seed: 7
+  seed: 0
 ```
 
 Supported objective aggregation modes are `mean`, `median`, `min`, `max`, `sum`, `last`, and `weighted_mean`.

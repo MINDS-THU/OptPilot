@@ -1,0 +1,24 @@
+apiVersion: optpilot.io/v3alpha1
+kind: MethodConfig
+id: lifecycle-fixed-parameter-method
+description: User-owned lifecycle method
+tags: [user-method, lifecycle]
+
+implementation:
+  type: python
+  callable: python:tests.fixtures.catalog.user_methods.lifecycle_fixed_method:LifecycleFixedParameterMethod
+  protocol: optpilot.method.batch.v1
+
+config:
+  batchSize: 2
+  maxPolls: 3
+  candidates:
+    - {x: 4.2, y: 7, mode: balanced}
+    - {x: 2.0, y: 4, mode: conservative}
+
+compatibility:
+  candidateTypes: [parameters]
+  artifactKinds: [parameter_spec]
+  requiredContext:
+    - parameters.schema
+

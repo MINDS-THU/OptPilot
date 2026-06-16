@@ -1,1 +1,0 @@
-"""External simulator examples for OptPilot."""

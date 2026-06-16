@@ -18,11 +18,11 @@ export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/optpilot-pycache}"
 "$PYTHON_BIN" -m compileall src/optpilot
 
 for study in \
-  examples/studies/toy_random_search.yaml \
-  examples/studies/toy_cli_random_search.yaml \
-  examples/studies/toy_user_method.yaml \
-  examples/studies/toy_lifecycle_method.yaml \
-  examples/studies/toy_evidence_aware_method.yaml
+  tests/fixtures/catalog/studies/toy_random_search.yaml \
+  tests/fixtures/catalog/studies/toy_cli_random_search.yaml \
+  tests/fixtures/catalog/studies/toy_user_method.yaml \
+  tests/fixtures/catalog/studies/toy_lifecycle_method.yaml \
+  tests/fixtures/catalog/studies/toy_evidence_aware_method.yaml
 do
   optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
 done

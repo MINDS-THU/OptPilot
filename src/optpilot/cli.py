@@ -27,7 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
     ui_parser = subparsers.add_parser("ui", help="Start the lightweight local web UI")
     ui_parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     ui_parser.add_argument("--port", type=int, default=8765, help="Port to bind")
-    ui_parser.add_argument("--catalog", action="append", default=[], help="Catalog root to scan")
+    ui_parser.add_argument(
+        "--catalog",
+        action="append",
+        default=[],
+        help="Catalog root to scan. Defaults to examples and user_catalog when present.",
+    )
     ui_parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
     ui_parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
 

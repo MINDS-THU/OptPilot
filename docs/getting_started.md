@@ -9,22 +9,44 @@ uv sync
 uv run optpilot --help
 ```
 
-## Run A Study
+## Built-In Example
 
-```bash
-uv run optpilot run examples/studies/toy_random_search.yaml
+The built-in example under `examples/` wraps a strategic-airlift DEVS simulator generated outside OptPilot. It demonstrates a realistic file-candidate environment and two methods that can target it.
+
+```text
+examples/
+  environments/strategic_airlift_devs/
+    environment.yaml
+    evaluator.py
+    instances/sa_default.yaml
+    prompts/sa_file_edit_system_prompt.md
+  methods/baseline_file_copy/
+    method.yaml
+    method.py
+  methods/openai_file_editor/
+    method.yaml
+    method.py
+  studies/
+    sa_baseline.yaml
+    sa_openai_file_editor.yaml
 ```
 
-The run creates a directory containing `study_spec.json`, `summary.json`, `observations.jsonl`, `trials.jsonl`, `artifacts.jsonl`, `method_calls.jsonl`, `scheduler_events.jsonl`, and environment snapshot files.
+The environment expects the generated simulator to exist at the `workspace.copy.from` path declared in `examples/environments/strategic_airlift_devs/environment.yaml`.
 
-Other examples:
+Run the baseline method first:
 
 ```bash
-uv run optpilot run examples/studies/toy_cli_random_search.yaml
-uv run optpilot run examples/studies/toy_user_method.yaml
-uv run optpilot run examples/studies/toy_lifecycle_method.yaml
-uv run optpilot run examples/studies/toy_evidence_aware_method.yaml
+uv run optpilot run examples/studies/sa_baseline.yaml
 ```
+
+Then run the OpenAI-compatible file editor after setting an API key:
+
+```bash
+export OPENROUTER_API_KEY=...
+uv run optpilot run examples/studies/sa_openai_file_editor.yaml
+```
+
+Each run creates a directory containing `study_spec.json`, `summary.json`, `observations.jsonl`, `trials.jsonl`, `artifacts.jsonl`, `method_calls.jsonl`, `scheduler_events.jsonl`, and environment snapshot files.
 
 ## The Three Configs
 
@@ -33,20 +55,16 @@ uv run optpilot run examples/studies/toy_evidence_aware_method.yaml
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: EnvironmentConfig
-id: toy-factory
+id: sa-simulator-code-edit
 evaluate:
   type: python
-  callable: optpilot.examples.toy_factory_env:evaluate
+  callable: examples.environments.strategic_airlift_devs.evaluator:evaluate
 candidate:
-  type: parameters
-  artifactKind: parameter_spec
-  description: Toy factory parameters.
-  parameters:
-    schema:
-      x: {type: float, min: 0.0, max: 8.0}
+  type: files
+  artifactKind: code_bundle
 metrics:
   source: return
-  keys: [throughput]
+  keys: [service_score]
 ```
 
 `MethodConfig` defines the optimization method.
@@ -54,50 +72,64 @@ metrics:
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: MethodConfig
-id: reference-random-search
+id: baseline-file-copy
 implementation:
   type: python
-  callable: builtin.reference_random_search
+  callable: python:examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
   protocol: optpilot.method.batch.v1
-config:
-  batchSize: 4
 compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
+  candidateTypes: [files]
+  artifactKinds: [code_bundle]
 ```
 
-`StudyConfig` binds one environment to one method.
+`StudyConfig` binds one environment config to one method config for a particular study.
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
-name: toy-random-search
-environment: ../environments/toy_factory.yaml
-method: ../methods/reference_random_search.yaml
+name: sa-baseline
+environment: ../environments/strategic_airlift_devs/environment.yaml
+method: ../methods/baseline_file_copy/method.yaml
 objective:
-  metric: throughput
+  metric: service_score
   direction: maximize
 budget:
-  maxTrials: 12
+  maxTrials: 1
 ```
 
-## User-Owned Methods
+## User Catalog
 
-Python methods use `python:module:Class`. A simple method implements:
+Put your own configs and implementation code under `user_catalog/` using the same structure as `examples/`:
 
-```python
-class MyMethod:
-    def __init__(self, definition, study_spec, rng):
-        self.definition = definition
-
-    def propose(self, n_candidates, study_state):
-        return [...]
-
-    def observe(self, observations):
-        pass
+```text
+user_catalog/
+  environments/my_environment/
+    environment.yaml
+    evaluator.py
+  methods/my_method/
+    method.yaml
+    method.py
+  studies/my_study.yaml
 ```
 
-Longer-running methods can implement `start`, `poll`, `finalize`, and optionally `intervene`.
+Reference environment code from an `EnvironmentConfig`:
+
+```yaml
+evaluate:
+  type: python
+  callable: user_catalog.environments.my_environment.evaluator:evaluate
+```
+
+Reference method code from a `MethodConfig`:
+
+```yaml
+implementation:
+  type: python
+  callable: python:user_catalog.methods.my_method.method:MyMethod
+  protocol: optpilot.method.batch.v1
+```
+
+For the same environment or method implementation, you may keep multiple config variants in the same directory, for example `environment_fast.yaml` and `environment_high_fidelity.yaml`.
 
 ## UI
 
@@ -105,15 +137,6 @@ Longer-running methods can implement `start`, `poll`, `finalize`, and optionally
 uv run optpilot ui --open-browser
 ```
 
-The UI scans configs, launches studies, shows running jobs, and inspects previous run evidence.
-
-## Frontier Draft Import
-
-```bash
-uv run optpilot import-frontier \
-  resource/Frontier-Engineering/benchmarks/Robotics/PIDTuning \
-  --output frontier_pid_study.yaml
-```
+By default, the UI scans `examples/` and `user_catalog/`. It launches studies, shows running jobs, and inspects previous run evidence.
 
 See [config_files_v3alpha.md](config_files_v3alpha.md) for schema details.
-

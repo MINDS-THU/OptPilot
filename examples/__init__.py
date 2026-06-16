@@ -1,1 +1,1 @@
-"""Example user-owned OptPilot components and study assets."""
+"""User-facing OptPilot examples."""

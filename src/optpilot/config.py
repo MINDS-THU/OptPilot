@@ -666,7 +666,7 @@ def _configured_environment_adapter_config(environment: Dict[str, Any], environm
 
 def _resolve_evaluate_paths(evaluate: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
     resolved = deepcopy(evaluate)
-    if resolved.get("type") == "python":
+    if resolved.get("type") in {"python", "command"}:
         resolved["pythonPath"] = [str(_resolve_path(path, base_path)) for path in resolved.get("pythonPath", []) or []]
     return resolved
 

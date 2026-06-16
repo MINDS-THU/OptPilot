@@ -27,7 +27,7 @@ Included in the current alpha:
 - optional Docker/Podman-compatible runtime isolation for command methods
 - local process, local subprocess, and container-backed trial evaluation
 - declared Docker/Podman-compatible image builds for method and environment containers
-- reference random search for examples and smoke tests
+- curated examples for external simulator integration and file-edit methods
 - resume and branch lineage metadata
 - lightweight local UI for browsing catalog entries and run directories
 - prompt and model provenance helpers for user-owned LLM-style methods
@@ -67,10 +67,10 @@ the checked-in `uv.lock` for reproducible dependency resolution.
 
 ## Quickstart
 
-Run the reference toy study:
+Run the strategic-airlift baseline study:
 
 ```bash
-uv run optpilot run examples/studies/toy_random_search.yaml
+uv run optpilot run examples/studies/sa_baseline.yaml
 ```
 
 The command prints a JSON summary with fields such as `study_id`, `run_dir`, `completed_trials`, and `best_metric`. The run directory contains the audit and evidence records for that study, including:
@@ -84,18 +84,14 @@ The command prints a JSON summary with fields such as `study_id`, `run_dir`, `co
 - `method_events.jsonl`
 - `scheduler_events.jsonl`
 
-Other runnable examples in this repository:
+The built-in example wraps a strategic-airlift DEVS simulator generated outside OptPilot and shows how an environment and different methods connect through configs:
 
-```bash
-uv run optpilot run examples/studies/toy_cli_random_search.yaml
-uv run optpilot run examples/studies/toy_user_method.yaml
-uv run optpilot run examples/studies/toy_lifecycle_method.yaml
-uv run optpilot run examples/studies/toy_evidence_aware_method.yaml
-```
-
-For an external-project code-edit example that uses an LLM method to modify a
-discrete-event simulator generated in another repository, see
-[examples/opt_devs_gen_sims/README.md](examples/opt_devs_gen_sims/README.md).
+- [examples/README.md](examples/README.md)
+- `examples/environments/strategic_airlift_devs/environment.yaml`
+- `examples/methods/baseline_file_copy/method.yaml`
+- `examples/methods/openai_file_editor/method.yaml`
+- `examples/studies/sa_baseline.yaml`
+- `examples/studies/sa_openai_file_editor.yaml`
 
 To browse local studies and run directories in the lightweight UI:
 
@@ -118,39 +114,68 @@ Every OptPilot study is built from three small config files.
    Selects the environment and method, then adds the objective, instances,
    execution settings, and stopping budget.
 
-The reference toy study is exactly this pattern:
+An example study is exactly this pattern:
 
 ```yaml
 apiVersion: optpilot.io/v3alpha1
 kind: StudyConfig
-name: toy-random-search
+name: sa-baseline
 
-environment: ../environments/toy_factory.yaml
-method: ../methods/reference_random_search.yaml
+environment: ../environments/strategic_airlift_devs/environment.yaml
+method: ../methods/baseline_file_copy/method.yaml
 
 objective:
-  metric: throughput
+  metric: service_score
   direction: maximize
 
 instances:
   source: files
   paths:
-    - ../instances/toy_factory_case.yaml
+    - ../environments/strategic_airlift_devs/instances/sa_default.yaml
 
 budget:
-  maxTrials: 12
+  maxTrials: 1
 ```
 
 For a full walkthrough, see [docs/getting_started.md](docs/getting_started.md).
 For the full schema, see [docs/config_files_v3alpha.md](docs/config_files_v3alpha.md).
 
-## User-Owned Python Hooks
+## User-Owned Catalog And Code
 
 OptPilot is designed so users own the search algorithm and the callable or command code used to evaluate an environment.
 
-- Environment callables use `module:function` for `evaluate.type: python`.
-- Methods use `python:module:Class`.
-- Example user-owned methods live under `examples/user_methods/`.
+Put your own integration files under `user_catalog/`:
+
+```text
+user_catalog/
+  environments/my_environment/
+    environment.yaml
+    evaluator.py
+    instances/
+    assets/
+  methods/my_method/
+    method.yaml
+    method.py
+    assets/
+  studies/my_study.yaml
+```
+
+Environment callables use `module:function` for `evaluate.type: python`, for example:
+
+```yaml
+evaluate:
+  type: python
+  callable: user_catalog.environments.my_environment.evaluator:evaluate
+```
+
+Methods use `python:module:Class`, for example:
+
+```yaml
+implementation:
+  type: python
+  callable: python:user_catalog.methods.my_method.method:MyMethod
+  protocol: optpilot.method.batch.v1
+```
 
 That means you can keep your optimization logic outside the OptPilot package itself while still getting the standard study runtime and evidence model.
 
@@ -159,14 +184,14 @@ That means you can keep your optimization logic outside the OptPilot package its
 Resume an existing run directory:
 
 ```bash
-uv run optpilot run examples/studies/toy_user_method.yaml \
+uv run optpilot run examples/studies/sa_baseline.yaml \
   --resume-run-dir path/to/existing-run
 ```
 
 Branch a new run from an earlier run:
 
 ```bash
-uv run optpilot run examples/studies/toy_user_method.yaml \
+uv run optpilot run examples/studies/sa_baseline.yaml \
   --branch-from-run-dir path/to/existing-run
 ```
 
@@ -174,7 +199,7 @@ Start the lightweight local UI:
 
 ```bash
 uv run optpilot ui --open-browser
-uv run optpilot ui --catalog examples --runs examples/runs
+uv run optpilot ui --catalog user_catalog --runs runs
 ```
 
 Run trials through a Docker/Podman-compatible container image:

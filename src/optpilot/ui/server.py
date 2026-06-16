@@ -103,7 +103,7 @@ class UiState:
         run_roots: List[Path],
     ):
         self.cwd = cwd.resolve()
-        self.catalog_roots = _dedupe_paths(catalog_roots or [self.cwd])
+        self.catalog_roots = _dedupe_paths(catalog_roots or _default_catalog_roots(self.cwd))
         self.run_roots = _dedupe_paths(run_roots or _default_run_roots(self.cwd))
         self.jobs: Dict[str, UiJob] = {}
         self.jobs_dir = self.cwd / ".optpilot-ui" / "jobs"
@@ -223,7 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="optpilot ui")
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to bind")
-    parser.add_argument("--catalog", action="append", default=[], help="Catalog root to scan")
+    parser.add_argument(
+        "--catalog",
+        action="append",
+        default=[],
+        help="Catalog root to scan. Defaults to examples and user_catalog when present.",
+    )
     parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
     parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
     return parser
@@ -965,6 +970,15 @@ def _default_run_roots(cwd: Path) -> List[Path]:
     if examples.exists():
         roots.extend(path for path in examples.rglob("runs") if path.is_dir())
     return _dedupe_paths([path for path in roots if path.exists()])
+
+
+def _default_catalog_roots(cwd: Path) -> List[Path]:
+    roots = [
+        cwd / "examples",
+        cwd / "user_catalog",
+    ]
+    existing = [path for path in roots if path.exists()]
+    return existing or [cwd]
 
 
 def _newest_run_dir(root: Path, *, exclude: set[Path]) -> Optional[Path]:
