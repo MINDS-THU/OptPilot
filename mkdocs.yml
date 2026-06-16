@@ -63,6 +63,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - How A Run Works: how-it-works.md
   - Concepts: concepts.md
   - Configuration: configuration.md
   - User Catalog: user-catalog.md

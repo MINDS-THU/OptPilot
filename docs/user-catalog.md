@@ -46,10 +46,11 @@ evaluate:
 Minimal evaluator:
 
 ```python
-def evaluate(candidate, instance, context):
+def evaluate(artifact_spec, instance, context):
     return {
         "status": "success",
         "metric_values": {"score": 1.0},
+        "constraint_results": {},
         "artifacts": [],
         "event_summary": {},
     }
@@ -74,11 +75,12 @@ class MyMethod:
     def propose(self, n_candidates, study_state):
         return [
             {
+                "artifact_id": f"candidate-{index}",
                 "artifact_kind": "parameter_spec",
                 "spec": {"x": 1.0},
                 "generator_record": {"method_id": self.definition["id"]},
             }
-            for _ in range(n_candidates)
+            for index in range(n_candidates)
         ]
 
     def observe(self, observations):
@@ -97,3 +99,5 @@ user_catalog/environments/my_environment/
 ```
 
 Use variants when the same evaluator has different fidelity levels, datasets, exposed files, metrics, or runtime settings. Do the same for methods when changing models, prompts, hyperparameters, or containers.
+
+For the complete field-by-field schema, see [Configuration](configuration.md). For the runtime sequence from candidate proposal to evidence files, see [How A Run Works](how-it-works.md).

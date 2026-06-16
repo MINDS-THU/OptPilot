@@ -43,6 +43,7 @@ class MyAgent:
     def run(self, session):
         session.event({"event": "started"})
         session.submit({
+            "artifact_id": "candidate-001",
             "artifact_kind": "parameter_spec",
             "spec": {"x": 1.0},
             "generator_record": {"method_id": session.method_id},
