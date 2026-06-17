@@ -34,7 +34,7 @@
         "settings": {"type": "object"}
       }
     },
-    "artifact": {
+    "outputFile": {
       "oneOf": [
         {"type": "string"},
         {

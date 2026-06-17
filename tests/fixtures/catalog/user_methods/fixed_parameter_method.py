@@ -21,18 +21,18 @@ class FixedParameterMethod:
             raise ValueError("FixedParameterMethod requires config.candidates.")
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        artifact_kind = self.study_spec.primary_artifact.get("kind", "parameter_spec")
+        candidate_format = self.study_spec.candidate.get("format", "parameters")
         proposed = []
         for _ in range(n_candidates):
             spec = dict(self.candidates[self._cursor % len(self.candidates)])
             self._cursor += 1
             proposed.append(
                 {
-                    "artifact_id": f"user-artifact-{uuid.uuid4().hex[:12]}",
-                    "artifact_kind": artifact_kind,
+                    "candidate_id": f"user-candidate-{uuid.uuid4().hex[:12]}",
+                    "format": candidate_format,
                     "spec": spec,
                     "lineage": {"parents": [], "source": "tests.fixtures.catalog.user_methods"},
-                    "generator_record": {
+                    "generator": {
                         "method_id": self.definition["id"],
                         "strategy": "fixed_parameter_user_method",
                         "owned_by": "user",
@@ -43,4 +43,3 @@ class FixedParameterMethod:
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observed.extend(observations)
-

@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-from optpilot.code_artifacts import CodeArtifactStore, CodeFileMapping
+from optpilot.candidate_files import CandidateFileStore, CandidateFileMapping
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
@@ -21,7 +21,7 @@ class OpenAIFileEditMethod:
         self.study_spec = study_spec
         self.rng = rng
         self.config = dict(definition.get("config", {}))
-        self.candidate_context = dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+        self.candidate_context = dict(self.study_spec.candidate.get("context", {}))
         self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
             raise ValueError("OpenAIFileEditMethod requires candidate_context.files.editable.")
@@ -35,13 +35,13 @@ class OpenAIFileEditMethod:
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         runtime_context = dict(study_state.get("runtime_context", {}))
-        artifact_store_dir = runtime_context.get("artifact_store_dir")
-        if not artifact_store_dir:
-            raise ValueError("OpenAIFileEditMethod requires runtime_context.artifact_store_dir.")
+        candidate_store_dir = runtime_context.get("candidate_store_dir")
+        if not candidate_store_dir:
+            raise ValueError("OpenAIFileEditMethod requires runtime_context.candidate_store_dir.")
 
-        artifact_store = CodeArtifactStore(
-            artifact_store_dir,
-            content_ref_mode=runtime_context.get("artifact_content_ref_mode", "absolute"),
+        candidate_store = CandidateFileStore(
+            candidate_store_dir,
+            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
         )
         prompt_store = None
         if runtime_context.get("prompt_store_dir"):
@@ -54,7 +54,7 @@ class OpenAIFileEditMethod:
         remaining = int(n_candidates)
 
         if remaining > 0 and self.include_baseline and not self._baseline_emitted:
-            candidates.append(self._build_baseline_candidate(artifact_store))
+            candidates.append(self._build_baseline_candidate(candidate_store))
             self._baseline_emitted = True
             remaining -= 1
 
@@ -69,24 +69,23 @@ class OpenAIFileEditMethod:
                 else None
             )
             candidate_summary, candidate_files = self._request_edit(prompt_messages)
-            candidates.append(self._store_candidate(artifact_store, candidate_summary, candidate_files, prompt_record))
+            candidates.append(self._store_candidate(candidate_store, candidate_summary, candidate_files, prompt_record))
 
         return candidates
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observations.extend(observations)
 
-    def _build_baseline_candidate(self, artifact_store: CodeArtifactStore) -> Dict[str, Any]:
+    def _build_baseline_candidate(self, candidate_store: CandidateFileStore) -> Dict[str, Any]:
         mappings = [
-            CodeFileMapping(source=self._source_file_for(relative_path), path=relative_path)
+            CandidateFileMapping(source=self._source_file_for(relative_path), path=relative_path)
             for relative_path in self.target_files
         ]
-        return artifact_store.store_files(
+        return candidate_store.store_files(
             mappings,
-            artifact_id=f"sa-baseline-{uuid.uuid4().hex[:12]}",
-            artifact_kind="files",
+            candidate_id=f"sa-baseline-{uuid.uuid4().hex[:12]}",
             lineage={"parents": [], "source": "baseline_source_tree"},
-            generator_record={
+            generator={
                 "method_id": self.definition["id"],
                 "strategy": "baseline_source_snapshot",
                 "owned_by": "user",
@@ -136,7 +135,7 @@ class OpenAIFileEditMethod:
                 json.dumps(
                     {
                         "trial_id": observation.get("trial_id"),
-                        "artifact_id": observation.get("artifact_id"),
+                        "candidate_id": _candidate_id(observation),
                         "status": observation.get("status"),
                         "metric_values": metric_values,
                         "event_summary": observation.get("event_summary", {}),
@@ -152,7 +151,7 @@ class OpenAIFileEditMethod:
                 + json.dumps(
                     {
                         "trial_id": best.get("trial_id"),
-                        "artifact_id": best.get("artifact_id"),
+                        "candidate_id": _candidate_id(best),
                         "status": best.get("status"),
                         "metric_values": best.get("metric_values", {}),
                     },
@@ -245,20 +244,20 @@ class OpenAIFileEditMethod:
 
     def _store_candidate(
         self,
-        artifact_store: CodeArtifactStore,
+        candidate_store: CandidateFileStore,
         summary: str,
         edited_files: Dict[str, str],
         prompt_record: Dict[str, Any] | None,
     ) -> Dict[str, Any]:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
-            mappings: List[CodeFileMapping] = []
+            mappings: List[CandidateFileMapping] = []
             for relative_path in self.target_files:
                 source_path = self._source_file_for(relative_path)
                 destination = tmp_root / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(edited_files.get(relative_path, source_path.read_text(encoding="utf-8")), encoding="utf-8")
-                mappings.append(CodeFileMapping(source=destination, path=relative_path))
+                mappings.append(CandidateFileMapping(source=destination, path=relative_path))
 
             best = self._best_observation()
             model_record = build_model_record(
@@ -269,12 +268,11 @@ class OpenAIFileEditMethod:
                     "max_tokens": int(self.config.get("maxTokens", 0) or 0),
                 },
             )
-            return artifact_store.store_files(
+            return candidate_store.store_files(
                 mappings,
-                artifact_id=f"sa-llm-{uuid.uuid4().hex[:12]}",
-                artifact_kind="files",
-                lineage={"parents": [best["artifact_id"]] if best else []},
-                generator_record=build_generator_record(
+                candidate_id=f"sa-llm-{uuid.uuid4().hex[:12]}",
+                lineage={"parents": [_candidate_id(best)] if best else []},
+                generator=build_generator_record(
                     method_id=self.definition["id"],
                     strategy="openai_file_edit",
                     prompt_record=prompt_record,
@@ -322,6 +320,12 @@ def _is_better(candidate: float, incumbent: float, direction: str) -> bool:
     if direction == "minimize":
         return candidate < incumbent
     return candidate > incumbent
+
+
+def _candidate_id(record: Dict[str, Any] | None) -> str | None:
+    if not record:
+        return None
+    return record.get("candidate_id")
 
 
 def _read_dotenv_value(path: Path, env_var_name: str) -> str | None:

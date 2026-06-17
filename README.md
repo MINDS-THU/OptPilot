@@ -7,14 +7,14 @@ OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework. T
 1. A method proposes one or more candidates.
 2. OptPilot validates and materializes each candidate.
 3. An environment evaluates the candidate and reports metrics.
-4. OptPilot records trials, observations, artifacts, method calls, and run metadata.
+4. OptPilot records trials, observations, saved output files, method calls, and run metadata.
 5. The method can use the accumulated evidence to propose the next candidates.
 
 ## Current Surface
 
 Users author three public YAML config files:
 
-- `config: environment`: candidate contract, evaluator, metrics, trial workspace, saved artifacts, and optional records.
+- `config: environment`: candidate contract, evaluator, metrics, trial workspace, saved output-file rules, and optional records.
 - `config: method`: method entrypoint, protocol, settings, compatibility requirements, and optional method runtime.
 - `config: study`: the concrete run binding an environment config to a method config with objective, instances, budget, execution, and evidence settings.
 
@@ -28,7 +28,7 @@ Included in the current release:
 - Python and command methods with batch protocol, plus Python session protocol
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
-- local JSONL evidence store with run summaries, trials, observations, artifacts, method calls, and events
+- local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
 - curated strategic-airlift DEVS example using an external generated simulator
 - local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
 

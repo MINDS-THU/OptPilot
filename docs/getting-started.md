@@ -79,7 +79,7 @@ evaluator:
 The callable must exist and accept:
 
 ```python
-evaluate(artifact_spec, instance, context)
+evaluate(candidate_runtime, instance, context)
 ```
 
 The environment declares a file candidate contract:
@@ -181,7 +181,7 @@ Important files:
 | `study_spec.json` | Compiled internal spec generated from the three YAML files. |
 | `observations.jsonl` | Trial statuses and metric values. |
 | `trials.jsonl` | Trial inputs and backend metadata. |
-| `artifacts.jsonl` | Candidate validation and materialization details. |
+| `candidates.jsonl` | Candidate validation and materialization details. |
 | `method_calls.jsonl` | Method requests and responses. |
 
 ## Use The UI

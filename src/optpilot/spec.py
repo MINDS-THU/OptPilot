@@ -13,12 +13,12 @@ import yaml
 
 REQUIRED_TOP_LEVEL = {
     "apiVersion",
-    "kind",
+    "config",
     "metadata",
-    "target",
+    "environment",
     "objective",
-    "evaluationScope",
-    "artifacts",
+    "instances",
+    "candidate",
     "method",
     "execution",
     "evidence",
@@ -35,8 +35,8 @@ SUPPORTED_ACCESS_POLICIES = {
 }
 SUPPORTED_MUTATION_POLICIES = {
     "NoMutation",
-    "StudyArtifactOnly",
     "StudyWorkspaceOnly",
+    "TrialWorkspaceOnly",
     "MethodConfigOnly",
 }
 SUPPORTED_EVALUATION_SCOPES = {"FixedInstance", "InstanceSet", "Distribution"}
@@ -62,20 +62,16 @@ class StudySpec:
         return self.metadata["name"]
 
     @property
-    def target(self) -> Dict[str, Any]:
-        return self.raw["target"]
+    def environment(self) -> Dict[str, Any]:
+        return self.raw["environment"]
 
     @property
     def objective(self) -> Dict[str, Any]:
         return self.raw["objective"]
 
     @property
-    def evaluation_scope(self) -> Dict[str, Any]:
-        return self.raw["evaluationScope"]
-
-    @property
-    def artifacts(self) -> Dict[str, Any]:
-        return self.raw["artifacts"]
+    def instances(self) -> Dict[str, Any]:
+        return self.raw["instances"]
 
     @property
     def method(self) -> Dict[str, Any]:
@@ -98,8 +94,8 @@ class StudySpec:
         return self.raw["stopping"]
 
     @property
-    def primary_artifact(self) -> Dict[str, Any]:
-        return self.artifacts["primaryArtifact"]
+    def candidate(self) -> Dict[str, Any]:
+        return self.raw["candidate"]
 
     @property
     def primary_metric_name(self) -> str:
@@ -120,15 +116,15 @@ class StudySpec:
         return (self.base_dir / candidate).resolve()
 
     def load_ref_or_inline(self, field: str, ref_key: str = "instanceRef") -> Dict[str, Any]:
-        data = self.evaluation_scope.get("definition", {})
+        data = self.instances.get("definition", {})
         if ref_key in data:
             with self.resolve_path(data[ref_key]).open("r", encoding="utf-8") as handle:
                 return yaml.safe_load(handle) or {}
         return dict(data.get(field, {}))
 
     def build_instance_batch(self, rng) -> List[Dict[str, Any]]:
-        mode = self.evaluation_scope["mode"]
-        definition = self.evaluation_scope.get("definition", {})
+        mode = self.instances["mode"]
+        definition = self.instances.get("definition", {})
         if mode == "FixedInstance":
             if "instance" in definition:
                 return [dict(definition["instance"])]
@@ -159,7 +155,7 @@ class StudySpec:
                     python_path=sampler.get("pythonPath", []) or [],
                 )
             return [_sample_distribution_instance(config, rng) for _ in range(sample_count)]
-        raise NotImplementedError(f"Unsupported evaluationScope mode: {mode}")
+        raise NotImplementedError(f"Unsupported instances mode: {mode}")
 
 
 def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]:
@@ -191,15 +187,15 @@ def _sample_custom_distribution(
             sys.path.insert(0, path)
     component = resolve_component("sampler", implementation)
     payload = {"config": dict(config), "sample_count": sample_count, "rng": rng}
-    target = component
+    sampler_object = component
     if inspect.isclass(component):
-        target = component(config)
-    if hasattr(target, "sample_batch"):
-        samples = target.sample_batch(sample_count, rng)
-    elif hasattr(target, "sample"):
-        samples = [target.sample(rng) for _ in range(sample_count)]
-    elif callable(target):
-        samples = target(payload)
+        sampler_object = component(config)
+    if hasattr(sampler_object, "sample_batch"):
+        samples = sampler_object.sample_batch(sample_count, rng)
+    elif hasattr(sampler_object, "sample"):
+        samples = [sampler_object.sample(rng) for _ in range(sample_count)]
+    elif callable(sampler_object):
+        samples = sampler_object(payload)
     else:
         raise TypeError("Custom sampler must be callable or implement sample/sample_batch.")
     if not isinstance(samples, list):
@@ -239,8 +235,8 @@ def study_spec_from_raw(spec_path: Path, raw: Dict[str, Any]) -> StudySpec:
     missing = REQUIRED_TOP_LEVEL - raw.keys()
     if missing:
         raise ValueError(f"StudySpec missing required top-level keys: {sorted(missing)}")
-    if raw.get("kind") != "StudySpec":
-        raise ValueError("kind must be 'StudySpec'")
+    if raw.get("config") != "compiled_study":
+        raise ValueError("config must be 'compiled_study'")
     if not raw.get("method"):
         raise ValueError("StudySpec must define method")
     _validate_study_spec(raw)
@@ -248,16 +244,16 @@ def study_spec_from_raw(spec_path: Path, raw: Dict[str, Any]) -> StudySpec:
 
 
 def _validate_study_spec(raw: Dict[str, Any]) -> None:
-    target = raw["target"]
-    access_policy = target.get("accessPolicy")
+    environment = raw["environment"]
+    access_policy = environment.get("accessPolicy")
     if access_policy not in SUPPORTED_ACCESS_POLICIES:
         raise ValueError(
-            f"Unsupported target.accessPolicy {access_policy!r}; expected one of {sorted(SUPPORTED_ACCESS_POLICIES)}"
+            f"Unsupported environment.accessPolicy {access_policy!r}; expected one of {sorted(SUPPORTED_ACCESS_POLICIES)}"
         )
-    mutation_policy = target.get("mutationPolicy")
+    mutation_policy = environment.get("mutationPolicy")
     if mutation_policy not in SUPPORTED_MUTATION_POLICIES:
         raise ValueError(
-            f"Unsupported target.mutationPolicy {mutation_policy!r}; expected one of {sorted(SUPPORTED_MUTATION_POLICIES)}"
+            f"Unsupported environment.mutationPolicy {mutation_policy!r}; expected one of {sorted(SUPPORTED_MUTATION_POLICIES)}"
         )
 
     direction = raw["objective"].get("primaryMetric", {}).get("direction")
@@ -269,13 +265,13 @@ def _validate_study_spec(raw: Dict[str, Any]) -> None:
             f"Unsupported objective aggregation {aggregation!r}; expected one of {sorted(SUPPORTED_AGGREGATIONS)}."
         )
 
-    scope_mode = raw["evaluationScope"].get("mode")
+    scope_mode = raw["instances"].get("mode")
     if scope_mode not in SUPPORTED_EVALUATION_SCOPES:
         raise NotImplementedError(
-            f"Unsupported evaluationScope mode {scope_mode!r}; implemented modes are {sorted(SUPPORTED_EVALUATION_SCOPES)}"
+            f"Unsupported instances mode {scope_mode!r}; implemented modes are {sorted(SUPPORTED_EVALUATION_SCOPES)}"
         )
 
-    _require_component("target.adapter", target.get("adapter", {}))
+    _require_component("environment.adapter", environment.get("adapter", {}))
     _require_component("execution.backend", raw["execution"].get("backend", {}))
     if "scheduler" in raw["execution"]:
         _require_component("execution.scheduler", raw["execution"].get("scheduler", {}))

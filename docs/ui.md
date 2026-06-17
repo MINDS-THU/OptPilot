@@ -29,7 +29,7 @@ uv run optpilot ui --catalog user_catalog --runs runs
 - Draft and validate study configs.
 - Launch studies.
 - Track UI-launched jobs.
-- Inspect previous run directories, trials, artifacts, events, and files.
+- Inspect previous run directories, trials, candidate records, events, and files.
 
 ## Design Boundary
 

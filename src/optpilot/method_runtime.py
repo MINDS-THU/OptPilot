@@ -82,7 +82,7 @@ class MethodRuntime:
             result = self.method(session)
         else:
             raise TypeError(f"Session method {self.method_id!r} must implement run(session) or be callable.")
-        candidates = [*session.candidates, *_extract_candidate_artifacts(result)]
+        candidates = [*session.candidates, *_extract_candidates(result)]
         self._record_call(
             "completed",
             {
@@ -171,7 +171,7 @@ class MethodRuntime:
         for event in method_events:
             if isinstance(event, dict):
                 self._record_event(dict(event))
-        candidates = _extract_candidate_artifacts(response)
+        candidates = _extract_candidates(response)
         self._record_call(
             "completed",
             {
@@ -220,7 +220,7 @@ class MethodRuntime:
         return {"configured": True, "status": "built", **payload}
 
     def _batch_request(self, call_id: str, n_candidates: int, study_state: Dict[str, Any], evidence_view, call_dir: Path) -> Dict[str, Any]:
-        candidate_context = dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+        candidate_context = dict(self.study_spec.candidate.get("context", {}))
         runtime_context = {
             **dict(study_state.get("runtime_context", {})),
             "method_workspace": str(call_dir),
@@ -291,7 +291,7 @@ class MethodRuntime:
             raise RuntimeError(f"Method {self.method_id!r} ended with state {state!r}.")
 
         result = self.method.finalize(handle)
-        candidates = _extract_candidate_artifacts(result)
+        candidates = _extract_candidates(result)
         self._record_call(
             "finalized",
             {
@@ -359,7 +359,7 @@ class MethodSession:
 
     @property
     def candidate_context(self) -> Dict[str, Any]:
-        return dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+        return dict(self.study_spec.candidate.get("context", {}))
 
     @property
     def config(self) -> Dict[str, Any]:
@@ -375,11 +375,11 @@ class MethodSession:
 
     def submit(self, candidate_or_candidates: Any) -> None:
         if isinstance(candidate_or_candidates, dict) and not (
-            "artifacts" in candidate_or_candidates or "candidates" in candidate_or_candidates
+            "candidates" in candidate_or_candidates
         ):
             self._candidates.append(dict(candidate_or_candidates))
             return
-        self._candidates.extend(_extract_candidate_artifacts(candidate_or_candidates))
+        self._candidates.extend(_extract_candidates(candidate_or_candidates))
 
     def event(self, payload: Dict[str, Any]) -> None:
         event = dict(payload)
@@ -401,15 +401,15 @@ def _status_state(status: Dict[str, Any]) -> Optional[str]:
     return str(state).lower() if state is not None else None
 
 
-def _extract_candidate_artifacts(result: Any) -> List[Dict[str, Any]]:
+def _extract_candidates(result: Any) -> List[Dict[str, Any]]:
     if isinstance(result, dict):
-        candidates = result.get("artifacts", result.get("candidates", []))
+        candidates = result.get("candidates", [])
     else:
         candidates = result
     if candidates is None:
         return []
     if not isinstance(candidates, list):
-        raise TypeError("Method must return a list or a dict containing an artifacts list.")
+        raise TypeError("Method must return a list or a dict containing a candidates list.")
     return [dict(candidate) for candidate in candidates]
 
 

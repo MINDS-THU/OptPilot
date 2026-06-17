@@ -35,10 +35,10 @@ flowchart LR
   subgraph Runtime["What OptPilot runs"]
     Compiler["Config compiler\nvalidates and expands configs"]
     MethodRuntime["Method runtime\ncalls Python or command method"]
-    Candidate["Candidate artifact\nparameters, files, or opaque payload"]
+    Candidate["Candidate\nparameters, files, or opaque payload"]
     Materializer["Materializer + validator\ncreates trial workspace"]
     Evaluator["Environment evaluator\nPython or command code"]
-    Observation["Observation\nstatus, metrics, artifacts"]
+    Observation["Observation\nstatus, metrics, output files"]
     Evidence["Evidence store\nJSON, JSONL, files"]
   end
 

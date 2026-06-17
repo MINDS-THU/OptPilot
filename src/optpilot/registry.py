@@ -13,9 +13,9 @@ BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
         "builtin.reference_random_search": "optpilot.methods:ReferenceRandomSearchMethod",
     },
     "adapter": {
-        "builtin.configured_environment": "optpilot.adapters:ConfiguredEnvironmentTargetAdapter",
-        "builtin.python_callable": "optpilot.adapters:PythonCallableTargetAdapter",
-        "builtin.cli_target": "optpilot.adapters:CLITargetAdapter",
+        "builtin.configured_environment": "optpilot.adapters:ConfiguredEnvironmentAdapter",
+        "builtin.python_callable": "optpilot.adapters:PythonCallableEnvironmentAdapter",
+        "builtin.cli_environment": "optpilot.adapters:CLIEnvironmentAdapter",
     },
     "backend": {
         "builtin.local_backend": "optpilot.execution:LocalExecutionBackend",
@@ -26,12 +26,12 @@ BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
         "builtin.local_scheduler": "optpilot.scheduler:LocalTrialScheduler",
     },
     "materializer": {
-        "builtin.parameter_to_config": "optpilot.artifacts:ParameterPassthroughMaterializer",
-        "builtin.workspace_bundle": "optpilot.artifacts:WorkspaceBundleMaterializer",
+        "builtin.parameter_to_config": "optpilot.candidate_materialization:ParameterPassthroughMaterializer",
+        "builtin.workspace_bundle": "optpilot.candidate_materialization:WorkspaceBundleMaterializer",
     },
     "validator": {
-        "builtin.schema_validation": "optpilot.artifacts:BoundsArtifactValidator",
-        "builtin.workspace_policy": "optpilot.artifacts:CodeArtifactManifestValidator",
+        "builtin.schema_validation": "optpilot.candidate_materialization:BoundsCandidateValidator",
+        "builtin.workspace_policy": "optpilot.candidate_materialization:FileCandidateManifestValidator",
     },
     "interface": {
         "builtin.sqlite_query": "optpilot.adapters:ReadOnlySQLiteQuery",

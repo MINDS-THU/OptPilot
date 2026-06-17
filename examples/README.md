@@ -37,7 +37,7 @@ The environment config at `examples/environments/strategic_airlift_devs/environm
 - runs `examples.environments.strategic_airlift_devs.evaluator:evaluate`
 - records simulator events and summary metrics
 
-Before running the example, make sure the generated simulator exists at the configured `workspace.copy.from` path.
+Before running the example, make sure the generated simulator exists at the configured `trialWorkspace[].from` path.
 
 ## Studies
 

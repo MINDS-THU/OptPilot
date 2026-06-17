@@ -1,4 +1,4 @@
-"""Example user-owned method that returns stored code artifact manifests."""
+"""Example user-owned method that returns stored file candidate manifests."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from optpilot.code_artifacts import CodeArtifactStore
+from optpilot.candidate_files import CandidateFileStore
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
-class CodeArtifactMethod:
-    """Stores a configured source directory as a code artifact candidate.
+class FileCandidateMethod:
+    """Stores a configured source directory as a file candidate.
 
     This is deliberately not an optimizer. It demonstrates how a user-owned
-    code generation or search method can use OptPilot's artifact helper while
+    code generation or search method can use OptPilot's candidate helper while
     still returning only a manifest to the core runner.
     """
 
@@ -30,13 +30,13 @@ class CodeArtifactMethod:
         runtime_context = study_state.get("runtime_context", {})
         candidate_context = study_state.get("candidate_context") or runtime_context.get("candidate_context", {})
         source_dir = self._resolve_source_dir(candidate_context)
-        artifact_store_dir = runtime_context.get("artifact_store_dir")
-        if not artifact_store_dir:
-            raise ValueError("CodeArtifactMethod requires runtime_context.artifact_store_dir.")
+        candidate_store_dir = runtime_context.get("candidate_store_dir")
+        if not candidate_store_dir:
+            raise ValueError("FileCandidateMethod requires runtime_context.candidate_store_dir.")
 
-        artifact_store = CodeArtifactStore(
-            artifact_store_dir,
-            content_ref_mode=runtime_context.get("artifact_content_ref_mode", "absolute"),
+        candidate_store = CandidateFileStore(
+            candidate_store_dir,
+            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
         )
         prompt_record = None
         if runtime_context.get("prompt_store_dir") and config.get("promptMessages"):
@@ -55,16 +55,15 @@ class CodeArtifactMethod:
                 model=config["model"],
                 parameters=dict(config.get("modelParameters", {})),
             )
-        artifacts = []
+        candidates = []
         for _ in range(n_candidates):
-            artifact_id = f"code-artifact-{uuid.uuid4().hex[:12]}"
-            artifact = artifact_store.store_directory(
+            candidate_id = f"file-candidate-{uuid.uuid4().hex[:12]}"
+            candidate = candidate_store.store_directory(
                 source_dir,
-                artifact_id=artifact_id,
+                candidate_id=candidate_id,
                 entrypoint=config.get("entrypoint"),
-                artifact_kind=config.get("artifactKind", "files"),
                 lineage={"parents": list(config.get("parents", []))},
-                generator_record=build_generator_record(
+                generator=build_generator_record(
                     method_id=self.definition["id"],
                     strategy="stored_directory_example",
                     prompt_record=prompt_record,
@@ -72,9 +71,9 @@ class CodeArtifactMethod:
                     extra={"owned_by": "user", "cursor": self._cursor},
                 ),
             )
-            artifacts.append(artifact)
+            candidates.append(candidate)
             self._cursor += 1
-        return artifacts
+        return candidates
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observed.extend(observations)
@@ -87,4 +86,4 @@ class CodeArtifactMethod:
                 source = Path(str(entry.get("from", ""))).resolve()
                 if source.is_dir():
                     return source
-        raise ValueError("CodeArtifactMethod requires a trialWorkspace entry matching candidate.materialize.root.")
+        raise ValueError("FileCandidateMethod requires a trialWorkspace entry matching candidate.materialize.root.")

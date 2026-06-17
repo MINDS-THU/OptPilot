@@ -34,7 +34,7 @@ class LocalTrialScheduler:
                 "handle": handle,
                 "trial_id": trial_spec.trial_id,
                 "method_id": trial_spec.method_id,
-                "artifact_id": trial_spec.artifact["artifact_id"],
+                "candidate_id": trial_spec.candidate["candidate_id"],
                 "trial_spec": trial_spec,
             }
             handles.append(record)
@@ -109,7 +109,7 @@ class LocalTrialScheduler:
                 "handle": next_handle,
                 "trial_id": next_trial_spec.trial_id,
                 "method_id": next_trial_spec.method_id,
-                "artifact_id": next_trial_spec.artifact["artifact_id"],
+                "candidate_id": next_trial_spec.candidate["candidate_id"],
                 "trial_spec": next_trial_spec,
             }
             self.evidence_store.record_scheduler_event(

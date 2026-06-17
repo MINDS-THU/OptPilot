@@ -33,7 +33,7 @@ metrics:
   source: return
   keys: [service_score, delivered_count, expired_count, generated_count, mean_latency, max_latency, delivery_ratio, expiration_ratio]
 
-artifacts:
+outputFiles:
   - sa_events.jsonl
   - sa_metrics.json
   - sa_stderr.log

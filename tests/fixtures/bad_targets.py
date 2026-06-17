@@ -9,7 +9,7 @@ def non_numeric_metric(candidate, instance, context):
         "metric_values": {
             "score": "high",
         },
-        "artifacts": [],
+        "output_files": [],
         "event_summary": {},
     }
 
@@ -19,12 +19,12 @@ class CustomAdapter:
         self.definition = definition
         self.study_spec = study_spec
 
-    def evaluate(self, artifact_spec, instance, context):
+    def evaluate(self, candidate_runtime, instance, context):
         return {
             "status": "success",
             "metric_values": {"throughput": 12.5},
             "constraint_results": {},
-            "artifacts": [],
+            "output_files": [],
             "event_summary": {"adapter": "custom"},
         }
 
@@ -71,10 +71,10 @@ class SessionMethod:
         for index in range(session.n_candidates):
             session.submit(
                 {
-                    "artifact_id": f"session-{len(self.observations)}-{index}",
-                    "artifact_kind": "parameter_spec",
+                    "candidate_id": f"session-{len(self.observations)}-{index}",
+                    "format": "parameters",
                     "spec": {"x": 4.0 + index, "y": 7},
-                    "generator_record": {"method_id": self.definition["id"], "strategy": "session"},
+                    "generator": {"method_id": self.definition["id"], "strategy": "session"},
                 }
             )
 

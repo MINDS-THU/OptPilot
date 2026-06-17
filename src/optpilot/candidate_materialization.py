@@ -1,4 +1,4 @@
-"""Artifact normalization, validation, and materialization helpers."""
+"""Candidate normalization, validation, and materialization helpers."""
 
 from __future__ import annotations
 
@@ -28,33 +28,31 @@ class ValidationReport:
 @dataclass
 class MaterializationRecord:
     runtime_spec: JsonDict
-    artifacts: List[JsonDict] = field(default_factory=list)
+    output_files: List[JsonDict] = field(default_factory=list)
     metadata: JsonDict = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         return asdict(self)
 
 
-def normalize_optimizable_artifact(artifact: JsonDict, study_spec, method_id: str) -> JsonDict:
-    primary_artifact = study_spec.primary_artifact
-    normalized = dict(artifact)
-    normalized.setdefault("artifact_id", artifact.get("candidate_id", artifact.get("id")))
-    if not normalized.get("artifact_id"):
+def normalize_candidate(candidate: JsonDict, study_spec, method_id: str) -> JsonDict:
+    primary_candidate = study_spec.candidate
+    normalized = dict(candidate)
+    normalized.setdefault("candidate_id", candidate.get("candidate_id", candidate.get("id")))
+    if not normalized.get("candidate_id"):
         raise ValueError("Candidate manifest requires candidate_id.")
-    normalized.setdefault("artifact_kind", primary_artifact.get("kind", "unspecified"))
+    normalized.setdefault("format", candidate.get("format", primary_candidate.get("format", "unspecified")))
     normalized.setdefault("spec", {})
     normalized.setdefault("lineage", {"parents": []})
-    if "generator" in normalized and "generator_record" not in normalized:
-        normalized["generator_record"] = normalized["generator"]
     normalized.setdefault(
-        "generator_record",
+        "generator",
         {
             "method_id": method_id,
             "strategy": "external",
         },
     )
-    normalized.setdefault("validation_rules", dict(primary_artifact.get("validationRules", {})))
-    normalized.setdefault("materialization_plan", dict(primary_artifact.get("materializationPlan", {})))
+    normalized.setdefault("validation", dict(primary_candidate.get("validation", {})))
+    normalized.setdefault("materialization", dict(primary_candidate.get("materialization", {})))
     return normalized
 
 
@@ -63,10 +61,10 @@ class ParameterPassthroughMaterializer:
         self.definition = definition
         self.study_spec = study_spec
 
-    def materialize(self, artifact: JsonDict, workspace: Path, context: JsonDict) -> MaterializationRecord:
+    def materialize(self, candidate: JsonDict, workspace: Path, context: JsonDict) -> MaterializationRecord:
         return MaterializationRecord(
-            runtime_spec=dict(artifact.get("spec", {})),
-            artifacts=[],
+            runtime_spec=dict(candidate.get("spec", {})),
+            output_files=[],
             metadata={
                 "implementation": self.definition.get("implementation", "builtin.parameter_to_config"),
                 "workspace": str(workspace),
@@ -81,14 +79,14 @@ class WorkspaceBundleMaterializer:
         self.definition = definition
         self.study_spec = study_spec
 
-    def materialize(self, artifact: JsonDict, workspace: Path, context: JsonDict) -> MaterializationRecord:
+    def materialize(self, candidate: JsonDict, workspace: Path, context: JsonDict) -> MaterializationRecord:
         config = self.definition.get("config", {})
         workspace.mkdir(parents=True, exist_ok=True)
         candidate_root = _safe_workspace_path(workspace, config.get("candidateRoot", "."))
         allow_absolute_refs = bool(config.get("allowAbsoluteContentRefs", False))
         manifest: JsonDict = {
-            "artifact_id": artifact.get("artifact_id"),
-            "artifact_kind": artifact.get("artifact_kind"),
+            "candidate_id": candidate.get("candidate_id"),
+            "format": candidate.get("format"),
             "candidate_root": str(candidate_root),
             "candidate_files": [],
             "seed_files": [],
@@ -101,7 +99,7 @@ class WorkspaceBundleMaterializer:
             manifest["seed_files"].append(seed_record)
 
         destination_paths = set()
-        for file_entry in _code_file_entries(artifact.get("artifact_kind"), artifact.get("spec", {}), []):
+        for file_entry in _candidate_file_entries(candidate.get("format"), candidate.get("spec", {}), []):
             candidate_path = file_entry.get("path")
             content_ref = file_entry.get("contentRef")
             if not isinstance(candidate_path, str) or not _is_safe_candidate_path(candidate_path):
@@ -148,12 +146,12 @@ class WorkspaceBundleMaterializer:
             "workspace": str(workspace),
             "candidateRoot": str(candidate_root),
             "manifestPath": str(manifest_path),
-            "entrypoint": artifact.get("spec", {}).get("entrypoint"),
+            "entrypoint": candidate.get("spec", {}).get("entrypoint"),
             "files": list(manifest["candidate_files"]),
         }
         return MaterializationRecord(
             runtime_spec=runtime_spec,
-            artifacts=[
+            output_files=[
                 {"type": "json", "name": "workspace_manifest", "path": str(manifest_path)},
                 *[
                     {"type": "code", "name": item["path"], "path": item["destination"]}
@@ -211,12 +209,12 @@ class WorkspaceBundleMaterializer:
         }
 
 
-class BoundsArtifactValidator:
+class BoundsCandidateValidator:
     def __init__(self, definition: JsonDict, study_spec):
         self.definition = definition
         self.study_spec = study_spec
 
-    def validate(self, artifact: JsonDict, context: JsonDict) -> ValidationReport:
+    def validate(self, candidate: JsonDict, context: JsonDict) -> ValidationReport:
         config = self.definition.get("config", {})
         if not config.get("enforceBounds", False):
             return ValidationReport(metadata={"implementation": self.definition.get("implementation")})
@@ -224,7 +222,7 @@ class BoundsArtifactValidator:
         search_space = _collect_search_space(self.study_spec.method)
         constraints = list(config.get("constraints", []) or [])
         errors: List[str] = []
-        for name, value in artifact.get("spec", {}).items():
+        for name, value in candidate.get("spec", {}).items():
             parameter_def = search_space.get(name)
             if parameter_def is None:
                 continue
@@ -243,7 +241,7 @@ class BoundsArtifactValidator:
 
         for constraint in constraints:
             try:
-                accepted = _evaluate_constraint(constraint.get("expr", {}), artifact.get("spec", {}))
+                accepted = _evaluate_constraint(constraint.get("expr", {}), candidate.get("spec", {}))
             except Exception as exc:
                 errors.append(f"Constraint {constraint.get('id', '<unknown>')!r} could not be evaluated: {exc}")
                 continue
@@ -353,21 +351,21 @@ def _copy_directory_contents(source: Path, destination: Path) -> None:
             shutil.copy2(child, target)
 
 
-class CodeArtifactManifestValidator:
-    """Validate manifest-only code artifacts.
+class FileCandidateManifestValidator:
+    """Validate manifest-only file candidates.
 
-    Code artifacts should reference files by path and hash. The artifact JSON is
-    metadata; it should not carry inline source code.
+    File candidates reference generated files by path and hash. The candidate
+    JSON is metadata; it should not carry inline source code.
     """
 
-    SUPPORTED_KINDS = {"code_file", "code_bundle", "code_module", "files"}
+    SUPPORTED_FORMATS = {"files"}
     SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
     def __init__(self, definition: JsonDict, study_spec):
         self.definition = definition
         self.study_spec = study_spec
 
-    def validate(self, artifact: JsonDict, context: JsonDict) -> ValidationReport:
+    def validate(self, candidate: JsonDict, context: JsonDict) -> ValidationReport:
         config = self.definition.get("config", {})
         require_hashes = bool(config.get("requireHashes", True))
         require_existing_refs = bool(config.get("requireExistingRefs", True))
@@ -375,26 +373,26 @@ class CodeArtifactManifestValidator:
         errors: List[str] = []
         warnings: List[str] = []
 
-        artifact_kind = artifact.get("artifact_kind")
-        if artifact_kind not in self.SUPPORTED_KINDS:
+        candidate_format = candidate.get("format")
+        if candidate_format not in self.SUPPORTED_FORMATS:
             errors.append(
-                f"Unsupported code artifact kind {artifact_kind!r}; expected one of {sorted(self.SUPPORTED_KINDS)!r}."
+                f"Unsupported file candidate format {candidate_format!r}; expected one of {sorted(self.SUPPORTED_FORMATS)!r}."
             )
 
-        spec = artifact.get("spec", {})
+        spec = candidate.get("spec", {})
         if not isinstance(spec, dict):
-            errors.append("Code artifact spec must be an object.")
+            errors.append("File candidate spec must be an object.")
             spec = {}
 
         inline_paths = _find_inline_content_fields(spec)
         for inline_path in inline_paths:
             errors.append(f"Inline source content is not allowed at spec.{inline_path}; use contentRef instead.")
 
-        file_entries = _code_file_entries(artifact_kind, spec, errors)
+        file_entries = _candidate_file_entries(candidate_format, spec, errors)
         seen_paths = set()
         for index, file_entry in enumerate(file_entries):
             candidate_path = file_entry.get("path")
-            location = f"files[{index}]" if artifact_kind in {"code_bundle", "code_module", "files"} else "spec"
+            location = f"files[{index}]"
             if not isinstance(candidate_path, str) or not candidate_path.strip():
                 errors.append(f"{location}.path must be a non-empty string.")
             elif not _is_safe_candidate_path(candidate_path):
@@ -431,13 +429,6 @@ class CodeArtifactManifestValidator:
                         f"{location}.sha256 mismatch for {content_ref}: expected {expected_sha}, got {actual_sha}."
                     )
 
-        if artifact_kind in {"code_bundle", "code_module"}:
-            bundle_ref = spec.get("bundleRef")
-            if not isinstance(bundle_ref, str) or not bundle_ref.strip():
-                errors.append("spec.bundleRef must be a non-empty string for code bundle artifacts.")
-            elif not _is_safe_content_ref(bundle_ref, allow_absolute_refs):
-                errors.append("spec.bundleRef must be a safe relative path unless absolute refs are explicitly allowed.")
-
         required_files = set(str(path) for path in config.get("requiredFiles", []) or [])
         missing_required = sorted(required_files - seen_paths)
         for path in missing_required:
@@ -457,7 +448,7 @@ class CodeArtifactManifestValidator:
             warnings=warnings,
             metadata={
                 "implementation": self.definition.get("implementation"),
-                "artifact_kind": artifact_kind,
+                "format": candidate_format,
                 "file_count": len(file_entries),
                 "requireHashes": require_hashes,
                 "requireExistingRefs": require_existing_refs,
@@ -465,13 +456,11 @@ class CodeArtifactManifestValidator:
         )
 
 
-def _code_file_entries(artifact_kind: str, spec: JsonDict, errors: List[str]) -> List[JsonDict]:
-    if artifact_kind == "code_file":
-        return [spec]
-    if artifact_kind in {"code_bundle", "code_module", "files"}:
+def _candidate_file_entries(candidate_format: str, spec: JsonDict, errors: List[str]) -> List[JsonDict]:
+    if candidate_format == "files":
         files = spec.get("files")
         if not isinstance(files, list) or not files:
-            errors.append("spec.files must be a non-empty list for file artifacts.")
+            errors.append("spec.files must be a non-empty list for file candidates.")
             return []
         entries: List[JsonDict] = []
         for index, entry in enumerate(files):

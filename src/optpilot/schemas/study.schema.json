@@ -41,7 +41,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "backend": {"enum": ["local", "local_subprocess", "external"]},
+        "backend": {"enum": ["local", "local_subprocess"]},
         "parallelism": {"type": "integer", "minimum": 1},
         "timeoutSeconds": {"type": "integer", "minimum": 1},
         "runtime": {"$ref": "defs/runtime.schema.json#/definitions/runtime"},
@@ -52,8 +52,7 @@
             "maxRetries": {"type": "integer", "minimum": 0}
           }
         },
-        "settings": {"type": "object"},
-        "adapter": {"$ref": "defs/common.schema.json#/definitions/pythonImport"}
+        "settings": {"type": "object"}
       }
     },
     "evidence": {
@@ -61,7 +60,7 @@
       "additionalProperties": false,
       "properties": {
         "level": {"enum": ["minimal", "standard", "full"]},
-        "artifactStorage": {"enum": ["reference", "copy"]},
+        "outputFileStorage": {"enum": ["reference", "copy"]},
         "outputDir": {"type": "string"}
       }
     },

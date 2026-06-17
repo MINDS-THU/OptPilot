@@ -9,6 +9,6 @@ def non_numeric_metric(candidate, instance, context):
         "metric_values": {
             "score": "high",
         },
-        "artifacts": [],
+        "output_files": [],
         "event_summary": {},
     }

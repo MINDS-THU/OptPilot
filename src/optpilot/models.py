@@ -82,14 +82,14 @@ class SandboxSpec:
 
 
 @dataclass
-class OptimizableArtifact:
-    artifact_id: str
-    artifact_kind: str
+class Candidate:
+    candidate_id: str
+    format: str
     spec: JsonDict
     lineage: JsonDict = field(default_factory=dict)
-    generator_record: JsonDict = field(default_factory=dict)
-    validation_rules: JsonDict = field(default_factory=dict)
-    materialization_plan: JsonDict = field(default_factory=dict)
+    generator: JsonDict = field(default_factory=dict)
+    validation: JsonDict = field(default_factory=dict)
+    materialization: JsonDict = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         return asdict(self)
@@ -100,7 +100,7 @@ class TrialSpec:
     trial_id: str
     study_id: str
     method_id: str
-    artifact: JsonDict
+    candidate: JsonDict
     instances: List[JsonDict]
     objective: JsonDict
     resource_profile: ResourceProfile
@@ -112,14 +112,14 @@ class TrialSpec:
 class Observation:
     trial_id: str
     study_id: str
-    artifact_id: str
-    target_id: str
+    candidate_id: str
+    environment_id: str
     instance_descriptor: JsonDict
     status: str
     metric_values: JsonDict
     constraint_results: JsonDict
     resource_usage: JsonDict
-    artifacts: List[JsonDict]
+    output_files: List[JsonDict]
     event_summary: JsonDict
     provenance: JsonDict
 
@@ -134,7 +134,7 @@ class RunSummary:
     completed_trials: int
     best_trial_id: Optional[str]
     best_metric: Optional[float]
-    best_artifact_id: Optional[str]
+    best_candidate_id: Optional[str]
     started_at: str
     finished_at: str
     failure_count: int = 0

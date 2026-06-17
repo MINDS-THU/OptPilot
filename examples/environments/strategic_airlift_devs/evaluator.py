@@ -23,9 +23,9 @@ SIMULATION_ARGS = (
 )
 
 
-def evaluate(artifact_spec: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
-    workspace = Path(artifact_spec.get("workspace") or context["workspace"]).resolve()
-    simulator_root = Path(artifact_spec.get("candidateRoot") or (workspace / "simulator")).resolve()
+def evaluate(candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    workspace = Path(candidate_runtime.get("workspace") or context["workspace"]).resolve()
+    simulator_root = Path(candidate_runtime.get("candidateRoot") or (workspace / "simulator")).resolve()
     stdout_path = workspace / "sa_events.jsonl"
     stderr_path = workspace / "sa_stderr.log"
     metrics_path = workspace / "sa_metrics.json"
@@ -73,7 +73,7 @@ def evaluate(artifact_spec: Dict[str, Any], instance: Dict[str, Any], context: D
     return {
         "status": "success",
         "metric_values": metrics,
-        "artifacts": [
+        "output_files": [
             {"type": "log", "name": "sa_events", "path": str(stdout_path)},
             {"type": "log", "name": "sa_stderr", "path": str(stderr_path)},
             {"type": "json", "name": "sa_metrics", "path": str(metrics_path)},

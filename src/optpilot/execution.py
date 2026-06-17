@@ -16,24 +16,24 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .artifacts import MaterializationRecord, ValidationReport
+from .candidate_materialization import MaterializationRecord, ValidationReport
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import Observation, ResourceProfile, SandboxSpec, TrialSpec, utc_now_iso
 
 
 class Evaluator:
-    def __init__(self, study_spec, target_adapter, evidence_store, materializer, artifact_validator):
+    def __init__(self, study_spec, environment_adapter, evidence_store, materializer, candidate_validator):
         self.study_spec = study_spec
-        self.target_adapter = target_adapter
+        self.environment_adapter = environment_adapter
         self.evidence_store = evidence_store
         self.materializer = materializer
-        self.artifact_validator = artifact_validator
+        self.candidate_validator = candidate_validator
 
     def run_trial(self, trial_spec: TrialSpec) -> List[Observation]:
         workspace = self.evidence_store.create_trial_workspace(trial_spec.trial_id)
         instance_results: List[Dict[str, Any]] = []
         started = time.monotonic()
-        artifact_context = {
+        candidate_context = {
             "trial_id": trial_spec.trial_id,
             "study_id": trial_spec.study_id,
             "workspace": str(workspace),
@@ -43,7 +43,7 @@ class Evaluator:
             "backend_worker": trial_spec.metadata.get("backend_worker", {}),
         }
         try:
-            validation_report = self.artifact_validator.validate(trial_spec.artifact, artifact_context)
+            validation_report = self.candidate_validator.validate(trial_spec.candidate, candidate_context)
         except Exception as exc:
             validation_report = _validation_exception_report(exc)
             materialization_record = MaterializationRecord(runtime_spec={}, metadata={"skipped": True})
@@ -55,7 +55,7 @@ class Evaluator:
                 time.monotonic() - started,
                 materialization_record,
             )
-            self._record_artifact(trial_spec, validation_report, materialization_record, error=observation.event_summary["error"])
+            self._record_candidate(trial_spec, validation_report, materialization_record, error=observation.event_summary["error"])
             self._record_trial(trial_spec, observation.status)
             self.evidence_store.record_observation(observation.to_dict())
             return [observation]
@@ -68,13 +68,13 @@ class Evaluator:
                 time.monotonic() - started,
                 materialization_record,
             )
-            self._record_artifact(trial_spec, validation_report, materialization_record)
+            self._record_candidate(trial_spec, validation_report, materialization_record)
             self._record_trial(trial_spec, observation.status)
             self.evidence_store.record_observation(observation.to_dict())
             return [observation]
 
         try:
-            materialization_record = self.materializer.materialize(trial_spec.artifact, workspace, artifact_context)
+            materialization_record = self.materializer.materialize(trial_spec.candidate, workspace, candidate_context)
         except Exception as exc:
             materialization_record = MaterializationRecord(runtime_spec={}, metadata={"failed": True})
             observation = self._failure_observation(
@@ -85,12 +85,12 @@ class Evaluator:
                 time.monotonic() - started,
                 materialization_record,
             )
-            self._record_artifact(trial_spec, validation_report, materialization_record, error=observation.event_summary["error"])
+            self._record_candidate(trial_spec, validation_report, materialization_record, error=observation.event_summary["error"])
             self._record_trial(trial_spec, observation.status)
             self.evidence_store.record_observation(observation.to_dict())
             return [observation]
 
-        self._record_artifact(trial_spec, validation_report, materialization_record)
+        self._record_candidate(trial_spec, validation_report, materialization_record)
         for index, instance in enumerate(trial_spec.instances):
             context = {
                 "trial_id": trial_spec.trial_id,
@@ -113,10 +113,10 @@ class Evaluator:
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
             }
             try:
-                result = self.target_adapter.evaluate(materialization_record.runtime_spec, instance, context)
-                _validate_target_result(result)
+                result = self.environment_adapter.evaluate(materialization_record.runtime_spec, instance, context)
+                _validate_environment_result(result)
             except Exception as exc:
-                result = _exception_instance_result(exc, "target_evaluation", workspace, index)
+                result = _exception_instance_result(exc, "environment_evaluation", workspace, index)
             instance_results.append(result)
         elapsed = time.monotonic() - started
         observation = self._aggregate_results(trial_spec, instance_results, elapsed, materialization_record)
@@ -124,7 +124,7 @@ class Evaluator:
         self.evidence_store.record_observation(observation.to_dict())
         return [observation]
 
-    def _record_artifact(
+    def _record_candidate(
         self,
         trial_spec: TrialSpec,
         validation_report: ValidationReport,
@@ -132,22 +132,22 @@ class Evaluator:
         error: Dict[str, Any] = None,
     ) -> None:
         payload = {
-            "artifact_id": trial_spec.artifact["artifact_id"],
+            "candidate_id": trial_spec.candidate["candidate_id"],
             "study_id": trial_spec.study_id,
             "trial_id": trial_spec.trial_id,
-            "artifact_kind": trial_spec.artifact["artifact_kind"],
-            "spec": dict(trial_spec.artifact.get("spec", {})),
-            "lineage": dict(trial_spec.artifact.get("lineage", {})),
-            "generator_record": dict(trial_spec.artifact.get("generator_record", {})),
-            "validation_rules": dict(trial_spec.artifact.get("validation_rules", {})),
-            "materialization_plan": dict(trial_spec.artifact.get("materialization_plan", {})),
+            "format": trial_spec.candidate["format"],
+            "spec": dict(trial_spec.candidate.get("spec", {})),
+            "lineage": dict(trial_spec.candidate.get("lineage", {})),
+            "generator": dict(trial_spec.candidate.get("generator", {})),
+            "validation_spec": dict(trial_spec.candidate.get("validation", {})),
+            "materialization_spec": dict(trial_spec.candidate.get("materialization", {})),
             "validation": validation_report.to_dict(),
             "materialization": materialization_record.to_dict(),
             "created_at": utc_now_iso(),
         }
         if error:
             payload["error"] = error
-        self.evidence_store.record_artifact(payload)
+        self.evidence_store.record_candidate(payload)
 
     def _record_trial(self, trial_spec: TrialSpec, status: str) -> None:
         self.evidence_store.record_trial(
@@ -155,9 +155,9 @@ class Evaluator:
                 "trial_id": trial_spec.trial_id,
                 "study_id": trial_spec.study_id,
                 "method_id": trial_spec.method_id,
-                "artifact_id": trial_spec.artifact["artifact_id"],
-                "artifact_kind": trial_spec.artifact["artifact_kind"],
-                "artifact": dict(trial_spec.artifact),
+                "candidate_id": trial_spec.candidate["candidate_id"],
+                "format": trial_spec.candidate["format"],
+                "candidate": dict(trial_spec.candidate),
                 "instance_count": len(trial_spec.instances),
                 "status": status,
                 "resource_profile": trial_spec.resource_profile.to_dict(),
@@ -178,10 +178,10 @@ class Evaluator:
     ) -> Observation:
         primary_metric = trial_spec.objective["primaryMetric"]["name"]
         aggregated_metrics = _aggregate_metric_values(instance_results, trial_spec.objective)
-        artifacts = list(materialization_record.artifacts)
+        output_files = list(materialization_record.output_files)
         for result in instance_results:
-            artifacts.extend(result.get("artifacts", []))
-        artifacts = self._retain_artifacts(trial_spec.trial_id, artifacts)
+            output_files.extend(result.get("output_files", []))
+        output_files = self._retain_output_files(trial_spec.trial_id, output_files)
         statuses = {result.get("status", "success") for result in instance_results}
         status = _aggregate_status(statuses)
         failure_events = [
@@ -192,9 +192,9 @@ class Evaluator:
         return Observation(
             trial_id=trial_spec.trial_id,
             study_id=trial_spec.study_id,
-            artifact_id=trial_spec.artifact["artifact_id"],
-            target_id=self.study_spec.target["targetId"],
-            instance_descriptor={"mode": self.study_spec.evaluation_scope["mode"], "count": len(trial_spec.instances)},
+            candidate_id=trial_spec.candidate["candidate_id"],
+            environment_id=self.study_spec.environment["environmentId"],
+            instance_descriptor={"mode": self.study_spec.instances["mode"], "count": len(trial_spec.instances)},
             status=status,
             metric_values=aggregated_metrics,
             constraint_results={},
@@ -202,7 +202,7 @@ class Evaluator:
                 "requested": trial_spec.resource_profile.to_dict(),
                 "wallClockSeconds": wall_clock_seconds,
             },
-            artifacts=artifacts,
+            output_files=output_files,
             event_summary={
                 "primary_metric": primary_metric,
                 "evaluated_instances": len(trial_spec.instances),
@@ -211,25 +211,25 @@ class Evaluator:
             },
             provenance={
                 "method_id": trial_spec.method_id,
-                "target_version": self.study_spec.target.get("targetVersion"),
+                "environment_version": self.study_spec.environment.get("environmentVersion"),
                 "seed": trial_spec.metadata.get("seed"),
                 "resource_profile": trial_spec.resource_profile.to_dict(),
                 "sandbox_spec": trial_spec.sandbox_spec.to_dict(),
                 "backend_identity": trial_spec.metadata.get("backend_identity", {}),
                 "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
-                "artifact_lineage": dict(trial_spec.artifact.get("lineage", {})),
-                "generator_record": dict(trial_spec.artifact.get("generator_record", {})),
+                "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
+                "generator": dict(trial_spec.candidate.get("generator", {})),
             },
         )
 
-    def _retain_artifacts(self, trial_id: str, artifacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if self.study_spec.evidence.get("artifactStorage", "reference") != "copy":
-            return artifacts
+    def _retain_output_files(self, trial_id: str, output_files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if self.study_spec.evidence.get("outputFileStorage", "reference") != "copy":
+            return output_files
         retained = []
-        destination_root = self.evidence_store.run_dir / "evidence_artifacts" / trial_id
-        for index, artifact in enumerate(artifacts):
-            item = dict(artifact)
+        destination_root = self.evidence_store.run_dir / "evidence_files" / trial_id
+        for index, output_file in enumerate(output_files):
+            item = dict(output_file)
             source_value = item.get("path") or item.get("contentRef")
             if not source_value:
                 retained.append(item)
@@ -238,7 +238,7 @@ class Evaluator:
             if not source.exists() or not source.is_file():
                 retained.append(item)
                 continue
-            relative_name = _safe_artifact_copy_name(source.name, index)
+            relative_name = _safe_output_file_copy_name(source.name, index)
             destination = destination_root / relative_name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
@@ -258,7 +258,7 @@ class Evaluator:
         error = {
             "phase": "validation",
             "type": "ValidationError",
-            "message": "; ".join(validation_report.errors) or "Artifact validation failed.",
+            "message": "; ".join(validation_report.errors) or "Candidate validation failed.",
             "errors": list(validation_report.errors),
         }
         return self._terminal_observation(
@@ -297,9 +297,9 @@ class Evaluator:
         return Observation(
             trial_id=trial_spec.trial_id,
             study_id=trial_spec.study_id,
-            artifact_id=trial_spec.artifact["artifact_id"],
-            target_id=self.study_spec.target["targetId"],
-            instance_descriptor={"mode": self.study_spec.evaluation_scope["mode"], "count": len(trial_spec.instances)},
+            candidate_id=trial_spec.candidate["candidate_id"],
+            environment_id=self.study_spec.environment["environmentId"],
+            instance_descriptor={"mode": self.study_spec.instances["mode"], "count": len(trial_spec.instances)},
             status=status,
             metric_values={},
             constraint_results={},
@@ -307,7 +307,7 @@ class Evaluator:
                 "requested": trial_spec.resource_profile.to_dict(),
                 "wallClockSeconds": wall_clock_seconds,
             },
-            artifacts=list(materialization_record.artifacts),
+            output_files=list(materialization_record.output_files),
             event_summary={
                 "primary_metric": trial_spec.objective["primaryMetric"]["name"],
                 "evaluated_instances": 0,
@@ -317,15 +317,15 @@ class Evaluator:
             },
             provenance={
                 "method_id": trial_spec.method_id,
-                "target_version": self.study_spec.target.get("targetVersion"),
+                "environment_version": self.study_spec.environment.get("environmentVersion"),
                 "seed": trial_spec.metadata.get("seed"),
                 "resource_profile": trial_spec.resource_profile.to_dict(),
                 "sandbox_spec": trial_spec.sandbox_spec.to_dict(),
                 "backend_identity": trial_spec.metadata.get("backend_identity", {}),
                 "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
-                "artifact_lineage": dict(trial_spec.artifact.get("lineage", {})),
-                "generator_record": dict(trial_spec.artifact.get("generator_record", {})),
+                "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
+                "generator": dict(trial_spec.candidate.get("generator", {})),
             },
         )
 
@@ -487,7 +487,7 @@ class LocalSubprocessExecutionBackend:
                 self.evaluator.study_spec,
                 trial_spec,
                 elapsed,
-                _worker_artifacts(paths),
+                _worker_output_files(paths),
                 exc,
             )
             self.evaluator._record_trial(trial_spec, observation.status)
@@ -503,7 +503,7 @@ class LocalSubprocessExecutionBackend:
             self.evaluator.study_spec,
             trial_spec,
             elapsed,
-            _worker_artifacts(paths),
+            _worker_output_files(paths),
             error,
         )
         self.evaluator._record_trial(trial_spec, observation.status)
@@ -643,7 +643,7 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
                 self.evaluator.study_spec,
                 trial_spec,
                 elapsed,
-                _worker_artifacts(paths),
+                _worker_output_files(paths),
                 exc,
             )
             self.evaluator._record_trial(trial_spec, observation.status)
@@ -659,7 +659,7 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
             self.evaluator.study_spec,
             trial_spec,
             elapsed,
-            _worker_artifacts(paths),
+            _worker_output_files(paths),
             error,
         )
         self.evaluator._record_trial(trial_spec, observation.status)
@@ -792,39 +792,39 @@ def _exception_instance_result(exc: Exception, phase: str, workspace: Path, inst
         "status": status,
         "metric_values": {},
         "constraint_results": {},
-        "artifacts": _failure_artifacts(workspace, instance_index),
+        "output_files": _failure_output_files(workspace, instance_index),
         "event_summary": {
             "error": _error_payload(exc, phase),
         },
     }
 
 
-def _validate_target_result(result: Any) -> None:
+def _validate_environment_result(result: Any) -> None:
     if not isinstance(result, dict):
-        raise TypeError("Target adapter result must be a JSON-like object.")
+        raise TypeError("Environment evaluator result must be a JSON-like object.")
     status = result.get("status", "success")
     if not isinstance(status, str):
-        raise TypeError("Target adapter result status must be a string.")
+        raise TypeError("Environment evaluator result status must be a string.")
     metric_values = result.get("metric_values", {})
     if not isinstance(metric_values, dict):
-        raise TypeError("Target adapter result metric_values must be a dict.")
+        raise TypeError("Environment evaluator result metric_values must be a dict.")
     for metric_name, metric_value in metric_values.items():
         if not isinstance(metric_name, str):
-            raise TypeError("Target adapter metric names must be strings.")
+            raise TypeError("Environment evaluator metric names must be strings.")
         if not isinstance(metric_value, (int, float, bool)):
-            raise TypeError(f"Target adapter metric {metric_name!r} must be numeric or boolean.")
+            raise TypeError(f"Environment evaluator metric {metric_name!r} must be numeric or boolean.")
     constraint_results = result.get("constraint_results", {})
     if not isinstance(constraint_results, dict):
-        raise TypeError("Target adapter result constraint_results must be a dict.")
-    artifacts = result.get("artifacts", [])
-    if not isinstance(artifacts, list):
-        raise TypeError("Target adapter result artifacts must be a list.")
-    for index, artifact in enumerate(artifacts):
-        if not isinstance(artifact, dict):
-            raise TypeError(f"Target adapter artifact entry {index} must be an object.")
+        raise TypeError("Environment evaluator result constraint_results must be a dict.")
+    output_files = result.get("output_files", [])
+    if not isinstance(output_files, list):
+        raise TypeError("Environment evaluator result output_files must be a list.")
+    for index, output_file in enumerate(output_files):
+        if not isinstance(output_file, dict):
+            raise TypeError(f"Environment evaluator output_file entry {index} must be an object.")
     event_summary = result.get("event_summary", {})
     if not isinstance(event_summary, dict):
-        raise TypeError("Target adapter result event_summary must be a dict.")
+        raise TypeError("Environment evaluator result event_summary must be a dict.")
 
 
 def _aggregate_status(statuses) -> str:
@@ -853,30 +853,30 @@ def _error_payload(exc: Exception, phase: str) -> Dict[str, Any]:
     }
 
 
-def _failure_artifacts(workspace: Path, instance_index: int) -> List[Dict[str, Any]]:
-    artifacts = []
-    for name, artifact_type, path in [
-        ("cli_artifact_input", "json", workspace / f"cli_artifact_{instance_index}.json"),
+def _failure_output_files(workspace: Path, instance_index: int) -> List[Dict[str, Any]]:
+    output_files = []
+    for name, file_type, path in [
+        ("cli_candidate_input", "json", workspace / f"cli_candidate_{instance_index}.json"),
         ("cli_instance_input", "json", workspace / f"cli_instance_{instance_index}.json"),
         ("cli_result_output", "json", workspace / f"cli_result_{instance_index}.json"),
         ("cli_stdout", "log", workspace / f"cli_stdout_{instance_index}.log"),
         ("cli_stderr", "log", workspace / f"cli_stderr_{instance_index}.log"),
     ]:
         if path.exists():
-            artifacts.append({"type": artifact_type, "name": name, "path": str(path)})
-    return artifacts
+            output_files.append({"type": file_type, "name": name, "path": str(path)})
+    return output_files
 
 
-def _worker_artifacts(paths: Dict[str, Path]) -> List[Dict[str, Any]]:
-    artifacts = []
-    for name, artifact_type, path in [
+def _worker_output_files(paths: Dict[str, Path]) -> List[Dict[str, Any]]:
+    output_files = []
+    for name, file_type, path in [
         ("backend_worker_stdout", "log", paths["stdout"]),
         ("backend_worker_stderr", "log", paths["stderr"]),
         ("backend_worker_output", "json", paths["output"]),
     ]:
         if path.exists():
-            artifacts.append({"type": artifact_type, "name": name, "path": str(path)})
-    return artifacts
+            output_files.append({"type": file_type, "name": name, "path": str(path)})
+    return output_files
 
 
 def _container_image(config: Dict[str, Any], trial_spec: TrialSpec) -> str:
@@ -909,7 +909,7 @@ def _backend_timeout_observation(
     study_spec,
     trial_spec: TrialSpec,
     wall_clock_seconds: float,
-    artifacts: List[Dict[str, Any]],
+    output_files: List[Dict[str, Any]],
     exc: Exception,
 ) -> Observation:
     return _backend_terminal_observation(
@@ -917,7 +917,7 @@ def _backend_timeout_observation(
         trial_spec,
         "timeout",
         wall_clock_seconds,
-        artifacts,
+        output_files,
         _error_payload(exc, "backend_execution"),
     )
 
@@ -926,7 +926,7 @@ def _backend_failure_observation(
     study_spec,
     trial_spec: TrialSpec,
     wall_clock_seconds: float,
-    artifacts: List[Dict[str, Any]],
+    output_files: List[Dict[str, Any]],
     exc: Exception,
 ) -> Observation:
     return _backend_terminal_observation(
@@ -934,7 +934,7 @@ def _backend_failure_observation(
         trial_spec,
         "failed",
         wall_clock_seconds,
-        artifacts,
+        output_files,
         _error_payload(exc, "backend_execution"),
     )
 
@@ -944,15 +944,15 @@ def _backend_terminal_observation(
     trial_spec: TrialSpec,
     status: str,
     wall_clock_seconds: float,
-    artifacts: List[Dict[str, Any]],
+    output_files: List[Dict[str, Any]],
     error: Dict[str, Any],
 ) -> Observation:
     return Observation(
         trial_id=trial_spec.trial_id,
         study_id=trial_spec.study_id,
-        artifact_id=trial_spec.artifact["artifact_id"],
-        target_id=study_spec.target["targetId"],
-        instance_descriptor={"mode": study_spec.evaluation_scope["mode"], "count": len(trial_spec.instances)},
+        candidate_id=trial_spec.candidate["candidate_id"],
+        environment_id=study_spec.environment["environmentId"],
+        instance_descriptor={"mode": study_spec.instances["mode"], "count": len(trial_spec.instances)},
         status=status,
         metric_values={},
         constraint_results={},
@@ -960,7 +960,7 @@ def _backend_terminal_observation(
             "requested": trial_spec.resource_profile.to_dict(),
             "wallClockSeconds": wall_clock_seconds,
         },
-        artifacts=artifacts,
+        output_files=output_files,
         event_summary={
             "primary_metric": trial_spec.objective["primaryMetric"]["name"],
             "evaluated_instances": 0,
@@ -969,15 +969,15 @@ def _backend_terminal_observation(
         },
         provenance={
             "method_id": trial_spec.method_id,
-            "target_version": study_spec.target.get("targetVersion"),
+            "environment_version": study_spec.environment.get("environmentVersion"),
             "seed": trial_spec.metadata.get("seed"),
             "resource_profile": trial_spec.resource_profile.to_dict(),
             "sandbox_spec": trial_spec.sandbox_spec.to_dict(),
             "backend_identity": trial_spec.metadata.get("backend_identity", {}),
             "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
             "backend_worker": trial_spec.metadata.get("backend_worker", {}),
-            "artifact_lineage": dict(trial_spec.artifact.get("lineage", {})),
-            "generator_record": dict(trial_spec.artifact.get("generator_record", {})),
+            "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
+            "generator": dict(trial_spec.candidate.get("generator", {})),
         },
     )
 
@@ -994,7 +994,7 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
         trial_id=payload["trial_id"],
         study_id=payload["study_id"],
         method_id=payload["method_id"],
-        artifact=dict(payload["artifact"]),
+        candidate=dict(payload["candidate"]),
         instances=list(payload["instances"]),
         objective=dict(payload["objective"]),
         resource_profile=ResourceProfile.from_dict(payload.get("resource_profile")),
@@ -1003,7 +1003,7 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
     )
 
 
-def _safe_artifact_copy_name(name: str, index: int) -> str:
+def _safe_output_file_copy_name(name: str, index: int) -> str:
     safe = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in name)
-    safe = safe.strip("._") or "artifact"
+    safe = safe.strip("._") or "output_file"
     return f"{index:04d}-{safe}"

@@ -47,7 +47,7 @@ A candidate is the object being evaluated. OptPilot supports:
 
 - `parameters`: structured parameter dictionaries
 - `files`: code or file bundles
-- `opaque`: custom artifacts interpreted by a custom environment/method pair
+- `opaque`: custom candidate payloads interpreted by a custom environment/method pair
 
 ## Evidence
 
@@ -55,7 +55,7 @@ Each run directory records what happened:
 
 - compiled `study_spec.json`
 - observations and trials
-- candidate artifacts
+- candidate records
 - method calls and method events
 - scheduler events
 - runtime policy and environment snapshot

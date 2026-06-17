@@ -15,7 +15,7 @@ Common files include:
 - `summary.json`
 - `observations.jsonl`
 - `trials.jsonl`
-- `artifacts.jsonl`
+- `candidates.jsonl`
 - `method_calls.jsonl`
 - `method_events.jsonl`
 - `scheduler_events.jsonl`
@@ -23,7 +23,7 @@ Common files include:
 - `run_policy.json`
 - `run_lineage.json`
 
-Trial workspaces and saved artifacts live under the run directory as well.
+Trial workspaces and saved evaluator output files live under the run directory as well.
 
 ## EvidenceView
 
@@ -31,7 +31,7 @@ Methods can inspect prior evidence through `EvidenceView` during iterative optim
 
 - observations
 - trials
-- artifacts
+- candidate records
 - method calls
 - scheduler events
 - method events

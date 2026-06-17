@@ -15,13 +15,13 @@ JsonDict = Dict[str, Any]
 class EvidenceSummary:
     completed_trials: int
     observation_count: int
-    artifact_count: int
+    candidate_count: int
     method_call_count: int
     scheduler_event_count: int
     method_event_count: int
     status_counts: JsonDict
     best_trial_id: Optional[str]
-    best_artifact_id: Optional[str]
+    best_candidate_id: Optional[str]
     best_metric: Optional[float]
     primary_metric_name: str
     primary_metric_direction: str
@@ -47,8 +47,8 @@ class EvidenceView:
             trials = [trial for trial in trials if trial.get("status") == status]
         return _limit_tail(trials, limit)
 
-    def artifacts(self, limit: Optional[int] = None) -> List[JsonDict]:
-        return _limit_tail(self.store.read_artifacts(), limit)
+    def candidates(self, limit: Optional[int] = None) -> List[JsonDict]:
+        return _limit_tail(self.store.read_candidates(), limit)
 
     def record_streams(
         self,
@@ -57,14 +57,14 @@ class EvidenceView:
         limit: Optional[int] = None,
         status: Optional[str] = None,
         trial_id: Optional[str] = None,
-        artifact_id: Optional[str] = None,
+        candidate_id: Optional[str] = None,
     ) -> List[JsonDict]:
         """Return extracted record stream metadata from observations.
 
         Configured environments write CSV/JSONL/SQLite extracts as JSONL files
-        and attach a recordsToExtract report to each observation. This method
+        and attach a records report to each observation. This method
         gives methods and analysis tools a stable way to discover those streams
-        without walking observation artifacts by hand.
+        without walking observation output_files by hand.
         """
 
         streams: List[JsonDict] = []
@@ -73,7 +73,7 @@ class EvidenceView:
                 continue
             if trial_id is not None and observation.get("trial_id") != trial_id:
                 continue
-            if artifact_id is not None and observation.get("artifact_id") != artifact_id:
+            if candidate_id is not None and observation.get("candidate_id") != candidate_id:
                 continue
             for stream in _observation_record_streams(observation):
                 if name is not None and stream.get("name") != name:
@@ -86,7 +86,7 @@ class EvidenceView:
                         "contentRef": stream.get("contentRef"),
                         "record_count": stream.get("record_count"),
                         "trial_id": observation.get("trial_id"),
-                        "artifact_id": observation.get("artifact_id"),
+                        "candidate_id": observation.get("candidate_id"),
                         "status": observation.get("status"),
                         "observation_index": observation_index,
                     }
@@ -100,13 +100,13 @@ class EvidenceView:
         limit: Optional[int] = None,
         status: Optional[str] = None,
         trial_id: Optional[str] = None,
-        artifact_id: Optional[str] = None,
+        candidate_id: Optional[str] = None,
         newest_first: bool = False,
     ) -> List[JsonDict]:
         """Read rows from extracted record streams.
 
         Returned items wrap the original row in ``record`` and include stream,
-        trial, and artifact provenance. Missing content refs are skipped so a
+        trial, and output_file provenance. Missing content refs are skipped so a
         method can safely query partial historical evidence.
         """
 
@@ -115,7 +115,7 @@ class EvidenceView:
             name=name,
             status=status,
             trial_id=trial_id,
-            artifact_id=artifact_id,
+            candidate_id=candidate_id,
         ):
             content_ref = stream.get("contentRef")
             if not content_ref:
@@ -129,7 +129,7 @@ class EvidenceView:
                         "name": stream.get("name"),
                         "source": stream.get("source"),
                         "trial_id": stream.get("trial_id"),
-                        "artifact_id": stream.get("artifact_id"),
+                        "candidate_id": stream.get("candidate_id"),
                         "status": stream.get("status"),
                         "row_index": row_index,
                         "record": row,
@@ -174,7 +174,7 @@ class EvidenceView:
         limit: Optional[int] = None,
         status: Optional[str] = None,
         trial_id: Optional[str] = None,
-        artifact_id: Optional[str] = None,
+        candidate_id: Optional[str] = None,
         method_id: Optional[str] = None,
         event: Optional[str] = None,
         newest_first: bool = False,
@@ -194,8 +194,8 @@ class EvidenceView:
                     normalized,
                     status=status,
                     trial_id=trial_id,
-                    artifact_id=artifact_id,
-                method_id=method_id,
+                    candidate_id=candidate_id,
+                    method_id=method_id,
                     event=event,
                 ):
                     continue
@@ -207,7 +207,7 @@ class EvidenceView:
 
     def summary(self) -> EvidenceSummary:
         observations = self.store.read_observations()
-        artifacts = self.store.read_artifacts()
+        candidates = self.store.read_candidates()
         method_calls = self.store.read_method_calls()
         scheduler_events = self.scheduler_events()
         method_events = self.method_events()
@@ -216,7 +216,7 @@ class EvidenceView:
         status_counts: JsonDict = {}
         best_metric: Optional[float] = None
         best_trial_id: Optional[str] = None
-        best_artifact_id: Optional[str] = None
+        best_candidate_id: Optional[str] = None
         for observation in observations:
             status = observation.get("status", "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
@@ -227,17 +227,17 @@ class EvidenceView:
             if _is_better(metric, best_metric, direction):
                 best_metric = metric
                 best_trial_id = observation.get("trial_id")
-                best_artifact_id = observation.get("artifact_id")
+                best_candidate_id = observation.get("candidate_id")
         return EvidenceSummary(
             completed_trials=len(observations),
             observation_count=len(observations),
-            artifact_count=len(artifacts),
+            candidate_count=len(candidates),
             method_call_count=len(method_calls),
             scheduler_event_count=len(scheduler_events),
             method_event_count=len(method_events),
             status_counts=status_counts,
             best_trial_id=best_trial_id,
-            best_artifact_id=best_artifact_id,
+            best_candidate_id=best_candidate_id,
             best_metric=best_metric,
             primary_metric_name=primary_metric,
             primary_metric_direction=direction,
@@ -256,7 +256,7 @@ class EvidenceView:
             "recent_failures": [
                 {
                     "trial_id": observation.get("trial_id"),
-                    "artifact_id": observation.get("artifact_id"),
+                    "candidate_id": observation.get("candidate_id"),
                     "status": observation.get("status"),
                     "errors": observation.get("event_summary", {}).get("errors", []),
                 }
@@ -269,8 +269,8 @@ class EvidenceView:
             return self.store.read_observations()
         if event_type == "trial":
             return self.store.read_trials()
-        if event_type == "artifact":
-            return self.store.read_artifacts()
+        if event_type == "candidate":
+            return self.store.read_candidates()
         if event_type == "method_call":
             return self.store.read_method_calls()
         if event_type == "scheduler_event":
@@ -289,15 +289,15 @@ def _limit_tail(items: List[JsonDict], limit: Optional[int]) -> List[JsonDict]:
 
 
 def _observation_record_streams(observation: JsonDict) -> List[JsonDict]:
-    report = observation.get("event_summary", {}).get("recordsToExtract")
+    report = observation.get("event_summary", {}).get("records")
     if isinstance(report, dict) and isinstance(report.get("streams"), list):
         return [dict(stream) for stream in report["streams"] if isinstance(stream, dict)]
-    for artifact in observation.get("artifacts", []) or []:
-        if not isinstance(artifact, dict):
+    for output_file in observation.get("output_files", []) or []:
+        if not isinstance(output_file, dict):
             continue
-        if artifact.get("name") != "records_to_extract_report":
+        if output_file.get("name") != "records_to_extract_report":
             continue
-        path = artifact.get("path")
+        path = output_file.get("path")
         if not path:
             continue
         report_path = Path(path)
@@ -338,7 +338,7 @@ def _read_jsonl_rows(path: Path) -> List[JsonDict]:
 EVENT_TYPE_ALIASES = {
     "observations": "observation",
     "trials": "trial",
-    "artifacts": "artifact",
+    "candidates": "candidate",
     "method_calls": "method_call",
     "calls": "method_call",
     "scheduler_events": "scheduler_event",
@@ -348,7 +348,7 @@ EVENT_TYPE_ALIASES = {
 EVENT_TYPES = [
     "observation",
     "trial",
-    "artifact",
+    "candidate",
     "method_call",
     "scheduler_event",
     "method_event",
@@ -377,7 +377,7 @@ def _normalize_event_record(event_type: str, payload: JsonDict, source_index: in
         "source_index": source_index,
         "created_at": payload.get("created_at") or payload.get("finished_at") or payload.get("started_at"),
         "trial_id": payload.get("trial_id"),
-        "artifact_id": payload.get("artifact_id"),
+        "candidate_id": payload.get("candidate_id"),
         "method_id": payload.get("method_id"),
         "status": payload.get("status"),
         "event": payload.get("event"),
@@ -390,7 +390,7 @@ def _matches_event(
     *,
     status: Optional[str],
     trial_id: Optional[str],
-    artifact_id: Optional[str],
+    candidate_id: Optional[str],
     method_id: Optional[str],
     event: Optional[str],
 ) -> bool:
@@ -398,7 +398,7 @@ def _matches_event(
         return False
     if trial_id is not None and item.get("trial_id") != trial_id:
         return False
-    if artifact_id is not None and item.get("artifact_id") != artifact_id:
+    if candidate_id is not None and item.get("candidate_id") != candidate_id:
         return False
     if method_id is not None and item.get("method_id") != method_id:
         return False

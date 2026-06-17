@@ -134,7 +134,6 @@
                       <option value="local">local</option>
                       <option value="local_subprocess">local_subprocess</option>
                       <option value="container">container</option>
-                      <option value="custom">custom</option>
                     </select>
                   </label>
                   <label>
@@ -168,16 +167,6 @@
                     <input id="builderContainerBuildTag" type="text" placeholder="optpilot-study-runtime" />
                   </label>
                 </div>
-                <div id="customBackendFields" class="conditional-fields">
-                  <label>
-                    <span>Custom backend implementation</span>
-                    <input id="builderCustomBackendImplementation" type="text" placeholder="python:package.module:Backend" />
-                  </label>
-                  <label>
-                    <span>Custom backend config JSON</span>
-                    <textarea id="builderCustomBackendConfig" rows="3" placeholder='{"key": "value"}'></textarea>
-                  </label>
-                </div>
                 <div class="form-row">
                   <label>
                     <span>Timeout seconds</span>
@@ -199,7 +188,7 @@
               </form>
             </section>
             <section class="panel">
-              <div class="panel-header"><h2>Generated StudyConfig</h2></div>
+              <div class="panel-header"><h2>Generated Study Config</h2></div>
               <div id="builderValidation" class="validation-box"></div>
               <pre id="builderYaml" class="code-box yaml-preview"></pre>
             </section>

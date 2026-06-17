@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .execution import Evaluator, trial_spec_from_dict
 from .registry import resolve_component
-from .runner import _resolve_materialization_plan, _resolve_validation_rules
+from .runner import _resolve_materialization_spec, _resolve_validation_spec
 from .spec import StudySpec
 from .storage import LocalEvidenceStore
 
@@ -26,18 +26,18 @@ def main(argv=None) -> int:
     )
     store = LocalEvidenceStore.open_run_dir(Path(payload["run_dir"]))
 
-    target_cls = resolve_component("adapter", study_spec.target["adapter"]["implementation"])
-    target_adapter = target_cls(study_spec.target["adapter"], study_spec)
+    environment_cls = resolve_component("adapter", study_spec.environment["adapter"]["implementation"])
+    environment_adapter = environment_cls(study_spec.environment["adapter"], study_spec)
 
-    materializer_def = _resolve_materialization_plan(study_spec)
+    materializer_def = _resolve_materialization_spec(study_spec)
     materializer_cls = resolve_component("materializer", materializer_def["implementation"])
     materializer = materializer_cls(materializer_def, study_spec)
 
-    validator_def = _resolve_validation_rules(study_spec)
+    validator_def = _resolve_validation_spec(study_spec)
     validator_cls = resolve_component("validator", validator_def["implementation"])
     validator = validator_cls(validator_def, study_spec)
 
-    evaluator = Evaluator(study_spec, target_adapter, store, materializer, validator)
+    evaluator = Evaluator(study_spec, environment_adapter, store, materializer, validator)
     trial_spec = trial_spec_from_dict(payload["trial_spec"])
     observations = evaluator.run_trial(trial_spec)
 

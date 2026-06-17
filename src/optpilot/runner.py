@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .artifacts import normalize_optimizable_artifact
+from .candidate_materialization import normalize_candidate
 from .environment import build_environment_snapshot
 from .evidence import EvidenceView
 from .execution import Evaluator
@@ -62,24 +62,23 @@ class StudyRunner:
             "run_dir": str(store.run_dir),
             "candidate_store": str(store.run_dir / "candidates"),
             "candidate_store_dir": str(store.run_dir / "candidates"),
-            "artifact_store_dir": str(store.run_dir / "candidates"),
             "prompt_store_dir": str(store.run_dir / "prompts"),
-            "artifact_content_ref_mode": "absolute",
+            "candidate_content_ref_mode": "absolute",
             "prompt_content_ref_mode": "absolute",
-            "candidate_context": dict(self.study_spec.primary_artifact.get("candidateContext", {})),
+            "candidate_context": dict(self.study_spec.candidate.get("context", {})),
             "environment_interfaces": list(
-                self.study_spec.target.get("adapter", {}).get("config", {}).get("interfaces", [])
+                self.study_spec.environment.get("adapter", {}).get("config", {}).get("interfaces", [])
             ),
         }
 
-        target_cls = resolve_component("adapter", self.study_spec.target["adapter"]["implementation"])
-        target_adapter = target_cls(self.study_spec.target["adapter"], self.study_spec)
+        environment_cls = resolve_component("adapter", self.study_spec.environment["adapter"]["implementation"])
+        environment_adapter = environment_cls(self.study_spec.environment["adapter"], self.study_spec)
 
-        materializer_def = _resolve_materialization_plan(self.study_spec)
+        materializer_def = _resolve_materialization_spec(self.study_spec)
         materializer_cls = resolve_component("materializer", materializer_def["implementation"])
         materializer = materializer_cls(materializer_def, self.study_spec)
 
-        validator_def = _resolve_validation_rules(self.study_spec)
+        validator_def = _resolve_validation_spec(self.study_spec)
         validator_cls = resolve_component("validator", validator_def["implementation"])
         validator = validator_cls(validator_def, self.study_spec)
 
@@ -94,7 +93,7 @@ class StudyRunner:
         method_runtime = MethodRuntime(method_def, method_instance, store, self.study_spec)
 
         backend_def = self.study_spec.execution["backend"]
-        evaluator = Evaluator(self.study_spec, target_adapter, store, materializer, validator)
+        evaluator = Evaluator(self.study_spec, environment_adapter, store, materializer, validator)
         backend_cls = resolve_component("backend", backend_def["implementation"])
         backend = backend_cls(backend_def, evaluator, max_workers=self.study_spec.candidate_parallelism)
         scheduler_def = _resolve_scheduler(self.study_spec)
@@ -104,7 +103,7 @@ class StudyRunner:
         prior = _prior_run_state(evidence_view, previous_summary)
         best_metric: Optional[float] = prior["best_metric"]
         best_trial_id: Optional[str] = prior["best_trial_id"]
-        best_artifact_id: Optional[str] = prior["best_artifact_id"]
+        best_candidate_id: Optional[str] = prior["best_candidate_id"]
         completed_trials = prior["completed_trials"]
         started_at = previous_summary.get("started_at") or utc_now_iso()
         start_monotonic = time.monotonic()
@@ -137,17 +136,17 @@ class StudyRunner:
             configured_batch_size = int(method_def.get("config", {}).get("batchSize", 1) or 1)
             remaining = max_trials - completed_trials if max_trials else configured_batch_size
             batch_size = min(configured_batch_size, remaining) if max_trials else configured_batch_size
-            candidate_artifacts = method_runtime.propose(batch_size, study_state, evidence_view)
-            if not candidate_artifacts:
+            proposed_candidates = method_runtime.propose(batch_size, study_state, evidence_view)
+            if not proposed_candidates:
                 break
             trial_specs = []
-            for artifact in candidate_artifacts:
-                normalized_artifact = normalize_optimizable_artifact(artifact, self.study_spec, method_def["id"])
+            for candidate in proposed_candidates:
+                normalized_candidate = normalize_candidate(candidate, self.study_spec, method_def["id"])
                 trial_spec = TrialSpec(
                     trial_id=f"trial-{uuid.uuid4().hex[:12]}",
                     study_id=study_id,
                     method_id=method_def["id"],
-                    artifact=normalized_artifact,
+                    candidate=normalized_candidate,
                     instances=self.study_spec.build_instance_batch(rng),
                     objective=self.study_spec.objective,
                     resource_profile=_resolve_resource_profile(self.study_spec.execution, method_def),
@@ -171,7 +170,7 @@ class StudyRunner:
                 if _is_better(metric, best_metric, self.study_spec.primary_metric_direction, min_delta):
                     best_metric = metric
                     best_trial_id = observation.trial_id
-                    best_artifact_id = observation.artifact_id
+                    best_candidate_id = observation.candidate_id
                     no_improvement_count = 0
                 else:
                     no_improvement_count += 1
@@ -185,7 +184,7 @@ class StudyRunner:
             completed_trials=completed_trials,
             best_trial_id=best_trial_id,
             best_metric=best_metric,
-            best_artifact_id=best_artifact_id,
+            best_candidate_id=best_candidate_id,
             started_at=started_at,
             finished_at=utc_now_iso(),
             failure_count=failure_count,
@@ -265,10 +264,10 @@ def _resolve_sandbox_spec(execution: Dict[str, Any], method: Dict[str, Any]) -> 
     return SandboxSpec.from_dict(merged)
 
 
-def _resolve_materialization_plan(study_spec: StudySpec) -> Dict[str, Any]:
+def _resolve_materialization_spec(study_spec: StudySpec) -> Dict[str, Any]:
     return dict(
-        study_spec.primary_artifact.get(
-            "materializationPlan",
+        study_spec.candidate.get(
+            "materialization",
             {
                 "implementation": "builtin.parameter_to_config",
                 "config": {},
@@ -277,10 +276,10 @@ def _resolve_materialization_plan(study_spec: StudySpec) -> Dict[str, Any]:
     )
 
 
-def _resolve_validation_rules(study_spec: StudySpec) -> Dict[str, Any]:
+def _resolve_validation_spec(study_spec: StudySpec) -> Dict[str, Any]:
     return dict(
-        study_spec.primary_artifact.get(
-            "validationRules",
+        study_spec.candidate.get(
+            "validation",
             {
                 "implementation": "builtin.schema_validation",
                 "config": {"enforceBounds": False},
@@ -321,10 +320,10 @@ def _scheduler_identity(scheduler_def: Dict[str, Any]) -> Dict[str, Any]:
 def _build_run_policy(study_spec: StudySpec) -> Dict[str, Any]:
     scheduler_def = _resolve_scheduler(study_spec)
     return {
-        "target": {
-            "accessPolicy": study_spec.target.get("accessPolicy"),
-            "mutationPolicy": study_spec.target.get("mutationPolicy"),
-            "runtimeContract": dict(study_spec.target.get("runtimeContract", {})),
+        "environment": {
+            "accessPolicy": study_spec.environment.get("accessPolicy"),
+            "mutationPolicy": study_spec.environment.get("mutationPolicy"),
+            "runtimeContract": dict(study_spec.environment.get("runtimeContract", {})),
         },
         "execution": {
             "backend": _backend_identity(study_spec.execution.get("backend", {})),
@@ -352,7 +351,7 @@ def _prior_run_state(evidence_view: EvidenceView, previous_summary: Dict[str, An
         "failure_count": failure_count,
         "best_metric": previous_summary.get("best_metric", summary.best_metric),
         "best_trial_id": previous_summary.get("best_trial_id", summary.best_trial_id),
-        "best_artifact_id": previous_summary.get("best_artifact_id", summary.best_artifact_id),
+        "best_candidate_id": previous_summary.get("best_candidate_id", summary.best_candidate_id),
     }
 
 

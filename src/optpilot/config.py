@@ -2,7 +2,7 @@
 
 OptPilot users author public YAML files with `config: environment`,
 `config: method`, and `config: study`. The runner consumes an expanded internal
-StudySpec. This module validates the public configs and compiles them into that
+compiled study spec. This module validates the public configs and compiles them into that
 internal representation.
 """
 
@@ -29,10 +29,10 @@ METRIC_SOURCES = {"custom", "return", "file", "stdout", "sqlite"}
 INSTANCE_SOURCES = {"none", "inline", "files", "sampler"}
 OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
 AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
-BACKENDS = {"local", "local_subprocess", "external"}
-RUNTIME_SANDBOXES = {"host", "container", "external"}
+BACKENDS = {"local", "local_subprocess"}
+RUNTIME_SANDBOXES = {"host", "container"}
 EVIDENCE_LEVELS = {"minimal", "standard", "full"}
-ARTIFACT_STORAGE_MODES = {"reference", "copy"}
+OUTPUT_FILE_STORAGE_MODES = {"reference", "copy"}
 RECORD_SOURCES = {"custom", "jsonl", "csv", "sqlite_table", "sqlite_query"}
 PARAMETER_VALUE_TYPES = {"float", "int", "categorical", "bool", "string", "array", "object"}
 
@@ -75,18 +75,16 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
 
     return {
         "apiVersion": "optpilot/v1",
-        "kind": "StudySpec",
+        "config": "compiled_study",
         "metadata": {
             "name": str(study["name"]),
             "description": str(study.get("description", "")),
             "tags": list(study.get("tags", [])),
         },
-        "target": _compile_target(environment, environment_path, candidate),
+        "environment": _compile_environment(environment, environment_path, candidate),
         "objective": _compile_objective(study["objective"]),
-        "evaluationScope": _compile_instances(study.get("instances"), config_path),
-        "artifacts": {
-            "primaryArtifact": _compile_primary_artifact(environment, environment_path, candidate),
-        },
+        "instances": _compile_instances(study.get("instances"), config_path),
+        "candidate": _compile_candidate_contract(environment, environment_path, candidate),
         "method": compiled_method,
         "execution": execution,
         "evidence": _compile_evidence(study, config_path),
@@ -232,13 +230,13 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
         _require_field(entry, "to", f"{location} trialWorkspace")
         _ensure_safe_relative(entry["to"], f"{location} trialWorkspace.to", allow_dot=True)
 
-    for item in environment.get("artifacts", []) or []:
+    for item in environment.get("outputFiles", []) or []:
         if isinstance(item, str):
             continue
         if isinstance(item, dict):
-            _require_field(item, "path", f"{location} artifacts")
+            _require_field(item, "path", f"{location} outputFiles")
             continue
-        raise ValueError(f"{location} artifacts entries must be strings or objects.")
+        raise ValueError(f"{location} outputFiles entries must be strings or objects.")
 
 
 def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> None:
@@ -309,13 +307,13 @@ def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     if backend not in BACKENDS:
         raise ValueError(f"{location} execution.backend must be one of {sorted(BACKENDS)}.")
     _validate_runtime(execution.get("runtime", {}) or {}, f"{location} execution.runtime")
-    if backend == "external" and not (execution.get("adapter") or execution.get("settings")):
-        raise ValueError(f"{location} execution.backend external requires execution.adapter or execution.settings.")
     evidence = study.get("evidence", {}) or {}
     if evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
-    if evidence.get("artifactStorage", "reference") not in ARTIFACT_STORAGE_MODES:
-        raise ValueError(f"{location} evidence.artifactStorage must be one of {sorted(ARTIFACT_STORAGE_MODES)}.")
+    if evidence.get("outputFileStorage", "reference") not in OUTPUT_FILE_STORAGE_MODES:
+        raise ValueError(
+            f"{location} evidence.outputFileStorage must be one of {sorted(OUTPUT_FILE_STORAGE_MODES)}."
+        )
 
 
 def _validate_method_environment_compatibility(
@@ -358,8 +356,6 @@ def _normalize_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     candidate_format = candidate.get("format")
     normalized = deepcopy(candidate)
     normalized["format"] = candidate_format
-    normalized["type"] = candidate_format
-    normalized["artifactKind"] = candidate_format
     normalized.setdefault("description", "")
 
     if candidate_format == "parameters":
@@ -533,8 +529,6 @@ def _build_candidate_context(
     method_context = _resolve_method_context(environment.get("methodContext", {}) or {}, base_path)
     context = {
         "format": candidate["format"],
-        "type": candidate["format"],
-        "artifactKind": candidate["format"],
         "description": candidate.get("description", ""),
         "candidate": _public_candidate_context(candidate),
         "methodContext": method_context,
@@ -587,7 +581,7 @@ def _add_nested_paths(paths: set, prefix: str, value: Any) -> None:
         paths.add(prefix)
 
 
-def _compile_target(environment: Dict[str, Any], environment_path: Path | None, candidate: Dict[str, Any]) -> Dict[str, Any]:
+def _compile_environment(environment: Dict[str, Any], environment_path: Path | None, candidate: Dict[str, Any]) -> Dict[str, Any]:
     evaluator = deepcopy(environment["evaluator"])
     if evaluator.get("adapter"):
         adapter = {
@@ -602,10 +596,10 @@ def _compile_target(environment: Dict[str, Any], environment_path: Path | None, 
             "config": _configured_environment_adapter_config(environment, environment_path, candidate),
         }
     return {
-        "targetId": str(environment["id"]),
+        "environmentId": str(environment["id"]),
         "adapter": adapter,
         "accessPolicy": "CodeAwareReadOnly" if candidate["format"] == "files" else "SchemaAware",
-        "mutationPolicy": "StudyArtifactOnly" if candidate["format"] in {"files", "opaque"} else "NoMutation",
+        "mutationPolicy": "TrialWorkspaceOnly" if candidate["format"] in {"files", "opaque"} else "NoMutation",
         "runtimeContract": {
             "timeoutSeconds": int(evaluator.get("timeoutSeconds", 600) or 600),
         },
@@ -623,12 +617,12 @@ def _configured_environment_adapter_config(
     return {
         "evaluate": evaluator,
         "candidate": deepcopy(candidate),
-        "candidateContext": _build_candidate_context(candidate, environment, environment_path),
+        "context": _build_candidate_context(candidate, environment, environment_path),
         "interfaces": [],
         "metrics": _compile_metrics_config(environment["metrics"]),
         "workspace": workspace,
-        "filesToSave": _compile_artifact_rules(environment.get("artifacts", []) or []),
-        "recordsToExtract": _compile_record_rules(environment.get("records", []) or []),
+        "outputFiles": _compile_output_file_rules(environment.get("outputFiles", []) or []),
+        "records": _compile_record_rules(environment.get("records", []) or []),
     }
 
 
@@ -645,7 +639,7 @@ def _compile_evaluator_config(evaluator: Dict[str, Any], base_path: Path) -> Dic
     elif evaluator.get("command"):
         result.update({"type": "command", "command": list(evaluator["command"])})
     else:
-        raise ValueError("evaluator.adapter is compiled as a custom target adapter, not configured_environment.")
+        raise ValueError("evaluator.adapter is compiled as a custom environment adapter, not configured_environment.")
     return result
 
 
@@ -670,13 +664,13 @@ def _compile_record_rules(records: Iterable[Dict[str, Any]]) -> list:
     return compiled
 
 
-def _compile_artifact_rules(artifacts: Iterable[Any]) -> list:
+def _compile_output_file_rules(output_files: Iterable[Any]) -> list:
     compiled = []
-    for artifact in artifacts:
-        if isinstance(artifact, str):
-            compiled.append(artifact)
-        elif isinstance(artifact, dict):
-            compiled.append(deepcopy(artifact))
+    for output_file in output_files:
+        if isinstance(output_file, str):
+            compiled.append(output_file)
+        elif isinstance(output_file, dict):
+            compiled.append(deepcopy(output_file))
     return compiled
 
 
@@ -706,7 +700,7 @@ def _resolve_method_context(method_context: Dict[str, Any], base_path: Path) -> 
     return resolved
 
 
-def _compile_primary_artifact(
+def _compile_candidate_contract(
     environment: Dict[str, Any],
     environment_path: Path | None,
     candidate: Dict[str, Any],
@@ -714,10 +708,10 @@ def _compile_primary_artifact(
     if candidate["format"] == "parameters":
         parameters = candidate.get("parameters", {})
         return {
-            "kind": "parameters",
-            "candidateContext": _build_candidate_context(candidate, environment, environment_path),
-            "materializationPlan": {"implementation": "builtin.parameter_to_config", "config": {}},
-            "validationRules": {
+            "format": "parameters",
+            "context": _build_candidate_context(candidate, environment, environment_path),
+            "materialization": {"implementation": "builtin.parameter_to_config", "config": {}},
+            "validation": {
                 "implementation": "builtin.schema_validation",
                 "config": {
                     "enforceBounds": bool(parameters.get("schema")),
@@ -738,13 +732,13 @@ def _compile_primary_artifact(
             "allowAbsoluteContentRefs": True,
         }
         return {
-            "kind": "files",
-            "candidateContext": _build_candidate_context(candidate, environment, environment_path),
-            "materializationPlan": {
+            "format": "files",
+            "context": _build_candidate_context(candidate, environment, environment_path),
+            "materialization": {
                 "implementation": "builtin.workspace_bundle",
                 "config": materializer_config,
             },
-            "validationRules": {
+            "validation": {
                 "implementation": "builtin.workspace_policy",
                 "config": {
                     "requireHashes": True,
@@ -757,10 +751,10 @@ def _compile_primary_artifact(
             },
         }
     return {
-        "kind": "opaque",
-        "candidateContext": _build_candidate_context(candidate, environment, environment_path),
-        "materializationPlan": {"implementation": "builtin.parameter_to_config", "config": {}},
-        "validationRules": {"implementation": "builtin.schema_validation", "config": {"enforceBounds": False}},
+        "format": "opaque",
+        "context": _build_candidate_context(candidate, environment, environment_path),
+        "materialization": {"implementation": "builtin.parameter_to_config", "config": {}},
+        "validation": {"implementation": "builtin.schema_validation", "config": {"enforceBounds": False}},
     }
 
 
@@ -797,7 +791,7 @@ def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate:
 def _compile_accepts(accepts: Dict[str, Any]) -> Dict[str, Any]:
     requires = accepts.get("requires", {}) or {}
     return {
-        "candidateTypes": list(accepts.get("formats", []) or []),
+        "formats": list(accepts.get("formats", []) or []),
         "requiredContext": list(requires.get("context", []) or []),
         "requiredCapabilities": list(requires.get("capabilities", []) or []),
     }
@@ -861,10 +855,6 @@ def _compile_execution(
     backend = execution.get("backend", "local")
     runtime = _merge_runtime(environment.get("runtime", {}) or {}, execution.get("runtime", {}) or {})
     sandbox = runtime.get("sandbox", "host")
-    if backend == "external":
-        raise ValueError("execution.backend external is not implemented yet.")
-    if sandbox == "external":
-        raise ValueError("runtime.sandbox external is not implemented yet.")
     if sandbox == "container" and backend != "local":
         raise ValueError("runtime.sandbox container is currently supported only with execution.backend local.")
 
@@ -926,9 +916,9 @@ def _compile_evidence(study: Dict[str, Any], study_path: Path) -> Dict[str, Any]
     compiled = {
         "store": {
             "metadataBackend": "local_json",
-            "artifactBackend": "local_fs",
+            "outputFileBackend": "local_fs",
         },
-        "artifactStorage": evidence.get("artifactStorage", "reference"),
+        "outputFileStorage": evidence.get("outputFileStorage", "reference"),
         "retention": _retention_for_level(level),
         "capture": {
             "methodCalls": level in {"standard", "full"},

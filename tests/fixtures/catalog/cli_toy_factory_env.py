@@ -11,7 +11,7 @@ from .toy_factory_env import evaluate
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli-toy-factory-env")
-    parser.add_argument("--artifact", required=True)
+    parser.add_argument("--candidate", required=True)
     parser.add_argument("--instance", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--instance-index", type=int, default=0)
@@ -20,10 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    artifact_path = Path(args.artifact)
+    candidate_path = Path(args.candidate)
     instance_path = Path(args.instance)
     output_path = Path(args.output)
-    candidate = json.loads(artifact_path.read_text(encoding="utf-8"))
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     instance = json.loads(instance_path.read_text(encoding="utf-8"))
     result = evaluate(
         candidate,

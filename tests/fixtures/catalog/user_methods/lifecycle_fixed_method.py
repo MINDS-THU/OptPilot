@@ -47,17 +47,17 @@ class LifecycleFixedParameterMethod:
 
     def finalize(self, handle: str) -> Dict[str, Any]:
         run = self._runs[handle]
-        artifact_kind = self.study_spec.primary_artifact.get("kind", "parameter_spec")
-        artifacts = []
+        candidate_format = self.study_spec.candidate.get("format", "parameters")
+        candidates = []
         for index in range(run["n_candidates"]):
             spec = dict(self.candidates[index % len(self.candidates)])
-            artifacts.append(
+            candidates.append(
                 {
-                    "artifact_id": f"lifecycle-artifact-{uuid.uuid4().hex[:12]}",
-                    "artifact_kind": artifact_kind,
+                    "candidate_id": f"lifecycle-candidate-{uuid.uuid4().hex[:12]}",
+                    "format": candidate_format,
                     "spec": spec,
                     "lineage": {"parents": [], "source": "tests.fixtures.catalog.user_methods.lifecycle_fixed_method"},
-                    "generator_record": {
+                    "generator": {
                         "method_id": self.definition["id"],
                         "strategy": "lifecycle_fixed_parameter_user_method",
                         "owned_by": "user",
@@ -65,5 +65,4 @@ class LifecycleFixedParameterMethod:
                     },
                 }
             )
-        return {"artifacts": artifacts}
-
+        return {"candidates": candidates}

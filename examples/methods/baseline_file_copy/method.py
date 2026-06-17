@@ -11,14 +11,14 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from optpilot.code_artifacts import CodeArtifactStore, CodeFileMapping
+from optpilot.candidate_files import CandidateFileStore, CandidateFileMapping
 
 
 class BaselineFileCopyMethod:
     def __init__(self, definition: Dict[str, Any], study_spec, rng):
         self.definition = definition
         self.study_spec = study_spec
-        self.candidate_context = dict(study_spec.primary_artifact.get("candidateContext", {}))
+        self.candidate_context = dict(study_spec.candidate.get("context", {}))
         self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
             raise ValueError("BaselineFileCopyMethod requires files.editable or files.required candidate context.")
@@ -30,21 +30,20 @@ class BaselineFileCopyMethod:
         if self._emitted or n_candidates <= 0:
             return []
         runtime_context = dict(study_state.get("runtime_context", {}))
-        artifact_store_dir = runtime_context.get("artifact_store_dir")
-        if not artifact_store_dir:
-            raise ValueError("BaselineFileCopyMethod requires runtime_context.artifact_store_dir.")
-        artifact_store = CodeArtifactStore(
-            artifact_store_dir,
-            content_ref_mode=runtime_context.get("artifact_content_ref_mode", "absolute"),
+        candidate_store_dir = runtime_context.get("candidate_store_dir")
+        if not candidate_store_dir:
+            raise ValueError("BaselineFileCopyMethod requires runtime_context.candidate_store_dir.")
+        candidate_store = CandidateFileStore(
+            candidate_store_dir,
+            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
         )
         self._emitted = True
         return [
-            artifact_store.store_files(
-                [CodeFileMapping(source=self.source_files[path], path=path) for path in self.target_files],
-                artifact_id=f"baseline-{uuid.uuid4().hex[:12]}",
-                artifact_kind=str(self.study_spec.primary_artifact["kind"]),
+            candidate_store.store_files(
+                [CandidateFileMapping(source=self.source_files[path], path=path) for path in self.target_files],
+                candidate_id=f"baseline-{uuid.uuid4().hex[:12]}",
                 lineage={"parents": [], "source": "baseline_source_tree"},
-                generator_record={
+                generator={
                     "method_id": self.definition["id"],
                     "strategy": "baseline_file_copy",
                     "owned_by": "example",

@@ -15,10 +15,10 @@ from pathlib import Path
 
 import yaml
 
-from optpilot.artifacts import BoundsArtifactValidator, CodeArtifactManifestValidator, WorkspaceBundleMaterializer
+from optpilot.candidate_materialization import BoundsCandidateValidator, FileCandidateManifestValidator, WorkspaceBundleMaterializer
 from optpilot.adapters import ReadOnlySQLiteQuery
 from optpilot.cli import build_parser, main as cli_main
-from optpilot.code_artifacts import CodeArtifactStore, store_code_file
+from optpilot.candidate_files import CandidateFileStore, store_candidate_file
 from optpilot.config import compile_authoring_config
 from optpilot.evidence import EvidenceView
 from optpilot.environment import build_environment_snapshot
@@ -57,14 +57,14 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue((run_dir / "method_calls.jsonl").exists())
             self.assertTrue((run_dir / "scheduler_events.jsonl").exists())
             self.assertTrue((run_dir / "trials.jsonl").exists())
-            self.assertTrue((run_dir / "artifacts.jsonl").exists())
+            self.assertTrue((run_dir / "candidates.jsonl").exists())
             self.assertTrue((run_dir / "run_policy.json").exists())
             self.assertTrue((run_dir / "environment_snapshot.json").exists())
 
             summary_payload = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             environment_snapshot = json.loads((run_dir / "environment_snapshot.json").read_text(encoding="utf-8"))
             self.assertEqual(summary_payload["completed_trials"], 12)
-            self.assertEqual(summary_payload["policy"]["target"]["accessPolicy"], "SchemaAware")
+            self.assertEqual(summary_payload["policy"]["environment"]["accessPolicy"], "SchemaAware")
             self.assertIn("python", environment_snapshot)
             self.assertIn("platform", environment_snapshot)
             self.assertIn("packages", environment_snapshot)
@@ -76,14 +76,14 @@ class MvpIntegrationTest(unittest.TestCase):
             trials = self._read_jsonl(run_dir / "trials.jsonl")
             scheduler_events = self._read_jsonl(run_dir / "scheduler_events.jsonl")
             method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
-            artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
+            candidates = self._read_jsonl(run_dir / "candidates.jsonl")
             run_policy = json.loads((run_dir / "run_policy.json").read_text(encoding="utf-8"))
             self.assertEqual(len(observations), 12)
             self.assertEqual(len(trials), 12)
             self.assertEqual(len(scheduler_events), 6)
             self.assertEqual(len(method_calls), 6)
-            self.assertEqual(len(artifacts), 12)
-            self.assertEqual(run_policy["target"]["mutationPolicy"], "NoMutation")
+            self.assertEqual(len(candidates), 12)
+            self.assertEqual(run_policy["environment"]["mutationPolicy"], "NoMutation")
             self.assertEqual(run_policy["execution"]["backend"]["implementation"], "builtin.local_backend")
             self.assertEqual(run_policy["execution"]["scheduler"]["implementation"], "builtin.local_scheduler")
             self.assertEqual(scheduler_events[0]["event"], "batch_submitted")
@@ -91,10 +91,10 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(scheduler_events[1]["observation_count"], 4)
             self.assertEqual(method_calls[0]["event"], "proposed")
             self.assertEqual(method_calls[1]["event"], "observed")
-            self.assertEqual(artifacts[0]["validation"]["accepted"], True)
-            self.assertEqual(artifacts[0]["materialization"]["runtime_spec"], artifacts[0]["spec"])
-            self.assertIn("materialization_plan", artifacts[0])
-            self.assertIn("validation_rules", artifacts[0])
+            self.assertEqual(candidates[0]["validation"]["accepted"], True)
+            self.assertEqual(candidates[0]["materialization"]["runtime_spec"], candidates[0]["spec"])
+            self.assertIn("materialization_spec", candidates[0])
+            self.assertIn("validation_spec", candidates[0])
             self.assertIn("backend_identity", trials[0])
             self.assertIn("scheduler_identity", trials[0])
             for observation in observations:
@@ -111,14 +111,14 @@ class MvpIntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(observation["provenance"]["resource_profile"]["timeoutSeconds"], 120)
                 self.assertEqual(observation["provenance"]["sandbox_spec"]["cleanupPolicy"], "always")
-                for artifact in observation["artifacts"]:
-                    self.assertTrue(Path(artifact["path"]).exists())
+                for output_file in observation["output_files"]:
+                    self.assertTrue(Path(output_file["path"]).exists())
 
     def test_distribution_scope_is_reproducible(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-distribution-repro"
-        base_spec["evaluationScope"] = {
+        base_spec["instances"] = {
             "mode": "Distribution",
             "definition": {
                 "sampleCount": 3,
@@ -155,7 +155,7 @@ class MvpIntegrationTest(unittest.TestCase):
         base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-instance-set-minimize"
         base_spec["objective"]["primaryMetric"] = {"name": "cycle_time", "direction": "minimize"}
-        base_spec["evaluationScope"] = {
+        base_spec["instances"] = {
             "mode": "InstanceSet",
             "definition": {
                 "instanceRefs": ["instance_a.yaml", "instance_b.yaml"],
@@ -178,7 +178,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(summary.best_metric, best_cycle_time)
             for observation in observations:
                 self.assertEqual(observation["instance_descriptor"]["count"], 2)
-                self.assertGreaterEqual(len(observation["artifacts"]), 2)
+                self.assertGreaterEqual(len(observation["output_files"]), 2)
 
     def test_documented_objective_aggregation_modes(self) -> None:
         instance_results = [
@@ -250,7 +250,7 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-parallel-check"
-        base_spec["evaluationScope"] = {
+        base_spec["instances"] = {
             "mode": "FixedInstance",
             "definition": {
                 "instance": {"target_x": 4.2, "target_y": 7, "sleep_seconds": 0.2},
@@ -287,7 +287,7 @@ class MvpIntegrationTest(unittest.TestCase):
             pyproject.write_text("[project]\nname = 'demo'\n", encoding="utf-8")
             lockfile.write_text("version = 1\n", encoding="utf-8")
             requirements.write_text("pyyaml\n", encoding="utf-8")
-            spec_path.write_text("kind: StudySpec\n", encoding="utf-8")
+            spec_path.write_text("config: compiled_study\n", encoding="utf-8")
 
             snapshot = build_environment_snapshot(study_spec_path=spec_path)
             dependencies = {Path(item["path"]).name: item for item in snapshot["dependency_files"]}
@@ -301,15 +301,15 @@ class MvpIntegrationTest(unittest.TestCase):
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
         study_spec = StudySpec(path=spec_path, raw=raw_spec)
-        validator = BoundsArtifactValidator(
-            raw_spec["artifacts"]["primaryArtifact"]["validationRules"],
+        validator = BoundsCandidateValidator(
+            raw_spec["candidate"]["validation"],
             study_spec,
         )
 
         report = validator.validate(
             {
-                "artifact_id": "artifact-invalid",
-                "artifact_kind": "parameter_spec",
+                "candidate_id": "candidate-invalid",
+                "format": "parameters",
                 "spec": {"x": 99.0, "y": 7, "mode": "balanced"},
             },
             {},
@@ -411,18 +411,18 @@ class MvpIntegrationTest(unittest.TestCase):
 
             raw_spec = compile_authoring_config(study_path)
             study_spec = StudySpec(path=study_path, raw=raw_spec)
-            validator = BoundsArtifactValidator(raw_spec["artifacts"]["primaryArtifact"]["validationRules"], study_spec)
+            validator = BoundsCandidateValidator(raw_spec["candidate"]["validation"], study_spec)
             report = validator.validate(
                 {
-                    "artifact_id": "artifact-constrained",
-                    "artifact_kind": "parameter_spec",
+                    "candidate_id": "candidate-constrained",
+                    "format": "parameters",
                     "spec": {"x": 2.0, "mode": "fast"},
                 },
                 {},
             )
 
             self.assertEqual(raw_spec["method"]["config"]["searchSpace"]["x"]["max"], 10.0)
-            self.assertEqual(raw_spec["artifacts"]["primaryArtifact"]["candidateContext"]["parameters"]["schema"]["mode"]["values"], ["safe", "fast"])
+            self.assertEqual(raw_spec["candidate"]["context"]["parameters"]["schema"]["mode"]["values"], ["safe", "fast"])
             self.assertFalse(report.accepted)
             self.assertTrue(any("fast_requires_large_x" in error for error in report.errors))
 
@@ -487,7 +487,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "id": "file-editor",
                         "description": "File editor.",
                         "entrypoint": {
-                            "python": "tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
+                            "python": "tests.fixtures.catalog.user_methods.file_candidate_method:FileCandidateMethod",
                             "protocol": "batch",
                         },
                         "accepts": {
@@ -519,10 +519,10 @@ class MvpIntegrationTest(unittest.TestCase):
             )
 
             raw_spec = compile_authoring_config(study_path)
-            candidate_context = raw_spec["artifacts"]["primaryArtifact"]["candidateContext"]
-            adapter_config = raw_spec["target"]["adapter"]["config"]
+            candidate_context = raw_spec["candidate"]["context"]
+            adapter_config = raw_spec["environment"]["adapter"]["config"]
 
-            self.assertEqual(raw_spec["artifacts"]["primaryArtifact"]["kind"], "files")
+            self.assertEqual(raw_spec["candidate"]["format"], "files")
             self.assertEqual(candidate_context["files"]["editable"][0]["path"], "solver.py")
             self.assertEqual(candidate_context["files"]["root"], "candidate")
             self.assertEqual(candidate_context["methodContext"]["instructions"], [str(instructions.resolve())])
@@ -531,7 +531,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(adapter_config["workspace"]["copy"][1]["from"], str(database.resolve()))
             self.assertEqual(adapter_config["workspace"]["copy"][1]["to"], "database.db")
             self.assertEqual(
-                raw_spec["artifacts"]["primaryArtifact"]["validationRules"]["config"]["requiredFiles"],
+                raw_spec["candidate"]["validation"]["config"]["requiredFiles"],
                 ["solver.py"],
             )
 
@@ -550,10 +550,10 @@ class MvpIntegrationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Only SELECT/WITH"):
                 query.query("delete from events")
 
-    def test_code_bundle_manifest_validator_accepts_file_refs_and_hashes(self) -> None:
+    def test_file_candidate_manifest_validator_accepts_file_refs_and_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            bundle_dir = tmp_path / "artifacts" / "artifact-code-001" / "files"
+            bundle_dir = tmp_path / "candidates" / "candidate-code-001" / "files"
             bundle_dir.mkdir(parents=True)
             solver_path = bundle_dir / "solver.py"
             helper_path = bundle_dir / "utils" / "helper.py"
@@ -561,26 +561,26 @@ class MvpIntegrationTest(unittest.TestCase):
             solver_path.write_text("from utils.helper import score\n\ndef solve(x):\n    return score(x)\n", encoding="utf-8")
             helper_path.write_text("def score(x):\n    return x + 1\n", encoding="utf-8")
             study_spec = StudySpec(path=tmp_path / "study.yaml", raw={})
-            validator = CodeArtifactManifestValidator(
+            validator = FileCandidateManifestValidator(
                 {"implementation": "builtin.workspace_policy"},
                 study_spec,
             )
 
             report = validator.validate(
                 {
-                    "artifact_id": "artifact-code-001",
-                    "artifact_kind": "code_bundle",
+                    "candidate_id": "candidate-code-001",
+                    "format": "files",
                     "spec": {
-                        "bundleRef": "artifacts/artifact-code-001/files",
+                        "bundleRef": "candidates/candidate-code-001/files",
                         "files": [
                             {
                                 "path": "solver.py",
-                                "contentRef": "artifacts/artifact-code-001/files/solver.py",
+                                "contentRef": "candidates/candidate-code-001/files/solver.py",
                                 "sha256": self._sha256(solver_path),
                             },
                             {
                                 "path": "utils/helper.py",
-                                "contentRef": "artifacts/artifact-code-001/files/utils/helper.py",
+                                "contentRef": "candidates/candidate-code-001/files/utils/helper.py",
                                 "sha256": self._sha256(helper_path),
                             },
                         ],
@@ -596,24 +596,28 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_code_manifest_validator_rejects_inline_content_and_unsafe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            source_path = tmp_path / "artifacts" / "artifact-code-002" / "files" / "solver.py"
+            source_path = tmp_path / "candidates" / "candidate-code-002" / "files" / "solver.py"
             source_path.parent.mkdir(parents=True)
             source_path.write_text("def solve(x):\n    return x\n", encoding="utf-8")
             study_spec = StudySpec(path=tmp_path / "study.yaml", raw={})
-            validator = CodeArtifactManifestValidator(
+            validator = FileCandidateManifestValidator(
                 {"implementation": "builtin.workspace_policy"},
                 study_spec,
             )
 
             report = validator.validate(
                 {
-                    "artifact_id": "artifact-code-002",
-                    "artifact_kind": "code_file",
+                    "candidate_id": "candidate-code-002",
+                    "format": "files",
                     "spec": {
-                        "path": "../solver.py",
-                        "content": "def solve(x): return x",
-                        "contentRef": "artifacts/artifact-code-002/files/solver.py",
-                        "sha256": self._sha256(source_path),
+                        "files": [
+                            {
+                                "path": "../solver.py",
+                                "content": "def solve(x): return x",
+                                "contentRef": "candidates/candidate-code-002/files/solver.py",
+                                "sha256": self._sha256(source_path),
+                            }
+                        ],
                     },
                 },
                 {},
@@ -623,7 +627,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(any("Inline source content is not allowed" in error for error in report.errors))
             self.assertTrue(any("safe relative POSIX path" in error for error in report.errors))
 
-    def test_code_artifact_store_creates_bundle_manifest_without_inline_content(self) -> None:
+    def test_candidate_file_store_creates_manifest_without_inline_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             generated = tmp_path / "generated"
@@ -633,76 +637,76 @@ class MvpIntegrationTest(unittest.TestCase):
             (generated / "utils" / "helper.py").write_text("def score(x):\n    return x + 1\n", encoding="utf-8")
             (generated / "__pycache__").mkdir()
             (generated / "__pycache__" / "ignored.pyc").write_bytes(b"ignored")
-            artifact_root = tmp_path / "artifact-store"
-            store = CodeArtifactStore(artifact_root, content_ref_mode="absolute")
+            artifact_root = tmp_path / "candidate-store"
+            store = CandidateFileStore(artifact_root, content_ref_mode="absolute")
 
-            artifact = store.store_directory(
+            candidate = store.store_directory(
                 generated,
-                artifact_id="artifact-generated-001",
+                candidate_id="candidate-generated-001",
                 entrypoint="solver:solve",
-                generator_record={"method_id": "llm_method", "strategy": "unit_test"},
+                generator={"method_id": "llm_method", "strategy": "unit_test"},
             )
 
             study_spec = StudySpec(path=tmp_path / "study.yaml", raw={})
-            validator = CodeArtifactManifestValidator(
+            validator = FileCandidateManifestValidator(
                 {
                     "implementation": "builtin.workspace_policy",
                     "config": {"allowAbsoluteContentRefs": True},
                 },
                 study_spec,
             )
-            report = validator.validate(artifact, {})
+            report = validator.validate(candidate, {})
 
             self.assertTrue(report.accepted, report.errors)
-            self.assertEqual(artifact["artifact_kind"], "code_bundle")
-            self.assertEqual(artifact["spec"]["entrypoint"], "solver:solve")
-            self.assertEqual(len(artifact["spec"]["files"]), 2)
-            self.assertFalse(self._contains_key(artifact, "content"))
-            self.assertTrue((artifact_root / "artifact-generated-001" / "files" / "utils" / "helper.py").exists())
+            self.assertEqual(candidate["format"], "files")
+            self.assertEqual(candidate["spec"]["entrypoint"], "solver:solve")
+            self.assertEqual(len(candidate["spec"]["files"]), 2)
+            self.assertFalse(self._contains_key(candidate, "content"))
+            self.assertTrue((artifact_root / "candidate-generated-001" / "files" / "utils" / "helper.py").exists())
 
-    def test_code_artifact_store_supports_single_file_relative_refs(self) -> None:
+    def test_candidate_file_store_supports_single_file_relative_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             generated = tmp_path / "solver.py"
             generated.write_text("def solve(x):\n    return x\n", encoding="utf-8")
-            artifact = store_code_file(
+            candidate = store_candidate_file(
                 generated,
-                tmp_path / "artifacts",
-                artifact_id="artifact-single-file",
+                tmp_path / "candidates",
+                candidate_id="candidate-single-file",
                 path="solver.py",
                 content_ref_mode="relative",
                 content_ref_base=tmp_path,
             )
 
             study_spec = StudySpec(path=tmp_path / "study.yaml", raw={})
-            validator = CodeArtifactManifestValidator(
+            validator = FileCandidateManifestValidator(
                 {"implementation": "builtin.workspace_policy"},
                 study_spec,
             )
-            report = validator.validate(artifact, {})
+            report = validator.validate(candidate, {})
 
             self.assertTrue(report.accepted, report.errors)
-            self.assertEqual(artifact["artifact_kind"], "code_file")
-            self.assertEqual(artifact["spec"]["path"], "solver.py")
+            self.assertEqual(candidate["format"], "files")
+            self.assertEqual(candidate["spec"]["files"][0]["path"], "solver.py")
             self.assertEqual(
-                artifact["spec"]["contentRef"],
-                "artifacts/artifact-single-file/files/solver.py",
+                candidate["spec"]["files"][0]["contentRef"],
+                "candidates/candidate-single-file/files/solver.py",
             )
 
-    def test_code_artifact_store_rejects_unsafe_paths(self) -> None:
+    def test_candidate_file_store_rejects_unsafe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             source = tmp_path / "solver.py"
             source.write_text("def solve(x):\n    return x\n", encoding="utf-8")
-            store = CodeArtifactStore(tmp_path / "artifacts")
+            store = CandidateFileStore(tmp_path / "candidates")
 
-            with self.assertRaisesRegex(ValueError, "Unsafe code artifact path"):
+            with self.assertRaisesRegex(ValueError, "Unsafe candidate file path"):
                 store.store_files(
                     [{"source": source, "path": "../solver.py"}],
-                    artifact_id="artifact-unsafe",
+                    candidate_id="candidate-unsafe",
                 )
 
-            self.assertFalse((tmp_path / "artifacts" / "artifact-unsafe").exists())
+            self.assertFalse((tmp_path / "candidates" / "candidate-unsafe").exists())
 
     def test_prompt_store_builds_prompt_and_model_generator_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -727,7 +731,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 parameters={"temperature": 0.2},
                 invocation_id="invocation-001",
             )
-            generator_record = build_generator_record(
+            generator = build_generator_record(
                 method_id="llm_method",
                 strategy="code_evolution",
                 prompt_record=prompt_record,
@@ -738,14 +742,14 @@ class MvpIntegrationTest(unittest.TestCase):
             prompt_path = tmp_path / prompt_record["contentRef"]
             self.assertTrue(prompt_path.exists())
             self.assertEqual(prompt_record["sha256"], self._sha256(prompt_path))
-            self.assertEqual(generator_record["prompt_record_id"], "prompt-unit")
-            self.assertEqual(generator_record["model_record"]["model"], "gpt-5")
-            self.assertNotIn("Improve the solver", json.dumps(generator_record))
+            self.assertEqual(generator["prompt_record_id"], "prompt-unit")
+            self.assertEqual(generator["model_record"]["model"], "gpt-5")
+            self.assertNotIn("Improve the solver", json.dumps(generator))
 
     def test_workspace_bundle_materializer_writes_candidate_files_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            source_dir = tmp_path / "artifacts" / "artifact-code-003" / "files"
+            source_dir = tmp_path / "candidates" / "candidate-code-003" / "files"
             source_dir.mkdir(parents=True)
             solver_path = source_dir / "solver.py"
             solver_path.write_text("def solve(x):\n    return x * 2\n", encoding="utf-8")
@@ -772,14 +776,14 @@ class MvpIntegrationTest(unittest.TestCase):
 
             record = materializer.materialize(
                 {
-                    "artifact_id": "artifact-code-003",
-                    "artifact_kind": "code_bundle",
+                    "candidate_id": "candidate-code-003",
+                    "format": "files",
                     "spec": {
-                        "bundleRef": "artifacts/artifact-code-003/files",
+                        "bundleRef": "candidates/candidate-code-003/files",
                         "files": [
                             {
                                 "path": "solver.py",
-                                "contentRef": "artifacts/artifact-code-003/files/solver.py",
+                                "contentRef": "candidates/candidate-code-003/files/solver.py",
                                 "sha256": self._sha256(solver_path),
                             }
                         ],
@@ -835,12 +839,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
 
-    def test_cli_target_adapter_runs_and_captures_process_evidence(self) -> None:
+    def test_cli_environment_adapter_runs_and_captures_process_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
         raw_spec["stopping"]["maxTrials"] = 4
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -852,14 +856,14 @@ class MvpIntegrationTest(unittest.TestCase):
             summary = run_expanded_study_spec(str(temp_spec), output_root=tmp_dir)
             run_dir = Path(summary.run_dir)
             observations = self._read_jsonl(run_dir / "observations.jsonl")
-            artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
+            candidates = self._read_jsonl(run_dir / "candidates.jsonl")
 
             self.assertEqual(summary.completed_trials, 4)
             self.assertEqual(len(observations), 4)
-            self.assertEqual(len(artifacts), 4)
+            self.assertEqual(len(candidates), 4)
             first_observation = observations[0]
             self.assertEqual(first_observation["provenance"]["backend_identity"]["implementation"], "builtin.local_backend")
-            artifact_names = {artifact["name"]: artifact for artifact in first_observation["artifacts"] if "name" in artifact}
+            artifact_names = {candidate["name"]: candidate for candidate in first_observation["output_files"] if "name" in candidate}
             self.assertIn("candidate_payload", artifact_names)
             self.assertIn("instance", artifact_names)
             self.assertIn("metrics", artifact_names)
@@ -867,7 +871,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("stderr", artifact_names)
             stdout_path = Path(artifact_names["stdout"]["path"])
             self.assertIn("wrote", stdout_path.read_text(encoding="utf-8"))
-            self.assertEqual(artifacts[0]["materialization"]["runtime_spec"], artifacts[0]["spec"])
+            self.assertEqual(candidates[0]["materialization"]["runtime_spec"], candidates[0]["spec"])
 
     def test_user_owned_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -876,13 +880,13 @@ class MvpIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(spec_path), output_root=tmp_dir)
             observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
-            artifacts = self._read_jsonl(Path(summary.run_dir) / "artifacts.jsonl")
+            candidates = self._read_jsonl(Path(summary.run_dir) / "candidates.jsonl")
 
             self.assertEqual(summary.completed_trials, 3)
             self.assertEqual(summary.best_metric, max(item["metric_values"]["throughput"] for item in observations))
-            self.assertEqual(artifacts[0]["generator_record"]["owned_by"], "user")
+            self.assertEqual(candidates[0]["generator"]["owned_by"], "user")
             self.assertEqual(
-                observations[0]["provenance"]["generator_record"]["strategy"],
+                observations[0]["provenance"]["generator"]["strategy"],
                 "fixed_parameter_user_method",
             )
 
@@ -899,11 +903,11 @@ class MvpIntegrationTest(unittest.TestCase):
                         "candidates = []",
                         "for index in range(int(request['n_candidates'])):",
                         "    candidates.append({",
-                        "        'artifact_id': f\"cmd-stdin-{index}\",",
-                        "        'artifact_kind': 'parameter_spec',",
+                        "        'candidate_id': f\"cmd-stdin-{index}\",",
+                        "        'format': 'parameters',",
                         "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
                         "        'lineage': {'parents': []},",
-                        "        'generator_record': {'method_id': 'command-stdin-method', 'strategy': 'stdin_command'},",
+                        "        'generator': {'method_id': 'command-stdin-method', 'strategy': 'stdin_command'},",
                         "    })",
                         "json.dump({",
                         "    'candidates': candidates,",
@@ -981,12 +985,12 @@ class MvpIntegrationTest(unittest.TestCase):
                         "response_path = pathlib.Path(sys.argv[2])",
                         "request = json.loads(request_path.read_text(encoding='utf-8'))",
                         "response_path.write_text(json.dumps({",
-                        "    'artifacts': [{",
-                        "        'artifact_id': 'cmd-file-0',",
-                        "        'artifact_kind': 'parameter_spec',",
+                        "    'candidates': [{",
+                        "        'candidate_id': 'cmd-file-0',",
+                        "        'format': 'parameters',",
                         "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
                         "        'lineage': {'parents': []},",
-                        "        'generator_record': {'method_id': 'command-file-method', 'strategy': request['request_id']},",
+                        "        'generator': {'method_id': 'command-file-method', 'strategy': request['request_id']},",
                         "    }],",
                         "}), encoding='utf-8')",
                     ]
@@ -1037,11 +1041,11 @@ class MvpIntegrationTest(unittest.TestCase):
 
             summary = run_study(str(study_path), output_root=tmp_dir)
             method_calls = self._read_jsonl(Path(summary.run_dir) / "method_calls.jsonl")
-            artifacts = self._read_jsonl(Path(summary.run_dir) / "artifacts.jsonl")
+            candidates = self._read_jsonl(Path(summary.run_dir) / "candidates.jsonl")
 
             self.assertEqual(summary.completed_trials, 1)
             self.assertEqual(method_calls[0]["event"], "completed")
-            self.assertEqual(artifacts[0]["generator_record"]["method_id"], "command-file-method")
+            self.assertEqual(candidates[0]["generator"]["method_id"], "command-file-method")
             self.assertTrue(Path(method_calls[0]["payload"]["output_path"]).exists())
 
     def test_command_method_can_run_inside_container_runtime(self) -> None:
@@ -1057,12 +1061,12 @@ class MvpIntegrationTest(unittest.TestCase):
                         "response_path = pathlib.Path(sys.argv[2])",
                         "request = json.loads(request_path.read_text(encoding='utf-8'))",
                         "response_path.write_text(json.dumps({",
-                        "    'artifacts': [{",
-                        "        'artifact_id': 'cmd-container-0',",
-                        "        'artifact_kind': 'parameter_spec',",
+                        "    'candidates': [{",
+                        "        'candidate_id': 'cmd-container-0',",
+                        "        'format': 'parameters',",
                         "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
                         "        'lineage': {'parents': []},",
-                        "        'generator_record': {'method_id': 'command-container-method', 'strategy': request['request_id']},",
+                        "        'generator': {'method_id': 'command-container-method', 'strategy': request['request_id']},",
                         "    }],",
                         "    'method_events': [{'event': 'container_method_finished'}],",
                         "}), encoding='utf-8')",
@@ -1197,7 +1201,7 @@ class MvpIntegrationTest(unittest.TestCase):
             run_dir = Path(summary.run_dir)
             method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
             method_events = self._read_jsonl(run_dir / "method_events.jsonl")
-            artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
+            candidates = self._read_jsonl(run_dir / "candidates.jsonl")
             fake_invocations = [json.loads(line) for line in fake_log.read_text(encoding="utf-8").splitlines()]
 
             self.assertEqual(summary.completed_trials, 1)
@@ -1206,7 +1210,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(method_calls[1]["payload"]["runtime"]["container_image"], "optpilot-method-test-image")
             self.assertEqual(method_calls[1]["payload"]["runtime"]["build"]["status"], "built")
             self.assertEqual(method_events[0]["event"], "container_method_finished")
-            self.assertEqual(artifacts[0]["artifact_id"], "cmd-container-0")
+            self.assertEqual(candidates[0]["candidate_id"], "cmd-container-0")
             self.assertEqual(fake_invocations[0][0], "build")
             self.assertIn("--build-arg", fake_invocations[0])
             self.assertIn("optpilot-method-test-image", fake_invocations[-1])
@@ -1522,9 +1526,15 @@ class MvpIntegrationTest(unittest.TestCase):
             ),
             (
                 {
-                    "execution": {"backend": "external", "parallelism": 1},
+                    "execution": {"backend": "remote", "parallelism": 1},
                 },
-                "external requires execution.adapter or execution.settings",
+                "execution.backend",
+            ),
+            (
+                {
+                    "execution": {"backend": "local", "runtime": {"sandbox": "external"}},
+                },
+                "execution.runtime.sandbox",
             ),
             (
                 {
@@ -1562,7 +1572,7 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-resume-run"
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["method"]["config"]["batchSize"] = 1
@@ -1590,7 +1600,7 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-branch-run"
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["method"]["config"]["batchSize"] = 1
@@ -1608,7 +1618,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(lineage["mode"], "branch")
             self.assertEqual(lineage["parent"]["run_dir"], parent.run_dir)
 
-    def test_user_owned_code_artifact_method_uses_run_artifact_store(self) -> None:
+    def test_user_owned_file_candidate_method_uses_run_candidate_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             source_dir = tmp_path / "candidate_source"
@@ -1632,12 +1642,12 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             spec = {
                 "apiVersion": "optpilot/v1",
-                "kind": "StudySpec",
-                "metadata": {"name": "code-artifact-method"},
-                "target": {
-                    "targetId": "code-artifact-evaluator",
+                "config": "compiled_study",
+                "metadata": {"name": "code-candidate-method"},
+                "environment": {
+                    "environmentId": "file-candidate-evaluator",
                     "accessPolicy": "CodeAwareReadOnly",
-                    "mutationPolicy": "StudyArtifactOnly",
+                    "mutationPolicy": "TrialWorkspaceOnly",
                     "adapter": {
                         "implementation": "builtin.configured_environment",
                         "config": {
@@ -1652,57 +1662,49 @@ class MvpIntegrationTest(unittest.TestCase):
                                     "{metrics_file}",
                                 ],
                             },
-                            "candidate": {"type": "files", "required": ["solver.py"]},
+                            "candidate": {"format": "files", "required": ["solver.py"]},
                             "metrics": {"source": "file", "path": "metrics.json"},
                         },
                     },
                     "runtimeContract": {"timeoutSeconds": 30},
                 },
                 "objective": {"primaryMetric": {"name": "score", "direction": "maximize"}},
-                "evaluationScope": {"mode": "FixedInstance", "definition": {"instance": {}}},
-                "artifacts": {
-                    "primaryArtifact": {
-                        "kind": "code_bundle",
-                        "candidateContext": {
-                            "type": "files",
-                            "artifactKind": "code_bundle",
-                            "description": "Generated code source.",
-                            "files": {
-                                "root": ".",
-                                "source": {"type": "workspace_copy", "root": "."},
-                                "editable": [
-                                    {"path": "solver.py", "language": "python", "role": "solver"}
-                                ],
-                                "required": ["solver.py"],
-                                "allow": ["solver.py"],
-                                "deny": [],
-                            },
-                            "workspace": {
-                                "copy": [
-                                    {"from": str(source_dir), "to": ".", "role": "source"}
-                                ]
-                            },
-                            "exposure": {},
-                            "interfaces": [],
+                "instances": {"mode": "FixedInstance", "definition": {"instance": {}}},
+                "candidate": {
+                    "format": "files",
+                    "context": {
+                        "description": "Generated code source.",
+                        "candidate": {"format": "files"},
+                        "files": {
+                            "root": ".",
+                            "editable": [{"path": "solver.py", "role": "solver"}],
+                            "required": ["solver.py"],
+                            "allow": ["solver.py"],
+                            "deny": [],
                         },
-                        "validationRules": {
-                            "implementation": "builtin.workspace_policy",
-                            "config": {"allowAbsoluteContentRefs": True},
+                        "workspace": {
+                            "copy": [
+                                {"from": str(source_dir), "to": "."}
+                            ]
                         },
-                        "materializationPlan": {
-                            "implementation": "builtin.workspace_bundle",
-                            "config": {
-                                "candidateRoot": ".",
-                                "allowAbsoluteContentRefs": True,
-                            },
+                    },
+                    "validation": {
+                        "implementation": "builtin.workspace_policy",
+                        "config": {"allowAbsoluteContentRefs": True},
+                    },
+                    "materialization": {
+                        "implementation": "builtin.workspace_bundle",
+                        "config": {
+                            "candidateRoot": ".",
+                            "allowAbsoluteContentRefs": True,
                         },
-                    }
+                    },
                 },
                 "method": {
                     "id": "code_method",
                     "implementation": {
                         "type": "python",
-                        "callable": "python:tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
+                        "callable": "python:tests.fixtures.catalog.user_methods.file_candidate_method:FileCandidateMethod",
                         "protocol": "optpilot.method.batch.v1",
                     },
                     "config": {
@@ -1719,25 +1721,25 @@ class MvpIntegrationTest(unittest.TestCase):
                     "scheduler": {"implementation": "builtin.local_scheduler", "config": {}},
                     "parallelism": {"candidateParallelism": 1},
                 },
-                "evidence": {"store": {"implementation": "builtin.local_jsonl", "config": {}}},
-                "reproducibility": {"seed": 0},
+                "evidence": {"store": {"metadataBackend": "local_json", "outputFileBackend": "local_fs"}},
+                "reproducibility": {"seedPolicy": {"globalSeed": 0}},
                 "stopping": {"maxTrials": 1},
             }
             spec_path = tmp_path / "code_method.yaml"
             spec_path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
 
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
-            artifacts = self._read_jsonl(Path(summary.run_dir) / "artifacts.jsonl")
+            candidates = self._read_jsonl(Path(summary.run_dir) / "candidates.jsonl")
             observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
 
             self.assertEqual(summary.best_metric, 42.0)
             self.assertEqual(observations[0]["metric_values"]["score"], 42.0)
-            content_ref = artifacts[0]["spec"]["files"][0]["contentRef"]
+            content_ref = candidates[0]["spec"]["files"][0]["contentRef"]
             self.assertIn(str(Path(summary.run_dir) / "candidates"), content_ref)
             self.assertTrue(Path(content_ref).exists())
-            prompt_record = artifacts[0]["generator_record"]["prompt_record"]
+            prompt_record = candidates[0]["generator"]["prompt_record"]
             self.assertTrue(Path(prompt_record["contentRef"]).exists())
-            self.assertEqual(artifacts[0]["generator_record"]["model_record"]["model"], "example-code-model")
+            self.assertEqual(candidates[0]["generator"]["model_record"]["model"], "example-code-model")
 
     def test_user_owned_lifecycle_method_loads_through_python_hook(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1747,20 +1749,20 @@ class MvpIntegrationTest(unittest.TestCase):
             summary = run_study(str(spec_path), output_root=tmp_dir)
             run_dir = Path(summary.run_dir)
             observations = self._read_jsonl(run_dir / "observations.jsonl")
-            artifacts = self._read_jsonl(run_dir / "artifacts.jsonl")
+            candidates = self._read_jsonl(run_dir / "candidates.jsonl")
             method_calls = self._read_jsonl(run_dir / "method_calls.jsonl")
 
             self.assertEqual(summary.completed_trials, 2)
             self.assertEqual(len(observations), 2)
-            self.assertEqual(len(artifacts), 2)
+            self.assertEqual(len(candidates), 2)
             self.assertEqual(
                 [snapshot["event"] for snapshot in method_calls],
                 ["started", "polled", "finalized", "observed"],
             )
             self.assertEqual(method_calls[0]["payload"]["interface"], "lifecycle")
-            self.assertEqual(artifacts[0]["generator_record"]["owned_by"], "user")
+            self.assertEqual(candidates[0]["generator"]["owned_by"], "user")
             self.assertEqual(
-                observations[0]["provenance"]["generator_record"]["strategy"],
+                observations[0]["provenance"]["generator"]["strategy"],
                 "lifecycle_fixed_parameter_user_method",
             )
 
@@ -1770,7 +1772,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-container-backend"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -1874,25 +1876,25 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("optpilot-test-image", fake_invocations[-1])
             self.assertIn("--network", fake_invocations[-1])
 
-    def test_study_spec_rejects_unknown_target_policy(self) -> None:
+    def test_study_spec_rejects_unknown_environment_policy(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
-        raw_spec["target"]["accessPolicy"] = "MagicAccess"
+        raw_spec["environment"]["accessPolicy"] = "MagicAccess"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "bad_policy.yaml"
             spec_path.write_text(yaml.safe_dump(raw_spec, sort_keys=False), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "Unsupported target.accessPolicy"):
+            with self.assertRaisesRegex(ValueError, "Unsupported environment.accessPolicy"):
                 load_expanded_study_spec(str(spec_path))
 
     def test_invalid_artifact_records_invalid_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
-        raw_spec["metadata"]["name"] = "toy-invalid-artifact"
+        raw_spec["metadata"]["name"] = "toy-invalid-candidate"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["method"]["config"]["candidates"] = [{"x": 99.0, "y": 7, "mode": "balanced"}]
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -1902,13 +1904,13 @@ class MvpIntegrationTest(unittest.TestCase):
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
             observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
             trials = self._read_jsonl(Path(summary.run_dir) / "trials.jsonl")
-            artifacts = self._read_jsonl(Path(summary.run_dir) / "artifacts.jsonl")
+            candidates = self._read_jsonl(Path(summary.run_dir) / "candidates.jsonl")
 
             self.assertEqual(summary.completed_trials, 1)
             self.assertIsNone(summary.best_metric)
             self.assertEqual(observations[0]["status"], "invalid")
             self.assertEqual(trials[0]["status"], "invalid")
-            self.assertFalse(artifacts[0]["validation"]["accepted"])
+            self.assertFalse(candidates[0]["validation"]["accepted"])
             self.assertEqual(observations[0]["event_summary"]["error"]["phase"], "validation")
 
     def test_max_failures_stops_study_after_failed_trial(self) -> None:
@@ -1922,7 +1924,7 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 99.0, "y": 7, "mode": "balanced"},
             {"x": 4.2, "y": 7, "mode": "balanced"},
         ]
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -1948,10 +1950,10 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-cli-failure"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["command"] = [
             "python3",
             "-c",
             "import sys; sys.stderr.write('boom'); sys.exit(3)",
@@ -1967,7 +1969,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(summary.completed_trials, 1)
             self.assertEqual(observations[0]["status"], "failed")
             self.assertEqual(trials[0]["status"], "failed")
-            self.assertEqual(observations[0]["event_summary"]["errors"][0]["phase"], "target_evaluation")
+            self.assertEqual(observations[0]["event_summary"]["errors"][0]["phase"], "environment_evaluation")
             self.assertIn("exit code 3", observations[0]["event_summary"]["errors"][0]["message"])
 
     def test_invalid_target_output_records_failed_observation(self) -> None:
@@ -1976,10 +1978,10 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-invalid-target-output"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["callable"] = "tests.fixtures.bad_targets:non_numeric_metric"
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["callable"] = "tests.fixtures.bad_targets:non_numeric_metric"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "invalid_target_output.yaml"
@@ -1989,7 +1991,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
             self.assertIsNone(summary.best_metric)
             self.assertEqual(observations[0]["status"], "failed")
-            self.assertEqual(observations[0]["event_summary"]["errors"][0]["phase"], "target_evaluation")
+            self.assertEqual(observations[0]["event_summary"]["errors"][0]["phase"], "environment_evaluation")
             self.assertIn("must be numeric", observations[0]["event_summary"]["errors"][0]["message"])
 
     def test_cli_timeout_records_timeout_observation_without_crashing(self) -> None:
@@ -1998,11 +2000,11 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-cli-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["timeoutSeconds"] = 1
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["timeoutSeconds"] = 1
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["command"] = [
             "python3",
             "-c",
             "import time; time.sleep(2)",
@@ -2024,14 +2026,14 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-resource-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
         raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
-        raw_spec["target"]["runtimeContract"] = {"timeoutSeconds": 30}
-        raw_spec["target"]["adapter"]["config"]["evaluate"].pop("timeoutSeconds", None)
-        raw_spec["target"]["adapter"]["config"]["evaluate"]["command"] = [
+        raw_spec["environment"]["runtimeContract"] = {"timeoutSeconds": 30}
+        raw_spec["environment"]["adapter"]["config"]["evaluate"].pop("timeoutSeconds", None)
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["command"] = [
             "{python}",
             "-c",
             "import time; time.sleep(2)",
@@ -2114,7 +2116,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -2136,7 +2138,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-subprocess-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["evaluationScope"] = {
+        raw_spec["instances"] = {
             "mode": "FixedInstance",
             "definition": {
                 "instance": {"target_x": 4.2, "target_y": 7, "sleep_seconds": 5.0},
@@ -2145,7 +2147,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
         raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
-        raw_spec["target"]["runtimeContract"] = {"timeoutSeconds": 30}
+        raw_spec["environment"]["runtimeContract"] = {"timeoutSeconds": 30}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "subprocess_timeout.yaml"
@@ -2185,10 +2187,10 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             spec = {
                 "apiVersion": "optpilot/v1",
-                "kind": "StudySpec",
+                "config": "compiled_study",
                 "metadata": {"name": "retry-policy-check"},
-                "target": {
-                    "targetId": "flaky-target",
+                "environment": {
+                    "environmentId": "flaky-environment",
                     "accessPolicy": "InvocationOnly",
                     "mutationPolicy": "NoMutation",
                     "adapter": {
@@ -2205,23 +2207,22 @@ class MvpIntegrationTest(unittest.TestCase):
                                     "{metrics_file}",
                                 ],
                             },
-                            "candidate": {"type": "parameters"},
+                            "candidate": {"format": "parameters"},
                             "metrics": {"source": "file", "path": "metrics.json"},
                         },
                     },
                     "runtimeContract": {"timeoutSeconds": 30},
                 },
                 "objective": {"primaryMetric": {"name": "score", "direction": "maximize"}},
-                "evaluationScope": {"mode": "FixedInstance", "definition": {"instance": {}}},
-                "artifacts": {
-                    "primaryArtifact": {
-                        "kind": "parameter_spec",
-                        "validationRules": {
-                            "implementation": "builtin.schema_validation",
-                            "config": {"enforceBounds": False},
-                        },
-                        "materializationPlan": {"implementation": "builtin.parameter_to_config", "config": {}},
-                    }
+                "instances": {"mode": "FixedInstance", "definition": {"instance": {}}},
+                "candidate": {
+                    "format": "parameters",
+                    "context": {"candidate": {"format": "parameters"}},
+                    "validation": {
+                        "implementation": "builtin.schema_validation",
+                        "config": {"enforceBounds": False},
+                    },
+                    "materialization": {"implementation": "builtin.parameter_to_config", "config": {}},
                 },
                 "method": {
                     "id": "method",
@@ -2240,8 +2241,8 @@ class MvpIntegrationTest(unittest.TestCase):
                     },
                     "parallelism": {"candidateParallelism": 1},
                 },
-                "evidence": {"store": {"implementation": "builtin.local_jsonl", "config": {}}},
-                "reproducibility": {"seed": 0},
+                "evidence": {"store": {"metadataBackend": "local_json", "outputFileBackend": "local_fs"}},
+                "reproducibility": {"seedPolicy": {"globalSeed": 0}},
                 "stopping": {"maxTrials": 1},
             }
             spec_path = tmp_path / "retry.yaml"
@@ -2270,7 +2271,7 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 4.2, "y": 7, "mode": "balanced"},
             {"x": 99.0, "y": 7, "mode": "balanced"},
         ]
-        raw_spec["evaluationScope"]["definition"]["instanceRef"] = str(
+        raw_spec["instances"]["definition"]["instanceRef"] = str(
             repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
         )
 
@@ -2323,11 +2324,11 @@ class MvpIntegrationTest(unittest.TestCase):
             store.record_observation(
                 {
                     "trial_id": "trial-a",
-                    "artifact_id": "artifact-a",
+                    "candidate_id": "candidate-a",
                     "status": "success",
                     "metric_values": {"throughput": 12.5},
                     "event_summary": {
-                        "recordsToExtract": {
+                        "records": {
                             "streams": [
                                 {
                                     "name": "machine_events",
@@ -2344,13 +2345,13 @@ class MvpIntegrationTest(unittest.TestCase):
             store.record_observation(
                 {
                     "trial_id": "trial-b",
-                    "artifact_id": "artifact-b",
+                    "candidate_id": "candidate-b",
                     "status": "failed",
                     "metric_values": {},
-                    "event_summary": {"errors": [{"phase": "target_evaluation"}]},
+                    "event_summary": {"errors": [{"phase": "environment_evaluation"}]},
                 }
             )
-            store.record_artifact({"artifact_id": "artifact-a"})
+            store.record_candidate({"candidate_id": "candidate-a"})
             store.record_method_call({"method_id": "method-a", "event": "proposed"})
             store.record_scheduler_event({"event": "batch_submitted"})
             store.record_method_event({"method_id": "method-a", "event": "debug"})
@@ -2367,7 +2368,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
             self.assertEqual(len(store.read_observations()), 2)
             self.assertEqual(summary.observation_count, 2)
-            self.assertEqual(summary.artifact_count, 1)
+            self.assertEqual(summary.candidate_count, 1)
             self.assertEqual(summary.method_call_count, 1)
             self.assertEqual(summary.scheduler_event_count, 1)
             self.assertEqual(summary.method_event_count, 1)
@@ -2411,7 +2412,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(any(item["label"] == "sa-openai-file-editor" for item in catalog["studies"]))
         self.assertIn("builtin.reference_random_search", catalog["builtins"]["method"])
         self.assertTrue(validation["valid"], validation)
-        self.assertEqual(validation["target_id"], "sa-simulator-code-edit")
+        self.assertEqual(validation["environment_id"], "sa-simulator-code-edit")
 
     def test_ui_default_catalog_roots_are_examples_and_user_catalog(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2521,28 +2522,6 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["image"], "python:3.11-slim")
             self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["executable"], "docker")
 
-            custom_draft = _draft_study(
-                state,
-                {
-                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
-                    "name": "ui-custom-draft",
-                    "metric": "throughput",
-                    "direction": "maximize",
-                    "maxTrials": 1,
-                    "backend": "external",
-                    "customBackendImplementation": "tests.fixtures.bad_targets:CustomAdapter",
-                    "customBackendConfig": '{"queue": "local"}',
-                    "parallelism": 1,
-                    "timeoutSeconds": 120,
-                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
-                },
-            )
-            self.assertFalse(custom_draft["validation"]["valid"], custom_draft)
-            self.assertIn("external is not implemented yet", custom_draft["validation"]["errors"][0])
-            self.assertEqual(custom_draft["draft"]["execution"]["adapter"], "tests.fixtures.bad_targets:CustomAdapter")
-            self.assertEqual(custom_draft["draft"]["execution"]["settings"], {"queue": "local"})
-
     def test_ui_config_editor_reads_and_writes_workspace_text_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(dir=repo_root) as tmp_dir:
@@ -2571,7 +2550,7 @@ class MvpIntegrationTest(unittest.TestCase):
             store.record_observation(
                 {
                     "trial_id": "trial-ok",
-                    "artifact_id": "artifact-ok",
+                    "candidate_id": "candidate-ok",
                     "status": "success",
                     "metric_values": {"throughput": 10.0},
                 }
@@ -2583,7 +2562,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "completed_trials": 1,
                     "best_metric": 10.0,
                     "best_trial_id": "trial-ok",
-                    "best_artifact_id": "artifact-ok",
+                    "best_candidate_id": "candidate-ok",
                     "failure_count": 0,
                 }
             )

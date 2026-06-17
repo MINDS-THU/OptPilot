@@ -21,7 +21,7 @@ class LocalEvidenceStore:
             self.run_dir = Path(run_dir).resolve()
             self.run_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        (self.run_dir / "artifacts").mkdir(exist_ok=True)
+        (self.run_dir / "output_files").mkdir(exist_ok=True)
         (self.run_dir / "candidates").mkdir(exist_ok=True)
         (self.run_dir / "trials").mkdir(exist_ok=True)
 
@@ -50,8 +50,8 @@ class LocalEvidenceStore:
     def record_method_event(self, event: Dict[str, Any]) -> None:
         self._append_jsonl(self.run_dir / "method_events.jsonl", event)
 
-    def record_artifact(self, artifact: Dict[str, Any]) -> None:
-        self._append_jsonl(self.run_dir / "artifacts.jsonl", artifact)
+    def record_candidate(self, candidate: Dict[str, Any]) -> None:
+        self._append_jsonl(self.run_dir / "candidates.jsonl", candidate)
 
     def record_trial(self, trial: Dict[str, Any]) -> None:
         self._append_jsonl(self.run_dir / "trials.jsonl", trial)
@@ -76,8 +76,8 @@ class LocalEvidenceStore:
     def read_method_events(self) -> List[Dict[str, Any]]:
         return self._read_jsonl(self.run_dir / "method_events.jsonl")
 
-    def read_artifacts(self) -> List[Dict[str, Any]]:
-        return self._read_jsonl(self.run_dir / "artifacts.jsonl")
+    def read_candidates(self) -> List[Dict[str, Any]]:
+        return self._read_jsonl(self.run_dir / "candidates.jsonl")
 
     def read_trials(self) -> List[Dict[str, Any]]:
         return self._read_jsonl(self.run_dir / "trials.jsonl")

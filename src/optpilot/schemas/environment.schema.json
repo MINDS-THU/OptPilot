@@ -67,9 +67,9 @@
       "type": "array",
       "items": {"$ref": "defs/metrics.schema.json#/definitions/record"}
     },
-    "artifacts": {
+    "outputFiles": {
       "type": "array",
-      "items": {"$ref": "defs/metrics.schema.json#/definitions/artifact"}
+      "items": {"$ref": "defs/metrics.schema.json#/definitions/outputFile"}
     },
     "capabilities": {
       "type": "array",

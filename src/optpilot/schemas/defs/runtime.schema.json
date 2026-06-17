@@ -7,7 +7,7 @@
       "additionalProperties": false,
       "properties": {
         "sandbox": {
-          "enum": ["host", "container", "external"]
+          "enum": ["host", "container"]
         },
         "container": {
           "type": "object",

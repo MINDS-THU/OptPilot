@@ -53,4 +53,4 @@ export OPENROUTER_API_KEY=...
 uv run optpilot run examples/studies/sa_openai_file_editor.yaml
 ```
 
-The OpenAI-compatible method is user-owned example code. It demonstrates how an LLM-style workflow can propose file artifacts while OptPilot owns evaluation and evidence capture.
+The OpenAI-compatible method is user-owned example code. It demonstrates how an LLM-style workflow can propose file candidates while OptPilot owns evaluation and evidence capture.

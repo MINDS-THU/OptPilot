@@ -58,9 +58,6 @@ function cacheElements() {
     "builderContainerBuildContext",
     "builderContainerBuildDockerfile",
     "builderContainerBuildTag",
-    "customBackendFields",
-    "builderCustomBackendImplementation",
-    "builderCustomBackendConfig",
     "builderParallelism",
     "builderTimeout",
     "builderOutputRoot",
@@ -277,8 +274,7 @@ function renderEnvironmentDetail() {
     ${entityHeader(env)}
     <div class="detail-grid">
       ${kvPanel("Candidate Contract", [
-        ["Type", env.summary.candidate_type],
-        ["Artifact kind", env.summary.artifact_kind],
+        ["Format", env.summary.candidate_format],
         ["Metrics", (env.summary.metrics || []).join(", ") || "-"],
         ["Evaluator", env.summary.evaluate_type],
       ])}
@@ -350,8 +346,7 @@ function renderMethodDetail() {
         ["Network", method.summary.runtime && method.summary.runtime.networkPolicy],
       ])}
       ${kvPanel("Compatibility", [
-        ["Candidate types", (method.summary.candidate_types || []).join(", ")],
-        ["Artifact kinds", (method.summary.artifact_kinds || []).join(", ")],
+        ["Candidate formats", (method.summary.candidate_formats || []).join(", ")],
         ["Capabilities", (method.summary.required_capabilities || []).join(", ") || "-"],
       ])}
     </div>
@@ -429,7 +424,6 @@ function renderBuilderCompatibility() {
 function renderBackendFields() {
   const backend = els.builderBackend.value;
   els.containerBackendFields.classList.toggle("active", backend === "container");
-  els.customBackendFields.classList.toggle("active", backend === "custom");
 }
 
 async function generateDraft() {
@@ -457,7 +451,7 @@ async function launchDraft(event) {
       launched: true,
       name: launched.job.study_name,
       path: launched.job.study_path,
-      target_id: launched.job.target_id,
+      environment_id: launched.job.environment_id,
       job_id: launched.job.job_id,
     });
     await loadRunsAndJobs();
@@ -481,8 +475,6 @@ function builderPayload() {
     containerBuildContext: els.builderContainerBuildContext.value.trim(),
     containerBuildDockerfile: els.builderContainerBuildDockerfile.value.trim(),
     containerBuildTag: els.builderContainerBuildTag.value.trim(),
-    customBackendImplementation: els.builderCustomBackendImplementation.value.trim(),
-    customBackendConfig: els.builderCustomBackendConfig.value.trim(),
     parallelism: Number(els.builderParallelism.value || 1),
     timeoutSeconds: Number(els.builderTimeout.value || 120),
     instances: els.builderInstances.value,
@@ -499,7 +491,7 @@ function renderDraft(result) {
 
 function renderRuns() {
   const query = els.runFilter.value.trim().toLowerCase();
-  const runs = state.runs.filter((run) => `${run.name} ${run.path} ${run.status} ${run.target_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
+  const runs = state.runs.filter((run) => `${run.name} ${run.path} ${run.status} ${run.environment_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
   els.totalRuns.textContent = String(state.runs.length);
   els.runningRuns.textContent = String(state.runs.filter((run) => run.status === "running").length);
   els.completedTrials.textContent = String(sum(state.runs.map((run) => Number(run.completed_trials || 0))));
@@ -548,7 +540,7 @@ async function loadRunDetail(runId, options = {}) {
 function renderRunDetail() {
   const detail = state.selectedRun;
   if (!detail) {
-    els.runDetail.innerHTML = emptyState("Select a run to inspect observations, artifacts, events, and files.");
+    els.runDetail.innerHTML = emptyState("Select a run to inspect observations, candidates, events, and files.");
     return;
   }
   const run = detail.run;
@@ -568,7 +560,7 @@ function renderRunDetail() {
     </div>
     ${metricChart(detail.observations || [], run.objective && run.objective.name)}
     <div class="tabs">
-      ${["overview", "trials", "artifacts", "events", "runtime", "files"].map((tab) => `<button class="tab ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button">${capitalize(tab)}</button>`).join("")}
+      ${["overview", "trials", "candidates", "events", "runtime", "files"].map((tab) => `<button class="tab ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button">${tabLabel(tab)}</button>`).join("")}
     </div>
     <div class="tab-content">${runTabContent(detail)}</div>
   `;
@@ -590,24 +582,24 @@ function renderRunDetail() {
 function runTabContent(detail) {
   if (state.activeRunTab === "overview") {
     return kvPanel("Run", [
-      ["Environment", detail.run.target_id],
+      ["Environment", detail.run.environment_id],
       ["Objective", `${detail.run.objective && detail.run.objective.name || "-"} ${detail.run.objective && detail.run.objective.direction || ""}`],
       ["Best trial", detail.run.best_trial_id],
-      ["Best artifact", detail.run.best_artifact_id],
+      ["Best candidate", detail.run.best_candidate_id],
     ]);
   }
   if (state.activeRunTab === "trials") {
     return tableFromRows(trialRows(detail), [
       ["trial_id", "Trial"],
       ["status", "Status"],
-      ["artifact_id", "Artifact"],
+      ["candidate_id", "Candidate"],
       ["backend", "Backend"],
       ["budget", "Budget"],
       ["error", "Error"],
     ]);
   }
-  if (state.activeRunTab === "artifacts") {
-    return tableFromRows(detail.artifacts || [], [["artifact_id", "Artifact"], ["artifact_kind", "Kind"], ["validation", "Validation"], ["generator_record", "Generator"]]);
+  if (state.activeRunTab === "candidates") {
+    return tableFromRows((detail.candidates || []).map(candidateRecord), [["candidate_id", "Candidate"], ["format", "Format"], ["validation", "Validation"], ["generator", "Generator"]]);
   }
   if (state.activeRunTab === "events") {
     const events = [
@@ -634,12 +626,21 @@ function trialRows(detail) {
     return {
       trial_id: trial.trial_id,
       status: trial.status || observation.status,
-      artifact_id: trial.artifact_id || observation.artifact_id,
+      candidate_id: trial.candidate_id || observation.candidate_id,
       backend: backendSummary(trial.backend_worker || observation.provenance && observation.provenance.backend_worker),
       budget: budgetSummary(trial, observation),
       error: errorSummary(observation) || errorSummary(trial),
     };
   });
+}
+
+function candidateRecord(record) {
+  return {
+    ...record,
+    candidate_id: record.candidate_id,
+    format: record.format,
+    generator: record.generator,
+  };
 }
 
 function backendSummary(worker) {
@@ -712,8 +713,7 @@ function entityButton(item, kind) {
   const selected = kind === "environment" ? item.uid === state.selectedEnvironmentUid : item.uid === state.selectedMethodUid;
   const summary = item.summary || {};
   const tags = [
-    summary.candidate_type,
-    summary.artifact_kind,
+    summary.candidate_format,
     summary.implementation_type,
     summary.runtime && summary.runtime.type,
   ].filter(Boolean);
@@ -796,7 +796,7 @@ function runRow(run) {
       <td>${escapeHtml(run.method && run.method.id || "-")}</td>
       <td>${escapeHtml(run.completed_trials ?? 0)}</td>
       <td>${formatMetric(run.best_metric)}</td>
-      <td>${escapeHtml(run.target_id || "-")}</td>
+      <td>${escapeHtml(run.environment_id || "-")}</td>
     </tr>
   `;
 }
@@ -808,7 +808,7 @@ function renderRunCard(run) {
         <strong>${escapeHtml(run.name)}</strong>
         ${statusPill(run.status)}
       </div>
-      <p>${escapeHtml(run.target_id || "-")} / ${escapeHtml(run.method && run.method.id || "-")}</p>
+      <p>${escapeHtml(run.environment_id || "-")} / ${escapeHtml(run.method && run.method.id || "-")}</p>
       <div class="item-meta">
         <span class="tag">best ${escapeHtml(formatMetric(run.best_metric))}</span>
         <span class="tag">${escapeHtml(run.completed_trials || 0)} trials</span>
@@ -877,7 +877,7 @@ function runComparisonTable(first, second) {
     ["Trials", first.completed_trials ?? 0, second.completed_trials ?? 0],
     ["Failures", first.failure_count ?? 0, second.failure_count ?? 0],
     ["Method", first.method && first.method.id || "-", second.method && second.method.id || "-"],
-    ["Environment", first.target_id || "-", second.target_id || "-"],
+    ["Environment", first.environment_id || "-", second.environment_id || "-"],
   ];
   return `
     <div class="table-wrap embedded">
@@ -1024,6 +1024,11 @@ function sum(values) {
 
 function capitalize(value) {
   return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+}
+
+function tabLabel(value) {
+  if (value === "candidates") return "Candidates";
+  return capitalize(value);
 }
 
 function escapeHtml(value) {

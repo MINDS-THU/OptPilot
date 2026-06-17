@@ -33,7 +33,7 @@ RUN_SENTINEL_FILES = {
     "study_spec.json",
     "observations.jsonl",
     "trials.jsonl",
-    "artifacts.jsonl",
+    "candidates.jsonl",
 }
 
 CATALOG_CONFIGS = {"environment", "method", "study"}
@@ -59,7 +59,7 @@ class UiJob:
     stdout_path: Path
     stderr_path: Path
     study_name: Optional[str] = None
-    target_id: Optional[str] = None
+    environment_id: Optional[str] = None
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
     run_dir: Optional[Path] = None
@@ -72,7 +72,7 @@ class UiJob:
             "study_path": str(self.study_path),
             "output_root": str(self.output_root),
             "study_name": self.study_name,
-            "target_id": self.target_id,
+            "environment_id": self.environment_id,
             "process_id": self.process.pid,
             "status": status,
             "exit_code": self.process.poll(),
@@ -116,7 +116,7 @@ class UiState:
         output_root: Optional[Path],
         *,
         study_name: Optional[str] = None,
-        target_id: Optional[str] = None,
+        environment_id: Optional[str] = None,
     ) -> UiJob:
         study_path = study_path.resolve()
         output_root = (output_root or self.cwd / "runs").resolve()
@@ -157,7 +157,7 @@ class UiState:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             study_name=study_name,
-            target_id=target_id,
+            environment_id=environment_id,
         )
         with self._lock:
             self.jobs[job_id] = job
@@ -337,7 +337,7 @@ def _handler_factory(state: UiState):
                         study_path,
                         output_root,
                         study_name=validation.get("name"),
-                        target_id=validation.get("target_id"),
+                        environment_id=validation.get("environment_id"),
                     )
                     self._send_json({"job": job.to_dict()}, status=HTTPStatus.CREATED)
                     return
@@ -376,8 +376,8 @@ def _handler_factory(state: UiState):
             if resource == "trials":
                 self._send_json({"trials": _read_jsonl(run_dir / "trials.jsonl")})
                 return
-            if resource == "artifacts":
-                self._send_json({"artifacts": _read_jsonl(run_dir / "artifacts.jsonl")})
+            if resource == "candidates":
+                self._send_json({"candidates": _read_jsonl(run_dir / "candidates.jsonl")})
                 return
             if resource == "file":
                 relative = query.get("path", [""])[0]
@@ -495,7 +495,6 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
                 editable.append(str(item["path"]))
         entry["summary"] = {
             "evaluate_type": _evaluator_mode(raw.get("evaluator", {})),
-            "candidate_type": candidate_format,
             "candidate_format": candidate_format,
             "runtime": _environment_runtime_summary(raw),
             "editable_files": editable,
@@ -517,7 +516,6 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
             "protocol": entrypoint.get("protocol", "batch"),
             "runtime": _method_runtime_summary(raw),
             "batch_size": settings.get("batchSize"),
-            "candidate_types": list(accepts.get("formats", []) or []),
             "candidate_formats": list(accepts.get("formats", []) or []),
             "required_context": list(requires.get("context", []) or []),
             "required_capabilities": list(requires.get("capabilities", []) or []),
@@ -737,10 +735,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         if execution_config.get("build"):
             container["build"] = execution_config["build"]
         draft["execution"]["runtime"] = {"sandbox": "container", "container": container}
-    elif backend == "external" and execution_config:
-        draft["execution"]["settings"] = execution_config
-    if backend == "external" and payload.get("customBackendImplementation"):
-        draft["execution"]["adapter"] = str(payload["customBackendImplementation"])
     if payload.get("seed") not in (None, ""):
         draft["reproducibility"] = {"seed": int(payload.get("seed"))}
     draft_yaml = yaml.safe_dump(draft, sort_keys=False)
@@ -799,9 +793,6 @@ def _draft_execution_config(payload: JsonDict) -> JsonDict:
                 build[target] = str(value)
         if build:
             result["build"] = build
-    if backend == "external" and payload.get("customBackendConfig") not in (None, ""):
-        custom_config = _parse_json_object(str(payload.get("customBackendConfig")), "custom backend config")
-        result.update(custom_config)
     return result
 
 
@@ -926,10 +917,10 @@ def _run_summary(run_dir: Path, state: Optional[UiState] = None) -> JsonDict:
         "completed_trials": summary.get("completed_trials", len(observations)),
         "best_metric": summary.get("best_metric"),
         "best_trial_id": summary.get("best_trial_id"),
-        "best_artifact_id": summary.get("best_artifact_id"),
+        "best_candidate_id": summary.get("best_candidate_id"),
         "failure_count": summary.get("failure_count", _failure_count(status_counts)),
         "objective": objective,
-        "target_id": study_spec.get("target", {}).get("targetId"),
+        "environment_id": study_spec.get("environment", {}).get("environmentId"),
         "method": _method_summary(study_spec),
         "started_at": summary.get("started_at"),
         "finished_at": summary.get("finished_at"),
@@ -942,7 +933,7 @@ def _run_summary(run_dir: Path, state: Optional[UiState] = None) -> JsonDict:
 def _run_detail(run_dir: Path) -> JsonDict:
     observations = _read_jsonl(run_dir / "observations.jsonl")
     trials = _read_jsonl(run_dir / "trials.jsonl")
-    artifacts = _read_jsonl(run_dir / "artifacts.jsonl")
+    candidates = _read_jsonl(run_dir / "candidates.jsonl")
     return {
         "run": _run_summary(run_dir),
         "summary": _read_json(run_dir / "summary.json"),
@@ -952,7 +943,7 @@ def _run_detail(run_dir: Path) -> JsonDict:
         "environment_snapshot": _read_json(run_dir / "environment_snapshot.json"),
         "observations": observations,
         "trials": trials,
-        "artifacts": artifacts,
+        "candidates": candidates,
         "method_calls": _read_jsonl(run_dir / "method_calls.jsonl"),
         "method_events": _read_jsonl(run_dir / "method_events.jsonl"),
         "scheduler_events": _read_jsonl(run_dir / "scheduler_events.jsonl"),
@@ -971,7 +962,7 @@ def _validate_study(study_path: Path) -> JsonDict:
             "errors": [],
             "path": str(study_path),
             "name": compiled.get("metadata", {}).get("name"),
-            "target_id": compiled.get("target", {}).get("targetId"),
+            "environment_id": compiled.get("environment", {}).get("environmentId"),
             "objective": compiled.get("objective", {}).get("primaryMetric", {}),
             "max_trials": compiled.get("stopping", {}).get("maxTrials"),
         }
@@ -1210,18 +1201,6 @@ def _validate_editable_content(path: Path, content: str) -> JsonDict:
         except json.JSONDecodeError as exc:
             return {"valid": False, "errors": [str(exc)]}
     return {"valid": True, "errors": []}
-
-
-def _parse_json_object(value: str, label: str) -> JsonDict:
-    if not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{label} must be a JSON object: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{label} must be a JSON object.")
-    return parsed
 
 
 def _resolve_user_path(value: Any, cwd: Path) -> Path:

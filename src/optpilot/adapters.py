@@ -1,4 +1,4 @@
-"""Target environment adapters."""
+"""Environment adapter implementations."""
 
 from __future__ import annotations
 
@@ -16,31 +16,31 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-class PythonCallableTargetAdapter:
+class PythonCallableEnvironmentAdapter:
     def __init__(self, definition: Dict[str, Any], study_spec):
         self.definition = definition
         self.study_spec = study_spec
         self._callable = None
 
-    def evaluate(self, artifact_spec: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         if self._callable is None:
             config = self.definition.get("config", {})
             module = importlib.import_module(config["module"])
             self._callable = getattr(module, config["callable"])
-        result = self._callable(artifact_spec, instance, context)
+        result = self._callable(candidate_runtime, instance, context)
         if not isinstance(result, dict):
-            raise TypeError("Target callable must return a dict.")
+            raise TypeError("Environment callable must return a dict.")
         metric_values = _extract_metric_values(result)
         return {
             "status": result.get("status", "success"),
             "metric_values": metric_values,
             "constraint_results": dict(result.get("constraint_results", {})),
-            "artifacts": list(result.get("artifacts", [])),
+            "output_files": list(result.get("output_files", [])),
             "event_summary": dict(result.get("event_summary", {})),
         }
 
 
-class ConfiguredEnvironmentTargetAdapter:
+class ConfiguredEnvironmentAdapter:
     """Evaluate environments compiled from public `config: environment` files."""
 
     def __init__(self, definition: Dict[str, Any], study_spec):
@@ -48,23 +48,23 @@ class ConfiguredEnvironmentTargetAdapter:
         self.study_spec = study_spec
         self._callable = None
 
-    def evaluate(self, artifact_spec: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.definition.get("config", {})
         evaluate = config.get("evaluate", {})
         metrics = config.get("metrics", {})
-        workspace = Path(artifact_spec.get("workspace") or context["workspace"]).resolve()
+        workspace = Path(candidate_runtime.get("workspace") or context["workspace"]).resolve()
         workspace.mkdir(parents=True, exist_ok=True)
-        candidate_root = Path(artifact_spec.get("candidateRoot", workspace)).resolve()
+        candidate_root = Path(candidate_runtime.get("candidateRoot", workspace)).resolve()
         instance_index = int(context["instance_index"])
         metrics_path = _workspace_path(workspace, metrics.get("path", "metrics.json"))
         instance_path = _workspace_path(workspace, f"instance_{instance_index}.json")
-        candidate_path = _configured_candidate_path(workspace, candidate_root, artifact_spec, config)
+        candidate_path = _configured_candidate_path(workspace, candidate_root, candidate_runtime, config)
         stdout_path = _workspace_path(workspace, f"stdout_{instance_index}.log")
         stderr_path = _workspace_path(workspace, f"stderr_{instance_index}.log")
 
         _write_json(instance_path, instance)
         candidate_payload_path = _workspace_path(workspace, "candidate.json")
-        _write_json(candidate_payload_path, artifact_spec)
+        _write_json(candidate_payload_path, candidate_runtime)
 
         eval_type = evaluate.get("type")
         process_result = None
@@ -85,7 +85,7 @@ class ConfiguredEnvironmentTargetAdapter:
         }
 
         if eval_type == "python":
-            python_result = self._evaluate_python(evaluate, artifact_spec, instance, context)
+            python_result = self._evaluate_python(evaluate, candidate_runtime, instance, context)
         elif eval_type == "command":
             command = _format_command(evaluate["command"], placeholders)
             env = os.environ.copy()
@@ -104,7 +104,7 @@ class ConfiguredEnvironmentTargetAdapter:
                     "timeoutSeconds",
                     context.get("resource_profile", {}).get(
                         "timeoutSeconds",
-                        self.study_spec.target.get("runtimeContract", {}).get("timeoutSeconds", 600),
+                        self.study_spec.environment.get("runtimeContract", {}).get("timeoutSeconds", 600),
                     ),
                 )
             )
@@ -139,34 +139,34 @@ class ConfiguredEnvironmentTargetAdapter:
             python_result,
             process_result,
         )
-        artifacts = [
+        output_files = [
             {"type": "json", "name": "instance", "path": str(instance_path)},
             {"type": "json", "name": "candidate_payload", "path": str(candidate_payload_path)},
         ]
         if process_result is not None:
-            artifacts.extend(
+            output_files.extend(
                 [
                     {"type": "log", "name": "stdout", "path": str(stdout_path)},
                     {"type": "log", "name": "stderr", "path": str(stderr_path)},
                 ]
             )
         if metrics_path.exists():
-            artifacts.append({"type": "json", "name": "metrics", "path": str(metrics_path)})
-        artifacts.extend(_collect_artifact_files(workspace, workspace, config.get("filesToSave", [])))
+            output_files.append({"type": "json", "name": "metrics", "path": str(metrics_path)})
+        output_files.extend(_collect_output_files(workspace, workspace, config.get("outputFiles", [])))
 
-        records_report = _extract_records(workspace, config.get("recordsToExtract", []))
+        records_report = _extract_records(workspace, config.get("records", []))
         if records_report:
             records_report_path = workspace / "records_to_extract_report.json"
             _write_json(records_report_path, records_report)
-            artifacts.append({"type": "json", "name": "records_to_extract_report", "path": str(records_report_path)})
-            event_summary["recordsToExtract"] = records_report
+            output_files.append({"type": "json", "name": "records_to_extract_report", "path": str(records_report_path)})
+            event_summary["records"] = records_report
 
-        manifest_path = Path(artifact_spec.get("manifestPath", workspace / "workspace_manifest.json")).resolve()
+        manifest_path = Path(candidate_runtime.get("manifestPath", workspace / "workspace_manifest.json")).resolve()
         readonly_report = _check_readonly_files(workspace, manifest_path)
         if readonly_report is not None:
             readonly_report_path = workspace / "readonly_report.json"
             _write_json(readonly_report_path, readonly_report)
-            artifacts.append({"type": "json", "name": "readonly_report", "path": str(readonly_report_path)})
+            output_files.append({"type": "json", "name": "readonly_report", "path": str(readonly_report_path)})
             event_summary["readonly_violations"] = readonly_report["violations"]
 
         event_summary.setdefault("adapter", "configured_environment")
@@ -180,14 +180,14 @@ class ConfiguredEnvironmentTargetAdapter:
             "status": status,
             "metric_values": metric_values,
             "constraint_results": constraint_results,
-            "artifacts": artifacts,
+            "output_files": output_files,
             "event_summary": event_summary,
         }
 
     def _evaluate_python(
         self,
         evaluate: Dict[str, Any],
-        artifact_spec: Dict[str, Any],
+        candidate_runtime: Dict[str, Any],
         instance: Dict[str, Any],
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -200,7 +200,7 @@ class ConfiguredEnvironmentTargetAdapter:
                 raise ValueError("evaluate.callable must use 'module:function' format.")
             module = importlib.import_module(module_name)
             self._callable = getattr(module, attr)
-        result = self._callable(artifact_spec, instance, context)
+        result = self._callable(candidate_runtime, instance, context)
         if not isinstance(result, dict):
             raise TypeError("Configured Python evaluator must return a dict.")
         return result
@@ -243,27 +243,27 @@ class ConfiguredEnvironmentTargetAdapter:
         )
 
 
-class CLITargetAdapter:
+class CLIEnvironmentAdapter:
     def __init__(self, definition: Dict[str, Any], study_spec):
         self.definition = definition
         self.study_spec = study_spec
 
-    def evaluate(self, artifact_spec: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.definition.get("config", {})
         workspace = Path(context["workspace"])
         instance_index = int(context["instance_index"])
-        artifact_path = workspace / config.get("artifactPath", f"cli_artifact_{instance_index}.json")
+        candidate_path = workspace / config.get("candidatePath", f"cli_candidate_{instance_index}.json")
         instance_path = workspace / config.get("instancePath", f"cli_instance_{instance_index}.json")
         output_path = workspace / config.get("outputPath", f"cli_result_{instance_index}.json")
         stdout_path = workspace / config.get("stdoutPath", f"cli_stdout_{instance_index}.log")
         stderr_path = workspace / config.get("stderrPath", f"cli_stderr_{instance_index}.log")
 
-        _write_json(artifact_path, artifact_spec)
+        _write_json(candidate_path, candidate_runtime)
         _write_json(instance_path, instance)
 
         placeholders = {
             "python": sys.executable,
-            "artifact_path": str(artifact_path),
+            "candidate_path": str(candidate_path),
             "instance_path": str(instance_path),
             "output_path": str(output_path),
             "stdout_path": str(stdout_path),
@@ -282,7 +282,7 @@ class CLITargetAdapter:
                 "timeoutSeconds",
                 context.get("resource_profile", {}).get(
                     "timeoutSeconds",
-                    self.study_spec.target.get("runtimeContract", {}).get("timeoutSeconds", 600),
+                    self.study_spec.environment.get("runtimeContract", {}).get("timeoutSeconds", 600),
                 ),
             )
         )
@@ -305,18 +305,18 @@ class CLITargetAdapter:
         stderr_path.write_text(completed.stderr, encoding="utf-8")
         if completed.returncode != 0:
             raise RuntimeError(
-                f"CLI target command failed with exit code {completed.returncode}: {completed.stderr.strip()}"
+                f"CLI environment command failed with exit code {completed.returncode}: {completed.stderr.strip()}"
             )
         if not output_path.exists():
-            raise FileNotFoundError(f"CLI target did not create output file: {output_path}")
+            raise FileNotFoundError(f"CLI environment did not create output file: {output_path}")
 
         result = json.loads(output_path.read_text(encoding="utf-8"))
         if not isinstance(result, dict):
-            raise TypeError("CLI target output must be a JSON object.")
-        artifacts = list(result.get("artifacts", []))
-        artifacts.extend(
+            raise TypeError("CLI environment output must be a JSON object.")
+        output_files = list(result.get("output_files", []))
+        output_files.extend(
             [
-                {"type": "json", "name": "cli_artifact_input", "path": str(artifact_path)},
+                {"type": "json", "name": "cli_candidate_input", "path": str(candidate_path)},
                 {"type": "json", "name": "cli_instance_input", "path": str(instance_path)},
                 {"type": "json", "name": "cli_result_output", "path": str(output_path)},
                 {"type": "log", "name": "cli_stdout", "path": str(stdout_path)},
@@ -336,13 +336,13 @@ class CLITargetAdapter:
             "status": result.get("status", "success"),
             "metric_values": dict(result.get("metric_values", {})),
             "constraint_results": dict(result.get("constraint_results", {})),
-            "artifacts": artifacts,
+            "output_files": output_files,
             "event_summary": event_summary,
         }
 
 
 class ReadOnlySQLiteQuery:
-    """Read-only SQLite query capability for method-visible data artifacts."""
+    """Read-only SQLite query capability for method-visible evidence data."""
 
     WRITE_KEYWORDS = {
         "attach",
@@ -430,14 +430,14 @@ def _resolve_optional_path(value: Any, study_spec) -> Optional[Path]:
 def _configured_candidate_path(
     workspace: Path,
     candidate_root: Path,
-    artifact_spec: Dict[str, Any],
+    candidate_runtime: Dict[str, Any],
     config: Dict[str, Any],
 ) -> Path:
     candidate = config.get("candidate", {})
     required = candidate.get("required", []) or []
     if len(required) == 1:
         return _workspace_path(candidate_root, required[0])
-    files = artifact_spec.get("files", [])
+    files = candidate_runtime.get("files", [])
     if isinstance(files, list) and len(files) == 1 and isinstance(files[0], dict):
         candidate_path = files[0].get("path")
         if candidate_path:
@@ -481,7 +481,7 @@ def _extract_metric_values(payload: Any) -> Dict[str, Any]:
     elif "metrics" in payload:
         metric_values = payload["metrics"]
     else:
-        excluded = {"status", "constraint_results", "artifacts", "event_summary"}
+        excluded = {"status", "constraint_results", "output_files", "event_summary"}
         metric_values = {key: value for key, value in payload.items() if key not in excluded}
     if not isinstance(metric_values, dict):
         raise TypeError("Workspace metrics must be a JSON object.")
@@ -640,8 +640,8 @@ def _query_sqlite_records(database: Path, query: str) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _collect_artifact_files(workspace: Path, cwd: Path, patterns: List[Any]) -> List[Dict[str, Any]]:
-    artifacts: List[Dict[str, Any]] = []
+def _collect_output_files(workspace: Path, cwd: Path, patterns: List[Any]) -> List[Dict[str, Any]]:
+    output_files: List[Dict[str, Any]] = []
     seen = set()
     workspace_resolved = workspace.resolve()
     for rule in patterns:
@@ -658,7 +658,7 @@ def _collect_artifact_files(workspace: Path, cwd: Path, patterns: List[Any]) -> 
             continue
         matches = sorted(cwd.glob(pattern_text))
         if required and not matches:
-            raise FileNotFoundError(f"Required artifact pattern matched no files: {pattern_text}")
+            raise FileNotFoundError(f"Required output_file pattern matched no files: {pattern_text}")
         for path in matches:
             resolved = path.resolve()
             if resolved.is_dir() or resolved in seen:
@@ -666,17 +666,17 @@ def _collect_artifact_files(workspace: Path, cwd: Path, patterns: List[Any]) -> 
             if resolved != workspace_resolved and workspace_resolved not in resolved.parents:
                 continue
             seen.add(resolved)
-            artifacts.append(
+            output_files.append(
                 {
-                    "type": _artifact_type(str(resolved)),
+                    "type": _output_file_type(str(resolved)),
                     "name": str(name or resolved.name),
                     "path": str(resolved),
                 }
             )
-    return artifacts
+    return output_files
 
 
-def _artifact_type(path: str) -> str:
+def _output_file_type(path: str) -> str:
     suffix = Path(path).suffix.lower()
     if suffix == ".json":
         return "json"

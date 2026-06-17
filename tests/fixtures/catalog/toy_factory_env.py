@@ -29,8 +29,8 @@ def evaluate(candidate: Dict[str, float], instance: Dict[str, float], context: D
     cycle_time = 200.0 - throughput
 
     workspace = Path(context["workspace"])
-    artifact_path = workspace / f"metrics_{context['instance_index']}.csv"
-    with artifact_path.open("w", newline="", encoding="utf-8") as handle:
+    metrics_path = workspace / f"metrics_{context['instance_index']}.csv"
+    with metrics_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["x", "y", "mode", "throughput", "cycle_time"])
         writer.writeheader()
         writer.writerow(
@@ -49,10 +49,10 @@ def evaluate(candidate: Dict[str, float], instance: Dict[str, float], context: D
             "throughput": throughput,
             "cycle_time": cycle_time,
         },
-        "artifacts": [
+        "output_files": [
             {
                 "type": "csv",
-                "path": str(artifact_path),
+                "path": str(metrics_path),
             }
         ],
         "event_summary": {

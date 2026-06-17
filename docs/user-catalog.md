@@ -64,12 +64,12 @@ metrics:
 Minimal evaluator:
 
 ```python
-def evaluate(artifact_spec, instance, context):
+def evaluate(candidate_runtime, instance, context):
     return {
         "status": "success",
         "metric_values": {"score": 1.0},
         "constraint_results": {},
-        "artifacts": [],
+        "output_files": [],
         "event_summary": {},
     }
 ```

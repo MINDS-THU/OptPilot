@@ -11,7 +11,7 @@ evaluator:
     - "{python}"
     - "-m"
     - "tests.fixtures.catalog.cli_toy_factory_env"
-    - "--artifact"
+    - "--candidate"
     - "{candidate_json}"
     - "--instance"
     - "{instance_file}"
@@ -43,7 +43,7 @@ metrics:
   path: metrics.json
   keys: [throughput, cycle_time]
 
-artifacts:
+outputFiles:
   - "metrics.json"
   - "stdout_*.log"
   - "stderr_*.log"
