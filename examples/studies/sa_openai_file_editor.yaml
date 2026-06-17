@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: sa-openai-file-editor
 description: Use a user-owned LLM method to rewrite selected SA simulator files and optimize service_score
 tags: [external-project, llm, code-edit, simulator]
 
-environment: ../environments/strategic_airlift_devs/environment.yaml
-method: ../methods/openai_file_editor/method.yaml
+environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
+methodConfig: ../methods/openai_file_editor/method.yaml
 
 objective:
   metric: service_score

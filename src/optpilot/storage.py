@@ -22,6 +22,7 @@ class LocalEvidenceStore:
             self.run_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         (self.run_dir / "artifacts").mkdir(exist_ok=True)
+        (self.run_dir / "candidates").mkdir(exist_ok=True)
         (self.run_dir / "trials").mkdir(exist_ok=True)
 
     @classmethod

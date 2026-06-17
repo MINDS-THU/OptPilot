@@ -60,7 +60,9 @@ class StudyRunner:
         evidence_view = EvidenceView(store, self.study_spec)
         runtime_context = {
             "run_dir": str(store.run_dir),
-            "artifact_store_dir": str(store.run_dir / "artifacts"),
+            "candidate_store": str(store.run_dir / "candidates"),
+            "candidate_store_dir": str(store.run_dir / "candidates"),
+            "artifact_store_dir": str(store.run_dir / "candidates"),
             "prompt_store_dir": str(store.run_dir / "prompts"),
             "artifact_content_ref_mode": "absolute",
             "prompt_content_ref_mode": "absolute",
@@ -85,6 +87,7 @@ class StudyRunner:
         method_impl = method_def.get("implementation", {})
         method_instance = None
         if method_impl.get("type") == "python":
+            _prepend_python_paths(method_impl.get("pythonPath", []) or [])
             method_ref = method_impl.get("callable") or method_impl.get("implementation")
             method_cls = resolve_component("method", method_ref)
             method_instance = method_cls(method_def, self.study_spec, rng)
@@ -216,6 +219,14 @@ def run_study(
     return runner.run()
 
 
+def _prepend_python_paths(paths: List[str]) -> None:
+    import sys
+
+    for path in reversed([str(Path(item).resolve()) for item in paths if item]):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
 def run_expanded_study_spec(
     spec_path: str,
     output_root: Optional[str] = None,
@@ -224,7 +235,7 @@ def run_expanded_study_spec(
 ) -> RunSummary:
     """Run an already-expanded internal StudySpec.
 
-    Public users should call `run_study` with a StudyConfig. This helper exists
+    Public users should call `run_study` with a public study config. This helper exists
     for internal tests and worker-style paths that deliberately exercise the
     canonical execution representation.
     """

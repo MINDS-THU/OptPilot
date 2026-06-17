@@ -1,29 +1,27 @@
 apiVersion: optpilot.io/v1
-kind: EnvironmentConfig
+config: environment
 id: toy-factory
 description: Toy Python simulator used by the reference examples
 tags: [toy, simulator]
 
-evaluate:
-  type: python
-  callable: tests.fixtures.catalog.toy_factory_env:evaluate
+evaluator:
+  python: tests.fixtures.catalog.toy_factory_env:evaluate
 
 candidate:
-  type: parameters
-  artifactKind: parameter_spec
+  format: parameters
   description: Search parameters accepted by the toy factory evaluator.
   parameters:
     schema:
       x:
-        type: float
+        valueType: float
         min: 0.0
         max: 8.0
       y:
-        type: int
+        valueType: int
         min: 1
         max: 10
       mode:
-        type: categorical
+        valueType: categorical
         values: [balanced, aggressive, conservative]
 
 metrics:

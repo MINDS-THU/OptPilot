@@ -120,8 +120,8 @@ class CodeArtifactStore:
         generator_record: Optional[JsonDict] = None,
         metadata: Optional[JsonDict] = None,
     ) -> JsonDict:
-        if artifact_kind not in {"code_file", "code_bundle", "code_module"}:
-            raise ValueError("artifact_kind must be code_file, code_bundle, or code_module.")
+        if artifact_kind not in {"code_file", "code_bundle", "code_module", "files"}:
+            raise ValueError("artifact_kind must be code_file, code_bundle, code_module, or files.")
         mappings = [_coerce_mapping(item) for item in files]
         if not mappings:
             raise ValueError("At least one code file is required.")
@@ -177,10 +177,12 @@ class CodeArtifactStore:
                 spec["entrypoint"] = entrypoint
 
         artifact = {
+            "candidate_id": artifact_id,
             "artifact_id": artifact_id,
             "artifact_kind": artifact_kind,
             "spec": spec,
             "lineage": dict(lineage or {"parents": []}),
+            "generator": dict(generator_record or {"strategy": "stored_code_artifact"}),
             "generator_record": dict(generator_record or {"strategy": "stored_code_artifact"}),
         }
         if metadata:

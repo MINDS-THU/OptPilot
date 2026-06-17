@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/defs/runtime.schema.json",
+  "definitions": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sandbox": {
+          "enum": ["host", "container", "external"]
+        },
+        "container": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {"type": "string"},
+            "executable": {"type": "string"},
+            "build": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "context": {"type": "string"},
+                "dockerfile": {"type": "string"},
+                "tag": {"type": "string"},
+                "target": {"type": "string"},
+                "platform": {"type": "string"},
+                "args": {"type": "object"},
+                "extraArgs": {
+                  "type": "array",
+                  "items": {"type": "string"}
+                },
+                "timeoutSeconds": {"type": "integer", "minimum": 1}
+              }
+            }
+          }
+        },
+        "workdir": {"type": "string"},
+        "env": {"type": "object"},
+        "envFromHost": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "readOnlyMounts": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "writableMounts": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "network": {
+          "enum": ["enabled", "disabled"]
+        }
+      }
+    },
+    "resourceProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {"type": "integer", "minimum": 1},
+        "memoryGiB": {"type": "number", "exclusiveMinimum": 0},
+        "gpu": {"type": "integer", "minimum": 0},
+        "gpuClass": {"type": "string"},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "diskGiB": {"type": "number", "exclusiveMinimum": 0},
+        "networkRequired": {"type": "boolean"},
+        "runtimeImage": {"type": "string"}
+      }
+    }
+  }
+}

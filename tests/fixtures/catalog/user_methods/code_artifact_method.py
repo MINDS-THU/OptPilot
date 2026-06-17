@@ -62,7 +62,7 @@ class CodeArtifactMethod:
                 source_dir,
                 artifact_id=artifact_id,
                 entrypoint=config.get("entrypoint"),
-                artifact_kind=config.get("artifactKind", "code_bundle"),
+                artifact_kind=config.get("artifactKind", "files"),
                 lineage={"parents": list(config.get("parents", []))},
                 generator_record=build_generator_record(
                     method_id=self.definition["id"],
@@ -87,5 +87,4 @@ class CodeArtifactMethod:
                 source = Path(str(entry.get("from", ""))).resolve()
                 if source.is_dir():
                     return source
-        raise ValueError("CodeArtifactMethod requires candidate_context.files.source backed by workspace.copy.")
-
+        raise ValueError("CodeArtifactMethod requires a trialWorkspace entry matching candidate.materialize.root.")

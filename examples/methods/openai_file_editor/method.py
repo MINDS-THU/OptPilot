@@ -84,7 +84,7 @@ class OpenAIFileEditMethod:
         return artifact_store.store_files(
             mappings,
             artifact_id=f"sa-baseline-{uuid.uuid4().hex[:12]}",
-            artifact_kind="code_bundle",
+            artifact_kind="files",
             lineage={"parents": [], "source": "baseline_source_tree"},
             generator_record={
                 "method_id": self.definition["id"],
@@ -113,8 +113,8 @@ class OpenAIFileEditMethod:
         return messages
 
     def _load_system_prompt(self) -> str:
-        exposure = self.candidate_context.get("exposure", {})
-        instructions = exposure.get("instructions", []) or []
+        method_context = self.candidate_context.get("methodContext", {})
+        instructions = method_context.get("instructions", []) or []
         if instructions:
             return Path(str(instructions[0])).read_text(encoding="utf-8")
         return str(self.config.get("systemPrompt", "Return JSON with full updated file contents."))
@@ -272,7 +272,7 @@ class OpenAIFileEditMethod:
             return artifact_store.store_files(
                 mappings,
                 artifact_id=f"sa-llm-{uuid.uuid4().hex[:12]}",
-                artifact_kind="code_bundle",
+                artifact_kind="files",
                 lineage={"parents": [best["artifact_id"]] if best else []},
                 generator_record=build_generator_record(
                     method_id=self.definition["id"],

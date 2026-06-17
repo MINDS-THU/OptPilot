@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/environment.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "config", "id", "evaluator", "candidate", "metrics"],
+  "properties": {
+    "apiVersion": {"$ref": "defs/common.schema.json#/definitions/apiVersion"},
+    "config": {"const": "environment"},
+    "id": {"$ref": "defs/common.schema.json#/definitions/identifier"},
+    "description": {"$ref": "defs/common.schema.json#/definitions/description"},
+    "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "python": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
+        "command": {"$ref": "defs/common.schema.json#/definitions/command"},
+        "adapter": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
+        "cwd": {"type": "string"},
+        "env": {"type": "object"},
+        "settings": {"type": "object"}
+      },
+      "oneOf": [
+        {"required": ["python"]},
+        {"required": ["command"]},
+        {"required": ["adapter"]}
+      ]
+    },
+    "runtime": {"$ref": "defs/runtime.schema.json#/definitions/runtime"},
+    "trialWorkspace": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to"],
+        "properties": {
+          "from": {"type": "string"},
+          "to": {"type": "string"}
+        }
+      }
+    },
+    "candidate": {"$ref": "defs/candidate.schema.json#/definitions/candidate"},
+    "methodContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {"$ref": "defs/common.schema.json#/definitions/stringList"},
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "path"],
+            "properties": {
+              "name": {"type": "string"},
+              "path": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "metrics": {"$ref": "defs/metrics.schema.json#/definitions/metrics"},
+    "records": {
+      "type": "array",
+      "items": {"$ref": "defs/metrics.schema.json#/definitions/record"}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "defs/metrics.schema.json#/definitions/artifact"}
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string"},
+          "description": {"type": "string"}
+        }
+      }
+    }
+  }
+}

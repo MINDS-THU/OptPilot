@@ -29,6 +29,7 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+  "jsonschema>=4",
   "PyYAML>=6.0",
 ]
 
@@ -54,3 +55,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "optpilot.ui" = ["static/*"]
+"optpilot.schemas" = ["*.json", "defs/*.json"]

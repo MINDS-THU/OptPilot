@@ -41,7 +41,7 @@ class ReferenceRandomSearchMethod:
         self.observed.extend(observations)
 
     def _sample_parameter(self, definition: Dict[str, Any]) -> Any:
-        param_type = definition.get("type", "float")
+        param_type = definition.get("valueType", definition.get("type", "float"))
         if param_type == "int":
             return self.rng.randint(int(definition.get("min", 0)), int(definition.get("max", 10)))
         if param_type == "categorical":

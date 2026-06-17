@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import inspect
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional
 
 import yaml
@@ -150,7 +151,13 @@ class StudySpec:
             sample_count = int(definition.get("sampleCount", 1))
             implementation = sampler.get("implementation", "builtin.parameter_sampler")
             if implementation != "builtin.parameter_sampler":
-                return _sample_custom_distribution(implementation, config, sample_count, rng)
+                return _sample_custom_distribution(
+                    implementation,
+                    config,
+                    sample_count,
+                    rng,
+                    python_path=sampler.get("pythonPath", []) or [],
+                )
             return [_sample_distribution_instance(config, rng) for _ in range(sample_count)]
         raise NotImplementedError(f"Unsupported evaluationScope mode: {mode}")
 
@@ -169,9 +176,19 @@ def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]
     return result
 
 
-def _sample_custom_distribution(implementation: str, config: Dict[str, Any], sample_count: int, rng) -> List[Dict[str, Any]]:
+def _sample_custom_distribution(
+    implementation: str,
+    config: Dict[str, Any],
+    sample_count: int,
+    rng,
+    *,
+    python_path: List[str],
+) -> List[Dict[str, Any]]:
     from .registry import resolve_component
 
+    for path in reversed([str(Path(item).resolve()) for item in python_path if item]):
+        if path not in sys.path:
+            sys.path.insert(0, path)
     component = resolve_component("sampler", implementation)
     payload = {"config": dict(config), "sample_count": sample_count, "rng": rng}
     target = component
@@ -197,8 +214,8 @@ def load_study_spec(path: str) -> StudySpec:
     spec_path = Path(path).resolve()
     with spec_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
-    if raw.get("kind") != "StudyConfig":
-        raise ValueError("OptPilot user config must be kind 'StudyConfig'. Expanded StudySpec is internal.")
+    if raw.get("config") != "study":
+        raise ValueError("OptPilot user config must be config 'study'. Expanded StudySpec is internal.")
     from .config import compile_authoring_config
 
     return study_spec_from_raw(spec_path, compile_authoring_config(spec_path))

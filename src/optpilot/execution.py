@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -180,6 +181,7 @@ class Evaluator:
         artifacts = list(materialization_record.artifacts)
         for result in instance_results:
             artifacts.extend(result.get("artifacts", []))
+        artifacts = self._retain_artifacts(trial_spec.trial_id, artifacts)
         statuses = {result.get("status", "success") for result in instance_results}
         status = _aggregate_status(statuses)
         failure_events = [
@@ -220,6 +222,31 @@ class Evaluator:
                 "generator_record": dict(trial_spec.artifact.get("generator_record", {})),
             },
         )
+
+    def _retain_artifacts(self, trial_id: str, artifacts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if self.study_spec.evidence.get("artifactStorage", "reference") != "copy":
+            return artifacts
+        retained = []
+        destination_root = self.evidence_store.run_dir / "evidence_artifacts" / trial_id
+        for index, artifact in enumerate(artifacts):
+            item = dict(artifact)
+            source_value = item.get("path") or item.get("contentRef")
+            if not source_value:
+                retained.append(item)
+                continue
+            source = Path(str(source_value))
+            if not source.exists() or not source.is_file():
+                retained.append(item)
+                continue
+            relative_name = _safe_artifact_copy_name(source.name, index)
+            destination = destination_root / relative_name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            item["originalPath"] = str(source)
+            item["copiedPath"] = str(destination)
+            item["path"] = str(destination)
+            retained.append(item)
+        return retained
 
     def _invalid_observation(
         self,
@@ -974,3 +1001,9 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
         sandbox_spec=SandboxSpec.from_dict(payload.get("sandbox_spec")),
         metadata=dict(payload.get("metadata", {})),
     )
+
+
+def _safe_artifact_copy_name(name: str, index: int) -> str:
+    safe = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in name)
+    safe = safe.strip("._") or "artifact"
+    return f"{index:04d}-{safe}"

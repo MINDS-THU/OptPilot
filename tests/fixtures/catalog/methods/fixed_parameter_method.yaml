@@ -1,24 +1,22 @@
 apiVersion: optpilot.io/v1
-kind: MethodConfig
+config: method
 id: fixed-parameter-method
 description: User-owned fixed candidate method
 tags: [user-method]
 
-implementation:
-  type: python
-  callable: python:tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod
-  protocol: optpilot.method.batch.v1
+entrypoint:
+  python: tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod
+  protocol: batch
 
-config:
+settings:
   batchSize: 3
   candidates:
     - {x: 4.2, y: 7, mode: balanced}
     - {x: 2.0, y: 4, mode: conservative}
     - {x: 7.5, y: 9, mode: aggressive}
 
-compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
-  requiredContext:
-    - parameters.schema
-
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema

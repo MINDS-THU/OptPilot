@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/defs/metrics.schema.json",
+  "definitions": {
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {"enum": ["return", "file", "stdout", "sqlite", "custom"]},
+        "keys": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "path": {"type": "string"},
+        "database": {"type": "string"},
+        "query": {"type": "string"},
+        "extractor": {"$ref": "common.schema.json#/definitions/pythonImport"},
+        "settings": {"type": "object"}
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source"],
+      "properties": {
+        "name": {"type": "string"},
+        "source": {"enum": ["jsonl", "csv", "sqlite_table", "sqlite_query", "custom"]},
+        "path": {"type": "string"},
+        "database": {"type": "string"},
+        "table": {"type": "string"},
+        "query": {"type": "string"},
+        "extractor": {"$ref": "common.schema.json#/definitions/pythonImport"},
+        "settings": {"type": "object"}
+      }
+    },
+    "artifact": {
+      "oneOf": [
+        {"type": "string"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": {"type": "string"},
+            "name": {"type": "string"},
+            "required": {"type": "boolean"}
+          }
+        }
+      ]
+    }
+  }
+}

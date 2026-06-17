@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: toy-lifecycle-method
 description: Exercise a user-owned lifecycle method loaded through the python component hook
 tags: [mvp, toy, user-method, lifecycle-method]
 
-environment: ../environments/toy_factory.yaml
-method: ../methods/lifecycle_fixed_parameter_method.yaml
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/lifecycle_fixed_parameter_method.yaml
 
 objective:
   metric: throughput
@@ -26,4 +26,3 @@ execution:
 
 reproducibility:
   seed: 7
-

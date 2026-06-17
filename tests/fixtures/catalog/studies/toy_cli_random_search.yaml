@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: toy-cli-random-search
 description: Exercise command-based evaluation with a reference random-search fixture
 tags: [mvp, toy, cli, reference-method]
 
-environment: ../environments/toy_factory_cli.yaml
-method: ../methods/reference_random_search.yaml
+environmentConfig: ../environments/toy_factory_cli.yaml
+methodConfig: ../methods/reference_random_search.yaml
 
 objective:
   metric: throughput

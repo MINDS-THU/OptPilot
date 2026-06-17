@@ -212,10 +212,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "weighted-mean-study",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {
                             "metric": "throughput",
                             "direction": "maximize",
@@ -329,18 +329,17 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "EnvironmentConfig",
+                        "config": "environment",
                         "id": "nested-parameters",
                         "description": "Nested parameter contract.",
-                        "evaluate": {"type": "python", "callable": "tests.fixtures.bad_targets:non_numeric_metric"},
+                        "evaluator": {"python": "tests.fixtures.bad_targets:non_numeric_metric"},
                         "candidate": {
-                            "type": "parameters",
-                            "artifactKind": "parameter_spec",
+                            "format": "parameters",
                             "description": "Parameters accepted by the evaluator.",
                             "parameters": {
                                 "schema": {
-                                    "x": {"type": "float", "min": 0.0, "max": 10.0},
-                                    "mode": {"type": "categorical", "values": ["safe", "fast"]},
+                                    "x": {"valueType": "float", "min": 0.0, "max": 10.0},
+                                    "mode": {"valueType": "categorical", "values": ["safe", "fast"]},
                                 },
                                 "constraints": [
                                     {
@@ -378,18 +377,16 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "MethodConfig",
+                        "config": "method",
                         "id": "parameter-method",
                         "description": "Parameter method.",
-                        "implementation": {
-                            "type": "python",
-                            "callable": "builtin.reference_random_search",
-                            "protocol": "optpilot.method.batch.v1",
+                        "entrypoint": {
+                            "python": "optpilot.methods:ReferenceRandomSearchMethod",
+                            "protocol": "batch",
                         },
-                        "compatibility": {
-                            "candidateTypes": ["parameters"],
-                            "artifactKinds": ["parameter_spec"],
-                            "requiredContext": ["parameters.schema"],
+                        "accepts": {
+                            "formats": ["parameters"],
+                            "requires": {"context": ["candidate.parameters.schema"]},
                         },
                     },
                     sort_keys=False,
@@ -400,10 +397,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "nested-parameter-study",
-                        "environment": "environment.yaml",
-                        "method": "method.yaml",
+                        "environmentConfig": "environment.yaml",
+                        "methodConfig": "method.yaml",
                         "objective": {"metric": "score", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
@@ -447,52 +444,34 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "EnvironmentConfig",
+                        "config": "environment",
                         "id": "nested-files",
                         "description": "Nested file contract.",
-                        "evaluate": {"type": "command", "command": ["python", "-c", "print('{}')"]},
-                        "workspace": {
-                            "copy": [
-                                {"from": "source", "to": "candidate", "role": "source"},
-                                {"from": "history.db", "to": "database.db", "role": "data"},
-                            ],
-                            "readonly": ["database.db"],
-                        },
-                        "interfaces": [
+                        "evaluator": {"command": ["python", "-c", "print('{}')"]},
+                        "trialWorkspace": [
+                            {"from": "source", "to": "candidate"},
+                            {"from": "history.db", "to": "database.db"},
+                        ],
+                        "capabilities": [
                             {
                                 "id": "historical_db_query",
-                                "capability": "optpilot.sqlite_query.v1",
                                 "description": "Read-only SQL access.",
-                                "adapter": {
-                                    "implementation": "builtin.sqlite_query",
-                                    "config": {"path": "database.db"},
-                                },
                             }
                         ],
                         "candidate": {
-                            "type": "files",
-                            "artifactKind": "code_bundle",
+                            "format": "files",
                             "description": "Editable solver file.",
                             "files": {
-                                "root": "candidate",
-                                "source": {"type": "workspace_copy", "root": "candidate"},
-                                "editable": [{"path": "solver.py", "language": "python", "role": "solver"}],
+                                "editable": [{"path": "solver.py"}],
                                 "required": ["solver.py"],
                                 "allow": ["solver.py"],
                                 "deny": ["database.db"],
                             },
-                            "exposure": {
-                                "instructions": ["instructions.md"],
-                                "contextArtifacts": [
-                                    {
-                                        "id": "historical_database",
-                                        "path": "database.db",
-                                        "role": "historical_data",
-                                        "mediaType": "application/vnd.sqlite3",
-                                        "readonly": True,
-                                    }
-                                ],
-                            },
+                            "materialize": {"root": "candidate"},
+                        },
+                        "methodContext": {
+                            "instructions": ["instructions.md"],
+                            "references": [{"name": "historical_database", "path": "history.db"}],
                         },
                         "metrics": {"source": "stdout", "keys": ["score"]},
                     },
@@ -504,19 +483,19 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "MethodConfig",
+                        "config": "method",
                         "id": "file-editor",
                         "description": "File editor.",
-                        "implementation": {
-                            "type": "python",
-                            "callable": "python:tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
-                            "protocol": "optpilot.method.batch.v1",
+                        "entrypoint": {
+                            "python": "tests.fixtures.catalog.user_methods.code_artifact_method:CodeArtifactMethod",
+                            "protocol": "batch",
                         },
-                        "compatibility": {
-                            "candidateTypes": ["files"],
-                            "artifactKinds": ["code_bundle"],
-                            "requiredContext": ["files.source", "files.editable", "exposure.contextArtifacts"],
-                            "requiredCapabilities": ["optpilot.sqlite_query.v1"],
+                        "accepts": {
+                            "formats": ["files"],
+                            "requires": {
+                                "context": ["candidate.files.editable", "methodContext.references"],
+                                "capabilities": ["historical_db_query"],
+                            },
                         },
                     },
                     sort_keys=False,
@@ -527,10 +506,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "nested-file-study",
-                        "environment": "environment.yaml",
-                        "method": "method.yaml",
+                        "environmentConfig": "environment.yaml",
+                        "methodConfig": "method.yaml",
                         "objective": {"metric": "score", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
@@ -543,14 +522,14 @@ class MvpIntegrationTest(unittest.TestCase):
             candidate_context = raw_spec["artifacts"]["primaryArtifact"]["candidateContext"]
             adapter_config = raw_spec["target"]["adapter"]["config"]
 
-            self.assertEqual(raw_spec["artifacts"]["primaryArtifact"]["kind"], "code_bundle")
+            self.assertEqual(raw_spec["artifacts"]["primaryArtifact"]["kind"], "files")
             self.assertEqual(candidate_context["files"]["editable"][0]["path"], "solver.py")
-            self.assertEqual(candidate_context["exposure"]["instructions"], [str(instructions.resolve())])
-            self.assertEqual(candidate_context["exposure"]["contextArtifacts"][0]["path"], "database.db")
-            self.assertEqual(adapter_config["interfaces"][0]["capability"], "optpilot.sqlite_query.v1")
-            self.assertEqual(adapter_config["interfaces"][0]["adapter"]["config"]["path"], str(database.resolve()))
-            self.assertEqual(adapter_config["interfaces"][0]["adapter"]["config"]["pathWorkspacePath"], "database.db")
-            self.assertEqual(candidate_context["interfaces"][0]["adapter"]["config"]["path"], str(database.resolve()))
+            self.assertEqual(candidate_context["files"]["root"], "candidate")
+            self.assertEqual(candidate_context["methodContext"]["instructions"], [str(instructions.resolve())])
+            self.assertEqual(candidate_context["methodContext"]["references"][0]["path"], str(database.resolve()))
+            self.assertEqual(candidate_context["capabilities"][0]["id"], "historical_db_query")
+            self.assertEqual(adapter_config["workspace"]["copy"][1]["from"], str(database.resolve()))
+            self.assertEqual(adapter_config["workspace"]["copy"][1]["to"], "database.db")
             self.assertEqual(
                 raw_spec["artifacts"]["primaryArtifact"]["validationRules"]["config"]["requiredFiles"],
                 ["solver.py"],
@@ -939,25 +918,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "command-stdin-study",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "MethodConfig",
-                            "id": "command-stdin-method",
-                            "implementation": {
-                                "type": "command",
-                                "command": [sys.executable, str(method_script)],
-                                "protocol": "optpilot.method.batch.v1",
-                            },
-                            "config": {"batchSize": 2},
-                            "compatibility": {
-                                "candidateTypes": ["parameters"],
-                                "artifactKinds": ["parameter_spec"],
-                                "requiredContext": ["parameters.schema"],
-                            },
-                        },
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": "command_stdin_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
@@ -965,6 +929,26 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                         "budget": {"maxTrials": 2},
                         "execution": {"backend": "local", "parallelism": 2, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (tmp_path / "command_stdin_method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "command-stdin-method",
+                        "entrypoint": {
+                            "command": [sys.executable, str(method_script)],
+                            "protocol": "batch",
+                        },
+                        "settings": {"batchSize": 2},
+                        "accepts": {
+                            "formats": ["parameters"],
+                            "requires": {"context": ["candidate.parameters.schema"]},
+                        },
                     },
                     sort_keys=False,
                 ),
@@ -1014,25 +998,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "command-file-study",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "MethodConfig",
-                            "id": "command-file-method",
-                            "implementation": {
-                                "type": "command",
-                                "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
-                                "protocol": "optpilot.method.batch.v1",
-                            },
-                            "config": {"batchSize": 1},
-                            "compatibility": {
-                                "candidateTypes": ["parameters"],
-                                "artifactKinds": ["parameter_spec"],
-                                "requiredContext": ["parameters.schema"],
-                            },
-                        },
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": "command_file_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
@@ -1040,6 +1009,26 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (tmp_path / "command_file_method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "command-file-method",
+                        "entrypoint": {
+                            "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
+                            "protocol": "batch",
+                        },
+                        "settings": {"batchSize": 1},
+                        "accepts": {
+                            "formats": ["parameters"],
+                            "requires": {"context": ["candidate.parameters.schema"]},
+                        },
                     },
                     sort_keys=False,
                 ),
@@ -1059,23 +1048,21 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            method_script = tmp_path / "container_method.py"
+            method_script = tmp_path / "container_command_method.py"
             method_script.write_text(
                 "\n".join(
                     [
-                        "import json, os, pathlib, sys",
+                        "import json, pathlib, sys",
                         "request_path = pathlib.Path(sys.argv[1])",
                         "response_path = pathlib.Path(sys.argv[2])",
                         "request = json.loads(request_path.read_text(encoding='utf-8'))",
-                        "assert os.environ['OPTPILOT_METHOD_TEST_TOKEN'] == 'secret-token'",
-                        "assert os.environ['OPTPILOT_METHOD_STATIC_ENV'] == 'static-value'",
                         "response_path.write_text(json.dumps({",
-                        "    'candidates': [{",
+                        "    'artifacts': [{",
                         "        'artifact_id': 'cmd-container-0',",
                         "        'artifact_kind': 'parameter_spec',",
-                        "        'spec': {'x': 3.5, 'y': 7, 'mode': 'balanced'},",
+                        "        'spec': {'x': 4.2, 'y': 7, 'mode': 'balanced'},",
                         "        'lineage': {'parents': []},",
-                        "        'generator_record': {'method_id': 'command-container-method', 'strategy': request['runtime_context']['method_workspace']},",
+                        "        'generator_record': {'method_id': 'command-container-method', 'strategy': request['request_id']},",
                         "    }],",
                         "    'method_events': [{'event': 'container_method_finished'}],",
                         "}), encoding='utf-8')",
@@ -1084,7 +1071,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_container = tmp_path / "fake_method_container.py"
-            fake_log = tmp_path / "fake_method_container_log.jsonl"
+            fake_log = tmp_path / "fake_container_invocations.jsonl"
             fake_container.write_text(
                 "\n".join(
                     [
@@ -1120,7 +1107,6 @@ class MvpIntegrationTest(unittest.TestCase):
                         "    if arg.startswith('-'):",
                         "        index += 1",
                         "        continue",
-                        "    image = arg",
                         "    command = args[index + 1:]",
                         "    break",
                         "else:",
@@ -1134,45 +1120,16 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_container.chmod(0o755)
-            (tmp_path / "Dockerfile.method").write_text("FROM python:3.11-slim\n", encoding="utf-8")
+            (tmp_path / "Dockerfile.method").write_text("FROM scratch\n", encoding="utf-8")
             study_path = tmp_path / "container_method_study.yaml"
             study_path.write_text(
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "container-method-study",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "MethodConfig",
-                            "id": "command-container-method",
-                            "implementation": {
-                                "type": "command",
-                                "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
-                                "protocol": "optpilot.method.batch.v1",
-                            },
-                            "runtime": {
-                                "type": "container",
-                                "image": "optpilot-method-test-image",
-                                "containerExecutable": str(fake_container),
-                                "networkPolicy": "disabled",
-                                "build": {
-                                    "context": str(tmp_path),
-                                    "dockerfile": "Dockerfile.method",
-                                    "tag": "optpilot-method-test-image",
-                                    "args": {"METHOD": "test"},
-                                },
-                                "env": {"OPTPILOT_METHOD_STATIC_ENV": "static-value"},
-                                "envFromHost": ["OPTPILOT_METHOD_TEST_TOKEN"],
-                            },
-                            "config": {"batchSize": 1},
-                            "compatibility": {
-                                "candidateTypes": ["parameters"],
-                                "artifactKinds": ["parameter_spec"],
-                                "requiredContext": ["parameters.schema"],
-                            },
-                        },
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": "container_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
@@ -1180,6 +1137,42 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (tmp_path / "container_method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "command-container-method",
+                        "entrypoint": {
+                            "command": [sys.executable, str(method_script), "{input_file}", "{output_file}"],
+                            "protocol": "batch",
+                        },
+                        "runtime": {
+                            "sandbox": "container",
+                            "network": "disabled",
+                            "container": {
+                                "image": "optpilot-method-test-image",
+                                "executable": str(fake_container),
+                                "build": {
+                                    "context": str(tmp_path),
+                                    "dockerfile": "Dockerfile.method",
+                                    "tag": "optpilot-method-test-image",
+                                    "args": {"METHOD": "test"},
+                                },
+                            },
+                            "env": {"OPTPILOT_METHOD_STATIC_ENV": "static-value"},
+                            "envFromHost": ["OPTPILOT_METHOD_TEST_TOKEN"],
+                        },
+                        "settings": {"batchSize": 1},
+                        "accepts": {
+                            "formats": ["parameters"],
+                            "requires": {"context": ["candidate.parameters.schema"]},
+                        },
                     },
                     sort_keys=False,
                 ),
@@ -1223,29 +1216,34 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_method_config_rejects_unimplemented_shapes(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         for implementation in [
-            {"type": "service", "endpoint": "http://127.0.0.1:9999"},
-            {"type": "command", "command": ["python", "method.py"], "protocol": "optpilot.method.session.v1"},
+            {"service": "http://127.0.0.1:9999"},
+            {"command": ["python", "method.py"], "protocol": "session"},
         ]:
             with self.subTest(implementation=implementation):
                 with tempfile.TemporaryDirectory() as tmp_dir:
-                    study_path = Path(tmp_dir) / "unsupported_method.yaml"
+                    tmp_path = Path(tmp_dir)
+                    (tmp_path / "unsupported_method.yaml").write_text(
+                        yaml.safe_dump(
+                            {
+                                "apiVersion": "optpilot.io/v1",
+                                "config": "method",
+                                "id": "unsupported-method",
+                                "entrypoint": implementation,
+                                "accepts": {"formats": ["parameters"]},
+                            },
+                            sort_keys=False,
+                        ),
+                        encoding="utf-8",
+                    )
+                    study_path = tmp_path / "unsupported_method_study.yaml"
                     study_path.write_text(
                         yaml.safe_dump(
                             {
                                 "apiVersion": "optpilot.io/v1",
-                                "kind": "StudyConfig",
+                                "config": "study",
                                 "name": "unsupported-method-shape",
-                                "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                                "method": {
-                                    "apiVersion": "optpilot.io/v1",
-                                    "kind": "MethodConfig",
-                                    "id": "unsupported-method",
-                                    "implementation": implementation,
-                                    "compatibility": {
-                                        "candidateTypes": ["parameters"],
-                                        "artifactKinds": ["parameter_spec"],
-                                    },
-                                },
+                                "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                                "methodConfig": "unsupported_method.yaml",
                                 "objective": {"metric": "throughput", "direction": "maximize"},
                                 "budget": {"maxTrials": 1},
                             },
@@ -1253,35 +1251,39 @@ class MvpIntegrationTest(unittest.TestCase):
                         ),
                         encoding="utf-8",
                     )
-                    with self.assertRaisesRegex(ValueError, "implementation|command methods"):
+                    with self.assertRaisesRegex(ValueError, "entrypoint|command entrypoints"):
                         compile_authoring_config(study_path)
 
     def test_python_session_method_protocol_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
-            study_path = Path(tmp_dir) / "session_method.yaml"
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "session_method_config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "session-method",
+                        "entrypoint": {
+                            "python": "tests.fixtures.bad_targets:SessionMethod",
+                            "protocol": "session",
+                        },
+                        "settings": {"batchSize": 2},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            study_path = tmp_path / "session_method.yaml"
             study_path.write_text(
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "session-method",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "MethodConfig",
-                            "id": "session-method",
-                            "implementation": {
-                                "type": "python",
-                                "callable": "python:tests.fixtures.bad_targets:SessionMethod",
-                                "protocol": "optpilot.method.session.v1",
-                            },
-                            "config": {"batchSize": 2},
-                            "compatibility": {
-                                "candidateTypes": ["parameters"],
-                                "artifactKinds": ["parameter_spec"],
-                            },
-                        },
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": "session_method_config.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 2},
                     },
@@ -1303,30 +1305,34 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_custom_environment_adapter_runs_through_component_registry(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "custom_adapter_env.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "custom-adapter-env",
+                        "evaluator": {"adapter": "tests.fixtures.bad_targets:CustomAdapter"},
+                        "candidate": {
+                            "format": "parameters",
+                            "description": "Toy parameters.",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 8.0}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["throughput"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
             study_path = Path(tmp_dir) / "custom_environment_adapter.yaml"
             study_path.write_text(
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "custom-environment-adapter",
-                        "environment": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "EnvironmentConfig",
-                            "id": "custom-adapter-env",
-                            "evaluate": {
-                                "type": "custom",
-                                "implementation": "python:tests.fixtures.bad_targets:CustomAdapter",
-                            },
-                            "candidate": {
-                                "type": "parameters",
-                                "artifactKind": "parameter_spec",
-                                "description": "Toy parameters.",
-                                "parameters": {"schema": {"x": {"type": "float", "min": 0.0, "max": 8.0}}},
-                            },
-                            "metrics": {"source": "return", "keys": ["throughput"]},
-                        },
-                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "environmentConfig": "custom_adapter_env.yaml",
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
@@ -1342,44 +1348,51 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_custom_metric_and_record_extractors_run(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            (tmp_path / "custom_extractors_env.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "custom-extractor-env",
+                        "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                        "candidate": {
+                            "format": "parameters",
+                            "description": "Toy parameters.",
+                            "parameters": {
+                                "schema": {
+                                    "x": {"valueType": "float", "min": 0.0, "max": 8.0},
+                                    "y": {"valueType": "int", "min": 1, "max": 10},
+                                },
+                            },
+                        },
+                        "metrics": {
+                            "source": "custom",
+                            "extractor": "tests.fixtures.bad_targets:custom_metrics",
+                            "keys": ["throughput"],
+                        },
+                        "records": [
+                            {
+                                "name": "custom_events",
+                                "source": "custom",
+                                "extractor": "tests.fixtures.bad_targets:CustomRecordExtractor",
+                                "settings": {"value": "recorded"},
+                            }
+                        ],
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
             study_path = Path(tmp_dir) / "custom_extractors.yaml"
             study_path.write_text(
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "custom-extractors",
-                        "environment": {
-                            "apiVersion": "optpilot.io/v1",
-                            "kind": "EnvironmentConfig",
-                            "id": "custom-extractor-env",
-                            "evaluate": {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
-                            "candidate": {
-                                "type": "parameters",
-                                "artifactKind": "parameter_spec",
-                                "description": "Toy parameters.",
-                                "parameters": {
-                                    "schema": {
-                                        "x": {"type": "float", "min": 0.0, "max": 8.0},
-                                        "y": {"type": "int", "min": 1, "max": 10},
-                                    },
-                                },
-                            },
-                            "metrics": {
-                                "source": "custom",
-                                "implementation": "python:tests.fixtures.bad_targets:custom_metrics",
-                                "keys": ["throughput"],
-                            },
-                            "recordsToExtract": [
-                                {
-                                    "name": "custom_events",
-                                    "source": "custom",
-                                    "implementation": "python:tests.fixtures.bad_targets:CustomRecordExtractor",
-                                    "config": {"value": "recorded"},
-                                }
-                            ],
-                        },
-                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "fixed_parameter_method.yaml"),
+                        "environmentConfig": "custom_extractors_env.yaml",
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "fixed_parameter_method.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "files",
@@ -1408,16 +1421,18 @@ class MvpIntegrationTest(unittest.TestCase):
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "custom-sampler",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "instances": {
                             "source": "sampler",
-                            "implementation": "python:tests.fixtures.bad_targets:CustomSampler",
-                            "count": 2,
-                            "config": {"base": 4.0},
+                            "sampler": {
+                                "python": "tests.fixtures.bad_targets:CustomSampler",
+                                "count": 2,
+                                "settings": {"base": 4.0},
+                            },
                         },
                         "budget": {"maxTrials": 1},
                     },
@@ -1436,49 +1451,56 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         cases = [
             (
-                {"type": "custom", "implementation": "custom:Adapter"},
+                {"adapter": "python:tests.fixtures.bad_targets:CustomAdapter"},
                 {"source": "return", "keys": ["throughput"]},
                 [],
-                "evaluate.implementation",
+                "evaluator.adapter",
             ),
             (
-                {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
-                {"source": "custom", "implementation": "custom:Metrics", "keys": ["throughput"]},
+                {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                {"source": "custom", "extractor": "python:tests.fixtures.bad_targets:custom_metrics", "keys": ["throughput"]},
                 [],
-                "metrics.implementation",
+                "metrics.extractor",
             ),
             (
-                {"type": "python", "callable": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
                 {"source": "return", "keys": ["throughput"]},
-                [{"name": "events", "source": "custom", "implementation": "custom:Records"}],
-                "recordsToExtract.implementation",
+                [{"name": "events", "source": "custom", "extractor": "python:tests.fixtures.bad_targets:CustomRecordExtractor"}],
+                "records.*extractor",
             ),
         ]
-        for evaluate, metrics, records, error in cases:
+        for evaluator, metrics, records, error in cases:
             with self.subTest(error=error):
                 with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp_path = Path(tmp_dir)
+                    (tmp_path / "malformed_env.yaml").write_text(
+                        yaml.safe_dump(
+                            {
+                                "apiVersion": "optpilot.io/v1",
+                                "config": "environment",
+                                "id": "malformed-hook-env",
+                                "evaluator": evaluator,
+                                "candidate": {
+                                    "format": "parameters",
+                                    "description": "Toy parameters.",
+                                    "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 8.0}}},
+                                },
+                                "metrics": metrics,
+                                "records": records,
+                            },
+                            sort_keys=False,
+                        ),
+                        encoding="utf-8",
+                    )
                     study_path = Path(tmp_dir) / "malformed_environment_hook.yaml"
                     study_path.write_text(
                         yaml.safe_dump(
                             {
                                 "apiVersion": "optpilot.io/v1",
-                                "kind": "StudyConfig",
+                                "config": "study",
                                 "name": "malformed-environment-hook",
-                                "environment": {
-                                    "apiVersion": "optpilot.io/v1",
-                                    "kind": "EnvironmentConfig",
-                                    "id": "malformed-hook-env",
-                                    "evaluate": evaluate,
-                                    "candidate": {
-                                        "type": "parameters",
-                                        "artifactKind": "parameter_spec",
-                                        "description": "Toy parameters.",
-                                        "parameters": {"schema": {"x": {"type": "float", "min": 0.0, "max": 8.0}}},
-                                    },
-                                    "metrics": metrics,
-                                    "recordsToExtract": records,
-                                },
-                                "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                                "environmentConfig": "malformed_env.yaml",
+                                "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                                 "objective": {"metric": "throughput", "direction": "maximize"},
                                 "budget": {"maxTrials": 1},
                             },
@@ -1494,25 +1516,27 @@ class MvpIntegrationTest(unittest.TestCase):
         cases = [
             (
                 {
-                    "execution": {"backend": "container", "parallelism": 1},
+                    "execution": {"backend": "local", "runtime": {"sandbox": "container"}},
                 },
-                "execution.config",
+                "execution.runtime.container requires image",
             ),
             (
                 {
-                    "execution": {"backend": "custom", "parallelism": 1},
+                    "execution": {"backend": "external", "parallelism": 1},
                 },
-                "execution.implementation",
+                "external requires execution.adapter or execution.settings",
             ),
             (
                 {
                     "instances": {
                         "source": "sampler",
-                        "implementation": "custom:Sampler",
-                        "config": {"target_x": [1, 2]},
+                        "sampler": {
+                            "python": "python:tests.fixtures.bad_targets:CustomSampler",
+                            "settings": {"target_x": [1, 2]},
+                        },
                     },
                 },
-                "instances.implementation",
+                "instances.sampler.python",
             ),
         ]
         for overrides, error in cases:
@@ -1520,10 +1544,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp_dir:
                     payload = {
                         "apiVersion": "optpilot.io/v1",
-                        "kind": "StudyConfig",
+                        "config": "study",
                         "name": "unsupported-runtime-shape",
-                        "environment": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "method": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     }
@@ -1709,7 +1733,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(summary.best_metric, 42.0)
             self.assertEqual(observations[0]["metric_values"]["score"], 42.0)
             content_ref = artifacts[0]["spec"]["files"][0]["contentRef"]
-            self.assertIn(str(Path(summary.run_dir) / "artifacts"), content_ref)
+            self.assertIn(str(Path(summary.run_dir) / "candidates"), content_ref)
             self.assertTrue(Path(content_ref).exists())
             prompt_record = artifacts[0]["generator_record"]["prompt_record"]
             self.assertTrue(Path(prompt_record["contentRef"]).exists())
@@ -2374,13 +2398,13 @@ class MvpIntegrationTest(unittest.TestCase):
 
         sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
         method_ids = {item["id"] for item in catalog["methods"]}
-        self.assertEqual(sa_environment["summary"]["artifact_kind"], "code_bundle")
+        self.assertEqual(sa_environment["summary"]["candidate_format"], "files")
         self.assertIn(
             "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
             sa_environment["summary"]["editable_files"],
         )
         sa_method = next(item for item in catalog["methods"] if item["id"] == "openai-sa-file-editor")
-        self.assertEqual(sa_method["summary"]["candidate_types"], ["files"])
+        self.assertEqual(sa_method["summary"]["candidate_formats"], ["files"])
         self.assertIn("baseline-file-copy", method_ids)
         self.assertIn("openai-sa-file-editor", method_ids)
         self.assertTrue(any(item["label"] == "sa-baseline" for item in catalog["studies"]))
@@ -2492,8 +2516,10 @@ class MvpIntegrationTest(unittest.TestCase):
                 },
             )
             self.assertTrue(container_draft["validation"]["valid"], container_draft)
-            self.assertEqual(container_draft["draft"]["execution"]["config"]["image"], "python:3.11-slim")
-            self.assertEqual(container_draft["draft"]["execution"]["config"]["containerExecutable"], "docker")
+            self.assertEqual(container_draft["draft"]["execution"]["backend"], "local")
+            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["sandbox"], "container")
+            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["image"], "python:3.11-slim")
+            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["executable"], "docker")
 
             custom_draft = _draft_study(
                 state,
@@ -2504,17 +2530,18 @@ class MvpIntegrationTest(unittest.TestCase):
                     "metric": "throughput",
                     "direction": "maximize",
                     "maxTrials": 1,
-                    "backend": "custom",
-                    "customBackendImplementation": "python:tests.fixtures.bad_targets:CustomAdapter",
+                    "backend": "external",
+                    "customBackendImplementation": "tests.fixtures.bad_targets:CustomAdapter",
                     "customBackendConfig": '{"queue": "local"}',
                     "parallelism": 1,
                     "timeoutSeconds": 120,
                     "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
-            self.assertTrue(custom_draft["validation"]["valid"], custom_draft)
-            self.assertEqual(custom_draft["draft"]["execution"]["implementation"], "python:tests.fixtures.bad_targets:CustomAdapter")
-            self.assertEqual(custom_draft["draft"]["execution"]["config"], {"queue": "local"})
+            self.assertFalse(custom_draft["validation"]["valid"], custom_draft)
+            self.assertIn("external is not implemented yet", custom_draft["validation"]["errors"][0])
+            self.assertEqual(custom_draft["draft"]["execution"]["adapter"], "tests.fixtures.bad_targets:CustomAdapter")
+            self.assertEqual(custom_draft["draft"]["execution"]["settings"], {"queue": "local"})
 
     def test_ui_config_editor_reads_and_writes_workspace_text_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

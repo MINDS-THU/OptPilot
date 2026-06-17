@@ -41,7 +41,7 @@ class PythonCallableTargetAdapter:
 
 
 class ConfiguredEnvironmentTargetAdapter:
-    """Evaluate environments described by the EnvironmentConfig schema."""
+    """Evaluate environments compiled from public `config: environment` files."""
 
     def __init__(self, definition: Dict[str, Any], study_spec):
         self.definition = definition
@@ -644,11 +644,21 @@ def _collect_artifact_files(workspace: Path, cwd: Path, patterns: List[Any]) -> 
     artifacts: List[Dict[str, Any]] = []
     seen = set()
     workspace_resolved = workspace.resolve()
-    for pattern in patterns:
+    for rule in patterns:
+        if isinstance(rule, dict):
+            pattern = rule.get("path")
+            name = rule.get("name")
+            required = bool(rule.get("required", False))
+        else:
+            pattern = rule
+            name = None
+            required = False
         pattern_text = str(pattern)
         if Path(pattern_text).is_absolute() or ".." in Path(pattern_text).parts:
             continue
         matches = sorted(cwd.glob(pattern_text))
+        if required and not matches:
+            raise FileNotFoundError(f"Required artifact pattern matched no files: {pattern_text}")
         for path in matches:
             resolved = path.resolve()
             if resolved.is_dir() or resolved in seen:
@@ -659,7 +669,7 @@ def _collect_artifact_files(workspace: Path, cwd: Path, patterns: List[Any]) -> 
             artifacts.append(
                 {
                     "type": _artifact_type(str(resolved)),
-                    "name": resolved.name,
+                    "name": str(name or resolved.name),
                     "path": str(resolved),
                 }
             )

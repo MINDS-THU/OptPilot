@@ -38,12 +38,14 @@ class MaterializationRecord:
 def normalize_optimizable_artifact(artifact: JsonDict, study_spec, method_id: str) -> JsonDict:
     primary_artifact = study_spec.primary_artifact
     normalized = dict(artifact)
-    normalized.setdefault("artifact_id", artifact.get("id"))
+    normalized.setdefault("artifact_id", artifact.get("candidate_id", artifact.get("id")))
     if not normalized.get("artifact_id"):
-        raise ValueError("Optimizable artifact requires an artifact_id.")
+        raise ValueError("Candidate manifest requires candidate_id.")
     normalized.setdefault("artifact_kind", primary_artifact.get("kind", "unspecified"))
     normalized.setdefault("spec", {})
     normalized.setdefault("lineage", {"parents": []})
+    if "generator" in normalized and "generator_record" not in normalized:
+        normalized["generator_record"] = normalized["generator"]
     normalized.setdefault(
         "generator_record",
         {
@@ -226,7 +228,7 @@ class BoundsArtifactValidator:
             parameter_def = search_space.get(name)
             if parameter_def is None:
                 continue
-            parameter_type = parameter_def.get("type", "float")
+            parameter_type = parameter_def.get("valueType", parameter_def.get("type", "float"))
             if parameter_type in {"float", "int"}:
                 minimum = parameter_def.get("min")
                 maximum = parameter_def.get("max")

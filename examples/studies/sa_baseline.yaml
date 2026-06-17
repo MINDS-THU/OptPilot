@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: sa-baseline
 description: Evaluate the unmodified strategic-airlift simulator files as a baseline.
 tags: [external-project, baseline, simulator]
 
-environment: ../environments/strategic_airlift_devs/environment.yaml
-method: ../methods/baseline_file_copy/method.yaml
+environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
+methodConfig: ../methods/baseline_file_copy/method.yaml
 
 objective:
   metric: service_score

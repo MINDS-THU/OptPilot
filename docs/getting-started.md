@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide runs the built-in strategic-airlift example and shows how the three config files work together.
+This guide runs the strategic-airlift example and explains the three YAML files that make it work.
 
 ## Install
 
@@ -12,13 +12,14 @@ uv run optpilot --help
 Useful commands:
 
 ```bash
+uv run optpilot validate examples/studies/sa_baseline.yaml
 uv run optpilot run examples/studies/sa_baseline.yaml
 uv run optpilot ui --open-browser
 ```
 
-## What The Example Contains
+## Example Layout
 
-The example wraps a strategic-airlift DEVS simulator generated outside OptPilot. OptPilot does not own that simulator; it copies the declared simulator files into each trial workspace, lets a method propose file edits, and calls the evaluator to measure the result.
+The example wraps a strategic-airlift DEVS simulator generated outside OptPilot. OptPilot does not own the simulator. The environment config declares which simulator files are copied into each trial workspace and which file a method can edit.
 
 ```text
 examples/
@@ -40,17 +41,15 @@ examples/
     sa_openai_file_editor.yaml
 ```
 
-The simulator source tree is expected at the path declared in:
+The simulator source tree is declared in `environment.yaml`:
 
 ```yaml
-workspace:
-  copy:
-    - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
-      to: simulator
-      role: source
+trialWorkspace:
+  - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
+    to: simulator
 ```
 
-If that path does not exist, the baseline run will fail during file materialization. That is intentional: the environment config explicitly declares the external simulator files it needs.
+That copy happens once for each trial workspace. If the source path does not exist, file candidate materialization fails before evaluation.
 
 ## Run The Baseline
 
@@ -58,103 +57,99 @@ If that path does not exist, the baseline run will fail during file materializat
 uv run optpilot run examples/studies/sa_baseline.yaml
 ```
 
-This study uses:
+The baseline method emits the unmodified editable simulator file. Run it first to confirm the simulator can be copied and evaluated.
 
-- Environment: `examples/environments/strategic_airlift_devs/environment.yaml`
-- Method: `examples/methods/baseline_file_copy/method.yaml`
-- Study binding: `examples/studies/sa_baseline.yaml`
+## Environment Config
 
-The baseline method emits the unmodified editable simulator file. This is the first sanity check to run before trying an LLM or search method.
-
-## Inspect The Three Configs
-
-### 1. Environment
-
-`examples/environments/strategic_airlift_devs/environment.yaml` defines the candidate contract and evaluator.
+`examples/environments/strategic_airlift_devs/environment.yaml` is a public environment config:
 
 ```yaml
-evaluate:
-  type: python
-  callable: examples.environments.strategic_airlift_devs.evaluator:evaluate
+apiVersion: optpilot.io/v1
+config: environment
+id: sa-simulator-code-edit
 ```
 
-This is implementation-bound. The callable must exist, and it must accept:
+It points to a Python evaluator:
+
+```yaml
+evaluator:
+  python: examples.environments.strategic_airlift_devs.evaluator:evaluate
+```
+
+The callable must exist and accept:
 
 ```python
 evaluate(artifact_spec, instance, context)
 ```
 
-The same environment declares file candidates:
+The environment declares a file candidate contract:
 
 ```yaml
 candidate:
-  type: files
-  artifactKind: code_bundle
-  files:
+  format: files
+  materialize:
     root: simulator
+  files:
     editable:
       - path: devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
 ```
 
-This tells compatible methods:
+This tells compatible methods that they must produce a file candidate that edits `MissionController.py`. OptPilot copies the simulator into the trial workspace, applies the candidate file into `simulator`, then calls the evaluator.
 
-- They are producing file artifacts, not plain parameter vectors.
-- The artifact kind is `code_bundle`.
-- The editable file is `MissionController.py`.
-- The source tree is copied into the trial workspace under `simulator`.
-
-The evaluator reports metrics by returning them directly:
+Metrics are returned by the evaluator:
 
 ```yaml
 metrics:
   source: return
-  keys: [service_score, delivered_count, expired_count, generated_count, mean_latency, max_latency, delivery_ratio, expiration_ratio]
+  keys:
+    - service_score
+    - delivered_count
+    - expired_count
+    - generated_count
 ```
 
-The study objective must use one of these keys.
+The study objective must use one of these metric keys.
 
-### 2. Method
+## Method Config
 
-`examples/methods/baseline_file_copy/method.yaml` points to method code:
+`examples/methods/baseline_file_copy/method.yaml` is a public method config:
 
 ```yaml
-implementation:
-  type: python
-  callable: python:examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
-  protocol: optpilot.method.batch.v1
+apiVersion: optpilot.io/v1
+config: method
+id: baseline-file-copy
+
+entrypoint:
+  python: examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
+  protocol: batch
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
 ```
 
-This is implementation-bound. OptPilot imports the class and constructs it with:
+OptPilot imports the class and constructs it with:
 
 ```python
 BaselineFileCopyMethod(definition, study_spec, rng)
 ```
 
-The method declares compatibility:
+`accepts` is the compatibility declaration. It tells OptPilot that this method can work with environments whose candidate format is `files` and whose context includes editable files.
+
+## Study Config
+
+`examples/studies/sa_baseline.yaml` binds one environment to one method:
 
 ```yaml
-compatibility:
-  candidateTypes: [files]
-  artifactKinds: [code_bundle]
-  requiredContext:
-    - files.source
-    - files.editable
-```
+apiVersion: optpilot.io/v1
+config: study
+name: sa-baseline
 
-This is how OptPilot knows the method can run on the strategic-airlift environment. It checks compatibility before launching a study.
+environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
+methodConfig: ../methods/baseline_file_copy/method.yaml
 
-### 3. Study
-
-`examples/studies/sa_baseline.yaml` binds the environment and method:
-
-```yaml
-environment: ../environments/strategic_airlift_devs/environment.yaml
-method: ../methods/baseline_file_copy/method.yaml
-```
-
-Then it chooses the objective, instance set, budget, backend, and evidence level:
-
-```yaml
 objective:
   metric: service_score
   direction: maximize
@@ -172,47 +167,32 @@ execution:
   parallelism: 1
 ```
 
-## What The Run Produces
+Study paths are resolved from the study file. Environment paths are resolved from the environment file. Method paths are resolved from the method file.
 
-By default, runs are written under a `runs/` directory near the study config. Each run contains:
+## Inspect The Run
 
-```text
-summary.json
-study_spec.json
-observations.jsonl
-trials.jsonl
-artifacts.jsonl
-method_calls.jsonl
-scheduler_events.jsonl
-environment_snapshot.json
-run_policy.json
-run_lineage.json
-```
+Runs are written under `runs/` unless an output directory is provided.
 
-Important first files to inspect:
+Important files:
 
-| File | What to look for |
+| File | What to inspect |
 | --- | --- |
 | `summary.json` | Best metric, best trial, failure count, run directory. |
-| `study_spec.json` | The compiled form of your three configs. |
+| `study_spec.json` | Compiled internal spec generated from the three YAML files. |
 | `observations.jsonl` | Trial statuses and metric values. |
+| `trials.jsonl` | Trial inputs and backend metadata. |
 | `artifacts.jsonl` | Candidate validation and materialization details. |
-| `method_calls.jsonl` | What the method was asked to propose and what it returned. |
+| `method_calls.jsonl` | Method requests and responses. |
 
-## Run The UI
+## Use The UI
 
 ```bash
 uv run optpilot ui --open-browser
 ```
 
-The UI scans `examples/` and `user_catalog/` by default. It lets you:
+The UI scans `examples/` and `user_catalog/` by default. It lets you browse environments and methods, check compatibility, draft studies, launch runs, and inspect previous run evidence.
 
-- Browse available environments and methods.
-- See which methods are compatible with an environment.
-- Create and launch a study without hand-editing every field.
-- Inspect previous run evidence.
-
-## Add Your Own Environment And Method
+## Add Your Own Code
 
 Put user-owned integrations under `user_catalog/`:
 
@@ -227,27 +207,4 @@ user_catalog/
   studies/my_study.yaml
 ```
 
-Environment callable example:
-
-```yaml
-evaluate:
-  type: python
-  callable: user_catalog.environments.my_environment.evaluator:evaluate
-```
-
-Method callable example:
-
-```yaml
-implementation:
-  type: python
-  callable: python:user_catalog.methods.my_method.method:MyMethod
-  protocol: optpilot.method.batch.v1
-```
-
-Then create a study config that points to those two YAML files.
-
-## Next Reading
-
-- [How A Run Works](how-it-works.md) explains the runtime flow.
-- [Configuration](configuration.md) is the detailed schema reference.
-- [User Catalog](user-catalog.md) explains how to organize user-owned integrations.
+Use [Configuration](configuration.md) for the full schema and [User Catalog](user-catalog.md) for layout guidance.

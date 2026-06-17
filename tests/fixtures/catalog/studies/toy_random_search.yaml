@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: toy-random-search
 description: Exercise the platform loop with the v1 authoring config
 tags: [mvp, toy, reference-method]
 
-environment: ../environments/toy_factory.yaml
-method: ../methods/reference_random_search.yaml
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/reference_random_search.yaml
 
 objective:
   metric: throughput

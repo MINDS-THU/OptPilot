@@ -1,20 +1,18 @@
 apiVersion: optpilot.io/v1
-kind: MethodConfig
+config: method
 id: reference-random-search
 description: Built-in reference random search for examples and tests
 tags: [reference]
 
-implementation:
-  type: python
-  callable: builtin.reference_random_search
-  protocol: optpilot.method.batch.v1
+entrypoint:
+  python: optpilot.methods:ReferenceRandomSearchMethod
+  protocol: batch
 
-config:
+settings:
   batchSize: 4
 
-compatibility:
-  candidateTypes: [parameters]
-  artifactKinds: [parameter_spec]
-  requiredContext:
-    - parameters.schema
-
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema

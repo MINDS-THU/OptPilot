@@ -1,11 +1,11 @@
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: toy-evidence-aware-method
 description: Exercise a user-owned method that reads prior evidence
 tags: [mvp, toy, user-method, evidence-view]
 
-environment: ../environments/toy_factory.yaml
-method: ../methods/evidence_aware_method.yaml
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/evidence_aware_method.yaml
 
 objective:
   metric: throughput
@@ -26,4 +26,3 @@ execution:
 
 reproducibility:
   seed: 7
-

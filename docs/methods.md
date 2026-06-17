@@ -7,65 +7,111 @@ description: How OptPilot connects user-owned optimization methods to environmen
 
 OptPilot exposes one optimization abstraction: `method`.
 
-The method owns the search loop: Bayesian optimization, RL training, LLM code editing, a hand-written heuristic, an existing agent workflow, or a command-line tool. OptPilot does not split that implementation into separate controller and engine concepts.
+A method proposes candidates. It can be a random search, Bayesian optimizer, RL trainer, metaheuristic, LLM workflow, or an existing agent process. OptPilot does not split methods into separate controller and engine concepts.
+
+## Method Config
+
+```yaml
+apiVersion: optpilot.io/v1
+config: method
+id: my-method
+
+entrypoint:
+  python: user_catalog.methods.my_method.method:MyMethod
+  protocol: batch
+
+settings:
+  batchSize: 4
+
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema
+```
+
+`entrypoint` points to the method implementation. `settings` is a free object passed to that implementation. `accepts` declares which environment contracts the method can target.
 
 ## Batch Protocol
 
-A batch method is asked to propose one or more candidates. After evaluation, OptPilot calls `observe(...)` when the method implements it.
+A batch method is passively asked to propose candidates. After evaluation, OptPilot calls `observe(...)` when the method implements it.
 
 ```python
 class MyMethod:
-    def __init__(self, definition, study_spec, rng):
-        ...
+    def __init__(self, definition, study_spec, rng=None):
+        self.definition = definition
 
     def propose(self, n_candidates, study_state):
-        ...
+        return [
+            {
+                "candidate_id": f"candidate-{index}",
+                "format": "parameters",
+                "spec": {"x": 1.0},
+                "generator": {"method_id": self.definition["id"]},
+            }
+            for index in range(n_candidates)
+        ]
 
     def observe(self, observations):
-        ...
+        return None
 ```
 
-Command methods receive a JSON request on stdin unless their command declares `{input_file}` or `{output_file}` placeholders.
+Command methods use the same batch protocol. They receive a JSON request on stdin unless the command includes `{input_file}`. They write JSON to stdout unless the command includes `{output_file}`.
 
 ```yaml
-implementation:
-  type: command
+entrypoint:
   command: [python, my_method.py, "{input_file}", "{output_file}"]
-  protocol: optpilot.method.batch.v1
+  protocol: batch
 ```
 
 ## Session Protocol
 
-Python session methods receive an active session object and submit candidates through that object.
+A Python session method actively interacts with an OptPilot session object. It is useful for LLM agents or workflows that naturally operate through repeated tool-like calls.
+
+```yaml
+entrypoint:
+  python: user_catalog.methods.my_agent.method:MyAgent
+  protocol: session
+```
 
 ```python
 class MyAgent:
     def run(self, session):
         session.event({"event": "started"})
         session.submit({
-            "artifact_id": "candidate-001",
-            "artifact_kind": "parameter_spec",
+            "candidate_id": "candidate-001",
+            "format": "parameters",
             "spec": {"x": 1.0},
-            "generator_record": {"method_id": session.method_id},
+            "generator": {"method_id": session.method_id},
         })
 ```
 
-The session exposes study state, evidence access, candidate context, method config, candidate submission, and method events.
+Batch and session methods have the same candidate and evidence capability. The distinction is control flow: batch methods are asked to produce candidates; session methods actively submit candidates through the session.
+
+## Parallel Candidates
+
+Both protocols can submit multiple candidates. `settings.batchSize` controls how many candidates OptPilot asks a batch method to propose at once. `study.execution.parallelism` controls how many candidate trials can be evaluated at the same time.
 
 ## Runtime Isolation
 
-Python methods run in the host process today. Existing agents that need isolated dependencies can be exposed as command methods and launched with a method runtime container.
+Python methods run in the host process. Existing agents or optimizers that need isolated dependencies can be exposed as command methods and launched in a container.
 
 ```yaml
+entrypoint:
+  command: [python, my_agent.py, "{input_file}", "{output_file}"]
+  protocol: batch
+
 runtime:
-  type: container
-  image: my-agent-image:latest
-  containerExecutable: docker
-  networkPolicy: disabled
-  build:
-    context: .
-    dockerfile: Dockerfile.agent
-    tag: my-agent-image:latest
+  sandbox: container
+  network: disabled
+  container:
+    image: my-agent-image:latest
+    executable: docker
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      tag: my-agent-image:latest
+  envFromHost: [OPENAI_API_KEY]
 ```
 
-Method runtime containers are independent from environment execution containers. Use method containers for optimizer or agent dependencies. Use execution backend containers for simulator or evaluator dependencies.
+Method runtime containers are independent from environment execution containers. Use method containers for optimizer or agent dependencies. Use study execution runtime for simulator or evaluator dependencies.

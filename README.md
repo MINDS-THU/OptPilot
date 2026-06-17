@@ -1,127 +1,86 @@
 # OptPilot
 
-OptPilot is an orchestrator for AI-assisted iterative optimization over measured objectives. It standardizes the study loop around configuration, candidate handoff, evaluation against target environments or evaluation harnesses, evidence capture, lineage, and reproducibility.
+OptPilot is a lightweight orchestration layer for iterative optimization studies. It connects a user-owned method to a user-owned environment, runs candidate solutions, records objective metrics, and keeps an auditable evidence trail.
 
-OptPilot is intentionally not an optimizer, simulator, RL framework, or LLM agent framework. Those parts remain user-owned. OptPilot provides the protocol that lets those components run as repeatable studies against a shared execution and evidence model.
+OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework. Those pieces remain yours. OptPilot standardizes the loop around them:
 
-## Project Status
+1. A method proposes one or more candidates.
+2. OptPilot validates and materializes each candidate.
+3. An environment evaluates the candidate and reports metrics.
+4. OptPilot records trials, observations, artifacts, method calls, and run metadata.
+5. The method can use the accumulated evidence to propose the next candidates.
 
-The intended user-facing surface is small and explicit:
+## Current Surface
 
-- `EnvironmentConfig`: describes how an environment evaluates candidates and produces metrics and artifacts.
-- `MethodConfig`: describes the user-owned optimization method.
-- `StudyConfig`: binds one method to one environment with an objective, instances, and budget.
-- CLI: `optpilot run`, `optpilot ui`
-- Python entrypoint: `optpilot.runner.run_study`
+Users author three public YAML config files:
 
-OptPilot compiles the three authoring files above into an internal `StudySpec` that is recorded in the run evidence. Most users should author the public configs, not hand-write `StudySpec`.
+- `config: environment`: candidate contract, evaluator, metrics, trial workspace, saved artifacts, and optional records.
+- `config: method`: method entrypoint, protocol, settings, compatibility requirements, and optional method runtime.
+- `config: study`: the concrete run binding an environment config to a method config with objective, instances, budget, execution, and evidence settings.
+
+OptPilot validates those YAML files with packaged JSON Schemas, compiles them into an internal `StudySpec`, and writes the compiled spec into every run directory.
 
 Included in the current release:
 
-- config loader and compiler
-- `evaluate.type: python` and `evaluate.type: command`
-- parameter and file candidate materialization
-- candidate validation for parameter bounds and referenced file artifacts
-- structured evidence capture into local JSONL and file-backed run directories
-- pluggable methods through `python:module:Class` or the command method protocol
-- optional Docker/Podman-compatible runtime isolation for command methods
-- local process, local subprocess, and container-backed trial evaluation
-- declared Docker/Podman-compatible image builds for method and environment containers
-- curated examples for external simulator integration and file-edit methods
-- resume and branch lineage metadata
-- lightweight local UI for browsing catalog entries and run directories
-- prompt and model provenance helpers for user-owned LLM-style methods
+- JSON Schema validation for public environment, method, and study configs
+- parameter, file, and opaque candidate contracts
+- Python and command environment evaluators
+- Python and command methods with batch protocol, plus Python session protocol
+- local thread, local subprocess, and Docker/Podman-compatible environment execution
+- Docker/Podman-compatible command-method runtime isolation
+- local JSONL evidence store with run summaries, trials, observations, artifacts, method calls, and events
+- curated strategic-airlift DEVS example using an external generated simulator
+- local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
 
-Not included in the current release:
+Not included:
 
-- built-in Bayesian optimization, RL, or LLM search algorithms
+- built-in Bayesian optimization, RL, LLM, or metaheuristic algorithms
 - remote execution backends
-- automatic dependency inference or package installation for method and environment sandboxes
-- multi-user UI auth and permissions
+- automatic dependency inference or package installation
+- multi-user UI authentication
 
-## Install With uv
+## Install
 
-OptPilot now uses `uv` as the recommended project manager.
-
-Prerequisites:
-
-- Python 3.10+
-- `uv` 0.10+
-
-Clone the repository, then create the local environment and install the package
-in editable mode:
+OptPilot uses `uv`.
 
 ```bash
 uv sync
-```
-
-Verify the CLI:
-
-```bash
 uv run optpilot --help
 ```
 
-`uv sync` creates a local `.venv`, installs the package from `src/`, and uses
-the checked-in `uv.lock` for reproducible dependency resolution.
-
 ## Quickstart
 
-Run the strategic-airlift baseline study:
+Run the strategic-airlift baseline:
 
 ```bash
 uv run optpilot run examples/studies/sa_baseline.yaml
 ```
 
-The command prints a JSON summary with fields such as `study_id`, `run_dir`, `completed_trials`, and `best_metric`. The run directory contains the audit and evidence records for that study, including:
+Validate a config without running it:
 
-- `study_spec.json`
-- `summary.json`
-- `observations.jsonl`
-- `trials.jsonl`
-- `artifacts.jsonl`
-- `method_calls.jsonl`
-- `method_events.jsonl`
-- `scheduler_events.jsonl`
+```bash
+uv run optpilot validate examples/studies/sa_baseline.yaml
+```
 
-The built-in example wraps a strategic-airlift DEVS simulator generated outside OptPilot and shows how an environment and different methods connect through configs:
-
-- [examples/README.md](examples/README.md)
-- `examples/environments/strategic_airlift_devs/environment.yaml`
-- `examples/methods/baseline_file_copy/method.yaml`
-- `examples/methods/openai_file_editor/method.yaml`
-- `examples/studies/sa_baseline.yaml`
-- `examples/studies/sa_openai_file_editor.yaml`
-
-To browse local studies and run directories in the lightweight UI:
+Open the local UI:
 
 ```bash
 uv run optpilot ui --open-browser
 ```
 
-## Authoring Model
+The UI scans `examples/` and `user_catalog/` by default.
 
-Every OptPilot study is built from three small config files.
+## Minimal Config Shape
 
-1. `EnvironmentConfig`
-   Defines how OptPilot evaluates candidates. The current release supports Python
-   callables and external commands.
-2. `MethodConfig`
-   Defines the optimization method. This can point at a built-in reference
-   method, user-owned Python classes, or command methods. Command methods can
-   optionally run inside a Docker/Podman-compatible container runtime.
-3. `StudyConfig`
-   Selects the environment and method, then adds the objective, instances,
-   execution settings, and stopping budget.
-
-An example study is exactly this pattern:
+Study config:
 
 ```yaml
 apiVersion: optpilot.io/v1
-kind: StudyConfig
+config: study
 name: sa-baseline
 
-environment: ../environments/strategic_airlift_devs/environment.yaml
-method: ../methods/baseline_file_copy/method.yaml
+environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
+methodConfig: ../methods/baseline_file_copy/method.yaml
 
 objective:
   metric: service_score
@@ -134,16 +93,58 @@ instances:
 
 budget:
   maxTrials: 1
+
+execution:
+  backend: local
+  parallelism: 1
 ```
 
-For a full walkthrough, see [docs/getting-started.md](docs/getting-started.md).
-For the full schema, see [docs/configuration.md](docs/configuration.md).
+Environment evaluator:
 
-## User-Owned Catalog And Code
+```yaml
+apiVersion: optpilot.io/v1
+config: environment
+id: my-environment
 
-OptPilot is designed so users own the search algorithm and the callable or command code used to evaluate an environment.
+evaluator:
+  python: user_catalog.environments.my_environment.evaluator:evaluate
 
-Put your own integration files under `user_catalog/`:
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 1.0
+
+metrics:
+  source: return
+  keys: [score]
+```
+
+Method entrypoint:
+
+```yaml
+apiVersion: optpilot.io/v1
+config: method
+id: my-method
+
+entrypoint:
+  python: user_catalog.methods.my_method.method:MyMethod
+  protocol: batch
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]
+```
+
+Python evaluator references use `module:function`. Python method references use `module:Class`. The old internal `python:module:Class` prefix is not used in public YAML.
+
+## User-Owned Catalog
+
+Put your own environments, methods, and studies under `user_catalog/`:
 
 ```text
 user_catalog/
@@ -159,104 +160,63 @@ user_catalog/
   studies/my_study.yaml
 ```
 
-Environment callables use `module:function` for `evaluate.type: python`, for example:
+Environment and method directories own reusable implementation code and reusable config variants. Study configs are project-specific bindings.
 
-```yaml
-evaluate:
-  type: python
-  callable: user_catalog.environments.my_environment.evaluator:evaluate
-```
+## Container Runtime Example
 
-Methods use `python:module:Class`, for example:
-
-```yaml
-implementation:
-  type: python
-  callable: python:user_catalog.methods.my_method.method:MyMethod
-  protocol: optpilot.method.batch.v1
-```
-
-That means you can keep your optimization logic outside the OptPilot package itself while still getting the standard study runtime and evidence model.
-
-## Common Commands
-
-Resume an existing run directory:
-
-```bash
-uv run optpilot run examples/studies/sa_baseline.yaml \
-  --resume-run-dir path/to/existing-run
-```
-
-Branch a new run from an earlier run:
-
-```bash
-uv run optpilot run examples/studies/sa_baseline.yaml \
-  --branch-from-run-dir path/to/existing-run
-```
-
-Start the lightweight local UI:
-
-```bash
-uv run optpilot ui --open-browser
-uv run optpilot ui --catalog user_catalog --runs runs
-```
-
-Run trials through a Docker/Podman-compatible container image:
+Run environment trials in a container:
 
 ```yaml
 execution:
-  backend: container
-  config:
-    image: python:3.11
-    containerExecutable: docker
-    build:
-      context: .
-      dockerfile: Dockerfile.environment
-      tag: python:3.11
+  backend: local
+  runtime:
+    sandbox: container
+    network: disabled
+    container:
+      image: python:3.11-slim
+      executable: docker
 ```
 
-Run a command method through its own Docker/Podman-compatible container image:
+Run a command method in its own container:
 
 ```yaml
-implementation:
-  type: command
+entrypoint:
   command: [python, my_agent.py, "{input_file}", "{output_file}"]
-  protocol: optpilot.method.batch.v1
+  protocol: batch
+
 runtime:
-  type: container
-  image: my-agent-image:latest
-  containerExecutable: docker
-  networkPolicy: disabled
-  build:
-    context: .
-    dockerfile: Dockerfile.agent
-    tag: my-agent-image:latest
+  sandbox: container
+  network: disabled
+  container:
+    image: my-agent-image:latest
+    executable: docker
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+      tag: my-agent-image:latest
   envFromHost: [OPENAI_API_KEY]
 ```
 
-## Development Checks
+## Documentation
 
-Run the repository checks with `uv`:
+- [Getting Started](docs/getting-started.md)
+- [Configuration Reference](docs/configuration.md)
+- [How A Run Works](docs/how-it-works.md)
+- [User Catalog](docs/user-catalog.md)
+- [UI](docs/ui.md)
+
+Build the docs locally:
+
+```bash
+uv run --extra docs mkdocs serve
+```
+
+## Development Checks
 
 ```bash
 uv run python -m unittest discover -s tests -p 'test_*.py'
 uv run python -m compileall src/optpilot
 ./scripts/smoke_test.sh
 ```
-
-The smoke script re-executes itself through `uv run` when needed.
-
-## More Documentation
-
-- [docs/getting-started.md](docs/getting-started.md)
-- [docs/configuration.md](docs/configuration.md)
-
-Build the documentation site locally:
-
-```bash
-uv run --extra docs mkdocs serve
-```
-
-## Release Note
 
 OptPilot is licensed under the Apache License 2.0. See [LICENSE](LICENSE).

@@ -220,18 +220,23 @@ class MethodRuntime:
         return {"configured": True, "status": "built", **payload}
 
     def _batch_request(self, call_id: str, n_candidates: int, study_state: Dict[str, Any], evidence_view, call_dir: Path) -> Dict[str, Any]:
+        candidate_context = dict(self.study_spec.primary_artifact.get("candidateContext", {}))
+        runtime_context = {
+            **dict(study_state.get("runtime_context", {})),
+            "method_workspace": str(call_dir),
+        }
         return {
             "protocol": "optpilot.method.batch.v1",
             "request_id": call_id,
             "n_candidates": n_candidates,
+            "candidate": dict(candidate_context.get("candidate", {})),
+            "methodContext": dict(candidate_context.get("methodContext", {})),
             "study_state": dict(study_state),
             "objective": dict(self.study_spec.objective),
-            "candidate_context": dict(self.study_spec.primary_artifact.get("candidateContext", {})),
+            "candidate_context": candidate_context,
             "evidence": evidence_view.decision_context() if evidence_view else {},
-            "runtime_context": {
-                **dict(study_state.get("runtime_context", {})),
-                "method_workspace": str(call_dir),
-            },
+            "runtime_context": runtime_context,
+            "settings": dict(self.definition.get("settings", self.definition.get("config", {}))),
             "config": dict(self.definition.get("config", {})),
         }
 

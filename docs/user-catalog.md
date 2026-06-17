@@ -5,9 +5,9 @@ description: Where to put user-owned OptPilot environments, methods, configs, an
 
 # User Catalog
 
-`user_catalog/` is the recommended place for your own environments, methods, configs, prompts, fixtures, and study files.
+`user_catalog/` is the recommended place for your own environments, methods, prompts, fixtures, datasets, assets, and study files.
 
-The UI scans `user_catalog/` automatically when launched from the repository root.
+The UI scans `user_catalog/` automatically when launched from the repository root:
 
 ```bash
 uv run optpilot ui --open-browser
@@ -23,11 +23,13 @@ user_catalog/
       evaluator.py
       instances/
         default.yaml
+      prompts/
       assets/
   methods/
     my_method/
       method.yaml
       method.py
+      prompts/
       assets/
   studies/
     my_study.yaml
@@ -38,9 +40,25 @@ Environment and method directories own reusable implementation and reusable conf
 ## Referencing Environment Code
 
 ```yaml
-evaluate:
-  type: python
-  callable: user_catalog.environments.my_environment.evaluator:evaluate
+apiVersion: optpilot.io/v1
+config: environment
+id: my-environment
+
+evaluator:
+  python: user_catalog.environments.my_environment.evaluator:evaluate
+
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 1.0
+
+metrics:
+  source: return
+  keys: [score]
 ```
 
 Minimal evaluator:
@@ -59,26 +77,34 @@ def evaluate(artifact_spec, instance, context):
 ## Referencing Method Code
 
 ```yaml
-implementation:
-  type: python
-  callable: python:user_catalog.methods.my_method.method:MyMethod
-  protocol: optpilot.method.batch.v1
+apiVersion: optpilot.io/v1
+config: method
+id: my-method
+
+entrypoint:
+  python: user_catalog.methods.my_method.method:MyMethod
+  protocol: batch
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]
 ```
 
 Minimal method:
 
 ```python
 class MyMethod:
-    def __init__(self, definition, study_spec, rng):
+    def __init__(self, definition, study_spec, rng=None):
         self.definition = definition
 
     def propose(self, n_candidates, study_state):
         return [
             {
-                "artifact_id": f"candidate-{index}",
-                "artifact_kind": "parameter_spec",
+                "candidate_id": f"candidate-{index}",
+                "format": "parameters",
                 "spec": {"x": 1.0},
-                "generator_record": {"method_id": self.definition["id"]},
+                "generator": {"method_id": self.definition["id"]},
             }
             for index in range(n_candidates)
         ]
@@ -96,8 +122,13 @@ user_catalog/environments/my_environment/
   evaluator.py
   environment_fast.yaml
   environment_high_fidelity.yaml
+
+user_catalog/methods/my_method/
+  method.py
+  method_small_model.yaml
+  method_large_model.yaml
 ```
 
-Use variants when the same evaluator has different fidelity levels, datasets, exposed files, metrics, or runtime settings. Do the same for methods when changing models, prompts, hyperparameters, or containers.
+Use variants when the same evaluator has different fidelity levels, datasets, exposed files, metrics, or runtime settings. Use method variants for different models, prompts, hyperparameters, candidate batch sizes, or containers.
 
 For the complete field-by-field schema, see [Configuration](configuration.md). For the runtime sequence from candidate proposal to evidence files, see [How A Run Works](how-it-works.md).

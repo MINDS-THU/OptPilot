@@ -37,7 +37,7 @@ uv run --extra docs mkdocs build --strict
 
 Before publishing:
 
-- Confirm public docs point users to `StudyConfig`, `EnvironmentConfig`, and `MethodConfig`.
+- Confirm public docs point users to `config: study`, `config: environment`, and `config: method`.
 - Confirm generated run directories are not committed.
 - Confirm `.optpilot-ui/`, `.venv/`, `dist/`, `site/`, and `*.egg-info/` are absent from commits.
 - Confirm local external projects are not committed under `resource/`.

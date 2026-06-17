@@ -27,9 +27,9 @@ OptPilot makes that loop explicit and reproducible.
 ```mermaid
 flowchart LR
   subgraph Authoring["What you write"]
-    StudyConfig["StudyConfig\nbinds a method to an environment"]
-    EnvironmentConfig["EnvironmentConfig\ndefines candidate contract + evaluator"]
-    MethodConfig["MethodConfig\ndefines proposal code + compatibility"]
+    StudyYaml["config: study\nbinds a method to an environment"]
+    EnvironmentYaml["config: environment\ndefines candidate contract + evaluator"]
+    MethodYaml["config: method\ndefines proposal code + compatibility"]
   end
 
   subgraph Runtime["What OptPilot runs"]
@@ -42,11 +42,11 @@ flowchart LR
     Evidence["Evidence store\nJSON, JSONL, files"]
   end
 
-  StudyConfig --> EnvironmentConfig
-  StudyConfig --> MethodConfig
-  StudyConfig --> Compiler
-  EnvironmentConfig --> Compiler
-  MethodConfig --> Compiler
+  StudyYaml --> EnvironmentYaml
+  StudyYaml --> MethodYaml
+  StudyYaml --> Compiler
+  EnvironmentYaml --> Compiler
+  MethodYaml --> Compiler
   Compiler --> MethodRuntime
   Compiler --> Materializer
   Compiler --> Evaluator
@@ -64,9 +64,9 @@ OptPilot users normally author three YAML files:
 
 | Config | Purpose | Points to code? |
 | --- | --- | --- |
-| `EnvironmentConfig` | Describes what a valid candidate looks like, how to evaluate it, where metrics come from, and what files or records should be saved. | Yes. `evaluate.callable`, `evaluate.command`, custom metric extractors, and optional interfaces point to environment-side implementation. |
-| `MethodConfig` | Describes a method that proposes candidates and declares which environments it can work with. | Yes. `implementation.callable` or `implementation.command` points to method-side implementation. |
-| `StudyConfig` | Chooses one environment config, one method config, objective, instances, budget, execution backend, and evidence settings. | Usually no direct code. It mostly references environment and method config files. |
+| `config: environment` | Describes what a valid candidate looks like, how to evaluate it, where metrics come from, and what files or records should be saved. | Yes. `evaluator.python`, `evaluator.command`, custom metric extractors, and optional adapters point to environment-side implementation. |
+| `config: method` | Describes a method that proposes candidates and declares which environments it can work with. | Yes. `entrypoint.python` or `entrypoint.command` points to method-side implementation. |
+| `config: study` | Chooses one environment config, one method config, objective, instances, budget, execution backend, and evidence settings. | Usually no direct code. It references `environmentConfig` and `methodConfig` files. |
 
 The most important distinction is this:
 

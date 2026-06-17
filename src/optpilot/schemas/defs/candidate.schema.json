@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/defs/candidate.schema.json",
+  "definitions": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format"],
+      "properties": {
+        "format": {"enum": ["parameters", "files", "opaque"]},
+        "description": {"type": "string"},
+        "parameters": {"$ref": "#/definitions/parameters"},
+        "files": {"$ref": "#/definitions/files"},
+        "materialize": {"$ref": "#/definitions/materialize"},
+        "opaque": {"$ref": "#/definitions/opaque"}
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {
+        "schema": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/definitions/parameter"}
+        },
+        "constraints": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/constraint"}
+        }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["valueType"],
+      "properties": {
+        "valueType": {
+          "enum": ["float", "int", "bool", "string", "categorical", "array", "object"]
+        },
+        "min": {"type": "number"},
+        "max": {"type": "number"},
+        "values": {"type": "array"},
+        "default": true,
+        "description": {"type": "string"},
+        "unit": {"type": "string"},
+        "pattern": {"type": "string"},
+        "items": {"$ref": "#/definitions/parameter"},
+        "properties": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/definitions/parameter"}
+        },
+        "required": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "minItems": {"type": "integer", "minimum": 0},
+        "maxItems": {"type": "integer", "minimum": 0}
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "expr"],
+      "properties": {
+        "id": {"type": "string"},
+        "description": {"type": "string"},
+        "expr": {"type": "object"}
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "editable": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": {"type": "string"}
+            }
+          }
+        },
+        "required": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "allow": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "deny": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "materialize": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "root": {"type": "string"}
+      }
+    },
+    "opaque": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["family"],
+      "properties": {
+        "family": {"type": "string"}
+      }
+    }
+  }
+}
