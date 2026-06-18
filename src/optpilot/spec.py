@@ -235,8 +235,8 @@ def study_spec_from_raw(spec_path: Path, raw: Dict[str, Any]) -> StudySpec:
     missing = REQUIRED_TOP_LEVEL - raw.keys()
     if missing:
         raise ValueError(f"StudySpec missing required top-level keys: {sorted(missing)}")
-    if raw.get("config") != "compiled_study":
-        raise ValueError("config must be 'compiled_study'")
+    if raw.get("config") != "run_spec":
+        raise ValueError("config must be 'run_spec'")
     if not raw.get("method"):
         raise ValueError("StudySpec must define method")
     _validate_study_spec(raw)
@@ -286,10 +286,10 @@ def _require_component(location: str, definition: Dict[str, Any]) -> None:
     implementation = definition.get("implementation")
     if not implementation:
         raise ValueError(f"{location} must define an implementation.")
-    if not (implementation.startswith("builtin.") or implementation.startswith("python:")):
+    if not _is_component_ref(implementation):
         raise ValueError(
-        f"{location}.implementation must start with 'builtin.' or 'python:'; got {implementation!r}."
-    )
+            f"{location}.implementation must be 'builtin.*' or module:object; got {implementation!r}."
+        )
 
 
 def _require_method(location: str, definition: Dict[str, Any]) -> None:
@@ -303,11 +303,18 @@ def _require_method(location: str, definition: Dict[str, Any]) -> None:
         callable_ref = implementation.get("callable") or implementation.get("implementation")
         if not callable_ref:
             raise ValueError(f"{location}.implementation must define callable for type 'python'.")
-        if not (str(callable_ref).startswith("builtin.") or str(callable_ref).startswith("python:")):
+        if not _is_component_ref(str(callable_ref)):
             raise ValueError(
-                f"{location}.implementation.callable must start with 'builtin.' or 'python:'; got {callable_ref!r}."
+                f"{location}.implementation.callable must be 'builtin.*' or module:object; got {callable_ref!r}."
             )
     if implementation_type == "command":
         command = implementation.get("command")
         if not isinstance(command, list) or not command or not all(isinstance(item, str) for item in command):
             raise ValueError(f"{location}.implementation.command must be a non-empty list of strings.")
+
+
+def _is_component_ref(value: str) -> bool:
+    if value.startswith("builtin."):
+        return True
+    module_name, sep, attr = value.partition(":")
+    return bool(sep and module_name and attr and not value.startswith("python:"))

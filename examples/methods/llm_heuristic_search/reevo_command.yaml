@@ -1,0 +1,27 @@
+apiVersion: optpilot.io/v1
+config: method
+id: reevo-llm-heuristic-search
+description: Thin OptPilot wrapper for an upstream ReEvo run that produces one heuristic file.
+tags: [upstream-project, llm-method, reevo, heuristic-search]
+
+entrypoint:
+  python: examples.methods.llm_heuristic_search.method:LLMHeuristicSearchMethod
+  protocol: batch
+
+settings:
+  command:
+    - "{python}"
+    - main.py
+    - problem=bpp_online
+    - output_dir={method_workspace}
+  repoRoot: ../../../resource/reevo
+  workdir: ../../../resource/reevo
+  generatedFile: problems/bpp_online/gpt.py
+  upstreamRepository: https://github.com/ai4co/reevo
+  timeoutSeconds: 1800
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable

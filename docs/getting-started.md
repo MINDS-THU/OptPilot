@@ -1,6 +1,24 @@
 # Getting Started
 
-This guide runs the strategic-airlift example and explains the three YAML files that make it work.
+This guide gets you to a successful first OptPilot run with the job-shop scheduling example.
+
+Use this page when you want to validate the toolchain and understand one concrete study layout. Use [Examples](examples.md) for the full built-in example catalog and [Configuration](configuration.md) for the YAML reference.
+
+## Mental Model
+
+Every OptPilot run follows the same loop:
+
+```text
+method proposes candidate
+environment evaluates candidate
+OptPilot records evidence
+```
+
+The three public configs map directly onto that loop:
+
+- the environment config says what can be evaluated and how
+- the method config says how candidates are proposed
+- the study config binds them into one concrete run
 
 ## Install
 
@@ -9,180 +27,156 @@ uv sync
 uv run optpilot --help
 ```
 
-Useful commands:
+Useful first commands:
 
 ```bash
-uv run optpilot validate examples/studies/sa_baseline.yaml
-uv run optpilot run examples/studies/sa_baseline.yaml
+uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
 uv run optpilot ui --open-browser
 ```
 
-## Example Layout
+`optpilot validate` checks YAML structure, path resolution, and method/environment compatibility before a study runs.
 
-The example wraps a strategic-airlift DEVS simulator generated outside OptPilot. OptPilot does not own the simulator. The environment config declares which simulator files are copied into each trial workspace and which file a method can edit.
+## Validate And Run
 
-```text
-examples/
-  environments/
-    strategic_airlift_devs/
-      environment.yaml
-      evaluator.py
-      instances/sa_default.yaml
-      prompts/sa_file_edit_system_prompt.md
-  methods/
-    baseline_file_copy/
-      method.yaml
-      method.py
-    openai_file_editor/
-      method.yaml
-      method.py
-  studies/
-    sa_baseline.yaml
-    sa_openai_file_editor.yaml
-```
+The first example evaluates weighted dispatch-rule parameters on two small job-shop scheduling instances.
 
-The simulator source tree is declared in `environment.yaml`:
-
-```yaml
-trialWorkspace:
-  - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
-    to: simulator
-```
-
-That copy happens once for each trial workspace. If the source path does not exist, file candidate materialization fails before evaluation.
-
-## Run The Baseline
+Validate it:
 
 ```bash
-uv run optpilot run examples/studies/sa_baseline.yaml
+uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-The baseline method emits the unmodified editable simulator file. Run it first to confirm the simulator can be copied and evaluated.
+Run it:
+
+```bash
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+```
+
+This baseline does not require an API key or external solver. It emits one parameter candidate, evaluates it, and writes run evidence under `examples/runs/` unless you pass `--output-root`.
+
+## The Three Configs In This Example
+
+The study uses:
+
+- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml`
+- `examples/methods/fixed_rule_parameters/method.yaml`
+- `examples/studies/job_shop_rule_parameters_baseline.yaml`
 
 ## Environment Config
 
-`examples/environments/strategic_airlift_devs/environment.yaml` is a public environment config:
+The environment config declares a parameter candidate contract:
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: environment
-id: sa-simulator-code-edit
+id: job-shop-rule-parameters
+
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      remaining_work_weight:
+        valueType: float
+        min: -5.0
+        max: 5.0
+      processing_time_weight:
+        valueType: float
+        min: -5.0
+        max: 5.0
 ```
 
 It points to a Python evaluator:
 
 ```yaml
 evaluator:
-  python: examples.environments.strategic_airlift_devs.evaluator:evaluate
+  python: examples.environments.job_shop_scheduling.evaluator:evaluate
 ```
 
-The callable must exist and accept:
-
-```python
-evaluate(candidate_runtime, instance, context)
-```
-
-The environment declares a file candidate contract:
-
-```yaml
-candidate:
-  format: files
-  materialize:
-    root: simulator
-  files:
-    editable:
-      - path: devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
-```
-
-This tells compatible methods that they must produce a file candidate that edits `MissionController.py`. OptPilot copies the simulator into the trial workspace, applies the candidate file into `simulator`, then calls the evaluator.
-
-Metrics are returned by the evaluator:
-
-```yaml
-metrics:
-  source: return
-  keys:
-    - service_score
-    - delivered_count
-    - expired_count
-    - generated_count
-```
-
-The study objective must use one of these metric keys.
+The evaluator converts the parameter candidate into a dispatching rule, simulates a schedule, validates feasibility, and returns metrics.
 
 ## Method Config
 
-`examples/methods/baseline_file_copy/method.yaml` is a public method config:
+The matching method emits one fixed parameter candidate:
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: method
-id: baseline-file-copy
+id: fixed-rule-parameters
 
 entrypoint:
-  python: examples.methods.baseline_file_copy.method:BaselineFileCopyMethod
+  python: examples.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
   protocol: batch
 
 accepts:
-  formats: [files]
+  formats: [parameters]
   requires:
     context:
-      - candidate.files.editable
+      - candidate.parameters.schema
 ```
 
-OptPilot imports the class and constructs it with:
-
-```python
-BaselineFileCopyMethod(definition, study_spec, rng)
-```
-
-`accepts` is the compatibility declaration. It tells OptPilot that this method can work with environments whose candidate format is `files` and whose context includes editable files.
+`accepts` is the compatibility declaration. It tells OptPilot that this method can work with environments whose candidate format is `parameters` and whose context includes a parameter schema.
 
 ## Study Config
 
-`examples/studies/sa_baseline.yaml` binds one environment to one method:
+The study binds the environment and method:
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: study
-name: sa-baseline
+name: job-shop-rule-parameters-baseline
 
-environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
-methodConfig: ../methods/baseline_file_copy/method.yaml
+environmentConfig: ../environments/job_shop_scheduling/environment_rule_parameters.yaml
+methodConfig: ../methods/fixed_rule_parameters/method.yaml
 
 objective:
-  metric: service_score
-  direction: maximize
+  metric: normalized_makespan
+  direction: minimize
 
 instances:
   source: files
   paths:
-    - ../environments/strategic_airlift_devs/instances/sa_default.yaml
+    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
+    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
 
 budget:
   maxTrials: 1
-
-execution:
-  backend: local
-  parallelism: 1
 ```
 
 Study paths are resolved from the study file. Environment paths are resolved from the environment file. Method paths are resolved from the method file.
 
-## Inspect The Run
+## Try File Candidates
 
-Runs are written under `runs/` unless an output directory is provided.
+The same job-shop evaluator also has file-candidate variants.
+
+Dispatch-rule file:
+
+```bash
+uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
+```
+
+Solver-code file:
+
+```bash
+uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
+```
+
+See [Job-Shop Environment](job-shop-environment.md) for the candidate contracts.
+
+## Inspect The Run
 
 Important files:
 
 | File | What to inspect |
 | --- | --- |
 | `summary.json` | Best metric, best trial, failure count, run directory. |
-| `study_spec.json` | Compiled internal spec generated from the three YAML files. |
+| `study_spec.json` | Compiled run spec generated from the three YAML files. |
 | `observations.jsonl` | Trial statuses and metric values. |
 | `trials.jsonl` | Trial inputs and backend metadata. |
 | `candidates.jsonl` | Candidate validation and materialization details. |
 | `method_calls.jsonl` | Method requests and responses. |
+
+See [How A Run Works](how-it-works.md) and [Evidence](evidence.md) for the full runtime sequence.
 
 ## Use The UI
 

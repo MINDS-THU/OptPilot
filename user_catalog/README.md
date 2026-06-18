@@ -1,6 +1,7 @@
 # User Catalog
 
-This folder is for user-owned OptPilot integrations. Put both configs and implementation code here.
+This folder is for user-owned OptPilot integrations. Put your own environment
+code, method code, configs, prompts, datasets, fixtures, and study files here.
 
 The UI scans this folder automatically when launched from the repository root:
 
@@ -14,92 +15,127 @@ uv run optpilot ui --open-browser
 user_catalog/
   environments/
     my_environment/
-      environment.yaml       # default EnvironmentConfig
-      evaluator.py           # Python evaluator or adapter code
+      environment.yaml       # reusable environment config
+      evaluator.py           # Python evaluator, command helper, or adapter code
       instances/
         default.yaml
-      assets/                # environment-specific prompts, schemas, fixtures
+      prompts/
+      assets/
   methods/
     my_method/
-      method.yaml            # default MethodConfig
-      method.py              # Python method implementation
-      assets/                # method-specific prompts/templates
+      method.yaml            # reusable method config
+      method.py              # Python method implementation or command helper
+      prompts/
+      assets/
   studies/
-    my_study.yaml            # project-specific binding of env + method + objective
+    my_study.yaml            # project-specific binding of environment + method
 ```
 
-This mirrors the built-in examples: an environment or method directory owns the reusable implementation and one or more reusable config variants, while studies remain project-centric.
+Environment and method directories own reusable implementation and reusable
+config variants. Study files are concrete run plans.
 
-## Referencing Environment Code
+## Environment Example
 
-If your evaluator lives at `user_catalog/environments/my_environment/evaluator.py`:
+If your evaluator lives at
+`user_catalog/environments/my_environment/evaluator.py`, reference it with a
+normal Python import string:
 
 ```yaml
-evaluate:
-  type: python
-  callable: user_catalog.environments.my_environment.evaluator:evaluate
+apiVersion: optpilot.io/v1
+config: environment
+id: my-environment
+
+evaluator:
+  python: user_catalog.environments.my_environment.evaluator:evaluate
+
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 1.0
+
+metrics:
+  source: return
+  keys: [score]
 ```
 
 Minimal evaluator:
 
 ```python
-def evaluate(candidate, instance, context):
-    score = 1.0
+def evaluate(candidate_runtime, instance, context):
     return {
         "status": "success",
-        "metric_values": {"score": score},
-        "artifacts": [],
+        "metric_values": {"score": 1.0},
+        "constraint_results": {},
+        "output_files": [],
         "event_summary": {},
     }
 ```
 
-## Referencing Method Code
+## Method Example
 
-If your method lives at `user_catalog/methods/my_method/method.py`:
+If your method lives at `user_catalog/methods/my_method/method.py`, reference it
+with a normal Python import string:
 
 ```yaml
-implementation:
-  type: python
-  callable: python:user_catalog.methods.my_method.method:MyMethod
-  protocol: optpilot.method.batch.v1
+apiVersion: optpilot.io/v1
+config: method
+id: my-method
+
+entrypoint:
+  python: user_catalog.methods.my_method.method:MyMethod
+  protocol: batch
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]
 ```
 
-Minimal method:
+Minimal batch method:
 
 ```python
 class MyMethod:
-    def __init__(self, definition, study_spec, rng):
+    def __init__(self, definition, study_spec, rng=None):
         self.definition = definition
 
     def propose(self, n_candidates, study_state):
         return [
             {
-                "artifact_kind": "parameter_spec",
+                "candidate_id": f"candidate-{index}",
+                "format": "parameters",
                 "spec": {"x": 1.0},
-                "generator_record": {"method_id": self.definition["id"]},
+                "generator": {"method_id": self.definition["id"]},
             }
-            for _ in range(n_candidates)
+            for index in range(n_candidates)
         ]
 
     def observe(self, observations):
         return None
 ```
 
-## Multiple Configs For One Environment Or Method
+## Multiple Config Variants
 
-Yes, this can happen. Keep the implementation once, and add config variants in the same directory:
+One implementation can have multiple configs:
 
 ```text
 user_catalog/environments/my_environment/
   evaluator.py
   environment_fast.yaml
   environment_high_fidelity.yaml
+
+user_catalog/methods/my_method/
+  method.py
+  method_small_model.yaml
+  method_large_model.yaml
 ```
 
-Use this when the same simulator/evaluator has different runtime settings, metric extraction, exposed files, datasets, or fidelity levels. Do the same for methods when the same method implementation has different models, hyperparameters, prompts, or runtime containers.
+Use variants when the same evaluator has different datasets, fidelity levels,
+metrics, exposed files, or runtime settings. Use method variants for different
+models, prompts, hyperparameters, candidate batch sizes, or containers.
 
-## Notes
-
-- Keep large simulators or external projects in their own repository when practical, then point configs at their Python modules, command entrypoints, Dockerfiles, or workspace files.
-- Use local `assets/` folders for small support files that belong with a specific environment or method.
-- Generated run directories should stay outside this folder or under an ignored `runs/` directory.
+For the complete field reference, see `docs/configuration.md`. For the runtime
+sequence from candidate proposal to evidence files, see `docs/how-it-works.md`.

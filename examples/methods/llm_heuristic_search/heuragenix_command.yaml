@@ -1,0 +1,29 @@
+apiVersion: optpilot.io/v1
+config: method
+id: heuragenix-llm-heuristic-search
+description: Thin OptPilot wrapper for an upstream HeurAgenix heuristic evolution run.
+tags: [upstream-project, llm-method, heuragenix, heuristic-search]
+
+entrypoint:
+  python: examples.methods.llm_heuristic_search.method:LLMHeuristicSearchMethod
+  protocol: batch
+
+settings:
+  command:
+    - "{python}"
+    - evolve_heuristic.py
+    - -p
+    - custom_problem
+    - -e
+    - seed_heuristic
+  repoRoot: ../../../resource/HeurAgenix
+  workdir: ../../../resource/HeurAgenix
+  generatedFile: output/custom_problem/evolution_result/seed_heuristic/best_heuristic.py
+  upstreamRepository: https://github.com/microsoft/HeurAgenix
+  timeoutSeconds: 1800
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable

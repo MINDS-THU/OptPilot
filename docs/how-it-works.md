@@ -6,61 +6,63 @@ This page follows what happens after:
 uv run optpilot run examples/studies/sa_baseline.yaml
 ```
 
-OptPilot loads a study config, loads the referenced environment and method configs, validates compatibility, compiles an internal `StudySpec`, then runs a propose-evaluate-record loop until the budget is exhausted.
+At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
 
-## End-To-End Procedure
+## Runtime Sequence
 
 ```mermaid
 sequenceDiagram
-  participant User
   participant CLI as "optpilot run"
   participant Compiler as "Config compiler"
-  participant Store as "Evidence store"
-  participant Runner as "OptPilot runner"
+  participant Runner as "Runner"
   participant Method as "Method"
-  participant Materializer as "Materializer"
+  participant CandidateStore as "Candidate store"
+  participant Trial as "Trial workspace"
   participant Evaluator as "Environment evaluator"
+  participant Evidence as "Evidence store"
 
-  User->>CLI: "run study.yaml"
-  CLI->>Compiler: "load config: study"
-  Compiler->>Compiler: "load environmentConfig"
-  Compiler->>Compiler: "load methodConfig"
-  Compiler->>Compiler: "validate JSON Schema"
-  Compiler->>Compiler: "check candidate and method compatibility"
-  Compiler-->>CLI: "internal StudySpec"
-  CLI->>Store: "create run directory"
-  CLI->>Store: "write StudySpec, policy, snapshot"
+  CLI->>Compiler: load study config
+  Compiler->>Compiler: load environmentConfig and methodConfig
+  Compiler->>Compiler: validate JSON Schema and compatibility
+  Compiler-->>Runner: compiled study spec
+  Runner->>Evidence: create run directory and write run metadata
 
-  loop "until budget stops"
-    Runner->>Method: "provide study state, method context, evidence, candidate contract"
-    Method-->>Runner: "candidate manifests"
-    Runner->>Materializer: "validate and materialize candidate"
-    Materializer-->>Runner: "trial workspace and runtime spec"
-    Runner->>Evaluator: "evaluate materialized candidate"
-    Evaluator-->>Runner: "status, metrics, output files, records"
-    Runner->>Store: "write trials, observations, candidate records, events"
-    Runner->>Method: "observe completed evaluations"
+  loop until budget stops
+    Runner->>Method: request candidates with study state, context, and evidence
+    Method-->>Runner: candidate manifests
+
+    opt file candidates
+      Method->>CandidateStore: write generated files
+      Runner->>CandidateStore: read contentRef files
+    end
+
+    Runner->>Trial: create fresh workspace
+    Runner->>Trial: copy trialWorkspace entries
+    Runner->>Trial: materialize candidate
+    Runner->>Evaluator: evaluate candidate in trial workspace
+    Evaluator-->>Runner: status, metrics, output files, records
+    Runner->>Evidence: write candidate, trial, observation, and event records
+    Runner->>Method: send observations when supported
   end
 
-  Runner->>Store: "write summary.json"
+  Runner->>Evidence: write summary
 ```
 
-The method proposes candidates. The runner does not invent candidates; it only gives the method the state and evidence needed to propose them.
+The method proposes candidates. The runner does not invent them. The runner supplies the method with the study state, method context, candidate contract, and evidence that the method is allowed to rely on.
 
 ## Config Compilation
 
-The public YAML files are authoring configs. The runner executes the compiled internal `StudySpec`.
+The public YAML files are authoring configs. The runner executes a compiled internal spec.
 
-Compilation performs these steps:
+Compilation performs these checks:
 
-- Load `config: study`.
-- Resolve `environmentConfig` and `methodConfig` relative to the study file.
-- Validate all three files with the packaged JSON Schemas.
-- Resolve relative paths in instances, trial workspace seeds, method context files, Python paths, and container build contexts.
-- Check that `method.accepts.formats` includes `environment.candidate.format`.
-- Check that `method.accepts.requires.context` exists in the compiled candidate and method context.
-- Check that `method.accepts.requires.capabilities` is provided by `environment.capabilities`.
-- Check that `study.objective.metric` is declared in `environment.metrics.keys` when keys are provided.
+- load `config: study`
+- resolve `environmentConfig` and `methodConfig` from the study file
+- validate all three files against JSON Schema
+- resolve config-relative paths
+- check that the method accepts the environment candidate format
+- check required method context paths and capabilities
+- check that the study objective metric is declared by the environment when metric keys are provided
 
 The compiled spec is written to:
 
@@ -68,36 +70,21 @@ The compiled spec is written to:
 run_dir/study_spec.json
 ```
 
+Users normally do not edit this file. It is evidence for what OptPilot actually ran.
+
 ## Method Execution
 
-The method owns the search algorithm. It can be random search, Bayesian optimization, RL training, an LLM workflow, a metaheuristic, or an existing agent process.
-
-Python method config:
-
-```yaml
-entrypoint:
-  python: user_catalog.methods.my_method.method:MyMethod
-  protocol: batch
-```
-
-Command method config:
-
-```yaml
-entrypoint:
-  command: [python, my_method.py, "{input_file}", "{output_file}"]
-  protocol: batch
-```
+The method owns the search algorithm. It can be a small Python class, a command-line optimizer, an LLM agent, or a wrapper around a full upstream repository.
 
 For each proposal request, OptPilot provides:
 
-- `study_state`: completed trials, best metric, recent failures, and related run state.
-- `candidate`: the environment candidate contract.
-- `methodContext`: instructions and references declared by the environment.
-- `evidence`: previous observations, candidate records, trials, records, method calls, and events.
-- `settings`: the free object from `method.settings`.
-- `runtime_context`: per-call paths, including the method workspace and candidate store.
+- `study_state`: completed trials, failure count, best metric, and related run state
+- `candidate_context`: the environment candidate contract and method-visible context
+- `evidence`: previous observations, candidates, trials, records, calls, and events
+- `settings`: the free object from the method config
+- `runtime_context`: per-call paths, including method workspace and candidate store
 
-The method returns candidates. Parameter candidates usually look like:
+Parameter candidates look like:
 
 ```json
 {
@@ -118,8 +105,8 @@ File candidates reference files generated by the method:
     "bundleRef": "/path/to/run/candidates/candidate-001/files",
     "files": [
       {
-        "path": "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
-        "contentRef": "/path/to/run/candidates/candidate-001/files/MissionController.py",
+        "path": "src/policy.py",
+        "contentRef": "/path/to/run/candidates/candidate-001/files/src/policy.py",
         "sha256": "..."
       }
     ]
@@ -130,37 +117,48 @@ File candidates reference files generated by the method:
 
 `optpilot.candidate_files.CandidateFileStore` creates this file-candidate shape for Python methods.
 
-## Trial Workspace
+## Candidate Store And Trial Workspace
 
-Each candidate evaluation gets its own trial workspace under the run directory. The trial workspace is the evaluator's working copy for that trial.
+The run directory contains distinct storage areas:
+
+| Location | Purpose |
+| --- | --- |
+| `run_dir/candidates/` | Durable method-produced candidate files before evaluation. |
+| `run_dir/method_calls/` | Per-call method request, response, stdout, and stderr files. |
+| `run_dir/trials/` | Per-trial workspaces used by evaluators. |
+| `run_dir/evidence_files/` | Optional copies of evaluator output files when `evidence.outputFileStorage: copy` is enabled. |
+
+For file candidates, materialization has one extra handoff:
+
+```text
+method writes generated files to candidate store
+method returns candidate manifest with contentRef and sha256
+runner validates the manifest
+runner copies contentRef files into the trial workspace
+evaluator reads the trial workspace
+```
+
+The trial workspace is what gets evaluated. The candidate store is a handoff area before evaluation. The evaluator normally reads the trial workspace, not the candidate store.
+
+## Trial Workspace Preparation
+
+Each candidate evaluation gets a fresh workspace under `run_dir/trials/`.
 
 For parameter candidates:
 
-- No environment source tree is required unless the evaluator itself needs copied files.
-- The candidate `spec` is passed directly as the runtime output_file spec.
+- the candidate `spec` is passed directly as runtime input
+- no environment source tree is required unless the evaluator itself needs copied files
 
 For file candidates:
 
 1. OptPilot creates a fresh trial workspace.
 2. It copies every `environment.trialWorkspace` entry into that workspace.
-3. It validates the method's candidate file manifest.
-4. It copies the method-generated files into `candidate.materialize.root`.
+3. It validates the method's file manifest.
+4. It copies method-generated files into `candidate.materialize.root`.
 5. It writes `workspace_manifest.json`.
 6. It calls the evaluator with the workspace and candidate root.
 
-The method can only modify the environment through the candidate files it returns. It may read any information exposed through the request, method context, evidence view, its own method workspace, and any files its own runtime can access. The evaluator reads the materialized trial workspace.
-
-## Candidate Store And Evidence Output files
-
-The run directory contains two distinct file areas:
-
-| Location | Purpose |
-| --- | --- |
-| `run_dir/candidates/` | Method handoff files. A file-producing method writes candidate bundles here so the materializer can copy them into trial workspaces. |
-| `run_dir/trials/` | Per-trial workspaces used by evaluators. |
-| `run_dir/evidence_files/` | Optional retained copies of evaluator output files when `evidence.outputFileStorage: copy` is enabled. |
-
-The trial workspace is what gets evaluated. The candidate store is the handoff area used before materialization. The evidence output_file area stores copies of output files after evaluation when the study requests copied evidence instead of path references.
+The SA example copies a complete simulator source tree because the evaluator runs the simulator from inside the trial workspace after candidate edits are applied. If an evaluator uses an installed package, a prebuilt image, an external service, or only JSON input files, it does not need to copy the complete environment implementation.
 
 ## Environment Evaluation
 
@@ -175,7 +173,7 @@ or:
 
 ```yaml
 evaluator:
-  command: [python, evaluate.py, "{workspace}", "{metrics_file}"]
+  command: [python, evaluate.py, "{candidate_json}", "{metrics_file}"]
 ```
 
 or:
@@ -185,7 +183,15 @@ evaluator:
   adapter: user_catalog.environments.my_environment.adapter:MyAdapter
 ```
 
-The evaluator receives the materialized candidate and one instance. It returns or writes status, metrics, optional output-file descriptors, and optional record streams. The configured adapter normalizes those into observations.
+The evaluator receives the materialized candidate and one instance. It returns or writes:
+
+- status
+- metric values
+- optional constraint results
+- optional output-file descriptors
+- optional record streams
+
+The configured adapter normalizes those values into observations.
 
 ## Parallelism And Runtimes
 
@@ -206,6 +212,7 @@ Current runner support:
 | `backend: local` with `sandbox: host` | Implemented. |
 | `backend: local_subprocess` with `sandbox: host` | Implemented. |
 | `backend: local` with `sandbox: container` | Implemented for Docker/Podman-compatible CLIs. |
+
 Method runtime is separate from environment execution:
 
 ```yaml
@@ -216,24 +223,10 @@ runtime:
     executable: docker
 ```
 
-Use a method runtime container when the optimizer or agent needs different dependencies from the environment evaluator.
+Use a method runtime container when the optimizer or agent needs different dependencies from the evaluator.
 
-## Evidence Files
+## Evidence
 
-Every run directory records:
+Every run directory records the compiled spec, trial results, candidate records, method calls, scheduler events, output files, and final summary.
 
-| File | Purpose |
-| --- | --- |
-| `study_spec.json` | Compiled internal spec used by the runner. |
-| `summary.json` | Final run summary. |
-| `observations.jsonl` | One normalized evaluation result per trial. |
-| `trials.jsonl` | Trial inputs, backend metadata, and statuses. |
-| `candidates.jsonl` | Candidate validation and materialization records. |
-| `method_calls.jsonl` | Method proposal, lifecycle, and observe calls. |
-| `method_events.jsonl` | Events emitted by methods. |
-| `scheduler_events.jsonl` | Scheduling and backend events. |
-| `environment_snapshot.json` | Python/platform/dependency snapshot. |
-| `run_policy.json` | Runtime policy compiled from the study. |
-| `run_lineage.json` | New, resumed, or branched run metadata. |
-
-The UI reads these files to show current and previous studies.
+Use [Evidence](evidence.md) for the run file catalog and resume/branch behavior.

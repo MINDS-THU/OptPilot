@@ -574,11 +574,9 @@ def _run_custom_record_extractor(record: Dict[str, Any], workspace: Path) -> tup
 
 
 def _load_python_component(implementation: str):
-    if not str(implementation).startswith("python:"):
-        raise ValueError(f"Custom implementation must start with 'python:': {implementation!r}")
-    module_name, _, attr = str(implementation)[len("python:") :].partition(":")
+    module_name, _, attr = str(implementation).partition(":")
     if not module_name or not attr:
-        raise ValueError(f"Custom implementation must use python:module:object format: {implementation!r}")
+        raise ValueError(f"Custom implementation must use module:object format: {implementation!r}")
     module = importlib.import_module(module_name)
     return getattr(module, attr)
 

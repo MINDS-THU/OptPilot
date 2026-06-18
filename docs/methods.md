@@ -9,6 +9,8 @@ OptPilot exposes one optimization abstraction: `method`.
 
 A method proposes candidates. It can be a random search, Bayesian optimizer, RL trainer, metaheuristic, LLM workflow, or an existing agent process. OptPilot does not split methods into separate controller and engine concepts.
 
+Methods remain user-owned. OptPilot provides the invocation protocol, candidate contract checking, trial orchestration, and evidence recording around them.
+
 ## Method Config
 
 ```yaml
@@ -31,6 +33,30 @@ accepts:
 ```
 
 `entrypoint` points to the method implementation. `settings` is a free object passed to that implementation. `accepts` declares which environment contracts the method can target.
+
+## Compatibility Contract
+
+Method and environment compatibility is intentionally explicit.
+
+`accepts` answers three questions:
+
+- which candidate formats can this method produce?
+- which environment context fields does it require?
+- which environment capabilities does it depend on?
+
+Example:
+
+```yaml
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - methodContext.instructions
+    capabilities: []
+```
+
+This avoids vague domain tags. Compatibility is defined by the actual candidate contract and method-visible environment surface.
 
 ## Batch Protocol
 

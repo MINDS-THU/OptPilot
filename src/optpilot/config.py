@@ -75,7 +75,7 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
 
     return {
         "apiVersion": "optpilot/v1",
-        "config": "compiled_study",
+        "config": "run_spec",
         "metadata": {
             "name": str(study["name"]),
             "description": str(study.get("description", "")),
@@ -586,7 +586,7 @@ def _compile_environment(environment: Dict[str, Any], environment_path: Path | N
     if evaluator.get("adapter"):
         adapter = {
             "type": "custom",
-            "implementation": _python_component_ref(evaluator["adapter"]),
+            "implementation": _component_ref(evaluator["adapter"]),
             "config": dict(evaluator.get("settings", {})),
         }
     else:
@@ -646,7 +646,7 @@ def _compile_evaluator_config(evaluator: Dict[str, Any], base_path: Path) -> Dic
 def _compile_metrics_config(metrics: Dict[str, Any]) -> Dict[str, Any]:
     result = deepcopy(metrics)
     if result.get("source") == "custom" and result.get("extractor"):
-        result["implementation"] = _python_component_ref(result.pop("extractor"))
+        result["implementation"] = _component_ref(result.pop("extractor"))
     if "settings" in result:
         result["config"] = result.pop("settings")
     return result
@@ -657,7 +657,7 @@ def _compile_record_rules(records: Iterable[Dict[str, Any]]) -> list:
     for record in records:
         item = deepcopy(record)
         if item.get("source") == "custom" and item.get("extractor"):
-            item["implementation"] = _python_component_ref(item.pop("extractor"))
+            item["implementation"] = _component_ref(item.pop("extractor"))
         if "settings" in item:
             item["config"] = item.pop("settings")
         compiled.append(item)
@@ -761,11 +761,12 @@ def _compile_candidate_contract(
 def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate: Dict[str, Any]) -> Dict[str, Any]:
     entrypoint = deepcopy(method["entrypoint"])
     protocol = entrypoint.get("protocol", "batch")
+    method_base_dir = (method_path.parent if method_path else Path.cwd()).resolve()
     implementation: Dict[str, Any] = {
         "protocol": "optpilot.method.session.v1" if protocol == "session" else "optpilot.method.batch.v1",
     }
     if entrypoint.get("python"):
-        implementation.update({"type": "python", "callable": _python_component_ref(entrypoint["python"])})
+        implementation.update({"type": "python", "callable": _component_ref(entrypoint["python"])})
     else:
         implementation.update({"type": "command", "command": list(entrypoint["command"])})
     if entrypoint.get("pythonPath"):
@@ -778,6 +779,7 @@ def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate:
 
     return {
         "id": str(method["id"]),
+        "configBaseDir": str(method_base_dir),
         "implementation": implementation,
         "runtime": _compile_method_runtime(method.get("runtime", {}) or {}, method_path or Path.cwd()),
         "config": settings,
@@ -835,7 +837,7 @@ def _compile_instances(instances: Any, study_path: Path) -> Dict[str, Any]:
             "mode": "Distribution",
             "definition": {
                 "sampler": {
-                    "implementation": _python_component_ref(sampler["python"]),
+                    "implementation": _component_ref(sampler["python"]),
                     "config": dict(sampler.get("settings", {})),
                     "pythonPath": [str(_resolve_path(path, study_path)) for path in sampler.get("pythonPath", []) or []],
                 },
@@ -904,8 +906,6 @@ def _compile_execution(
         },
         "parallelism": {
             "candidateParallelism": parallelism,
-            "rolloutParallelism": 1,
-            "methodParallelism": 1,
         },
     }
 
@@ -1042,17 +1042,17 @@ def _resolve_container_build(build: Dict[str, Any], base_path: Path) -> Dict[str
     return resolved
 
 
-def _python_component_ref(value: str) -> str:
+def _component_ref(value: str) -> str:
     text = str(value)
-    if text.startswith("python:") or text.startswith("builtin."):
+    if text.startswith("builtin."):
         return text
-    return f"python:{text}"
+    return text
 
 
 def _require_plain_python_import(value: Any, location: str) -> None:
     text = str(value)
     if text.startswith("python:"):
-        raise ValueError(f"{location} must use module:object format, not python:module:object.")
+        raise ValueError(f"{location} must use module:object format without the legacy prefix.")
     module, sep, attr = text.partition(":")
     if not sep or not module or not attr:
         raise ValueError(f"{location} must use module:object format.")

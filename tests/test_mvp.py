@@ -64,7 +64,7 @@ class MvpIntegrationTest(unittest.TestCase):
             summary_payload = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             environment_snapshot = json.loads((run_dir / "environment_snapshot.json").read_text(encoding="utf-8"))
             self.assertEqual(summary_payload["completed_trials"], 12)
-            self.assertEqual(summary_payload["policy"]["environment"]["accessPolicy"], "SchemaAware")
+            self.assertEqual(summary_payload["policy"]["environment"]["candidateAccess"], "candidate_schema")
             self.assertIn("python", environment_snapshot)
             self.assertIn("platform", environment_snapshot)
             self.assertIn("packages", environment_snapshot)
@@ -83,7 +83,8 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(scheduler_events), 6)
             self.assertEqual(len(method_calls), 6)
             self.assertEqual(len(candidates), 12)
-            self.assertEqual(run_policy["environment"]["mutationPolicy"], "NoMutation")
+            self.assertEqual(run_policy["environment"]["candidateWriteScope"], "none")
+            self.assertEqual(run_policy["execution"]["parallelism"]["candidateEvaluations"], 4)
             self.assertEqual(run_policy["execution"]["backend"]["implementation"], "builtin.local_backend")
             self.assertEqual(run_policy["execution"]["scheduler"]["implementation"], "builtin.local_scheduler")
             self.assertEqual(scheduler_events[0]["event"], "batch_submitted")
@@ -113,6 +114,24 @@ class MvpIntegrationTest(unittest.TestCase):
                 self.assertEqual(observation["provenance"]["sandbox_spec"]["cleanupPolicy"], "always")
                 for output_file in observation["output_files"]:
                     self.assertTrue(Path(output_file["path"]).exists())
+
+    def test_job_shop_example_baselines_run_end_to_end(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        study_paths = [
+            repo_root / "examples" / "studies" / "job_shop_rule_parameters_baseline.yaml",
+            repo_root / "examples" / "studies" / "job_shop_dispatch_rule_baseline.yaml",
+            repo_root / "examples" / "studies" / "job_shop_solver_code_baseline.yaml",
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for study_path in study_paths:
+                with self.subTest(study=study_path.name):
+                    summary = run_study(str(study_path), output_root=tmp_dir)
+                    self.assertEqual(summary.completed_trials, 1)
+                    self.assertEqual(summary.failure_count, 0)
+                    self.assertIsNotNone(summary.best_metric)
+                    observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
+                    self.assertEqual(observations[0]["status"], "success")
+                    self.assertIn("normalized_makespan", observations[0]["metric_values"])
 
     def test_distribution_scope_is_reproducible(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -287,7 +306,7 @@ class MvpIntegrationTest(unittest.TestCase):
             pyproject.write_text("[project]\nname = 'demo'\n", encoding="utf-8")
             lockfile.write_text("version = 1\n", encoding="utf-8")
             requirements.write_text("pyyaml\n", encoding="utf-8")
-            spec_path.write_text("config: compiled_study\n", encoding="utf-8")
+            spec_path.write_text("config: run_spec\n", encoding="utf-8")
 
             snapshot = build_environment_snapshot(study_spec_path=spec_path)
             dependencies = {Path(item["path"]).name: item for item in snapshot["dependency_files"]}
@@ -296,7 +315,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(dependencies["uv.lock"]["kind"], "lockfile")
             self.assertEqual(dependencies["requirements.txt"]["sha256"], self._sha256(requirements))
 
-    def test_bounds_validator_rejects_out_of_range_artifacts(self) -> None:
+    def test_bounds_validator_rejects_out_of_range_candidates(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
@@ -637,8 +656,8 @@ class MvpIntegrationTest(unittest.TestCase):
             (generated / "utils" / "helper.py").write_text("def score(x):\n    return x + 1\n", encoding="utf-8")
             (generated / "__pycache__").mkdir()
             (generated / "__pycache__" / "ignored.pyc").write_bytes(b"ignored")
-            artifact_root = tmp_path / "candidate-store"
-            store = CandidateFileStore(artifact_root, content_ref_mode="absolute")
+            candidate_store_root = tmp_path / "candidate-store"
+            store = CandidateFileStore(candidate_store_root, content_ref_mode="absolute")
 
             candidate = store.store_directory(
                 generated,
@@ -662,7 +681,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(candidate["spec"]["entrypoint"], "solver:solve")
             self.assertEqual(len(candidate["spec"]["files"]), 2)
             self.assertFalse(self._contains_key(candidate, "content"))
-            self.assertTrue((artifact_root / "candidate-generated-001" / "files" / "utils" / "helper.py").exists())
+            self.assertTrue((candidate_store_root / "candidate-generated-001" / "files" / "utils" / "helper.py").exists())
 
     def test_candidate_file_store_supports_single_file_relative_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -692,6 +711,56 @@ class MvpIntegrationTest(unittest.TestCase):
                 candidate["spec"]["files"][0]["contentRef"],
                 "candidates/candidate-single-file/files/solver.py",
             )
+
+    def test_llm_heuristic_wrapper_stores_generated_file_candidate(self) -> None:
+        from examples.methods.llm_heuristic_search.method import LLMHeuristicSearchMethod
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            method_dir = tmp_path / "catalog" / "methods" / "llm_wrapper"
+            method_dir.mkdir(parents=True)
+            workdir = method_dir / "upstream"
+            workdir.mkdir()
+            study_spec = StudySpec(
+                path=tmp_path / "studies" / "study.yaml",
+                raw={"metadata": {"name": "llm-heuristic-wrapper-test"}},
+            )
+            definition = {
+                "id": "fake-llm-heuristic",
+                "configBaseDir": str(method_dir),
+                "settings": {
+                    "command": [
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; Path('outputs').mkdir(exist_ok=True); Path('outputs/best.py').write_text('def priority(x):\\n    return x\\n', encoding='utf-8')",
+                    ],
+                    "repoRoot": "upstream",
+                    "workdir": "upstream",
+                    "generatedFile": "outputs/best.py",
+                },
+            }
+            method = LLMHeuristicSearchMethod(definition, study_spec)
+
+            candidates = method.propose(
+                1,
+                {
+                    "runtime_context": {"candidate_store_dir": str(tmp_path / "run" / "candidates")},
+                    "candidate_context": {
+                        "candidate": {
+                            "format": "files",
+                            "files": {"editable": [{"path": "priority.py"}]},
+                        }
+                    },
+                },
+            )
+
+            self.assertEqual(len(candidates), 1)
+            candidate = candidates[0]
+            self.assertEqual(candidate["format"], "files")
+            self.assertEqual(candidate["spec"]["files"][0]["path"], "priority.py")
+            content_ref = Path(candidate["spec"]["files"][0]["contentRef"])
+            self.assertTrue(content_ref.exists())
+            self.assertIn("def priority", content_ref.read_text(encoding="utf-8"))
 
     def test_candidate_file_store_rejects_unsafe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -863,13 +932,13 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(candidates), 4)
             first_observation = observations[0]
             self.assertEqual(first_observation["provenance"]["backend_identity"]["implementation"], "builtin.local_backend")
-            artifact_names = {candidate["name"]: candidate for candidate in first_observation["output_files"] if "name" in candidate}
-            self.assertIn("candidate_payload", artifact_names)
-            self.assertIn("instance", artifact_names)
-            self.assertIn("metrics", artifact_names)
-            self.assertIn("stdout", artifact_names)
-            self.assertIn("stderr", artifact_names)
-            stdout_path = Path(artifact_names["stdout"]["path"])
+            output_file_names = {candidate["name"]: candidate for candidate in first_observation["output_files"] if "name" in candidate}
+            self.assertIn("candidate_payload", output_file_names)
+            self.assertIn("instance", output_file_names)
+            self.assertIn("metrics", output_file_names)
+            self.assertIn("stdout", output_file_names)
+            self.assertIn("stderr", output_file_names)
+            stdout_path = Path(output_file_names["stdout"]["path"])
             self.assertIn("wrote", stdout_path.read_text(encoding="utf-8"))
             self.assertEqual(candidates[0]["materialization"]["runtime_spec"], candidates[0]["spec"])
 
@@ -1642,7 +1711,7 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             spec = {
                 "apiVersion": "optpilot/v1",
-                "config": "compiled_study",
+                "config": "run_spec",
                 "metadata": {"name": "code-candidate-method"},
                 "environment": {
                     "environmentId": "file-candidate-evaluator",
@@ -1704,7 +1773,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "id": "code_method",
                     "implementation": {
                         "type": "python",
-                        "callable": "python:tests.fixtures.catalog.user_methods.file_candidate_method:FileCandidateMethod",
+                        "callable": "tests.fixtures.catalog.user_methods.file_candidate_method:FileCandidateMethod",
                         "protocol": "optpilot.method.batch.v1",
                     },
                     "config": {
@@ -1887,7 +1956,7 @@ class MvpIntegrationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported environment.accessPolicy"):
                 load_expanded_study_spec(str(spec_path))
 
-    def test_invalid_artifact_records_invalid_observation_without_crashing(self) -> None:
+    def test_invalid_candidate_records_invalid_observation_without_crashing(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-invalid-candidate"
@@ -2187,7 +2256,7 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             spec = {
                 "apiVersion": "optpilot/v1",
-                "config": "compiled_study",
+                "config": "run_spec",
                 "metadata": {"name": "retry-policy-check"},
                 "environment": {
                     "environmentId": "flaky-environment",
@@ -2228,7 +2297,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "id": "method",
                     "implementation": {
                         "type": "python",
-                        "callable": "python:tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod",
+                        "callable": "tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod",
                         "protocol": "optpilot.method.batch.v1",
                     },
                     "config": {"batchSize": 1, "candidates": [{"x": 1}]},
@@ -2398,16 +2467,25 @@ class MvpIntegrationTest(unittest.TestCase):
         validation = _validate_study(repo_root / "examples" / "studies" / "sa_baseline.yaml")
 
         sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
+        job_shop_parameter_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
+        job_shop_file_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-dispatch-rule")
         method_ids = {item["id"] for item in catalog["methods"]}
         self.assertEqual(sa_environment["summary"]["candidate_format"], "files")
+        self.assertEqual(job_shop_parameter_environment["summary"]["candidate_format"], "parameters")
+        self.assertEqual(job_shop_file_environment["summary"]["candidate_format"], "files")
         self.assertIn(
             "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
             sa_environment["summary"]["editable_files"],
         )
+        self.assertIn("dispatch_rule.py", job_shop_file_environment["summary"]["editable_files"])
         sa_method = next(item for item in catalog["methods"] if item["id"] == "openai-sa-file-editor")
         self.assertEqual(sa_method["summary"]["candidate_formats"], ["files"])
         self.assertIn("baseline-file-copy", method_ids)
+        self.assertIn("fixed-rule-parameters", method_ids)
         self.assertIn("openai-sa-file-editor", method_ids)
+        self.assertTrue(any(item["label"] == "job-shop-rule-parameters-baseline" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-dispatch-rule-baseline" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-solver-code-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "sa-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "sa-openai-file-editor" for item in catalog["studies"]))
         self.assertIn("builtin.reference_random_search", catalog["builtins"]["method"])
@@ -2426,14 +2504,37 @@ class MvpIntegrationTest(unittest.TestCase):
             [repo_root / "examples", repo_root / "user_catalog"],
         )
         self.assertEqual(state.catalog_roots, roots)
-        self.assertEqual([item["id"] for item in catalog["environments"]], ["sa-simulator-code-edit"])
+        self.assertEqual(
+            sorted(item["id"] for item in catalog["environments"]),
+            [
+                "job-shop-dispatch-rule",
+                "job-shop-rule-parameters",
+                "job-shop-solver-code",
+                "sa-simulator-code-edit",
+            ],
+        )
         self.assertEqual(
             sorted(item["id"] for item in catalog["methods"]),
-            ["baseline-file-copy", "openai-sa-file-editor"],
+            [
+                "baseline-file-copy",
+                "eoh-llm-heuristic-search",
+                "eohs-llm-heuristic-search",
+                "fixed-rule-parameters",
+                "funsearch-llm-heuristic-search",
+                "heuragenix-llm-heuristic-search",
+                "openai-sa-file-editor",
+                "reevo-llm-heuristic-search",
+            ],
         )
         self.assertEqual(
             sorted(item["label"] for item in catalog["studies"]),
-            ["sa-baseline", "sa-openai-file-editor"],
+            [
+                "job-shop-dispatch-rule-baseline",
+                "job-shop-rule-parameters-baseline",
+                "job-shop-solver-code-baseline",
+                "sa-baseline",
+                "sa-openai-file-editor",
+            ],
         )
 
     def test_ui_compatibility_payload_and_study_draft(self) -> None:

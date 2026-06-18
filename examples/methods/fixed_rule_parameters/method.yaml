@@ -1,0 +1,23 @@
+apiVersion: optpilot.io/v1
+config: method
+id: fixed-rule-parameters
+description: Emits one fixed weighted dispatch-rule parameter candidate.
+tags: [baseline, parameters, job-shop, no-api]
+
+entrypoint:
+  python: examples.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
+  protocol: batch
+
+settings:
+  batchSize: 1
+  values:
+    remaining_work_weight: 1.0
+    processing_time_weight: -1.0
+    machine_ready_weight: -0.1
+    job_ready_weight: -0.1
+
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema

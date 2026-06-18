@@ -319,21 +319,41 @@ def _scheduler_identity(scheduler_def: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_run_policy(study_spec: StudySpec) -> Dict[str, Any]:
     scheduler_def = _resolve_scheduler(study_spec)
+    runtime_contract = dict(study_spec.environment.get("runtimeContract", {}))
+    parallelism = dict(study_spec.execution.get("parallelism", {}))
     return {
         "environment": {
-            "accessPolicy": study_spec.environment.get("accessPolicy"),
-            "mutationPolicy": study_spec.environment.get("mutationPolicy"),
-            "runtimeContract": dict(study_spec.environment.get("runtimeContract", {})),
+            "candidateAccess": _public_candidate_access(study_spec.environment.get("accessPolicy")),
+            "candidateWriteScope": _public_candidate_write_scope(study_spec.environment.get("mutationPolicy")),
+            "timeoutSeconds": runtime_contract.get("timeoutSeconds"),
         },
         "execution": {
             "backend": _backend_identity(study_spec.execution.get("backend", {})),
             "scheduler": _scheduler_identity(scheduler_def),
-            "parallelism": dict(study_spec.execution.get("parallelism", {})),
+            "parallelism": {
+                "candidateEvaluations": parallelism.get("candidateParallelism", 1),
+                "methodCalls": parallelism.get("methodParallelism", 1),
+            },
             "defaults": dict(study_spec.execution.get("defaults", {})),
         },
         "evidence": dict(study_spec.evidence),
         "reproducibility": dict(study_spec.reproducibility),
     }
+
+
+def _public_candidate_access(access_policy: Any) -> str:
+    return {
+        "SchemaAware": "candidate_schema",
+        "CodeAwareReadOnly": "candidate_files_read_only",
+        "InvocationOnly": "evaluator_invocation_only",
+    }.get(str(access_policy), str(access_policy))
+
+
+def _public_candidate_write_scope(mutation_policy: Any) -> str:
+    return {
+        "NoMutation": "none",
+        "TrialWorkspaceOnly": "trial_workspace_only",
+    }.get(str(mutation_policy), str(mutation_policy))
 
 
 def _prior_run_state(evidence_view: EvidenceView, previous_summary: Dict[str, Any]) -> Dict[str, Any]:

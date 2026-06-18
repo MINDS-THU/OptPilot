@@ -29,7 +29,8 @@ Included in the current release:
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
-- curated strategic-airlift DEVS example using an external generated simulator
+- curated job-shop scheduling tutorial environment with parameter and file-candidate variants
+- strategic-airlift DEVS example using an external generated simulator
 - local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
 
 Not included:
@@ -50,16 +51,16 @@ uv run optpilot --help
 
 ## Quickstart
 
-Run the strategic-airlift baseline:
+Run the job-shop parameter baseline:
 
 ```bash
-uv run optpilot run examples/studies/sa_baseline.yaml
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Validate a config without running it:
 
 ```bash
-uv run optpilot validate examples/studies/sa_baseline.yaml
+uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Open the local UI:
@@ -77,19 +78,19 @@ Study config:
 ```yaml
 apiVersion: optpilot.io/v1
 config: study
-name: sa-baseline
+name: job-shop-rule-parameters-baseline
 
-environmentConfig: ../environments/strategic_airlift_devs/environment.yaml
-methodConfig: ../methods/baseline_file_copy/method.yaml
+environmentConfig: ../environments/job_shop_scheduling/environment_rule_parameters.yaml
+methodConfig: ../methods/fixed_rule_parameters/method.yaml
 
 objective:
-  metric: service_score
-  direction: maximize
+  metric: normalized_makespan
+  direction: minimize
 
 instances:
   source: files
   paths:
-    - ../environments/strategic_airlift_devs/instances/sa_default.yaml
+    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
 
 budget:
   maxTrials: 1
@@ -140,7 +141,7 @@ accepts:
     context: [candidate.parameters.schema]
 ```
 
-Python evaluator references use `module:function`. Python method references use `module:Class`. The old internal `python:module:Class` prefix is not used in public YAML.
+Python evaluator references use `module:function`. Python method references use `module:Class`.
 
 ## User-Owned Catalog
 

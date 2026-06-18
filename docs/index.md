@@ -1,83 +1,82 @@
 ---
 title: OptPilot Documentation
-description: OptPilot orchestrates AI-assisted iterative optimization studies while keeping environments and methods user-owned.
+description: OptPilot connects user-owned optimization methods to user-owned evaluation environments.
 ---
 
 # OptPilot
 
 OptPilot is a lightweight orchestration layer for iterative optimization studies.
-It lets you connect a user-owned method to a user-owned environment, run candidate solutions, collect objective metrics, and keep the complete evidence trail for inspection or reuse.
+It connects a user-owned optimization method to a user-owned evaluation environment, runs candidate solutions, records objective results, and keeps the evidence needed to inspect, resume, compare, or reproduce a study.
 
-The project is deliberately small in scope:
+OptPilot does not try to become your simulator, dataset evaluator, LLM agent, Bayesian optimizer, RL trainer, or metaheuristic. Those pieces stay in your code. OptPilot provides the contract and runtime around them:
 
-- OptPilot does not own your simulator, dataset, evaluator, LLM agent, Bayesian optimizer, RL loop, or metaheuristic.
-- OptPilot owns the contract between those pieces: how a method proposes a candidate, how an environment evaluates it, how results are recorded, and how a study is repeated.
+- what a method must return
+- how the environment evaluates it
+- how each trial workspace is prepared
+- how metrics, records, output files, and provenance are stored
+- how compatible environments and methods are discovered and launched
 
-## The Core Idea
+## Core Loop
 
-Most optimization projects have the same shape:
+Every OptPilot run follows the same loop:
 
-1. A method proposes something to try.
-2. An environment evaluates that candidate.
-3. The measured result is recorded.
-4. The method uses prior evidence to propose the next candidate.
+```text
+method proposes candidate
+runner validates and materializes candidate
+environment evaluates materialized candidate
+runner records evidence
+```
 
-OptPilot makes that loop explicit and reproducible.
+That loop supports parameter search, file/code evolution, simulator control, metaheuristics, Bayesian optimization, LLM agents, LLM-assisted methods, and coarse-grained wrappers around existing search repositories.
 
 ```mermaid
 flowchart LR
-  subgraph Authoring["What you write"]
-    StudyYaml["config: study\nbinds a method to an environment"]
-    EnvironmentYaml["config: environment\ndefines candidate contract + evaluator"]
-    MethodYaml["config: method\ndefines proposal code + compatibility"]
+  subgraph Configs["Public YAML configs"]
+    Env["EnvironmentConfig\ncandidate contract + evaluator"]
+    Method["MethodConfig\nentrypoint + compatibility"]
+    Study["StudyConfig\nobjective + budget + runtime"]
   end
 
-  subgraph Runtime["What OptPilot runs"]
-    Compiler["Config compiler\nvalidates and expands configs"]
-    MethodRuntime["Method runtime\ncalls Python or command method"]
-    Candidate["Candidate\nparameters, files, or opaque payload"]
-    Materializer["Materializer + validator\ncreates trial workspace"]
-    Evaluator["Environment evaluator\nPython or command code"]
-    Observation["Observation\nstatus, metrics, output files"]
-    Evidence["Evidence store\nJSON, JSONL, files"]
+  subgraph Runtime["Run time"]
+    Runner["OptPilot runner"]
+    MethodCode["User method"]
+    Candidate["Candidate\nparameters | files | opaque"]
+    Trial["Trial workspace"]
+    Eval["User evaluator"]
+    Evidence["Evidence store"]
   end
 
-  StudyYaml --> EnvironmentYaml
-  StudyYaml --> MethodYaml
-  StudyYaml --> Compiler
-  EnvironmentYaml --> Compiler
-  MethodYaml --> Compiler
-  Compiler --> MethodRuntime
-  Compiler --> Materializer
-  Compiler --> Evaluator
-  MethodRuntime --> Candidate
-  Candidate --> Materializer
-  Materializer --> Evaluator
-  Evaluator --> Observation
-  Observation --> Evidence
-  Evidence --> MethodRuntime
+  Study --> Env
+  Study --> Method
+  Study --> Runner
+  Env --> Runner
+  Method --> Runner
+  Runner --> MethodCode
+  MethodCode --> Candidate
+  Candidate --> Trial
+  Trial --> Eval
+  Eval --> Evidence
+  Evidence --> MethodCode
 ```
 
-## The Three Public Configs
+## Three Files Users Write
 
-OptPilot users normally author three YAML files:
+OptPilot users normally write three public YAML configs.
 
-| Config | Purpose | Points to code? |
-| --- | --- | --- |
-| `config: environment` | Describes what a valid candidate looks like, how to evaluate it, where metrics come from, and what files or records should be saved. | Yes. `evaluator.python`, `evaluator.command`, custom metric extractors, and optional adapters point to environment-side implementation. |
-| `config: method` | Describes a method that proposes candidates and declares which environments it can work with. | Yes. `entrypoint.python` or `entrypoint.command` points to method-side implementation. |
-| `config: study` | Chooses one environment config, one method config, objective, instances, budget, execution backend, and evidence settings. | Usually no direct code. It references `environmentConfig` and `methodConfig` files. |
+| Config | What it answers |
+| --- | --- |
+| `config: environment` | What can be evaluated? What candidate format is valid? Which evaluator code runs? Where do metrics and output files come from? |
+| `config: method` | How is the method invoked? Which candidate formats and environment context fields can it work with? |
+| `config: study` | Which environment and method are paired? What objective, instances, budget, runtime, and evidence policy are used for this run? |
 
-The most important distinction is this:
+The split is intentional. Environment and method configs are reusable components; study configs are concrete run plans.
 
-- Environment configs define the candidate contract and evaluator.
-- Method configs declare compatibility with that contract.
-- Study configs bind one concrete pair and decide how long and where to run it.
+## Start Here
 
-## Where To Start
+1. Run the first example with [Getting Started](getting-started.md).
+2. Read [Concepts](concepts.md) for the mental model.
+3. Read [How A Run Works](how-it-works.md) for the runtime sequence and storage model.
+4. Use [Configuration](configuration.md) while writing YAML files.
+5. Use [Examples](examples.md) to choose the right integration pattern.
 
-- Follow [Getting Started](getting-started.md) to run the strategic-airlift example.
-- Read [How A Run Works](how-it-works.md) to understand the runtime procedure.
-- Use [Configuration](configuration.md) when writing YAML files.
-- Use [User Catalog](user-catalog.md) when adding your own environments and methods.
-- Use [UI](ui.md) when browsing compatible methods, launching studies, and inspecting runs.
+For personal or team use, put your own integrations under `user_catalog/`; the UI scans both `examples/` and `user_catalog/` automatically.

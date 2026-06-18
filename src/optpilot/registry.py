@@ -50,8 +50,8 @@ def resolve_component(category: str, implementation: str) -> Type[Any]:
         if dotted is None:
             raise RegistryError(f"Unknown builtin {category} implementation: {implementation}")
         return _load_dotted(dotted)
-    if implementation.startswith("python:"):
-        dotted = implementation[len("python:") :]
+    if ":" in implementation and not implementation.startswith("python:"):
+        dotted = implementation
         try:
             return _load_dotted(dotted)
         except ModuleNotFoundError as exc:
@@ -64,7 +64,7 @@ def resolve_component(category: str, implementation: str) -> Type[Any]:
                 sys.path.insert(0, cwd)
             return _load_dotted(dotted)
     raise RegistryError(
-        f"Unsupported implementation identifier '{implementation}'. Use 'builtin.*' or 'python:module:Class'."
+        f"Unsupported implementation identifier '{implementation}'. Use 'builtin.*' or 'module:object'."
     )
 
 

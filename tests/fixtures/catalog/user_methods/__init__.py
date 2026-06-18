@@ -1,2 +1,1 @@
-"""User-owned method examples loaded through OptPilot's python: hook."""
-
+"""User-owned method examples loaded through OptPilot Python entrypoints."""

@@ -63,14 +63,18 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - How A Run Works: how-it-works.md
   - Concepts: concepts.md
   - Configuration: configuration.md
-  - User Catalog: user-catalog.md
-  - Examples: examples.md
   - Methods: methods.md
-  - UI: ui.md
+  - How A Run Works: how-it-works.md
   - Evidence: evidence.md
+  - User Catalog: user-catalog.md
+  - Examples:
+      - Overview: examples.md
+      - Job-Shop Environment: job-shop-environment.md
+      - LLM Heuristic Methods: llm-heuristic-methods.md
+      - Strategic Airlift DEVS: strategic-airlift-devs.md
+  - UI: ui.md
   - Development: development.md
 
 extra:
