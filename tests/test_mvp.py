@@ -2482,7 +2482,13 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(sa_method["summary"]["candidate_formats"], ["files"])
         self.assertIn("baseline-file-copy", method_ids)
         self.assertIn("fixed-rule-parameters", method_ids)
+        self.assertIn("job-shop-lib-dispatching-rule", method_ids)
+        self.assertIn("job-shop-lib-simulated-annealing", method_ids)
+        self.assertIn("job-shop-lib-ortools-cpsat", method_ids)
         self.assertIn("openai-sa-file-editor", method_ids)
+        self.assertTrue(any(item["label"] == "job-shop-lib-dispatching-rule" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-lib-simulated-annealing" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-lib-ortools-cpsat" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-rule-parameters-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-dispatch-rule-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-solver-code-baseline" for item in catalog["studies"]))
@@ -2522,6 +2528,9 @@ class MvpIntegrationTest(unittest.TestCase):
                 "fixed-rule-parameters",
                 "funsearch-llm-heuristic-search",
                 "heuragenix-llm-heuristic-search",
+                "job-shop-lib-dispatching-rule",
+                "job-shop-lib-ortools-cpsat",
+                "job-shop-lib-simulated-annealing",
                 "openai-sa-file-editor",
                 "reevo-llm-heuristic-search",
             ],
@@ -2530,6 +2539,9 @@ class MvpIntegrationTest(unittest.TestCase):
             sorted(item["label"] for item in catalog["studies"]),
             [
                 "job-shop-dispatch-rule-baseline",
+                "job-shop-lib-dispatching-rule",
+                "job-shop-lib-ortools-cpsat",
+                "job-shop-lib-simulated-annealing",
                 "job-shop-rule-parameters-baseline",
                 "job-shop-solver-code-baseline",
                 "sa-baseline",

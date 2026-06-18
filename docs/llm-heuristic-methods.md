@@ -1,9 +1,9 @@
 ---
-title: LLM Heuristic Methods
+title: LLM Heuristic Repositories
 description: How to connect existing LLM-based heuristic-search repositories to OptPilot.
 ---
 
-# LLM Heuristic Methods
+# LLM Heuristic Repositories
 
 This page is an integration template guide, not a turnkey tutorial. It explains how to connect an existing LLM-based heuristic-search repository to OptPilot as a method.
 

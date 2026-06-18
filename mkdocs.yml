@@ -72,7 +72,11 @@ nav:
   - Examples:
       - Overview: examples.md
       - Job-Shop Environment: job-shop-environment.md
-      - LLM Heuristic Methods: llm-heuristic-methods.md
+      - Dispatching Rule Methods: dispatching-rule-methods.md
+      - Simulated Annealing Methods: simulated-annealing-methods.md
+      - OR-Tools CP-SAT Methods: cp-sat-methods.md
+      - LLM Code-Writing Methods: llm-code-methods.md
+      - LLM Heuristic Repositories: llm-heuristic-methods.md
       - Strategic Airlift DEVS: strategic-airlift-devs.md
   - UI: ui.md
   - Development: development.md

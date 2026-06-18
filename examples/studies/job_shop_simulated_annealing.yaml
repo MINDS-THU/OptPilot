@@ -1,0 +1,33 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-lib-simulated-annealing
+description: Evaluate JobShopLib SimulatedAnnealingSolver through the solver-code environment.
+tags: [job-shop, job-shop-lib, simulated-annealing, solver-code]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_solver_code.yaml
+methodConfig: ../methods/job_shop_lib_simulated_annealing/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+instances:
+  source: files
+  paths:
+    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
+    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
+
+budget:
+  maxTrials: 1
+
+execution:
+  backend: local_subprocess
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0

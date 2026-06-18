@@ -1,0 +1,19 @@
+apiVersion: optpilot.io/v1
+config: method
+id: job-shop-lib-dispatching-rule
+description: Emits a solver.py candidate that calls JobShopLib DispatchingRuleSolver.
+tags: [job-shop, job-shop-lib, dispatching-rule, solver-code]
+
+entrypoint:
+  python: examples.methods.job_shop_lib_dispatching_rule.method:JobShopLibDispatchingRuleMethod
+  protocol: batch
+
+settings:
+  batchSize: 1
+  dispatchingRule: most_work_remaining
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable

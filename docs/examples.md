@@ -9,15 +9,19 @@ description: Built-in OptPilot examples and the integration patterns they teach.
 
 Use this page as a catalog, not as a step-by-step walkthrough. Start with [Getting Started](getting-started.md) for the first successful run.
 
-The examples are organized around one main tutorial environment plus specialized integration tracks.
+The examples are organized around one main tutorial environment plus separate method-family tracks.
 
 ## Readiness Overview
 
 | Track | Status | External setup | Best for |
 | --- | --- | --- | --- |
-| Job-shop baseline | Turnkey tutorial | None | First run and core OptPilot model |
+| Job-shop environment | Turnkey tutorial | None | First run and shared environment boundary |
+| Dispatching rules | Turnkey code | None for baselines; `uv sync --extra examples` for JobShopLib wrapper | Native and JobShopLib dispatching rules |
+| Simulated annealing | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's metaheuristic solver |
+| OR-Tools CP-SAT | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's constraint-programming solver |
+| LLM code-writing methods | Repo code with provider setup | Provider credentials for LLM methods | Agents that write `dispatch_rule.py` or `solver.py` |
+| LLM heuristic repositories | Integration templates | Upstream repository clone, dependency install, command wiring, often provider credentials | Wrapping existing LLM search repositories |
 | Strategic Airlift DEVS | Advanced example | Generated simulator tree under `resource/devs_gen_gallery/simulators/SA/simulator`; provider credentials only for the LLM editing study | File-candidate simulator workflows |
-| `llm_heuristic_search` wrappers | Integration template | Upstream repository clone, dependency install, command wiring, often provider credentials | Wrapping an existing LLM search repository |
 
 ## Main Tutorial Environment
 
@@ -29,17 +33,33 @@ The primary tutorial environment is job-shop scheduling:
   - `examples/studies/job_shop_rule_parameters_baseline.yaml`
   - `examples/studies/job_shop_dispatch_rule_baseline.yaml`
   - `examples/studies/job_shop_solver_code_baseline.yaml`
+  - `examples/studies/job_shop_lib_dispatching_rule.yaml`
+  - `examples/studies/job_shop_simulated_annealing.yaml`
+  - `examples/studies/job_shop_ortools_cpsat.yaml`
 
 This environment is useful because the same problem can be optimized in several ways:
 
-| Method style | Candidate contract |
-| --- | --- |
-| Bayesian optimization, random search, Pymoo-style methods | `parameters` for dispatch-rule weights |
-| LLM code editing, LLM heuristic search | `files` containing `dispatch_rule.py` |
-| LLM solver-code writing, OR-Tools, Gurobi-style workflows | `files` containing `solver.py` |
-| RL training wrappers | method-owned training loop returning a policy/rule candidate |
+| Method family | Page | Candidate contract |
+| --- | --- | --- |
+| Dispatching rules | [Dispatching Rule Methods](dispatching-rule-methods.md) | `parameters` or `files` |
+| Simulated annealing | [Simulated Annealing Methods](simulated-annealing-methods.md) | `files` containing `solver.py` |
+| OR-Tools CP-SAT | [OR-Tools CP-SAT Methods](cp-sat-methods.md) | `files` containing `solver.py` |
+| LLM agents that write code | [LLM Code-Writing Methods](llm-code-methods.md) | `files` containing `dispatch_rule.py` or `solver.py` |
+| Existing LLM heuristic-search repositories | [LLM Heuristic Repositories](llm-heuristic-methods.md) | generated file from upstream command |
 
 Start with [Job-Shop Environment](job-shop-environment.md).
+
+## Method Tracks
+
+After the job-shop environment page, read the method page that matches what you want to connect:
+
+- [Dispatching Rule Methods](dispatching-rule-methods.md): fixed weighted rules and baseline Python rule files.
+- [Simulated Annealing Methods](simulated-annealing-methods.md): JobShopLib's simulated annealing solver through `solver.py`.
+- [OR-Tools CP-SAT Methods](cp-sat-methods.md): constraint programming through a generated `solver.py`.
+- [LLM Code-Writing Methods](llm-code-methods.md): LLM agents or workflows that generate `dispatch_rule.py` or `solver.py`.
+- [LLM Heuristic Repositories](llm-heuristic-methods.md): existing repositories such as FunSearch, EoH, ReEvo, HeurAgenix, and EoH-S.
+
+Each method page explains which job-shop config to use, what the method should produce, and what remains user-owned.
 
 ## Generated Simulator Track
 
@@ -68,7 +88,7 @@ Included method templates:
 - `examples/methods/llm_heuristic_search/heuragenix_command.yaml`
 - `examples/methods/llm_heuristic_search/eohs_command.yaml`
 
-These templates are not turnkey studies. They show how to point OptPilot at one upstream command and one generated file. See [LLM Heuristic Methods](llm-heuristic-methods.md).
+These templates are not turnkey studies. They show how to point OptPilot at one upstream command and one generated file. See [LLM Heuristic Repositories](llm-heuristic-methods.md).
 
 ## Layout
 
@@ -82,8 +102,11 @@ examples/
   methods/
     baseline_file_copy/
     fixed_rule_parameters/
+    job_shop_lib_dispatching_rule/
+    job_shop_lib_simulated_annealing/
     llm_heuristic_search/
     openai_file_editor/
+    ortools_cpsat_solver/
   studies/
     job_shop_*.yaml
     sa_*.yaml

@@ -40,9 +40,9 @@ The same environment implementation has three reusable config variants.
 
 | Config | Candidate format | Intended methods |
 | --- | --- | --- |
-| `environment_rule_parameters.yaml` | `parameters` | BO, random search, Pymoo-style optimizers |
-| `environment_dispatch_rule.yaml` | `files` with `dispatch_rule.py` | LLM code editing, LLM heuristic search |
-| `environment_solver_code.yaml` | `files` with `solver.py` | LLM solver-code writing, OR-Tools/Gurobi-style solver scripts |
+| `environment_rule_parameters.yaml` | `parameters` | [Dispatching rules](dispatching-rule-methods.md) |
+| `environment_dispatch_rule.yaml` | `files` with `dispatch_rule.py` | [Dispatching rules](dispatching-rule-methods.md), [LLM code-writing methods](llm-code-methods.md), [LLM heuristic repositories](llm-heuristic-methods.md) |
+| `environment_solver_code.yaml` | `files` with `solver.py` | [JobShopLib dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), [OR-Tools CP-SAT](cp-sat-methods.md), [LLM code-writing methods](llm-code-methods.md) |
 
 This is intentional: the problem and metrics stay the same, while the candidate contract changes.
 
@@ -69,7 +69,25 @@ uv run optpilot validate examples/studies/job_shop_solver_code_baseline.yaml
 uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
 ```
 
-All three studies should run from a fresh checkout and do not require API keys or provider credentials.
+Simulated annealing:
+
+```bash
+uv sync --extra examples
+uv run optpilot validate examples/studies/job_shop_simulated_annealing.yaml
+uv run optpilot run examples/studies/job_shop_simulated_annealing.yaml
+```
+
+OR-Tools CP-SAT:
+
+```bash
+uv sync --extra examples
+uv run optpilot validate examples/studies/job_shop_ortools_cpsat.yaml
+uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
+```
+
+The baseline studies run from a fresh checkout without API keys or provider credentials. The JobShopLib dispatching-rule, simulated annealing, and CP-SAT studies additionally require the optional `examples` dependency.
+
+The simulated annealing study uses `execution.backend: local_subprocess` because JobShopLib's annealer uses signal handling internally. That is a useful example of choosing a runtime boundary to match the library being wrapped.
 
 ## Parameter Contract
 
@@ -148,3 +166,13 @@ For your own environment, follow the same pattern:
 2. write a small evaluator wrapper beside it
 3. define a candidate contract
 4. keep method code outside the environment
+
+## Next: Choose A Method Track
+
+After you understand the environment configs, choose the method page that matches the optimizer you want to connect:
+
+- [Dispatching Rule Methods](dispatching-rule-methods.md)
+- [Simulated Annealing Methods](simulated-annealing-methods.md)
+- [OR-Tools CP-SAT Methods](cp-sat-methods.md)
+- [LLM Code-Writing Methods](llm-code-methods.md)
+- [LLM Heuristic Repositories](llm-heuristic-methods.md)
