@@ -1,9 +1,11 @@
 # How A Run Works
 
+This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [Getting Started](getting-started.md).
+
 This page follows what happens after:
 
 ```bash
-uv run optpilot run examples/studies/sa_baseline.yaml
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
@@ -149,6 +151,8 @@ For parameter candidates:
 - the candidate `spec` is passed directly as runtime input
 - no environment source tree is required unless the evaluator itself needs copied files
 
+The job-shop parameter baseline from [Getting Started](getting-started.md) follows this simpler path.
+
 For file candidates:
 
 1. OptPilot creates a fresh trial workspace.
@@ -159,6 +163,8 @@ For file candidates:
 6. It calls the evaluator with the workspace and candidate root.
 
 The SA example copies a complete simulator source tree because the evaluator runs the simulator from inside the trial workspace after candidate edits are applied. If an evaluator uses an installed package, a prebuilt image, an external service, or only JSON input files, it does not need to copy the complete environment implementation.
+
+File-candidate tracks such as Strategic Airlift add this materialization step on top of the same base loop. The method still proposes candidates, the environment still evaluates them, and OptPilot still records the evidence.
 
 ## Environment Evaluation
 

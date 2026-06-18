@@ -2,7 +2,7 @@
 
 This guide gets you to a successful first OptPilot run with the job-shop scheduling example.
 
-Use this page when you want to validate the toolchain and understand one concrete study layout. Use [Examples](examples.md) for the full built-in example catalog and [Configuration](configuration.md) for the YAML reference.
+Use this page to validate the toolchain and understand one concrete study layout. It is the recommended first walkthrough. Use [Examples](examples.md) for the full built-in example catalog and [Configuration](configuration.md) for the YAML reference.
 
 ## Mental Model
 
@@ -21,6 +21,14 @@ The three public configs map directly onto that loop:
 - the study config binds them into one concrete run
 
 ## Install
+
+Prerequisites:
+
+- Python 3.10+
+- `uv`
+- run the commands below from the repository root
+
+This walkthrough is fully local and does not require API keys or provider credentials.
 
 ```bash
 uv sync
@@ -54,6 +62,17 @@ uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 This baseline does not require an API key or external solver. It emits one parameter candidate, evaluates it, and writes run evidence under `examples/runs/` unless you pass `--output-root`.
+
+## Expected Output
+
+The run command prints a JSON summary at the end. A successful first run should show:
+
+- `completed_trials: 1`
+- `failure_count: 0`
+- a non-empty `run_dir`
+- `best_metric` and `best_trial_id`
+
+If the command fails before printing a run summary, return to the install step and re-run `optpilot validate` first.
 
 ## The Three Configs In This Example
 
@@ -202,3 +221,11 @@ user_catalog/
 ```
 
 Use [Configuration](configuration.md) for the full schema and [User Catalog](user-catalog.md) for layout guidance.
+
+## Next Steps
+
+After this first run:
+
+1. Read [How A Run Works](how-it-works.md) to understand trial workspaces, candidate materialization, and evidence.
+2. Read [Examples](examples.md) to choose between turnkey tutorials, advanced examples, and integration templates.
+3. Copy the pattern into `user_catalog/` when you are ready to bind your own environment and method.

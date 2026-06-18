@@ -5,6 +5,8 @@ description: Core OptPilot concepts and boundaries.
 
 # Concepts
 
+This page gives the mental model behind OptPilot. For a runnable first example, use [Getting Started](getting-started.md).
+
 OptPilot has one optimization abstraction:
 
 ```text

@@ -7,11 +7,23 @@ description: Where to put user-owned OptPilot environments, methods, configs, an
 
 `user_catalog/` is the recommended place for your own environments, methods, prompts, fixtures, datasets, assets, and study files.
 
+Use this page after you complete the built-in job-shop tutorial. The easiest first custom integration is usually a copy of one working example with your own names and paths.
+
 The UI scans `user_catalog/` automatically when launched from the repository root:
 
 ```bash
 uv run optpilot ui --open-browser
 ```
+
+## First Move After The Tutorial
+
+The shortest path from the built-in examples to your own study is:
+
+1. copy one working example into `user_catalog/`
+2. rename imports, ids, and local paths
+3. run `uv run optpilot validate` on the new study before running it
+
+The first paths that usually need changing are `study.environmentConfig`, `study.methodConfig`, instance paths, and any environment-side `trialWorkspace` or `methodContext` file references.
 
 ## Recommended Layout
 

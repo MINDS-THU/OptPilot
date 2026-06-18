@@ -5,7 +5,7 @@ description: How to connect existing LLM-based heuristic-search repositories to 
 
 # LLM Heuristic Methods
 
-This guide explains how to connect an existing LLM-based heuristic-search repository to OptPilot as a method.
+This page is an integration template guide, not a turnkey tutorial. It explains how to connect an existing LLM-based heuristic-search repository to OptPilot as a method.
 
 Use this pattern when the upstream repository already has its own search loop. Examples include FunSearch-style systems, evolutionary heuristic search, reflection-based heuristic improvement, and repositories that repeatedly generate, evaluate, rank, and revise candidate heuristics internally.
 
@@ -161,6 +161,64 @@ uv run optpilot validate path/to/your_study.yaml
 
 If the upstream command fails, inspect the adapter logs in the run directory. The method workspace contains `request.json`, `stdout.log`, and `stderr.log`.
 
+## Worked Example: ReEvo
+
+This example shows a concrete bridge using the included ReEvo template.
+
+Prerequisites:
+
+- a local clone of `https://github.com/ai4co/reevo`
+- Python 3.11+ for the upstream ReEvo repository
+- the upstream dependencies installed in that repository
+- an LLM provider key accepted by ReEvo
+
+One concrete setup path based on the public ReEvo README is:
+
+```bash
+git clone https://github.com/ai4co/reevo resource/reevo
+cd resource/reevo
+pip install -e ".[gls,aco,nco]"
+export OPENAI_API_KEY=...
+python main.py problem=bpp_online init_pop_size=4 pop_size=4 max_fe=20 timeout=20
+```
+
+That upstream dry run confirms four things before OptPilot is involved:
+
+1. the repository clone path is correct
+2. the dependencies are installed
+3. the upstream command works in its own environment
+4. the generated heuristic file lands where the OptPilot template expects it
+
+The included OptPilot template is:
+
+```text
+examples/methods/llm_heuristic_search/reevo_command.yaml
+```
+
+The matching fields are:
+
+- `settings.repoRoot`: `../../../resource/reevo`
+- `settings.workdir`: `../../../resource/reevo`
+- `settings.generatedFile`: `problems/bpp_online/gpt.py`
+- `settings.command`: launches `main.py` with the chosen ReEvo problem
+
+Bind that method to a file-candidate environment whose editable file matches the generated heuristic. The job-shop dispatch-rule environment is the recommended first OptPilot target because it keeps the environment side simple.
+
+Minimum OptPilot-side validation:
+
+```bash
+uv run optpilot validate examples/methods/llm_heuristic_search/reevo_command.yaml
+uv run optpilot validate path/to/your_study.yaml
+```
+
+Success criterion:
+
+1. the upstream command runs from OptPilot without path errors
+2. OptPilot captures the generated file as a file candidate
+3. the environment accepts that file and evaluates it as one trial
+
+If your optimizer can already propose candidates directly from OptPilot study state without a large internal loop, stop using this wrapper pattern and write a native OptPilot method instead.
+
 ## Included Templates
 
 The repository includes template configs for several upstream projects:
@@ -174,7 +232,7 @@ examples/methods/llm_heuristic_search/
   eohs_command.yaml
 ```
 
-These templates are not guaranteed turnkey studies. They document the OptPilot-side shape for connecting those repositories. You still need to clone the upstream repository, install its dependencies, confirm its real command, and bind it to an environment whose file-candidate contract matches the produced file. The job-shop dispatch-rule environment is the recommended first target for generated heuristic files.
+These templates document the OptPilot-side shape for connecting those repositories. You still need to clone the upstream repository, install its dependencies, confirm its real command, and bind it to an environment whose file-candidate contract matches the produced file. The job-shop dispatch-rule environment is the recommended first target for generated heuristic files.
 
 ## Repository Notes
 

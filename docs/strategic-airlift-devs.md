@@ -5,6 +5,8 @@ description: How to connect a devs_gen_code generated simulator to OptPilot.
 
 # Strategic Airlift DEVS
 
+This is an advanced example, not the recommended first OptPilot run. Start with [Getting Started](getting-started.md) unless you specifically want to evaluate generated simulator code.
+
 The Strategic Airlift example demonstrates a generated-simulator workflow:
 
 1. generate a discrete-event simulator using `devs_gen_code`
@@ -13,6 +15,18 @@ The Strategic Airlift example demonstrates a generated-simulator workflow:
 4. apply candidate edits only inside disposable trial workspaces
 
 This track is separate from the main job-shop tutorial environment. Its purpose is to show how OptPilot connects to generated simulation projects.
+
+This page assumes that the generated Strategic Airlift simulator tree is already present in this repository checkout at `resource/devs_gen_gallery/simulators/SA/simulator`.
+
+## Prerequisites
+
+- Python 3.10+
+- `uv`
+- run commands from the repository root
+- the Strategic Airlift simulator directory exists at `resource/devs_gen_gallery/simulators/SA/simulator`
+- for the file-editing study only: `OPENROUTER_API_KEY` is set in the shell
+
+`devs_gen_code` is an external simulator-generation workflow. In this example, OptPilot does not generate the simulator itself. OptPilot assumes the generated simulator already exists and copies it into disposable trial workspaces.
 
 ## Current Files
 
@@ -77,6 +91,16 @@ It collects simulator events and returns metrics such as:
 
 ## Run
 
+### Verify Setup
+
+Before running either study, confirm:
+
+1. `resource/devs_gen_gallery/simulators/SA/simulator` exists.
+2. `resource/devs_gen_gallery/simulators/SA/simulator/devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py` exists.
+3. `OPENROUTER_API_KEY` is set if you plan to run `sa_openai_file_editor.yaml`.
+
+### Baseline Study
+
 Validate and run the baseline:
 
 ```bash
@@ -84,12 +108,18 @@ uv run optpilot validate examples/studies/sa_baseline.yaml
 uv run optpilot run examples/studies/sa_baseline.yaml
 ```
 
+This baseline uses the checked-in OptPilot wrapper and the generated simulator copy. It does not require API keys or provider credentials.
+
+### OpenAI-Compatible File Editing Study
+
 The OpenAI-compatible file-editing method requires provider credentials:
 
 ```bash
 export OPENROUTER_API_KEY=...
 uv run optpilot run examples/studies/sa_openai_file_editor.yaml
 ```
+
+Use this second study only after the baseline path works.
 
 ## Adapting To Another Generated Simulator
 

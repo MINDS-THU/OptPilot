@@ -69,7 +69,7 @@ uv run optpilot validate examples/studies/job_shop_solver_code_baseline.yaml
 uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
 ```
 
-All three studies are API-free and should run from a fresh checkout.
+All three studies should run from a fresh checkout and do not require API keys or provider credentials.
 
 ## Parameter Contract
 

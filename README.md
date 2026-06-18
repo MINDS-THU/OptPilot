@@ -40,6 +40,15 @@ Not included:
 - automatic dependency inference or package installation
 - multi-user UI authentication
 
+## Prerequisites
+
+OptPilot currently supports Python 3.10 and newer.
+
+Before running the examples below, install:
+
+- Python 3.10+
+- `uv`
+
 ## Install
 
 OptPilot uses `uv`.
@@ -50,6 +59,8 @@ uv run optpilot --help
 ```
 
 ## Quickstart
+
+Start with the job-shop parameter baseline. It is the recommended first run, works from a fresh checkout, and does not require API keys or external solvers.
 
 Run the job-shop parameter baseline:
 
@@ -70,6 +81,8 @@ uv run optpilot ui --open-browser
 ```
 
 The UI scans `examples/` and `user_catalog/` by default.
+
+Advanced examples and integration templates such as Strategic Airlift and `llm_heuristic_search` require extra setup. Use the job-shop example first, then continue with the example-specific docs.
 
 ## Minimal Config Shape
 

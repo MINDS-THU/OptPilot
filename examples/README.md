@@ -20,7 +20,7 @@ uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
 uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
 ```
 
-These studies do not require API keys or external solvers.
+These studies do not require API keys, provider credentials, or external solvers.
 
 ## Generated Simulator Track: Strategic Airlift DEVS
 

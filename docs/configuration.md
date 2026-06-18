@@ -1,12 +1,14 @@
 # Configuration Reference
 
+This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run the job-shop baseline yet.
+
 OptPilot public configs are YAML files validated by JSON Schema. The schemas are packaged in `src/optpilot/schemas/` and are used by:
 
 ```bash
 uv run optpilot validate path/to/study.yaml
 ```
 
-This page is the field reference for the three public config roles: `environment`, `method`, and `study`.
+It covers the three public config roles: `environment`, `method`, and `study`.
 
 For the conceptual model behind those roles, use [Concepts](concepts.md). For the runtime procedure after these files are loaded and validated, use [How A Run Works](how-it-works.md).
 
@@ -126,6 +128,12 @@ paths that describe what the evaluator should read or produce resolve inside
 the trial workspace, because that workspace is the directory OptPilot prepares
 and evaluates for each candidate.
 
+Example:
+
+- `examples/studies/job_shop_rule_parameters_baseline.yaml` resolves `environmentConfig` relative to the study file
+- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves any `trialWorkspace` or `methodContext` entries relative to the environment file
+- `examples/methods/fixed_rule_parameters/method.yaml` resolves any `pythonPath` entries relative to the method file
+
 ## Environment Config
 
 An environment config describes what can be evaluated and how the evaluation happens.
@@ -218,6 +226,8 @@ capabilities:
   - id: historical_db_query
     description: Read-only access to a historical SQLite database.
 ```
+
+For a first runnable environment config, the minimum important fields are usually `id`, `evaluator`, `candidate`, and `metrics`.
 
 ### Evaluator Return
 
@@ -353,6 +363,8 @@ accepts:
 runtime:
   sandbox: host          # enum: host | container
 ```
+
+For a first runnable method config, the minimum important fields are usually `id`, `entrypoint`, and `accepts`.
 
 Batch Python methods can implement:
 
