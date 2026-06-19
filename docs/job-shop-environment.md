@@ -13,7 +13,8 @@ It demonstrates the core OptPilot idea: keep the environment boundary stable, th
 
 A job-shop instance contains jobs, operations, machine assignments, and processing times. A candidate produces either:
 
-- dispatch-rule parameters
+- weighted dispatch-rule parameters
+- complete schedule solutions
 - a generated `dispatch_rule.py`
 - a generated `solver.py`
 
@@ -36,13 +37,14 @@ objective:
 
 ## Environment Config Variants
 
-The same environment implementation has three reusable config variants.
+The same environment implementation has four reusable config variants.
 
 | Config | Candidate format | Intended methods |
 | --- | --- | --- |
-| `environment_rule_parameters.yaml` | `parameters` | [Dispatching rules](dispatching-rule-methods.md) |
+| `environment_rule_parameters.yaml` | `parameters` | Dependency-free weighted [dispatching rules](dispatching-rule-methods.md) |
+| `environment_schedule_solution.yaml` | `parameters` with `solutions` | External solvers and policies, including JobShopLib [dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), and [OR-Tools CP-SAT](cp-sat-methods.md) |
 | `environment_dispatch_rule.yaml` | `files` with `dispatch_rule.py` | [Dispatching rules](dispatching-rule-methods.md), [LLM code-writing methods](llm-code-methods.md), [LLM heuristic repositories](llm-heuristic-methods.md) |
-| `environment_solver_code.yaml` | `files` with `solver.py` | [JobShopLib dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), [OR-Tools CP-SAT](cp-sat-methods.md), [LLM code-writing methods](llm-code-methods.md) |
+| `environment_solver_code.yaml` | `files` with `solver.py` | [LLM code-writing methods](llm-code-methods.md) and user-provided solver-code methods |
 
 This is intentional: the problem and metrics stay the same, while the candidate contract changes.
 
@@ -87,9 +89,7 @@ uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
 
 The baseline studies run from a fresh checkout without API keys or provider credentials. The JobShopLib dispatching-rule, simulated annealing, and CP-SAT studies additionally require the optional `examples` dependency.
 
-The simulated annealing study uses `execution.backend: local_subprocess` because JobShopLib's annealer uses signal handling internally. That is a useful example of choosing a runtime boundary to match the library being wrapped.
-
-## Parameter Contract
+## Weighted-Rule Parameter Contract
 
 `environment_rule_parameters.yaml` accepts a parameter candidate:
 
@@ -109,6 +109,44 @@ candidate:
 ```
 
 The evaluator converts these weights into a priority dispatching rule.
+
+## Schedule-Solution Contract
+
+`environment_schedule_solution.yaml` accepts complete schedules keyed by OptPilot study instance id:
+
+```yaml
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}
+```
+
+The method produces:
+
+```yaml
+solutions:
+  ft06_small:
+    operations:
+      - job: 0
+        operation: 0
+        machine: 0
+        start: 0
+        end: 3
+  la01_tiny:
+    operations:
+      - job: 0
+        operation: 0
+        machine: 0
+        start: 0
+        end: 2
+```
+
+The keys `ft06_small` and `la01_tiny` come from the study instance file names. OptPilot exposes the same ids and instance payloads to methods through `study_state.instances`, so a solver method can solve the exact benchmark set used by the evaluator.
+
+This contract is suitable for any method that produces finished schedules: JobShopLib, OR-Tools, Gurobi, a trained RL policy, or an internal company solver. The environment only validates and scores schedules. It does not know which method or library produced them.
 
 ## Dispatch-Rule File Contract
 
@@ -155,6 +193,8 @@ def solve(instance, time_limit_seconds, context):
 ```
 
 The evaluator independently validates the returned schedule. A generated solver does not get credit for an infeasible schedule.
+
+Use this file contract when the candidate itself is code. For example, an LLM code-writing method may produce a new `solver.py`; a JobShopLib wrapper should normally produce schedule solutions instead.
 
 ## Wrapper Principle
 

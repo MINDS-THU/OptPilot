@@ -127,20 +127,15 @@ class StudySpec:
         definition = self.instances.get("definition", {})
         if mode == "FixedInstance":
             if "instance" in definition:
-                return [dict(definition["instance"])]
+                return [_attach_instance_id(dict(definition["instance"]), "inline")]
             if "instanceRef" in definition:
-                with self.resolve_path(definition["instanceRef"]).open("r", encoding="utf-8") as handle:
-                    return [yaml.safe_load(handle) or {}]
+                return [self._load_instance_ref(definition["instanceRef"])]
             raise ValueError("FixedInstance scope requires 'instance' or 'instanceRef'.")
         if mode == "InstanceSet":
             refs = definition.get("instanceRefs", [])
             if not refs:
                 raise ValueError("InstanceSet scope requires 'instanceRefs'.")
-            instances = []
-            for ref in refs:
-                with self.resolve_path(ref).open("r", encoding="utf-8") as handle:
-                    instances.append(yaml.safe_load(handle) or {})
-            return instances
+            return [self._load_instance_ref(ref) for ref in refs]
         if mode == "Distribution":
             sampler = definition.get("sampler", {})
             config = sampler.get("config", {})
@@ -157,6 +152,35 @@ class StudySpec:
             return [_sample_distribution_instance(config, rng) for _ in range(sample_count)]
         raise NotImplementedError(f"Unsupported instances mode: {mode}")
 
+    def method_instance_context(self) -> List[Dict[str, Any]]:
+        mode = self.instances["mode"]
+        definition = self.instances.get("definition", {})
+        if mode == "FixedInstance":
+            if "instance" in definition:
+                payload = _attach_instance_id(dict(definition["instance"]), "inline")
+                return [{"id": payload["_optpilot_instance_id"], "payload": payload}]
+            if "instanceRef" in definition:
+                return [self._method_instance_ref(definition["instanceRef"])]
+            return []
+        if mode == "InstanceSet":
+            return [self._method_instance_ref(ref) for ref in definition.get("instanceRefs", []) or []]
+        return []
+
+    def _load_instance_ref(self, ref: str) -> Dict[str, Any]:
+        path = self.resolve_path(ref)
+        with path.open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        return _attach_instance_id(dict(payload), path.stem)
+
+    def _method_instance_ref(self, ref: str) -> Dict[str, Any]:
+        path = self.resolve_path(ref)
+        payload = self._load_instance_ref(ref)
+        return {
+            "id": payload["_optpilot_instance_id"],
+            "path": str(path),
+            "payload": payload,
+        }
+
 
 def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]:
     result: Dict[str, Any] = {}
@@ -170,6 +194,11 @@ def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]
             continue
         result[key] = value
     return result
+
+
+def _attach_instance_id(payload: Dict[str, Any], fallback: str) -> Dict[str, Any]:
+    payload.setdefault("_optpilot_instance_id", str(payload.get("_optpilot_instance_id") or fallback))
+    return payload
 
 
 def _sample_custom_distribution(

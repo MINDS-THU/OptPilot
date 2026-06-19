@@ -1,8 +1,8 @@
 apiVersion: optpilot.io/v1
 config: method
 id: job-shop-lib-ortools-cpsat
-description: Emits a solver.py candidate that calls JobShopLib ORToolsSolver.
-tags: [job-shop, job-shop-lib, cp-sat, ortools, solver-code]
+description: Uses JobShopLib ORToolsSolver to emit complete schedule solutions.
+tags: [job-shop, job-shop-lib, cp-sat, ortools, schedule-solution]
 
 entrypoint:
   python: examples.methods.ortools_cpsat_solver.method:OrToolsCpSatSolverMethod
@@ -10,9 +10,10 @@ entrypoint:
 
 settings:
   batchSize: 1
+  timeLimitSeconds: 10.0
 
 accepts:
-  formats: [files]
+  formats: [parameters]
   requires:
     context:
-      - candidate.files.editable
+      - candidate.parameters.schema

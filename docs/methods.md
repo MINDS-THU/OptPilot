@@ -90,6 +90,24 @@ entrypoint:
   protocol: batch
 ```
 
+## Instance-Aware Methods
+
+Some methods need to solve the study instances directly before proposing a candidate. External solvers, trained policies, and coarse-grained optimization scripts commonly work this way.
+
+OptPilot includes the configured study instances in `study_state.instances`:
+
+```json
+[
+  {
+    "id": "ft06_small",
+    "path": ".../ft06_small.yaml",
+    "payload": {"name": "ft06-small", "jobs": "..."}
+  }
+]
+```
+
+The `id` is the stable OptPilot instance id used by solution candidates. For file-based study instances, it comes from the instance file stem. A method that produces one solution per instance should use those ids in its candidate, for example `spec.solutions.ft06_small`.
+
 ## Session Protocol
 
 A Python session method actively interacts with an OptPilot session object. It is useful for LLM agents or workflows that naturally operate through repeated tool-like calls.

@@ -1,12 +1,11 @@
-"""Method that emits the included JobShopLib OR-Tools solver as a file candidate."""
+"""Method that solves job-shop instances with JobShopLib OR-Tools CP-SAT."""
 
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
 from typing import Any, Dict, List
 
-from optpilot.candidate_files import CandidateFileStore
+from examples.methods.job_shop_lib_solvers import solve_study_instances
 
 
 JsonDict = Dict[str, Any]
@@ -15,34 +14,34 @@ JsonDict = Dict[str, Any]
 class OrToolsCpSatSolverMethod:
     def __init__(self, definition: JsonDict, study_spec, rng=None):
         self.definition = definition
-        self.study_spec = study_spec
+        self.settings = dict(definition.get("config", {}))
         self._emitted = False
 
     def propose(self, n_candidates: int, study_state: JsonDict) -> List[JsonDict]:
         if self._emitted or n_candidates <= 0:
             return []
-        runtime_context = dict(study_state.get("runtime_context", {}))
-        candidate_store_dir = runtime_context.get("candidate_store_dir")
-        if not candidate_store_dir:
-            raise ValueError("OrToolsCpSatSolverMethod requires runtime_context.candidate_store_dir.")
         self._emitted = True
-        store = CandidateFileStore(
-            candidate_store_dir,
-            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
+        time_limit = float(self.settings.get("timeLimitSeconds", 10.0))
+        try:
+            from job_shop_lib.constraint_programming import ORToolsSolver
+        except ImportError as exc:
+            raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --extra examples`.") from exc
+        solutions = solve_study_instances(
+            study_state,
+            lambda: ORToolsSolver(max_time_in_seconds=max(time_limit * 0.8, 1.0)),
         )
         return [
-            store.store_file(
-                Path(__file__).with_name("solver.py"),
-                path="solver.py",
-                candidate_id=f"job-shop-lib-cpsat-{uuid.uuid4().hex[:12]}",
-                generator={
+            {
+                "candidate_id": f"job-shop-lib-cpsat-{uuid.uuid4().hex[:12]}",
+                "format": "parameters",
+                "spec": {"solutions": solutions},
+                "generator": {
                     "method_id": self.definition["id"],
                     "strategy": "job_shop_lib_ortools_solver",
+                    "time_limit_seconds": time_limit,
                 },
-                metadata={
-                    "summary": "JobShopLib ORToolsSolver candidate for job-shop scheduling.",
-                },
-            )
+                "metadata": {"summary": "Schedules produced by JobShopLib ORToolsSolver."},
+            }
         ]
 
     def observe(self, observations: List[JsonDict]) -> None:

@@ -16,7 +16,7 @@ examples/methods/ortools_cpsat_solver/
 It targets:
 
 ```text
-examples/environments/job_shop_scheduling/environment_solver_code.yaml
+examples/environments/job_shop_scheduling/environment_schedule_solution.yaml
 ```
 
 ## Install Optional Dependency
@@ -36,26 +36,26 @@ uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
 
 ## What The Method Produces
 
-The method emits:
+The method reads `study_state.instances`, runs JobShopLib's OR-Tools solver for each instance, and emits schedule solutions:
 
-```text
-solver.py
+```yaml
+solutions:
+  ft06_small:
+    operations:
+      - job: 0
+        operation: 0
+        machine: 0
+        start: 0
+        end: 3
 ```
 
-The solver file imports:
+The method owns the CP-SAT call:
 
 ```python
 from job_shop_lib.constraint_programming import ORToolsSolver
 ```
 
-and defines:
-
-```python
-def solve(instance, time_limit_seconds, context):
-    ...
-```
-
-The job-shop evaluator imports that file inside the trial workspace, calls `solve(...)`, and independently validates the returned schedule.
+The evaluator independently validates the returned schedule. This keeps the environment reusable for any solver that can produce the same schedule-solution shape.
 
 ## Why OR-Tools, Not Gurobi
 

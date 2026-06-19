@@ -1,8 +1,8 @@
 apiVersion: optpilot.io/v1
 config: method
 id: job-shop-lib-simulated-annealing
-description: Emits a solver.py candidate that calls JobShopLib SimulatedAnnealingSolver.
-tags: [job-shop, job-shop-lib, simulated-annealing, solver-code]
+description: Uses JobShopLib SimulatedAnnealingSolver to emit complete schedule solutions.
+tags: [job-shop, job-shop-lib, simulated-annealing, schedule-solution]
 
 entrypoint:
   python: examples.methods.job_shop_lib_simulated_annealing.method:JobShopLibSimulatedAnnealingMethod
@@ -17,7 +17,7 @@ settings:
   seed: 0
 
 accepts:
-  formats: [files]
+  formats: [parameters]
   requires:
     context:
-      - candidate.files.editable
+      - candidate.parameters.schema

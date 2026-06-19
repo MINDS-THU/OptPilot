@@ -189,6 +189,11 @@ class MvpIntegrationTest(unittest.TestCase):
             (tmp_path / "instance_b.yaml").write_text("target_x: 4.4\ntarget_y: 7\n", encoding="utf-8")
             spec_path = tmp_path / "instance_set.yaml"
             spec_path.write_text(yaml.safe_dump(base_spec, sort_keys=False), encoding="utf-8")
+            study_spec = load_expanded_study_spec(str(spec_path))
+            instance_context = study_spec.method_instance_context()
+
+            self.assertEqual([item["id"] for item in instance_context], ["instance_a", "instance_b"])
+            self.assertEqual(instance_context[0]["payload"]["_optpilot_instance_id"], "instance_a")
 
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
             observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
@@ -2468,10 +2473,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
         sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
         job_shop_parameter_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
+        job_shop_solution_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-schedule-solution")
         job_shop_file_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-dispatch-rule")
         method_ids = {item["id"] for item in catalog["methods"]}
         self.assertEqual(sa_environment["summary"]["candidate_format"], "files")
         self.assertEqual(job_shop_parameter_environment["summary"]["candidate_format"], "parameters")
+        self.assertEqual(job_shop_solution_environment["summary"]["candidate_format"], "parameters")
         self.assertEqual(job_shop_file_environment["summary"]["candidate_format"], "files")
         self.assertIn(
             "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
@@ -2515,6 +2522,7 @@ class MvpIntegrationTest(unittest.TestCase):
             [
                 "job-shop-dispatch-rule",
                 "job-shop-rule-parameters",
+                "job-shop-schedule-solution",
                 "job-shop-solver-code",
                 "sa-simulator-code-edit",
             ],

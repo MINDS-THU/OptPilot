@@ -19,6 +19,7 @@ The examples are organized around one main tutorial environment plus separate me
 | Dispatching rules | Turnkey code | None for baselines; `uv sync --extra examples` for JobShopLib wrapper | Native and JobShopLib dispatching rules |
 | Simulated annealing | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's metaheuristic solver |
 | OR-Tools CP-SAT | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's constraint-programming solver |
+| Reinforcement learning | Integration pattern | JobShopLib plus a user-owned trained policy | Rolling out policies that emit schedules |
 | LLM code-writing methods | Repo code with provider setup | Provider credentials for LLM methods | Agents that write `dispatch_rule.py` or `solver.py` |
 | LLM heuristic repositories | Integration templates | Upstream repository clone, dependency install, command wiring, often provider credentials | Wrapping existing LLM search repositories |
 | Strategic Airlift DEVS | Advanced example | Generated simulator tree under `resource/devs_gen_gallery/simulators/SA/simulator`; provider credentials only for the LLM editing study | File-candidate simulator workflows |
@@ -42,8 +43,9 @@ This environment is useful because the same problem can be optimized in several 
 | Method family | Page | Candidate contract |
 | --- | --- | --- |
 | Dispatching rules | [Dispatching Rule Methods](dispatching-rule-methods.md) | `parameters` or `files` |
-| Simulated annealing | [Simulated Annealing Methods](simulated-annealing-methods.md) | `files` containing `solver.py` |
-| OR-Tools CP-SAT | [OR-Tools CP-SAT Methods](cp-sat-methods.md) | `files` containing `solver.py` |
+| Simulated annealing | [Simulated Annealing Methods](simulated-annealing-methods.md) | schedule-solution `parameters` |
+| OR-Tools CP-SAT | [OR-Tools CP-SAT Methods](cp-sat-methods.md) | schedule-solution `parameters` |
+| Reinforcement learning | [Reinforcement Learning Methods](reinforcement-learning-methods.md) | schedule-solution `parameters` |
 | LLM agents that write code | [LLM Code-Writing Methods](llm-code-methods.md) | `files` containing `dispatch_rule.py` or `solver.py` |
 | Existing LLM heuristic-search repositories | [LLM Heuristic Repositories](llm-heuristic-methods.md) | generated file from upstream command |
 
@@ -53,9 +55,10 @@ Start with [Job-Shop Environment](job-shop-environment.md).
 
 After the job-shop environment page, read the method page that matches what you want to connect:
 
-- [Dispatching Rule Methods](dispatching-rule-methods.md): fixed weighted rules and baseline Python rule files.
-- [Simulated Annealing Methods](simulated-annealing-methods.md): JobShopLib's simulated annealing solver through `solver.py`.
-- [OR-Tools CP-SAT Methods](cp-sat-methods.md): constraint programming through a generated `solver.py`.
+- [Dispatching Rule Methods](dispatching-rule-methods.md): fixed weighted rules, baseline Python rule files, and JobShopLib dispatching rules that emit schedule solutions.
+- [Simulated Annealing Methods](simulated-annealing-methods.md): JobShopLib's simulated annealing solver producing schedule solutions.
+- [OR-Tools CP-SAT Methods](cp-sat-methods.md): JobShopLib's OR-Tools CP-SAT solver producing schedule solutions.
+- [Reinforcement Learning Methods](reinforcement-learning-methods.md): JobShopLib Gymnasium policy rollouts that produce schedule solutions.
 - [LLM Code-Writing Methods](llm-code-methods.md): LLM agents or workflows that generate `dispatch_rule.py` or `solver.py`.
 - [LLM Heuristic Repositories](llm-heuristic-methods.md): existing repositories such as FunSearch, EoH, ReEvo, HeurAgenix, and EoH-S.
 

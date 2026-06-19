@@ -5,7 +5,7 @@ description: How the JobShopLib simulated annealing example connects to OptPilot
 
 # Simulated Annealing Methods
 
-JobShopLib includes a simulated annealing solver for job-shop scheduling. The OptPilot example does not reimplement that solver. It wraps JobShopLib as a method that emits a `solver.py` file candidate.
+JobShopLib includes a simulated annealing solver for job-shop scheduling. The OptPilot example does not reimplement that solver and does not generate solver code. It wraps JobShopLib as a method that emits complete schedule solutions.
 
 The included method is:
 
@@ -16,7 +16,7 @@ examples/methods/job_shop_lib_simulated_annealing/
 It targets:
 
 ```text
-examples/environments/job_shop_scheduling/environment_solver_code.yaml
+examples/environments/job_shop_scheduling/environment_schedule_solution.yaml
 ```
 
 ## Install Optional Dependency
@@ -35,24 +35,33 @@ uv run optpilot validate examples/studies/job_shop_simulated_annealing.yaml
 uv run optpilot run examples/studies/job_shop_simulated_annealing.yaml
 ```
 
-This study uses `execution.backend: local_subprocess`. JobShopLib's annealer is built on `simanneal`, which uses process-level signal handling; running the evaluator in a subprocess avoids thread-pool signal limitations.
-
 ## What The Method Produces
 
-The OptPilot method writes a generated `solver.py` candidate. That file imports:
+The method reads the shared study instances from `study_state.instances`, runs `SimulatedAnnealingSolver` for each instance, and emits:
 
-```python
-from job_shop_lib.metaheuristics import SimulatedAnnealingSolver
+```yaml
+solutions:
+  ft06_small:
+    operations:
+      - job: 0
+        operation: 0
+        machine: 0
+        start: 0
+        end: 3
 ```
 
-and exposes the environment-facing function:
+The method settings control the annealer:
 
-```python
-def solve(instance, time_limit_seconds, context):
-    ...
+```yaml
+settings:
+  initialTemperature: 2500.0
+  endingTemperature: 2.5
+  steps: 1000
+  updates: 0
+  seed: 0
 ```
 
-The job-shop evaluator imports `solver.py`, calls `solve(...)`, validates the returned schedule, and records the metrics.
+The environment validates the returned schedules and records the metrics.
 
 ## Boundary
 
@@ -65,9 +74,9 @@ JobShopLib owns:
 OptPilot owns:
 
 - launching the method
-- storing the generated `solver.py` as a candidate
-- materializing the candidate into a trial workspace
+- exposing the study instances to the method
+- storing the schedule-solution candidate
 - calling the environment evaluator
 - recording evidence
 
-This demonstrates the intended integration pattern: keep the external method intact and write a thin OptPilot wrapper around it.
+This demonstrates the intended integration pattern for existing optimization libraries: keep the external method intact, let the method produce a general candidate contract, and keep the evaluator independent from the solver library.

@@ -75,6 +75,7 @@ nav:
       - Dispatching Rule Methods: dispatching-rule-methods.md
       - Simulated Annealing Methods: simulated-annealing-methods.md
       - OR-Tools CP-SAT Methods: cp-sat-methods.md
+      - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
       - LLM Heuristic Repositories: llm-heuristic-methods.md
       - Strategic Airlift DEVS: strategic-airlift-devs.md

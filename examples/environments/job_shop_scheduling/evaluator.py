@@ -27,7 +27,10 @@ def evaluate(candidate_runtime: JsonDict, instance: JsonDict, context: JsonDict)
 
     mode = _evaluation_mode(candidate_runtime, candidate_root)
     if mode == "parameters":
-        schedule = schedule_by_dispatch_rule(job_shop, weighted_dispatch_score(candidate_runtime))
+        if "solutions" in candidate_runtime:
+            schedule = _extract_solution_schedule(candidate_runtime, instance)
+        else:
+            schedule = schedule_by_dispatch_rule(job_shop, weighted_dispatch_score(candidate_runtime))
     elif mode == "dispatch_rule":
         module = _load_module(candidate_root / "dispatch_rule.py", "optpilot_job_shop_dispatch_rule")
         if not hasattr(module, "score"):
@@ -78,6 +81,22 @@ def _evaluation_mode(candidate_runtime: JsonDict, candidate_root: Path) -> str:
     if "solver.py" in paths:
         return "solver"
     raise ValueError("File candidate must materialize dispatch_rule.py or solver.py.")
+
+
+def _extract_solution_schedule(candidate_runtime: JsonDict, instance: JsonDict) -> List[JsonDict]:
+    solutions = candidate_runtime.get("solutions")
+    if not isinstance(solutions, dict):
+        raise TypeError("Schedule-solution candidates must define a solutions object.")
+    instance_id = str(instance.get("_optpilot_instance_id") or instance.get("name") or "")
+    if not instance_id:
+        raise ValueError("Cannot select a schedule solution because the instance has no OptPilot instance id.")
+    solution = solutions.get(instance_id)
+    if not isinstance(solution, dict):
+        raise KeyError(f"Schedule-solution candidate does not define a solution for instance {instance_id!r}.")
+    operations = solution.get("operations")
+    if not isinstance(operations, list):
+        raise TypeError(f"Solution for instance {instance_id!r} must define an operations list.")
+    return list(operations)
 
 
 def _load_module(path: Path, name: str):

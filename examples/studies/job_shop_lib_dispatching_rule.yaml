@@ -1,10 +1,10 @@
 apiVersion: optpilot.io/v1
 config: study
 name: job-shop-lib-dispatching-rule
-description: Evaluate JobShopLib DispatchingRuleSolver through the solver-code environment.
-tags: [job-shop, job-shop-lib, dispatching-rule, solver-code]
+description: Evaluate JobShopLib DispatchingRuleSolver through schedule-solution candidates.
+tags: [job-shop, job-shop-lib, dispatching-rule, schedule-solution]
 
-environmentConfig: ../environments/job_shop_scheduling/environment_solver_code.yaml
+environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution.yaml
 methodConfig: ../methods/job_shop_lib_dispatching_rule/method.yaml
 
 objective:

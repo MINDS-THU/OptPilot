@@ -101,6 +101,7 @@ class StudyRunner:
         scheduler = scheduler_cls(scheduler_def, backend, store)
 
         prior = _prior_run_state(evidence_view, previous_summary)
+        method_instances = self.study_spec.method_instance_context()
         best_metric: Optional[float] = prior["best_metric"]
         best_trial_id: Optional[str] = prior["best_trial_id"]
         best_candidate_id: Optional[str] = prior["best_candidate_id"]
@@ -130,6 +131,7 @@ class StudyRunner:
                 "failure_count": failure_count,
                 "best_metric": best_metric,
                 "best_trial_id": best_trial_id,
+                "instances": method_instances,
                 "candidate_context": runtime_context["candidate_context"],
                 "runtime_context": runtime_context,
             }

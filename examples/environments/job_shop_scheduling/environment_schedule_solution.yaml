@@ -1,0 +1,27 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: job-shop-schedule-solution
+description: Evaluate complete job-shop schedules produced by external solvers or policies.
+tags: [job-shop, scheduling, parameters, schedule-solution, tutorial]
+
+evaluator:
+  python: examples.environments.job_shop_scheduling.evaluator:evaluate
+  timeoutSeconds: 60
+
+candidate:
+  format: parameters
+  description: Complete schedule solutions keyed by OptPilot study instance id.
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}
+        description: Mapping from instance id to a solution object with an operations list.
+
+metrics:
+  source: return
+  keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
+
+outputFiles:
+  - schedule.json
+  - job_shop_metrics.json

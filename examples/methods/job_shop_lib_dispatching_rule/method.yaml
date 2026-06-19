@@ -1,8 +1,8 @@
 apiVersion: optpilot.io/v1
 config: method
 id: job-shop-lib-dispatching-rule
-description: Emits a solver.py candidate that calls JobShopLib DispatchingRuleSolver.
-tags: [job-shop, job-shop-lib, dispatching-rule, solver-code]
+description: Uses JobShopLib DispatchingRuleSolver to emit complete schedule solutions.
+tags: [job-shop, job-shop-lib, dispatching-rule, schedule-solution]
 
 entrypoint:
   python: examples.methods.job_shop_lib_dispatching_rule.method:JobShopLibDispatchingRuleMethod
@@ -13,7 +13,7 @@ settings:
   dispatchingRule: most_work_remaining
 
 accepts:
-  formats: [files]
+  formats: [parameters]
   requires:
     context:
-      - candidate.files.editable
+      - candidate.parameters.schema

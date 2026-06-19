@@ -6,9 +6,10 @@
 
 The main example environment is `examples/environments/job_shop_scheduling/`.
 
-It exposes the same scheduling problem through three candidate contracts:
+It exposes the same scheduling problem through four candidate contracts:
 
 - `environment_rule_parameters.yaml`: parameter candidates for weighted dispatch-rule optimization
+- `environment_schedule_solution.yaml`: parameter candidates containing complete schedules for each study instance
 - `environment_dispatch_rule.yaml`: file candidates that provide `dispatch_rule.py`
 - `environment_solver_code.yaml`: file candidates that provide `solver.py`
 
@@ -31,7 +32,7 @@ uv run optpilot run examples/studies/job_shop_simulated_annealing.yaml
 uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
 ```
 
-These reuse JobShopLib's dispatching-rule, simulated annealing, and OR-Tools CP-SAT solvers through OptPilot's `solver.py` file-candidate contract.
+These reuse JobShopLib's dispatching-rule, simulated annealing, and OR-Tools CP-SAT solvers as methods that emit OptPilot schedule-solution candidates.
 
 ## Generated Simulator Track: Strategic Airlift DEVS
 

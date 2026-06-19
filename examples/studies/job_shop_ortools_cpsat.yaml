@@ -1,10 +1,10 @@
 apiVersion: optpilot.io/v1
 config: study
 name: job-shop-lib-ortools-cpsat
-description: Evaluate JobShopLib ORToolsSolver through the solver-code environment.
-tags: [job-shop, job-shop-lib, cp-sat, ortools, solver-code]
+description: Evaluate JobShopLib ORToolsSolver through schedule-solution candidates.
+tags: [job-shop, job-shop-lib, cp-sat, ortools, schedule-solution]
 
-environmentConfig: ../environments/job_shop_scheduling/environment_solver_code.yaml
+environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution.yaml
 methodConfig: ../methods/ortools_cpsat_solver/method.yaml
 
 objective:
