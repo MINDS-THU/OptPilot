@@ -75,8 +75,8 @@ The split is intentional. Environment and method configs are reusable components
 
 1. Run the first example with [Getting Started](getting-started.md).
 2. Read [Concepts](concepts.md) for the mental model.
-3. Read [How A Run Works](how-it-works.md) for the runtime sequence and storage model.
-4. Use [Configuration](configuration.md) while writing YAML files.
-5. Use [Examples](examples.md) to choose the right integration pattern.
+3. Read [Methods](methods.md), [How A Run Works](how-it-works.md), and [Evidence](evidence.md) when you want the runtime model.
+4. Use [Examples](examples.md) and [Job-Shop Environment](job-shop-environment.md) to choose a method track.
+5. Use [Configuration](configuration.md) and [User Catalog](user-catalog.md) when you start writing your own YAML files.
 
 For personal or team use, put your own integrations under `user_catalog/`; the UI scans both `examples/` and `user_catalog/` automatically.

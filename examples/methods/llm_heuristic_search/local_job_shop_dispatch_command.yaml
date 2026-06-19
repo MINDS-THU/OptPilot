@@ -1,0 +1,30 @@
+apiVersion: optpilot.io/v1
+config: method
+id: local-job-shop-heuristic-search
+description: Executable local upstream-command fixture for the LLM heuristic-search adapter.
+tags: [job-shop, llm-method, heuristic-search, local-fixture]
+
+entrypoint:
+  python: examples.methods.llm_heuristic_search.method:LLMHeuristicSearchMethod
+  protocol: batch
+
+settings:
+  command:
+    - "{python}"
+    - local_job_shop_dispatch.py
+    - --request
+    - "{request_file}"
+    - --output-dir
+    - "{method_workspace}"
+  repoRoot: .
+  workdir: .
+  generatedFile: dispatch_rule.py
+  candidatePath: dispatch_rule.py
+  upstreamRepository: examples/methods/llm_heuristic_search/local_job_shop_dispatch.py
+  timeoutSeconds: 60
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable

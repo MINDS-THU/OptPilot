@@ -40,6 +40,7 @@ docs = [
 ]
 examples = [
   "job-shop-lib>=1.7.0",
+  "stable-baselines3>=2.3,<3",
 ]
 
 [project.urls]

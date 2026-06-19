@@ -29,13 +29,13 @@ Included in the current release:
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
-- curated job-shop scheduling tutorial environment with parameter and file-candidate variants
+- curated job-shop scheduling tutorial environment with shared instances, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
 - strategic-airlift DEVS example using an external generated simulator
 - local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
 
 Not included:
 
-- built-in Bayesian optimization, RL, LLM, or metaheuristic algorithms
+- production Bayesian optimization, RL, LLM, or metaheuristic frameworks
 - remote execution backends
 - automatic dependency inference or package installation
 - multi-user UI authentication
@@ -62,6 +62,8 @@ uv run optpilot --help
 
 Start with the job-shop parameter baseline. It is the recommended first run, works from a fresh checkout, and does not require API keys or external solvers.
 
+The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, shared instances, objective, budget, and runtime.
+
 Run the job-shop parameter baseline:
 
 ```bash
@@ -82,7 +84,7 @@ uv run optpilot ui --open-browser
 
 The UI scans `examples/` and `user_catalog/` by default.
 
-Advanced examples and integration templates such as Strategic Airlift and `llm_heuristic_search` require extra setup. Use the job-shop example first, then continue with the example-specific docs.
+Some advanced examples and integration templates, such as Strategic Airlift and upstream `llm_heuristic_search` repository wrappers, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
 
 ## Minimal Config Shape
 
@@ -214,8 +216,12 @@ runtime:
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)
-- [Configuration Reference](docs/configuration.md)
+- [Concepts](docs/concepts.md)
+- [Methods](docs/methods.md)
 - [How A Run Works](docs/how-it-works.md)
+- [Evidence](docs/evidence.md)
+- [Examples](docs/examples.md)
+- [Configuration Reference](docs/configuration.md)
 - [User Catalog](docs/user-catalog.md)
 - [UI](docs/ui.md)
 

@@ -4,6 +4,7 @@ import json
 import hashlib
 import contextlib
 import io
+import importlib.util
 import os
 import sqlite3
 import subprocess
@@ -121,6 +122,8 @@ class MvpIntegrationTest(unittest.TestCase):
             repo_root / "examples" / "studies" / "job_shop_rule_parameters_baseline.yaml",
             repo_root / "examples" / "studies" / "job_shop_dispatch_rule_baseline.yaml",
             repo_root / "examples" / "studies" / "job_shop_solver_code_baseline.yaml",
+            repo_root / "examples" / "studies" / "job_shop_openai_dispatch_rule.yaml",
+            repo_root / "examples" / "studies" / "job_shop_local_heuristic_search.yaml",
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             for study_path in study_paths:
@@ -132,6 +135,19 @@ class MvpIntegrationTest(unittest.TestCase):
                     observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
                     self.assertEqual(observations[0]["status"], "success")
                     self.assertIn("normalized_makespan", observations[0]["metric_values"])
+
+    @unittest.skipUnless(importlib.util.find_spec("stable_baselines3"), "stable-baselines3 example extra is not installed")
+    def test_job_shop_stable_baselines_example_runs_end_to_end(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        study_path = repo_root / "examples" / "studies" / "job_shop_rl_stable_baselines.yaml"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            summary = run_study(str(study_path), output_root=tmp_dir)
+            self.assertEqual(summary.completed_trials, 1)
+            self.assertEqual(summary.failure_count, 0)
+            self.assertIsNotNone(summary.best_metric)
+            observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
+            self.assertEqual(observations[0]["status"], "success")
+            self.assertIn("normalized_makespan", observations[0]["metric_values"])
 
     def test_distribution_scope_is_reproducible(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2485,17 +2501,22 @@ class MvpIntegrationTest(unittest.TestCase):
             sa_environment["summary"]["editable_files"],
         )
         self.assertIn("dispatch_rule.py", job_shop_file_environment["summary"]["editable_files"])
-        sa_method = next(item for item in catalog["methods"] if item["id"] == "openai-sa-file-editor")
-        self.assertEqual(sa_method["summary"]["candidate_formats"], ["files"])
+        openai_method = next(item for item in catalog["methods"] if item["id"] == "openai-file-editor")
+        self.assertEqual(openai_method["summary"]["candidate_formats"], ["files"])
         self.assertIn("baseline-file-copy", method_ids)
         self.assertIn("fixed-rule-parameters", method_ids)
         self.assertIn("job-shop-lib-dispatching-rule", method_ids)
         self.assertIn("job-shop-lib-simulated-annealing", method_ids)
         self.assertIn("job-shop-lib-ortools-cpsat", method_ids)
-        self.assertIn("openai-sa-file-editor", method_ids)
+        self.assertIn("job-shop-rl-stable-baselines", method_ids)
+        self.assertIn("local-job-shop-heuristic-search", method_ids)
+        self.assertIn("openai-file-editor", method_ids)
         self.assertTrue(any(item["label"] == "job-shop-lib-dispatching-rule" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-lib-simulated-annealing" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-lib-ortools-cpsat" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-rl-stable-baselines" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-openai-dispatch-rule" for item in catalog["studies"]))
+        self.assertTrue(any(item["label"] == "job-shop-local-heuristic-search" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-rule-parameters-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-dispatch-rule-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-solver-code-baseline" for item in catalog["studies"]))
@@ -2539,7 +2560,9 @@ class MvpIntegrationTest(unittest.TestCase):
                 "job-shop-lib-dispatching-rule",
                 "job-shop-lib-ortools-cpsat",
                 "job-shop-lib-simulated-annealing",
-                "openai-sa-file-editor",
+                "job-shop-rl-stable-baselines",
+                "local-job-shop-heuristic-search",
+                "openai-file-editor",
                 "reevo-llm-heuristic-search",
             ],
         )
@@ -2550,6 +2573,9 @@ class MvpIntegrationTest(unittest.TestCase):
                 "job-shop-lib-dispatching-rule",
                 "job-shop-lib-ortools-cpsat",
                 "job-shop-lib-simulated-annealing",
+                "job-shop-local-heuristic-search",
+                "job-shop-openai-dispatch-rule",
+                "job-shop-rl-stable-baselines",
                 "job-shop-rule-parameters-baseline",
                 "job-shop-solver-code-baseline",
                 "sa-baseline",

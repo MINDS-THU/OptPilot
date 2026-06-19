@@ -1,0 +1,33 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-rl-stable-baselines
+description: Train a small RL policy on training instances and evaluate it on the shared job-shop validation instances.
+tags: [job-shop, reinforcement-learning, stable-baselines, schedule-solution]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution.yaml
+methodConfig: ../methods/job_shop_rl_stable_baselines/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+instances:
+  source: files
+  paths:
+    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
+    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
+
+budget:
+  maxTrials: 1
+
+execution:
+  backend: local
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0

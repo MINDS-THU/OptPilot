@@ -7,9 +7,24 @@ description: Built-in OptPilot examples and the integration patterns they teach.
 
 `examples/` contains curated integrations that teach how to connect external environments and methods to OptPilot. The UI scans this folder by default together with `user_catalog/`.
 
-Use this page as a catalog, not as a step-by-step walkthrough. Start with [Getting Started](getting-started.md) for the first successful run.
+Use this page as a catalog, not as a step-by-step walkthrough. Start with [Getting Started](getting-started.md) for the first successful run, then use this page to choose a tutorial or integration track.
 
-The examples are organized around one main tutorial environment plus separate method-family tracks.
+The examples are organized in the same order as the docs navigation:
+
+1. the shared job-shop tutorial environment
+2. runnable job-shop method tracks
+3. advanced integration templates for larger external systems
+
+## Shared Job-Shop Comparison Set
+
+The job-shop studies are the main runnable comparison set. They intentionally reuse the same small instances and objective whenever the candidate contract allows it:
+
+- instances: `examples/environments/job_shop_scheduling/instances/ft06_small.yaml` and `examples/environments/job_shop_scheduling/instances/la01_tiny.yaml`
+- objective: minimize `normalized_makespan`
+- secondary metrics: `makespan`, `tardiness`, and `utilization`
+- budget: one trial per bundled method example
+
+This lets users compare dependency-free rules, generated file candidates, JobShopLib dispatching, simulated annealing, OR-Tools CP-SAT, and a Stable-Baselines3 rollout without changing the benchmark set.
 
 ## Readiness Overview
 
@@ -19,10 +34,10 @@ The examples are organized around one main tutorial environment plus separate me
 | Dispatching rules | Turnkey code | None for baselines; `uv sync --extra examples` for JobShopLib wrapper | Native and JobShopLib dispatching rules |
 | Simulated annealing | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's metaheuristic solver |
 | OR-Tools CP-SAT | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's constraint-programming solver |
-| Reinforcement learning | Integration pattern | JobShopLib plus a user-owned trained policy | Rolling out policies that emit schedules |
-| LLM code-writing methods | Repo code with provider setup | Provider credentials for LLM methods | Agents that write `dispatch_rule.py` or `solver.py` |
-| LLM heuristic repositories | Integration templates | Upstream repository clone, dependency install, command wiring, often provider credentials | Wrapping existing LLM search repositories |
-| Strategic Airlift DEVS | Advanced example | Generated simulator tree under `resource/devs_gen_gallery/simulators/SA/simulator`; provider credentials only for the LLM editing study | File-candidate simulator workflows |
+| Reinforcement learning | Runnable Stable-Baselines3 code | `uv sync --extra examples` | Training on method-owned samples and rolling out schedules on shared validation instances |
+| LLM code-writing methods | Runnable file-editor code | Provider credentials only for real LLM edits; bundled baseline path runs without credentials | Agents that write `dispatch_rule.py` or `solver.py` |
+| LLM heuristic repositories | Runnable local fixture plus templates | None for local fixture; upstream clone, dependency install, command wiring, and often provider credentials for real repositories | Wrapping existing LLM search repositories |
+| DEVS-Gen simulation environments | Advanced pattern | Generated simulator tree under `resource/`; provider credentials only for real LLM edits | Wrapping generated simulation projects as OptPilot environments |
 
 ## Main Tutorial Environment
 
@@ -37,19 +52,35 @@ The primary tutorial environment is job-shop scheduling:
   - `examples/studies/job_shop_lib_dispatching_rule.yaml`
   - `examples/studies/job_shop_simulated_annealing.yaml`
   - `examples/studies/job_shop_ortools_cpsat.yaml`
+  - `examples/studies/job_shop_rl_stable_baselines.yaml`
+  - `examples/studies/job_shop_openai_dispatch_rule.yaml`
+  - `examples/studies/job_shop_local_heuristic_search.yaml`
 
 This environment is useful because the same problem can be optimized in several ways:
 
 | Method family | Page | Candidate contract |
 | --- | --- | --- |
-| Dispatching rules | [Dispatching Rule Methods](dispatching-rule-methods.md) | `parameters` or `files` |
+| Dispatching rules | [Dispatching Rule Methods](dispatching-rule-methods.md) | weighted `parameters`, `dispatch_rule.py`, or schedule-solution `parameters` |
 | Simulated annealing | [Simulated Annealing Methods](simulated-annealing-methods.md) | schedule-solution `parameters` |
 | OR-Tools CP-SAT | [OR-Tools CP-SAT Methods](cp-sat-methods.md) | schedule-solution `parameters` |
-| Reinforcement learning | [Reinforcement Learning Methods](reinforcement-learning-methods.md) | schedule-solution `parameters` |
+| Reinforcement learning | [Reinforcement Learning Methods](reinforcement-learning-methods.md) | schedule-solution `parameters` from policy rollout |
 | LLM agents that write code | [LLM Code-Writing Methods](llm-code-methods.md) | `files` containing `dispatch_rule.py` or `solver.py` |
 | Existing LLM heuristic-search repositories | [LLM Heuristic Repositories](llm-heuristic-methods.md) | generated file from upstream command |
 
 Start with [Job-Shop Environment](job-shop-environment.md).
+
+## JobShopLib Coverage
+
+The upstream [JobShopLib package](https://github.com/Pabloo22/job_shop_lib/tree/main/job_shop_lib) includes dispatching, constraint-programming, metaheuristic, and reinforcement-learning components. The bundled OptPilot examples make all four method families runnable:
+
+- `job_shop_lib.dispatching.rules.DispatchingRuleSolver`
+- `job_shop_lib.metaheuristics.SimulatedAnnealingSolver`
+- `job_shop_lib.constraint_programming.ORToolsSolver`
+- `job_shop_lib.reinforcement_learning.SingleJobShopGraphEnv`
+
+The bundled reinforcement-learning study trains a small Stable-Baselines3 policy on separate training instances, then rolls it out on the shared validation instances. A user-owned RL method can load a checkpoint, change the policy class, or train for longer while emitting the same schedule-solution candidate used by the solver wrappers.
+
+Support modules such as JobShopLib generation, graphs, benchmarking, and visualization are useful around experiments, but they are not method wrappers by themselves. Keep those dependencies in method code or analysis tooling unless your environment genuinely evaluates them.
 
 ## Method Tracks
 
@@ -58,24 +89,24 @@ After the job-shop environment page, read the method page that matches what you 
 - [Dispatching Rule Methods](dispatching-rule-methods.md): fixed weighted rules, baseline Python rule files, and JobShopLib dispatching rules that emit schedule solutions.
 - [Simulated Annealing Methods](simulated-annealing-methods.md): JobShopLib's simulated annealing solver producing schedule solutions.
 - [OR-Tools CP-SAT Methods](cp-sat-methods.md): JobShopLib's OR-Tools CP-SAT solver producing schedule solutions.
-- [Reinforcement Learning Methods](reinforcement-learning-methods.md): JobShopLib Gymnasium policy rollouts that produce schedule solutions.
-- [LLM Code-Writing Methods](llm-code-methods.md): LLM agents or workflows that generate `dispatch_rule.py` or `solver.py`.
-- [LLM Heuristic Repositories](llm-heuristic-methods.md): existing repositories such as FunSearch, EoH, ReEvo, HeurAgenix, and EoH-S.
+- [Reinforcement Learning Methods](reinforcement-learning-methods.md): JobShopLib Gymnasium policy training and rollouts that produce schedule solutions.
+- [LLM Code-Writing Methods](llm-code-methods.md): the OpenAI-compatible file editor bound by study config to the job-shop `dispatch_rule.py` environment.
+- [LLM Heuristic Repositories](llm-heuristic-methods.md): a runnable local upstream-command fixture plus templates for FunSearch, EoH, ReEvo, HeurAgenix, and EoH-S.
 
 Each method page explains which job-shop config to use, what the method should produce, and what remains user-owned.
 
-## Generated Simulator Track
+## DEVS-Gen Generated Simulator Track
 
-This advanced example requires the generated Strategic Airlift simulator tree at `resource/devs_gen_gallery/simulators/SA/simulator`. The baseline study does not need an API key. The OpenAI-compatible editing study does.
+This advanced pattern starts with a simulator generated outside OptPilot by [DEVS-Gen](https://minds-thu.github.io/devs_gen/). OptPilot then copies that generated simulator into trial workspaces, applies candidate files to the copy, and runs an evaluator wrapper that returns metrics.
 
-The Strategic Airlift DEVS example demonstrates a different use case: generating a discrete-event simulator outside OptPilot and then configuring OptPilot to evaluate it.
+The bundled concrete sample uses a Strategic Airlift generated simulator at `resource/devs_gen_gallery/simulators/SA/simulator`. The baseline study does not need an API key. The OpenAI-compatible editing study needs provider credentials only for real LLM edits.
 
 - environment: `examples/environments/strategic_airlift_devs/environment.yaml`
 - studies:
   - `examples/studies/sa_baseline.yaml`
   - `examples/studies/sa_openai_file_editor.yaml`
 
-This track teaches how to use a simulator generated by `devs_gen_code`, copy that generated simulator into trial workspaces, and apply candidate edits only to disposable trial copies. See [Strategic Airlift DEVS](strategic-airlift-devs.md).
+This track teaches how to use a DEVS-Gen simulator with OptPilot while keeping simulator generation outside OptPilot. See [DEVS-Gen Simulation Environments](devs-gen-simulation-environments.md).
 
 ## Existing Method Repository Track
 
@@ -91,7 +122,7 @@ Included method templates:
 - `examples/methods/llm_heuristic_search/heuragenix_command.yaml`
 - `examples/methods/llm_heuristic_search/eohs_command.yaml`
 
-These templates are not turnkey studies. They show how to point OptPilot at one upstream command and one generated file. See [LLM Heuristic Repositories](llm-heuristic-methods.md).
+The local job-shop heuristic-search study is runnable. The FunSearch, EoH, ReEvo, HeurAgenix, and EoH-S configs are templates: they show how to point OptPilot at one upstream command and one generated file after you clone and configure the upstream repository. See [LLM Heuristic Repositories](llm-heuristic-methods.md).
 
 ## Layout
 
@@ -107,6 +138,7 @@ examples/
     fixed_rule_parameters/
     job_shop_lib_dispatching_rule/
     job_shop_lib_simulated_annealing/
+    job_shop_rl_stable_baselines/
     llm_heuristic_search/
     openai_file_editor/
     ortools_cpsat_solver/

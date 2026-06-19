@@ -65,6 +65,13 @@ The method owns the JobShopLib call:
 from job_shop_lib.dispatching.rules import DispatchingRuleSolver
 ```
 
+JobShopLib also exposes individual rule functions and scorers such as shortest processing time, first-come first-served, most work remaining, most operations remaining, and random operation. To use a different built-in rule, change the method setting:
+
+```yaml
+settings:
+  dispatchingRule: shortest_processing_time
+```
+
 The environment does not import JobShopLib. It validates the schedule and computes the same metrics used by every other job-shop method.
 
 ## Why This Method Is Included

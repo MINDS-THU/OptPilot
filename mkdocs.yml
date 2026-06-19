@@ -63,13 +63,12 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
-  - Concepts: concepts.md
-  - Configuration: configuration.md
-  - Methods: methods.md
-  - How A Run Works: how-it-works.md
-  - Evidence: evidence.md
-  - User Catalog: user-catalog.md
-  - Examples:
+  - Core Model:
+      - Concepts: concepts.md
+      - Methods: methods.md
+      - How A Run Works: how-it-works.md
+      - Evidence: evidence.md
+  - Job-Shop Tutorial:
       - Overview: examples.md
       - Job-Shop Environment: job-shop-environment.md
       - Dispatching Rule Methods: dispatching-rule-methods.md
@@ -77,8 +76,12 @@ nav:
       - OR-Tools CP-SAT Methods: cp-sat-methods.md
       - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
+  - Advanced Integrations:
       - LLM Heuristic Repositories: llm-heuristic-methods.md
-      - Strategic Airlift DEVS: strategic-airlift-devs.md
+      - DEVS-Gen Simulation Environments: devs-gen-simulation-environments.md
+  - Reference:
+      - Configuration: configuration.md
+      - User Catalog: user-catalog.md
   - UI: ui.md
   - Development: development.md
 

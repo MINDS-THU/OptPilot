@@ -5,7 +5,7 @@ description: How to connect existing LLM-based heuristic-search repositories to 
 
 # LLM Heuristic Repositories
 
-This page is an integration template guide, not a turnkey tutorial. It explains how to connect an existing LLM-based heuristic-search repository to OptPilot as a method.
+This page explains how to connect an existing LLM-based heuristic-search repository to OptPilot as a method. It includes one runnable local fixture plus templates for larger upstream repositories.
 
 Use this pattern when the upstream repository already has its own search loop. Examples include FunSearch-style systems, evolutionary heuristic search, reflection-based heuristic improvement, and repositories that repeatedly generate, evaluate, rank, and revise candidate heuristics internally.
 
@@ -21,6 +21,24 @@ For a concrete environment target, use the job-shop file-candidate configs:
 
 - `examples/environments/job_shop_scheduling/environment_dispatch_rule.yaml` for generated `dispatch_rule.py`
 - `examples/environments/job_shop_scheduling/environment_solver_code.yaml` for generated `solver.py`
+
+## Runnable Local Example
+
+The repository includes a small executable upstream-command fixture so this adapter can be run without cloning a real LLM repository:
+
+```bash
+uv run optpilot validate examples/studies/job_shop_local_heuristic_search.yaml
+uv run optpilot run examples/studies/job_shop_local_heuristic_search.yaml
+```
+
+That study uses:
+
+```text
+examples/methods/llm_heuristic_search/local_job_shop_dispatch_command.yaml
+examples/methods/llm_heuristic_search/local_job_shop_dispatch.py
+```
+
+The local command receives the adapter's `request.json`, writes `dispatch_rule.py` into the method workspace, and lets `LLMHeuristicSearchMethod` store that file as the candidate. Real LLM heuristic-search repositories use the same adapter boundary; only `settings.command`, `settings.repoRoot`, `settings.workdir`, and `settings.generatedFile` change.
 
 ## When This Pattern Fits
 

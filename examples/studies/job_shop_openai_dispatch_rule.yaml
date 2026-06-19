@@ -1,0 +1,33 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-openai-dispatch-rule
+description: Use the OpenAI-compatible file editor on the job-shop dispatch_rule.py candidate.
+tags: [job-shop, llm, code-edit, dispatch-rule, files]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_dispatch_rule.yaml
+methodConfig: ../methods/openai_file_editor/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+instances:
+  source: files
+  paths:
+    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
+    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
+
+budget:
+  maxTrials: 1
+
+execution:
+  backend: local
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0

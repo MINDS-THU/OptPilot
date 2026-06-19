@@ -1,8 +1,8 @@
 apiVersion: optpilot.io/v1
 config: method
-id: openai-sa-file-editor
-description: User-owned LLM method that edits selected files in the SA simulator
-tags: [user-method, llm, code-edit, external-project]
+id: openai-file-editor
+description: OpenAI-compatible method that edits environment-provided file candidates.
+tags: [llm, code-edit, files]
 
 entrypoint:
   python: examples.methods.openai_file_editor.method:OpenAIFileEditMethod

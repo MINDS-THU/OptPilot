@@ -7,6 +7,8 @@ description: How the JobShopLib simulated annealing example connects to OptPilot
 
 JobShopLib includes a simulated annealing solver for job-shop scheduling. The OptPilot example does not reimplement that solver and does not generate solver code. It wraps JobShopLib as a method that emits complete schedule solutions.
 
+In upstream JobShopLib, simulated annealing lives under `job_shop_lib.metaheuristics` alongside the annealer, neighbor generators, and objective helpers. The bundled OptPilot wrapper uses `SimulatedAnnealingSolver` directly and keeps all of that dependency on the method side.
+
 The included method is:
 
 ```text

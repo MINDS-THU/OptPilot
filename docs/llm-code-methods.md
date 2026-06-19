@@ -42,6 +42,24 @@ uv run optpilot validate examples/studies/job_shop_dispatch_rule_baseline.yaml
 uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
+Then run the OpenAI-compatible file editor binding:
+
+```bash
+uv run optpilot validate examples/studies/job_shop_openai_dispatch_rule.yaml
+uv run optpilot run examples/studies/job_shop_openai_dispatch_rule.yaml
+```
+
+That study uses:
+
+```text
+examples/methods/openai_file_editor/method.yaml
+examples.methods.openai_file_editor.method:OpenAIFileEditMethod
+```
+
+The included study has `budget.maxTrials: 1` and `includeBaselineCandidate: true`, so it is executable without provider credentials and exercises the actual file-candidate method path. To request a real LLM edit, set a provider key such as `OPENROUTER_API_KEY`, increase the study budget, or set `includeBaselineCandidate: false`.
+
+The same method config is used by the Strategic Airlift editing study. The method stays generic: it accepts `files`, reads the environment-provided editable-file contract and `methodContext.instructions`, and returns a file candidate. The study is where one environment is bound to one method for a concrete run.
+
 ## Solver-Code Writing
 
 Use this when the LLM should write a complete solver wrapper, for example a heuristic solver or an OR-Tools script:
@@ -114,6 +132,6 @@ Use this page when you are writing the OptPilot method yourself. The repository 
 examples/methods/openai_file_editor/
 ```
 
-That method accepts file-candidate environments with `methodContext.instructions`, so it can be bound to the job-shop dispatch-rule or solver-code environment after you configure provider credentials.
+That method accepts file-candidate environments with `methodContext.instructions`, and the job-shop dispatch-rule binding above is a concrete runnable example.
 
 Use [LLM Heuristic Repositories](llm-heuristic-methods.md) when you already have a larger upstream repository that owns its own search loop and only needs OptPilot to launch a command and collect one generated file.

@@ -1,4 +1,4 @@
-"""User-owned OpenAI-backed file edit method for the SA simulator example."""
+"""User-owned OpenAI-compatible file edit method for file-candidate examples."""
 
 from __future__ import annotations
 
@@ -83,14 +83,14 @@ class OpenAIFileEditMethod:
         ]
         return candidate_store.store_files(
             mappings,
-            candidate_id=f"sa-baseline-{uuid.uuid4().hex[:12]}",
+            candidate_id=f"{self.definition['id']}-baseline-{uuid.uuid4().hex[:12]}",
             lineage={"parents": [], "source": "baseline_source_tree"},
             generator={
                 "method_id": self.definition["id"],
                 "strategy": "baseline_source_snapshot",
                 "owned_by": "user",
             },
-            metadata={"summary": "Baseline candidate copied from the upstream SA simulator."},
+            metadata={"summary": "Baseline candidate copied from the environment-provided source files."},
         )
 
     def _build_prompt_messages(self, study_state: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -220,7 +220,7 @@ class OpenAIFileEditMethod:
             for item in files_payload
             if isinstance(item, dict) and item.get("path") and item.get("content")
         }
-        return str(parsed.get("summary", "LLM edited SA simulator files.")), edited_files
+        return str(parsed.get("summary", "LLM edited candidate files.")), edited_files
 
     def _read_api_key_from_dotenv(self, env_var_name: str) -> str | None:
         for dotenv_path in self._candidate_dotenv_paths():
@@ -270,7 +270,7 @@ class OpenAIFileEditMethod:
             )
             return candidate_store.store_files(
                 mappings,
-                candidate_id=f"sa-llm-{uuid.uuid4().hex[:12]}",
+                candidate_id=f"{self.definition['id']}-{uuid.uuid4().hex[:12]}",
                 lineage={"parents": [_candidate_id(best)] if best else []},
                 generator=build_generator_record(
                     method_id=self.definition["id"],

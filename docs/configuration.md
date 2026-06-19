@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run the job-shop baseline yet.
+<!-- This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run the job-shop baseline yet. -->
 
 OptPilot public configs are YAML files validated by JSON Schema. The schemas are packaged in `src/optpilot/schemas/` and are used by:
 

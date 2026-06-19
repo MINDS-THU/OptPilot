@@ -226,6 +226,7 @@ Use [Configuration](configuration.md) for the full schema and [User Catalog](use
 
 After this first run:
 
-1. Read [How A Run Works](how-it-works.md) to understand trial workspaces, candidate materialization, and evidence.
-2. Read [Examples](examples.md) to choose between turnkey tutorials, advanced examples, and integration templates.
-3. Copy the pattern into `user_catalog/` when you are ready to bind your own environment and method.
+1. Read [Concepts](concepts.md) and [Methods](methods.md) to understand the environment/method/study boundary.
+2. Read [How A Run Works](how-it-works.md) and [Evidence](evidence.md) to understand trial workspaces, candidate materialization, and recorded outputs.
+3. Read [Examples](examples.md) and [Job-Shop Environment](job-shop-environment.md) to choose between the shared job-shop method tracks.
+4. Copy the pattern into `user_catalog/` when you are ready to bind your own environment and method.

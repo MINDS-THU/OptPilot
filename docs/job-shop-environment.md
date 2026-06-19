@@ -9,6 +9,18 @@ The job-shop scheduling example is the main cross-method tutorial environment.
 
 It demonstrates the core OptPilot idea: keep the environment boundary stable, then connect very different methods through candidate contracts.
 
+## Shared Comparison Setup
+
+The runnable job-shop studies are designed as a comparison set. Where the candidate contract allows it, they use the same:
+
+- study instances: `ft06_small.yaml` and `la01_tiny.yaml`
+- objective: minimize `normalized_makespan`
+- secondary metrics: `makespan`, `tardiness`, and `utilization`
+- budget: `maxTrials: 1`
+- runtime: local execution with `parallelism: 1`
+
+The study file is the binding point. Each study chooses one environment config, one method config, the shared instances, the objective, budget, execution runtime, evidence level, and seed.
+
 ## What It Evaluates
 
 A job-shop instance contains jobs, operations, machine assignments, and processing times. A candidate produces either:
@@ -42,11 +54,47 @@ The same environment implementation has four reusable config variants.
 | Config | Candidate format | Intended methods |
 | --- | --- | --- |
 | `environment_rule_parameters.yaml` | `parameters` | Dependency-free weighted [dispatching rules](dispatching-rule-methods.md) |
-| `environment_schedule_solution.yaml` | `parameters` with `solutions` | External solvers and policies, including JobShopLib [dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), and [OR-Tools CP-SAT](cp-sat-methods.md) |
+| `environment_schedule_solution.yaml` | `parameters` with `solutions` | External solvers and policies, including JobShopLib [dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), [OR-Tools CP-SAT](cp-sat-methods.md), and [reinforcement learning](reinforcement-learning-methods.md) |
 | `environment_dispatch_rule.yaml` | `files` with `dispatch_rule.py` | [Dispatching rules](dispatching-rule-methods.md), [LLM code-writing methods](llm-code-methods.md), [LLM heuristic repositories](llm-heuristic-methods.md) |
 | `environment_solver_code.yaml` | `files` with `solver.py` | [LLM code-writing methods](llm-code-methods.md) and user-provided solver-code methods |
 
 This is intentional: the problem and metrics stay the same, while the candidate contract changes.
+
+## JobShopLib Method Families
+
+[JobShopLib](https://github.com/Pabloo22/job_shop_lib/tree/main/job_shop_lib) exposes several useful job-shop method families. OptPilot connects them on the method side:
+
+| JobShopLib area | What it provides | OptPilot connection |
+| --- | --- | --- |
+| `dispatching.rules` | `DispatchingRuleSolver` and built-in priority rules such as shortest processing time, first-come first-served, most work remaining, and random operation. | Turnkey `job-shop-lib-dispatching-rule` method emits schedule-solution candidates. |
+| `metaheuristics` | `SimulatedAnnealingSolver`, annealing helpers, neighbor generators, and objective helpers. | Turnkey `job-shop-lib-simulated-annealing` method emits schedule-solution candidates. |
+| `constraint_programming` | `ORToolsSolver` for CP-SAT based job-shop solving. | Turnkey `job-shop-lib-ortools-cpsat` method emits schedule-solution candidates. |
+| `reinforcement_learning` | Gymnasium-style single-instance and multi-instance graph environments, reward observers, and rollout utilities. | Runnable Stable-Baselines3 method emits schedule-solution candidates. |
+
+The environment does not import JobShopLib and does not know which of these produced a schedule. JobShopLib imports live in `examples/methods/...`, and each wrapper translates the JobShopLib schedule into the neutral `solutions` candidate expected by `environment_schedule_solution.yaml`.
+
+## Connect Another JobShopLib Method
+
+Use `environment_schedule_solution.yaml` when the method can produce a complete schedule. The method wrapper should:
+
+1. read `study_state.instances`
+2. convert each instance payload into the solver's preferred representation
+3. run the solver, rule, metaheuristic, or policy rollout
+4. convert the result into `solutions.<instance_id>.operations`
+5. return a `parameters` candidate with `spec: {solutions: ...}`
+
+The bundled wrappers share this shape through `examples/methods/job_shop_lib_solvers.py`:
+
+```python
+solutions = solve_study_instances(study_state, lambda: MyJobShopLibSolver(...))
+return [{
+    "candidate_id": "...",
+    "format": "parameters",
+    "spec": {"solutions": solutions},
+}]
+```
+
+That is the main OptPilot boundary. A CP-SAT model, simulated annealer, dispatching rule, trained RL policy, Gurobi model, or LLM-controlled search can all connect this way as long as the final candidate is a valid schedule solution.
 
 ## Run The Baselines
 
@@ -71,6 +119,14 @@ uv run optpilot validate examples/studies/job_shop_solver_code_baseline.yaml
 uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
 ```
 
+JobShopLib dispatching rule:
+
+```bash
+uv sync --extra examples
+uv run optpilot validate examples/studies/job_shop_lib_dispatching_rule.yaml
+uv run optpilot run examples/studies/job_shop_lib_dispatching_rule.yaml
+```
+
 Simulated annealing:
 
 ```bash
@@ -87,7 +143,29 @@ uv run optpilot validate examples/studies/job_shop_ortools_cpsat.yaml
 uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
 ```
 
-The baseline studies run from a fresh checkout without API keys or provider credentials. The JobShopLib dispatching-rule, simulated annealing, and CP-SAT studies additionally require the optional `examples` dependency.
+Reinforcement learning policy rollout:
+
+```bash
+uv sync --extra examples
+uv run optpilot validate examples/studies/job_shop_rl_stable_baselines.yaml
+uv run optpilot run examples/studies/job_shop_rl_stable_baselines.yaml
+```
+
+OpenAI-compatible file editor:
+
+```bash
+uv run optpilot validate examples/studies/job_shop_openai_dispatch_rule.yaml
+uv run optpilot run examples/studies/job_shop_openai_dispatch_rule.yaml
+```
+
+Local heuristic-search command:
+
+```bash
+uv run optpilot validate examples/studies/job_shop_local_heuristic_search.yaml
+uv run optpilot run examples/studies/job_shop_local_heuristic_search.yaml
+```
+
+The baseline studies run from a fresh checkout without API keys or provider credentials. The OpenAI-compatible file-editor study is also executable without provider credentials at `maxTrials: 1` because it emits the baseline file candidate first. The JobShopLib dispatching-rule, simulated annealing, CP-SAT, and Stable-Baselines RL studies additionally require the optional `examples` dependency.
 
 ## Weighted-Rule Parameter Contract
 
@@ -214,5 +292,6 @@ After you understand the environment configs, choose the method page that matche
 - [Dispatching Rule Methods](dispatching-rule-methods.md)
 - [Simulated Annealing Methods](simulated-annealing-methods.md)
 - [OR-Tools CP-SAT Methods](cp-sat-methods.md)
+- [Reinforcement Learning Methods](reinforcement-learning-methods.md)
 - [LLM Code-Writing Methods](llm-code-methods.md)
 - [LLM Heuristic Repositories](llm-heuristic-methods.md)
