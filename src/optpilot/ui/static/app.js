@@ -78,6 +78,7 @@ function cacheElements() {
     "compareRunsButton",
     "compareRunsResult",
     "jobsList",
+    "configEditorSelect",
     "configEditorPath",
     "configOpenButton",
     "configSaveButton",
@@ -113,6 +114,12 @@ function bindEvents() {
   els.builderForm.addEventListener("submit", launchDraft);
   els.builderBackend.addEventListener("change", renderBackendFields);
   els.compareRunsButton.addEventListener("click", compareRuns);
+  els.configEditorSelect.addEventListener("change", () => {
+    const selected = configEntryByPath(els.configEditorSelect.value);
+    if (!selected) return;
+    els.configEditorPath.value = shortPath(selected.path);
+    openConfigPath(selected.path);
+  });
   els.configOpenButton.addEventListener("click", () => openConfigPath(els.configEditorPath.value));
   els.configSaveButton.addEventListener("click", saveConfigFile);
 }
@@ -183,6 +190,7 @@ function renderAll() {
   renderBuilder();
   renderRuns();
   renderJobs();
+  renderConfigEditorOptions();
   if (state.selectedRunId) {
     loadRunDetail(state.selectedRunId, { keepTab: true });
   } else {
@@ -899,6 +907,7 @@ async function openConfigPath(path) {
     const response = await getJson(`/api/config/file?path=${encodeURIComponent(cleanPath)}`);
     state.configEditorPath = response.path;
     els.configEditorPath.value = response.relative_path || response.path;
+    syncConfigEditorSelect(response.path);
     els.configEditorContent.value = response.content || "";
     els.configEditorStatus.innerHTML = validationHtml(response.validation || { valid: true, path: response.path });
   } catch (error) {
@@ -920,7 +929,45 @@ async function saveConfigFile() {
   if (response.saved) {
     await loadCatalogAndCompatibility();
     renderAll();
+    syncConfigEditorSelect(response.path);
   }
+}
+
+function renderConfigEditorOptions() {
+  const groups = [
+    ["Studies", state.catalog.studies || []],
+    ["Environments", state.catalog.environments || []],
+    ["Methods", state.catalog.methods || []],
+  ];
+  const selectedPath = state.configEditorPath || "";
+  els.configEditorSelect.innerHTML = [
+    `<option value="">Choose from catalog</option>`,
+    ...groups
+      .filter(([, items]) => items.length)
+      .map(([label, items]) => `
+        <optgroup label="${escapeHtml(label)}">
+          ${items
+            .slice()
+            .sort((a, b) => String(a.label).localeCompare(String(b.label)))
+            .map((item) => `<option value="${escapeHtml(item.path)}" ${item.path === selectedPath ? "selected" : ""}>${escapeHtml(item.label)} - ${escapeHtml(shortPath(item.path))}</option>`)
+            .join("")}
+        </optgroup>
+      `),
+  ].join("");
+}
+
+function syncConfigEditorSelect(path) {
+  const match = configEntryByPath(path);
+  els.configEditorSelect.value = match ? match.path : "";
+}
+
+function configEntryByPath(path) {
+  const normalized = String(path || "");
+  return [
+    ...(state.catalog.studies || []),
+    ...(state.catalog.environments || []),
+    ...(state.catalog.methods || []),
+  ].find((item) => item.path === normalized) || null;
 }
 
 function compatibleMethodsForEnvironment(uid) {

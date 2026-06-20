@@ -31,6 +31,20 @@ uv run optpilot ui --catalog user_catalog --runs runs
 - Track UI-launched jobs.
 - Inspect previous run directories, trials, candidate records, events, and files.
 
+## Screenshots
+
+Home:
+
+![OptPilot UI home](assets/ui-home.png)
+
+Study Builder:
+
+![OptPilot study builder](assets/ui-study-builder.png)
+
+Config Editor:
+
+![OptPilot config editor](assets/ui-config-editor.png)
+
 ## Design Boundary
 
 The UI is a local-first workbench. It does not replace a full IDE, and it does not embed simulator-specific visualizations into the core platform. Environment-specific assets and frontends can still live beside the environment implementation.

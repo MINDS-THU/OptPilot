@@ -752,6 +752,7 @@ th {
 }
 
 .compare-controls select,
+.config-editor select,
 .config-editor input,
 .config-editor textarea {
   width: 100%;
