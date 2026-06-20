@@ -11,6 +11,9 @@ OptPilot includes a lightweight local web UI.
 uv run optpilot ui --open-browser
 ```
 
+This starts a local server and opens the browser. Stop the server with `Ctrl-C`
+in the terminal when you are done.
+
 By default, the UI scans:
 
 - `examples/`

@@ -2,28 +2,45 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Dict
+
+import yaml
 
 
 JsonDict = Dict[str, Any]
 
 
-def solve_study_instances(study_state: JsonDict, solver_factory: Callable[[], Any]) -> JsonDict:
-    instances = study_state.get("instances", [])
-    if not isinstance(instances, list) or not instances:
-        raise ValueError("JobShopLib methods require study_state.instances with id and payload for each instance.")
+def solve_job_shop_cases(study_state: JsonDict, solver_factory: Callable[[], Any]) -> JsonDict:
+    cases = load_job_shop_cases(study_state)
     solutions: JsonDict = {}
-    for item in instances:
-        if not isinstance(item, dict):
-            raise ValueError("Each study_state.instances entry must be an object.")
-        instance_id = str(item.get("id", ""))
-        payload = item.get("payload")
-        if not instance_id or not isinstance(payload, dict):
-            raise ValueError("Each study_state.instances entry must define id and payload.")
+    for case_id, payload in cases.items():
         job_shop = to_job_shop_lib_instance(payload)
         schedule = solver_factory()(job_shop)
-        solutions[instance_id] = {"operations": schedule_to_operations(schedule)}
+        solutions[case_id] = {"operations": schedule_to_operations(schedule)}
     return solutions
+
+
+def load_job_shop_cases(study_state: JsonDict) -> Dict[str, JsonDict]:
+    candidate_context = study_state.get("candidate_context", {})
+    method_context = candidate_context.get("methodContext", {}) if isinstance(candidate_context, dict) else {}
+    references = method_context.get("references", []) if isinstance(method_context, dict) else []
+    cases: Dict[str, JsonDict] = {}
+    for reference in references:
+        if not isinstance(reference, dict) or reference.get("type") != "job_shop_case":
+            continue
+        case_id = str(reference.get("name") or "")
+        path = reference.get("path")
+        if not case_id or not path:
+            continue
+        with Path(str(path)).open("r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        if not isinstance(payload, dict):
+            raise TypeError(f"Job-shop case {case_id!r} must load to an object.")
+        cases[case_id] = dict(payload)
+    if not cases:
+        raise ValueError("JobShopLib methods require job_shop_case entries in methodContext.references.")
+    return cases
 
 
 def to_job_shop_lib_instance(payload: JsonDict):

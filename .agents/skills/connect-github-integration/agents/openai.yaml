@@ -1,0 +1,7 @@
+interface:
+  display_name: "Connect GitHub Integration"
+  short_description: "Connect GitHub environments and methods"
+  default_prompt: "Use $connect-github-integration to connect this GitHub project to OptPilot with the smallest appropriate environment or method wrapper."
+
+policy:
+  allow_implicit_invocation: true

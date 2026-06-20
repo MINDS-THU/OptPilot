@@ -39,7 +39,9 @@ uv run optpilot run examples/studies/job_shop_simulated_annealing.yaml
 
 ## What The Method Produces
 
-The method reads the shared study instances from `study_state.instances`, runs `SimulatedAnnealingSolver` for each instance, and emits:
+The method reads the shared validation case references from `methodContext.references`, runs `SimulatedAnnealingSolver` for each case, and emits:
+
+Candidate `spec` payload fragment:
 
 ```yaml
 solutions:
@@ -53,6 +55,8 @@ solutions:
 ```
 
 The method settings control the annealer:
+
+Method `settings` fragment:
 
 ```yaml
 settings:
@@ -76,9 +80,9 @@ JobShopLib owns:
 OptPilot owns:
 
 - launching the method
-- exposing the study instances to the method
+- exposing the validation case references to the method
 - storing the schedule-solution candidate
 - calling the environment evaluator
 - recording evidence
 
-This demonstrates the intended integration pattern for existing optimization libraries: keep the external method intact, let the method produce a general candidate contract, and keep the evaluator independent from the solver library.
+This demonstrates the intended integration pattern for existing optimization libraries: keep the external method intact, let the method produce a candidate shape the environment accepts, and keep the evaluator independent from the solver library.

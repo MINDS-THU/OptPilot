@@ -15,13 +15,14 @@ MODE_BONUS = {
 }
 
 
-def evaluate(candidate: Dict[str, float], instance: Dict[str, float], context: Dict[str, str]) -> Dict[str, object]:
+def evaluate(candidate: Dict[str, float], context: Dict[str, object]) -> Dict[str, object]:
+    settings = dict(context.get("settings", {}) or {})
     x = float(candidate["x"])
     y = int(candidate["y"])
     mode = candidate["mode"]
-    target_x = float(instance["target_x"])
-    target_y = int(instance["target_y"])
-    sleep_seconds = float(instance.get("sleep_seconds", 0.0))
+    target_x = float(settings["target_x"])
+    target_y = int(settings["target_y"])
+    sleep_seconds = float(settings.get("sleep_seconds", 0.0))
     if sleep_seconds > 0:
         time.sleep(sleep_seconds)
     penalty = abs(x - target_x) * 18.0 + abs(y - target_y) * 7.5
@@ -29,7 +30,7 @@ def evaluate(candidate: Dict[str, float], instance: Dict[str, float], context: D
     cycle_time = 200.0 - throughput
 
     workspace = Path(context["workspace"])
-    metrics_path = workspace / f"metrics_{context['instance_index']}.csv"
+    metrics_path = workspace / "metrics.csv"
     with metrics_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=["x", "y", "mode", "throughput", "cycle_time"])
         writer.writeheader()

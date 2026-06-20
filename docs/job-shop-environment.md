@@ -13,13 +13,13 @@ It demonstrates the core OptPilot idea: keep the environment boundary stable, th
 
 The runnable job-shop studies are designed as a comparison set. Where the candidate contract allows it, they use the same:
 
-- study instances: `ft06_small.yaml` and `la01_tiny.yaml`
+- validation cases: `ft06_small.yaml` and `la01_tiny.yaml`
 - objective: minimize `normalized_makespan`
 - secondary metrics: `makespan`, `tardiness`, and `utilization`
 - budget: `maxTrials: 1`
 - runtime: local execution with `parallelism: 1`
 
-The study file is the binding point. Each study chooses one environment config, one method config, the shared instances, the objective, budget, execution runtime, evidence level, and seed.
+The study file is the binding point. Each study chooses one environment config, one method config, the objective, budget, execution runtime, evidence level, and seed. The validation cases live in each environment config's `evaluator.settings`.
 
 ## What It Evaluates
 
@@ -41,6 +41,8 @@ The evaluator simulates or validates the resulting schedule and returns:
 
 The primary tutorial objective is:
 
+Study `objective` fragment:
+
 ```yaml
 objective:
   metric: normalized_makespan
@@ -60,6 +62,27 @@ The same environment implementation has four reusable config variants.
 
 This is intentional: the problem and metrics stay the same, while the candidate contract changes.
 
+```mermaid
+flowchart TB
+  Problem["Same validation cases\nsame metrics\nsame evaluator package"]
+  P["Parameters\nweighted dispatch rule"]
+  S["Parameters\nsolutions by case id"]
+  D["Files\ndispatch_rule.py"]
+  C["Files\nsolver.py"]
+
+  Problem --> P
+  Problem --> S
+  Problem --> D
+  Problem --> C
+
+  P --> M1["fixed-rule-parameters baseline\nschema-general parameter methods"]
+  S --> M2["JobShopLib dispatching\nsimulated annealing\nOR-Tools\nRL rollout"]
+  D --> M3["baseline file copy\nOpenAI file editor\nLLM heuristic repositories"]
+  C --> M4["solver-code writers"]
+```
+
+The environment configs are not method-specific solver adapters. They are candidate contracts for the same evaluation problem.
+
 ## JobShopLib Method Families
 
 [JobShopLib](https://github.com/Pabloo22/job_shop_lib/tree/main/job_shop_lib) exposes several useful job-shop method families. OptPilot connects them on the method side:
@@ -77,16 +100,16 @@ The environment does not import JobShopLib and does not know which of these prod
 
 Use `environment_schedule_solution.yaml` when the method can produce a complete schedule. The method wrapper should:
 
-1. read `study_state.instances`
-2. convert each instance payload into the solver's preferred representation
+1. read job-shop case references from `methodContext.references`
+2. convert each case payload into the solver's preferred representation
 3. run the solver, rule, metaheuristic, or policy rollout
-4. convert the result into `solutions.<instance_id>.operations`
+4. convert the result into `solutions.<case_id>.operations`
 5. return a `parameters` candidate with `spec: {solutions: ...}`
 
 The bundled wrappers share this shape through `examples/methods/job_shop_lib_solvers.py`:
 
 ```python
-solutions = solve_study_instances(study_state, lambda: MyJobShopLibSolver(...))
+solutions = solve_job_shop_cases(study_state, lambda: MyJobShopLibSolver(...))
 return [{
     "candidate_id": "...",
     "format": "parameters",
@@ -171,6 +194,8 @@ The baseline studies run from a fresh checkout without API keys or provider cred
 
 `environment_rule_parameters.yaml` accepts a parameter candidate:
 
+Candidate-contract fragment:
+
 ```yaml
 candidate:
   format: parameters
@@ -190,7 +215,9 @@ The evaluator converts these weights into a priority dispatching rule.
 
 ## Schedule-Solution Contract
 
-`environment_schedule_solution.yaml` accepts complete schedules keyed by OptPilot study instance id:
+`environment_schedule_solution.yaml` accepts complete schedules keyed by validation case id:
+
+Candidate-contract fragment:
 
 ```yaml
 candidate:
@@ -202,7 +229,9 @@ candidate:
         properties: {}
 ```
 
-The method produces:
+For `parameters` candidates, `schema` is a map from parameter name to parameter definition. Here `solutions` is the single top-level parameter. Its value is an object that contains one schedule per validation case. Other environments might define different top-level parameters such as `rule`, `weights`, or `solver_settings`; this environment chooses `solutions` because a schedule-producing method submits a bundle of finished schedules.
+
+Candidate `spec` payload fragment produced by a schedule-solving method:
 
 ```yaml
 solutions:
@@ -222,13 +251,37 @@ solutions:
         end: 2
 ```
 
-The keys `ft06_small` and `la01_tiny` come from the study instance file names. OptPilot exposes the same ids and instance payloads to methods through `study_state.instances`, so a solver method can solve the exact benchmark set used by the evaluator.
+The keys `ft06_small` and `la01_tiny` come from the environment config's case ids. The environment also exposes those case files to methods through `methodContext.references`, so a solver method can solve the exact benchmark set used by the evaluator.
 
 This contract is suitable for any method that produces finished schedules: JobShopLib, OR-Tools, Gurobi, a trained RL policy, or an internal company solver. The environment only validates and scores schedules. It does not know which method or library produced them.
+
+Schedule-producing methods declare the same output shape on their side:
+
+Method compatibility fragment:
+
+```yaml
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema
+
+produces:
+  format: parameters
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}
+```
+
+The important part is the structural match: the method produces a `solutions` parameter shaped like the environment's accepted candidate schema. The environment does not need to know whether that schedule came from OR-Tools, JobShopLib simulated annealing, Stable-Baselines, Gurobi, or something else.
 
 ## Dispatch-Rule File Contract
 
 `environment_dispatch_rule.yaml` accepts one editable file:
+
+Candidate-contract fragment:
 
 ```yaml
 candidate:
@@ -252,6 +305,8 @@ Higher scores are scheduled first.
 ## Solver-Code File Contract
 
 `environment_solver_code.yaml` accepts one editable file:
+
+Candidate-contract fragment:
 
 ```yaml
 candidate:

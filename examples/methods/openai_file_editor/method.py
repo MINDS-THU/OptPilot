@@ -104,7 +104,10 @@ class OpenAIFileEditMethod:
             self._render_source_snapshot(),
             "Recent observations:",
             self._render_recent_observations(),
-            "Return JSON only.",
+            "Return JSON only using exactly this shape:",
+            _response_shape_example(self.target_files),
+            "The `files` array must include one or more allowed target files. "
+            "Each `content` value must contain the complete replacement file, not a patch.",
         ]
 
         messages = [{"role": "system", "content": self._load_system_prompt()}]
@@ -122,7 +125,8 @@ class OpenAIFileEditMethod:
         blocks = []
         for relative_path in self.target_files:
             source_text = self._source_file_for(relative_path).read_text(encoding="utf-8")
-            blocks.append(f"FILE: {relative_path}\n```python\n{source_text}\n```")
+            language = _fence_language(relative_path)
+            blocks.append(f"FILE: {relative_path}\n```{language}\n{source_text}\n```")
         return "\n\n".join(blocks)
 
     def _render_recent_observations(self) -> str:
@@ -214,12 +218,7 @@ class OpenAIFileEditMethod:
         data = json.loads(raw)
         content = data["choices"][0]["message"]["content"]
         parsed = json.loads(content)
-        files_payload = parsed.get("files", [])
-        edited_files = {
-            str(item["path"]): str(item["content"])
-            for item in files_payload
-            if isinstance(item, dict) and item.get("path") and item.get("content")
-        }
+        edited_files = _extract_edited_files(parsed, self.target_files)
         return str(parsed.get("summary", "LLM edited candidate files.")), edited_files
 
     def _read_api_key_from_dotenv(self, env_var_name: str) -> str | None:
@@ -354,6 +353,66 @@ def _editable_paths_from_context(candidate_context: Dict[str, Any]) -> List[str]
     if paths:
         return paths
     return [str(path) for path in files.get("required", []) or []]
+
+
+def _extract_edited_files(parsed: Dict[str, Any], target_files: Iterable[str]) -> Dict[str, str]:
+    allowed = {str(path) for path in target_files}
+    files_payload = parsed.get("files")
+    if not isinstance(files_payload, list) or not files_payload:
+        raise ValueError(
+            "OpenAIFileEditMethod expected the model response to include a non-empty "
+            "`files` list with at least one edited target file."
+        )
+
+    edited_files: Dict[str, str] = {}
+    for index, item in enumerate(files_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must be an object.")
+        path = str(item.get("path", ""))
+        if not path:
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must define path.")
+        if path not in allowed:
+            raise ValueError(
+                f"OpenAIFileEditMethod response path {path!r} is not editable. "
+                f"Allowed paths: {sorted(allowed)!r}."
+            )
+        if "content" not in item or not isinstance(item["content"], str):
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must define string content.")
+        edited_files[path] = item["content"]
+
+    if not edited_files:
+        raise ValueError("OpenAIFileEditMethod response did not contain any editable files.")
+    return edited_files
+
+
+def _response_shape_example(target_files: Iterable[str]) -> str:
+    return json.dumps(
+        {
+            "summary": "Short description of the change.",
+            "files": [
+                {
+                    "path": path,
+                    "content": "Full updated file content.",
+                }
+                for path in target_files
+            ],
+        },
+        indent=2,
+    )
+
+
+def _fence_language(relative_path: str) -> str:
+    suffix = Path(relative_path).suffix.lower()
+    return {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".md": "markdown",
+        ".txt": "text",
+    }.get(suffix, "")
 
 
 def _source_for_workspace_file(relative_path: str, copy_entries: List[Dict[str, Any]]) -> Path | None:

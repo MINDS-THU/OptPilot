@@ -38,7 +38,9 @@ uv run optpilot run examples/studies/job_shop_ortools_cpsat.yaml
 
 ## What The Method Produces
 
-The method reads `study_state.instances`, runs JobShopLib's OR-Tools solver for each instance, and emits schedule solutions:
+The method reads the job-shop case references exposed through `methodContext.references`, runs JobShopLib's OR-Tools solver for each case, and emits schedule solutions:
+
+Candidate `spec` payload fragment:
 
 ```yaml
 solutions:

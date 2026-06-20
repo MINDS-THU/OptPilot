@@ -12,6 +12,7 @@ const state = {
   selectedRun: null,
   activeRunTab: "overview",
   draft: null,
+  builderAutoName: "",
   pendingJobId: null,
   configEditorPath: "",
 };
@@ -61,7 +62,6 @@ function cacheElements() {
     "builderParallelism",
     "builderTimeout",
     "builderOutputRoot",
-    "builderInstances",
     "draftButton",
     "launchDraftButton",
     "builderValidation",
@@ -102,6 +102,7 @@ function bindEvents() {
   els.runFilter.addEventListener("input", renderRuns);
   els.builderEnvironment.addEventListener("change", () => {
     state.selectedEnvironmentUid = els.builderEnvironment.value || state.selectedEnvironmentUid;
+    renderBuilderOptions();
     fillBuilderDefaults();
     renderBuilderCompatibility();
   });
@@ -110,6 +111,8 @@ function bindEvents() {
     fillBuilderDefaults();
     renderBuilderCompatibility();
   });
+  els.builderForm.addEventListener("input", markBuilderDirty);
+  els.builderForm.addEventListener("change", markBuilderDirty);
   els.draftButton.addEventListener("click", generateDraft);
   els.builderForm.addEventListener("submit", launchDraft);
   els.builderBackend.addEventListener("change", renderBackendFields);
@@ -406,8 +409,11 @@ function fillBuilderDefaults() {
   const method = methodByUid(els.builderMethod.value || state.selectedMethodUid);
   if (env) state.selectedEnvironmentUid = env.uid;
   if (method) state.selectedMethodUid = method.uid;
-  if (!els.builderName.value && env && method) {
-    els.builderName.value = `${env.id}-${method.id}`;
+  const defaultName = env && method ? `${env.id}-${method.id}` : "";
+  const currentName = els.builderName.value.trim();
+  if (defaultName && (!currentName || currentName === state.builderAutoName)) {
+    els.builderName.value = defaultName;
+    state.builderAutoName = defaultName;
   }
   if (env && (!els.builderMetric.value || !((env.summary.metrics || []).includes(els.builderMetric.value)))) {
     els.builderMetric.value = (env.summary.metrics || [])[0] || "score";
@@ -417,7 +423,13 @@ function fillBuilderDefaults() {
 function fillBuilderFromSelection() {
   els.builderName.value = "";
   els.builderMetric.value = "";
+  state.builderAutoName = "";
+  state.draft = null;
   renderBuilder();
+}
+
+function markBuilderDirty() {
+  state.draft = null;
 }
 
 function renderBuilderCompatibility() {
@@ -485,7 +497,6 @@ function builderPayload() {
     containerBuildTag: els.builderContainerBuildTag.value.trim(),
     parallelism: Number(els.builderParallelism.value || 1),
     timeoutSeconds: Number(els.builderTimeout.value || 120),
-    instances: els.builderInstances.value,
   };
 }
 

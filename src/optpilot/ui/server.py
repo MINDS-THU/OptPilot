@@ -23,7 +23,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import yaml
 
-from ..config import AUTHORING_API_VERSION, compile_authoring_config, validate_authoring_config
+from ..config import (
+    AUTHORING_API_VERSION,
+    candidate_contract_mismatch,
+    compile_authoring_config,
+    validate_authoring_config,
+)
 from ..registry import BUILTIN_COMPONENTS
 
 
@@ -646,6 +651,17 @@ def _compatibility_result(environment: JsonDict, env_raw: JsonDict, method: Json
             f"required capability {required!r} is available",
             f"required capability {required!r} is missing",
         ))
+    produces = method_raw.get("produces")
+    if isinstance(produces, dict):
+        try:
+            mismatch = candidate_contract_mismatch(candidate, produces)
+        except Exception as exc:
+            mismatch = f"produces contract cannot be compared: {exc}"
+        checks.append(_compat_check(
+            mismatch is None,
+            "produced candidate contract matches environment candidate contract",
+            mismatch or "produced candidate contract does not match environment candidate contract",
+        ))
     compatible = all(check["ok"] for check in checks)
     return {
         "compatible": compatible,
@@ -711,9 +727,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
     backend = "local" if requested_backend == "container" else requested_backend
     parallelism = int(payload.get("parallelism", 1) or 1)
     timeout = int(payload.get("timeoutSeconds", payload.get("timeout_seconds", 120)) or 120)
-    instances = _draft_instances(payload, state.cwd)
-    if instances.get("source") == "none":
-        instances = _matching_study_instances(state, environment_path, method_path) or instances
     draft = {
         "apiVersion": AUTHORING_API_VERSION,
         "config": "study",
@@ -721,7 +734,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         "environmentConfig": str(environment_path),
         "methodConfig": str(method_path),
         "objective": {"metric": metric, "direction": direction},
-        "instances": instances,
         "budget": {"maxTrials": max_trials},
         "execution": {"backend": backend, "parallelism": parallelism, "timeoutSeconds": timeout},
     }
@@ -748,22 +760,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         "compatibility": compatibility,
         "validation": validation,
     }
-
-
-def _draft_instances(payload: JsonDict, cwd: Path) -> JsonDict:
-    instance_paths = payload.get("instance_paths") or payload.get("instances")
-    if isinstance(instance_paths, str) and instance_paths.strip():
-        paths = [item.strip() for item in instance_paths.splitlines() if item.strip()]
-    elif isinstance(instance_paths, list):
-        paths = [str(item) for item in instance_paths if str(item).strip()]
-    else:
-        paths = []
-    if paths:
-        return {
-            "source": "files",
-            "paths": [str(_resolve_user_path(path, cwd)) for path in paths],
-        }
-    return {"source": "none"}
 
 
 def _draft_execution_config(payload: JsonDict) -> JsonDict:
@@ -794,31 +790,6 @@ def _draft_execution_config(payload: JsonDict) -> JsonDict:
         if build:
             result["build"] = build
     return result
-
-
-def _matching_study_instances(state: UiState, environment_path: Path, method_path: Path) -> Optional[JsonDict]:
-    for entry in _scan_catalog(state.catalog_roots):
-        if entry["config"] != "study":
-            continue
-        study_path = Path(entry["path"])
-        study = _read_yaml(study_path)
-        if _study_ref_matches(study.get("environmentConfig"), study_path, environment_path) and _study_ref_matches(
-            study.get("methodConfig"), study_path, method_path
-        ):
-            instances = study.get("instances")
-            if isinstance(instances, dict) and instances.get("source", "none") != "none":
-                return _resolve_study_instances(instances, study_path)
-    return None
-
-
-def _resolve_study_instances(instances: JsonDict, study_path: Path) -> JsonDict:
-    resolved = deepcopy(instances)
-    if resolved.get("source") == "files":
-        resolved["paths"] = [
-            str(_resolve_config_path(path, study_path))
-            for path in resolved.get("paths", []) or []
-        ]
-    return resolved
 
 
 def _study_ref_matches(value: Any, study_path: Path, expected_path: Path) -> bool:

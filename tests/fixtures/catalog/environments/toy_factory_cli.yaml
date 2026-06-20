@@ -13,13 +13,14 @@ evaluator:
     - "tests.fixtures.catalog.cli_toy_factory_env"
     - "--candidate"
     - "{candidate_json}"
-    - "--instance"
-    - "{instance_file}"
+    - "--settings"
+    - "{settings_file}"
     - "--output"
     - "{metrics_file}"
-    - "--instance-index"
-    - "{instance_index}"
   timeoutSeconds: 120
+  settings:
+    target_x: 4.2
+    target_y: 7
 
 candidate:
   format: parameters
@@ -45,5 +46,5 @@ metrics:
 
 outputFiles:
   - "metrics.json"
-  - "stdout_*.log"
-  - "stderr_*.log"
+  - "stdout.log"
+  - "stderr.log"

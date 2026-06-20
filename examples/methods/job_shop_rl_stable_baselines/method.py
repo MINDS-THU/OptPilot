@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-from examples.methods.job_shop_lib_solvers import schedule_to_operations, to_job_shop_lib_instance
+from examples.methods.job_shop_lib_solvers import load_job_shop_cases, schedule_to_operations, to_job_shop_lib_instance
 
 try:
     import gymnasium as gym
@@ -105,18 +105,8 @@ class StableBaselinesJobShopMethod:
         return model
 
     def _roll_out_policy(self, model, study_state: JsonDict) -> JsonDict:
-        instances = study_state.get("instances", [])
-        if not isinstance(instances, list) or not instances:
-            raise ValueError("Stable-Baselines methods require study_state.instances for validation rollout.")
-
         solutions: JsonDict = {}
-        for item in instances:
-            if not isinstance(item, dict):
-                raise ValueError("Each study_state.instances entry must be an object.")
-            instance_id = str(item.get("id", ""))
-            payload = item.get("payload")
-            if not instance_id or not isinstance(payload, dict):
-                raise ValueError("Each study_state.instances entry must define id and payload.")
+        for case_id, payload in load_job_shop_cases(study_state).items():
             env = StableBaselinesJobShopEnv([payload], max_jobs=int(self.settings.get("maxJobs", len(payload["jobs"]))))
             obs, _ = env.reset(seed=int(self.settings.get("seed", 0)))
             done = False
@@ -124,7 +114,7 @@ class StableBaselinesJobShopMethod:
                 action, _ = model.predict(obs, deterministic=True)
                 obs, _, terminated, truncated, _ = env.step(action)
                 done = bool(terminated or truncated)
-            solutions[instance_id] = {"operations": schedule_to_operations(env.dispatcher.schedule)}
+            solutions[case_id] = {"operations": schedule_to_operations(env.dispatcher.schedule)}
         return solutions
 
 

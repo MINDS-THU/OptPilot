@@ -6,6 +6,9 @@ tags: [toy, simulator]
 
 evaluator:
   python: tests.fixtures.catalog.toy_factory_env:evaluate
+  settings:
+    target_x: 4.2
+    target_y: 7
 
 candidate:
   format: parameters

@@ -22,12 +22,13 @@ class PythonCallableEnvironmentAdapter:
         self.study_spec = study_spec
         self._callable = None
 
-    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         if self._callable is None:
             config = self.definition.get("config", {})
             module = importlib.import_module(config["module"])
             self._callable = getattr(module, config["callable"])
-        result = self._callable(candidate_runtime, instance, context)
+        context = {**context, "settings": dict(self.definition.get("config", {}) or {})}
+        result = self._callable(candidate_runtime, context)
         if not isinstance(result, dict):
             raise TypeError("Environment callable must return a dict.")
         metric_values = _extract_metric_values(result)
@@ -48,23 +49,24 @@ class ConfiguredEnvironmentAdapter:
         self.study_spec = study_spec
         self._callable = None
 
-    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.definition.get("config", {})
         evaluate = config.get("evaluate", {})
         metrics = config.get("metrics", {})
         workspace = Path(candidate_runtime.get("workspace") or context["workspace"]).resolve()
         workspace.mkdir(parents=True, exist_ok=True)
         candidate_root = Path(candidate_runtime.get("candidateRoot", workspace)).resolve()
-        instance_index = int(context["instance_index"])
         metrics_path = _workspace_path(workspace, metrics.get("path", "metrics.json"))
-        instance_path = _workspace_path(workspace, f"instance_{instance_index}.json")
+        settings_path = _workspace_path(workspace, "settings.json")
         candidate_path = _configured_candidate_path(workspace, candidate_root, candidate_runtime, config)
-        stdout_path = _workspace_path(workspace, f"stdout_{instance_index}.log")
-        stderr_path = _workspace_path(workspace, f"stderr_{instance_index}.log")
+        stdout_path = _workspace_path(workspace, "stdout.log")
+        stderr_path = _workspace_path(workspace, "stderr.log")
 
-        _write_json(instance_path, instance)
+        settings = dict(evaluate.get("config", {}) or {})
+        _write_json(settings_path, settings)
         candidate_payload_path = _workspace_path(workspace, "candidate.json")
         _write_json(candidate_payload_path, candidate_runtime)
+        context = {**context, "settings": settings, "settings_file": str(settings_path)}
 
         eval_type = evaluate.get("type")
         process_result = None
@@ -77,15 +79,14 @@ class ConfiguredEnvironmentAdapter:
             "candidate_file": str(candidate_path),
             "candidate": str(candidate_path),
             "candidate_json": str(candidate_payload_path),
+            "settings_file": str(settings_path),
             "metrics_file": str(metrics_path),
-            "instance_file": str(instance_path),
             "trial_id": context["trial_id"],
             "study_id": context["study_id"],
-            "instance_index": str(instance_index),
         }
 
         if eval_type == "python":
-            python_result = self._evaluate_python(evaluate, candidate_runtime, instance, context)
+            python_result = self._evaluate_python(evaluate, candidate_runtime, context)
         elif eval_type == "command":
             command = _format_command(evaluate["command"], placeholders)
             env = os.environ.copy()
@@ -140,7 +141,7 @@ class ConfiguredEnvironmentAdapter:
             process_result,
         )
         output_files = [
-            {"type": "json", "name": "instance", "path": str(instance_path)},
+            {"type": "json", "name": "settings", "path": str(settings_path)},
             {"type": "json", "name": "candidate_payload", "path": str(candidate_payload_path)},
         ]
         if process_result is not None:
@@ -152,7 +153,10 @@ class ConfiguredEnvironmentAdapter:
             )
         if metrics_path.exists():
             output_files.append({"type": "json", "name": "metrics", "path": str(metrics_path)})
+        if python_result is not None:
+            output_files.extend(list(python_result.get("output_files", []) or []))
         output_files.extend(_collect_output_files(workspace, workspace, config.get("outputFiles", [])))
+        output_files = _dedupe_output_files(output_files)
 
         records_report = _extract_records(workspace, config.get("records", []))
         if records_report:
@@ -188,7 +192,6 @@ class ConfiguredEnvironmentAdapter:
         self,
         evaluate: Dict[str, Any],
         candidate_runtime: Dict[str, Any],
-        instance: Dict[str, Any],
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         if self._callable is None:
@@ -200,7 +203,7 @@ class ConfiguredEnvironmentAdapter:
                 raise ValueError("evaluate.callable must use 'module:function' format.")
             module = importlib.import_module(module_name)
             self._callable = getattr(module, attr)
-        result = self._callable(candidate_runtime, instance, context)
+        result = self._callable(candidate_runtime, context)
         if not isinstance(result, dict):
             raise TypeError("Configured Python evaluator must return a dict.")
         return result
@@ -248,30 +251,30 @@ class CLIEnvironmentAdapter:
         self.definition = definition
         self.study_spec = study_spec
 
-    def evaluate(self, candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    def evaluate(self, candidate_runtime: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         config = self.definition.get("config", {})
         workspace = Path(context["workspace"])
-        instance_index = int(context["instance_index"])
-        candidate_path = workspace / config.get("candidatePath", f"cli_candidate_{instance_index}.json")
-        instance_path = workspace / config.get("instancePath", f"cli_instance_{instance_index}.json")
-        output_path = workspace / config.get("outputPath", f"cli_result_{instance_index}.json")
-        stdout_path = workspace / config.get("stdoutPath", f"cli_stdout_{instance_index}.log")
-        stderr_path = workspace / config.get("stderrPath", f"cli_stderr_{instance_index}.log")
+        candidate_path = workspace / config.get("candidatePath", "cli_candidate.json")
+        settings_path = workspace / config.get("settingsPath", "cli_settings.json")
+        output_path = workspace / config.get("outputPath", "cli_result.json")
+        stdout_path = workspace / config.get("stdoutPath", "cli_stdout.log")
+        stderr_path = workspace / config.get("stderrPath", "cli_stderr.log")
 
         _write_json(candidate_path, candidate_runtime)
-        _write_json(instance_path, instance)
+        settings = dict(config.get("settings", config.get("config", {})) or {})
+        _write_json(settings_path, settings)
+        context = {**context, "settings": settings, "settings_file": str(settings_path)}
 
         placeholders = {
             "python": sys.executable,
             "candidate_path": str(candidate_path),
-            "instance_path": str(instance_path),
+            "settings_path": str(settings_path),
             "output_path": str(output_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
             "workspace": str(workspace),
             "trial_id": context["trial_id"],
             "study_id": context["study_id"],
-            "instance_index": str(instance_index),
         }
         command = _format_command(config["command"], placeholders)
         cwd = _resolve_optional_path(config.get("workingDir"), self.study_spec)
@@ -317,7 +320,7 @@ class CLIEnvironmentAdapter:
         output_files.extend(
             [
                 {"type": "json", "name": "cli_candidate_input", "path": str(candidate_path)},
-                {"type": "json", "name": "cli_instance_input", "path": str(instance_path)},
+                {"type": "json", "name": "cli_settings_input", "path": str(settings_path)},
                 {"type": "json", "name": "cli_result_output", "path": str(output_path)},
                 {"type": "log", "name": "cli_stdout", "path": str(stdout_path)},
                 {"type": "log", "name": "cli_stderr", "path": str(stderr_path)},
@@ -672,6 +675,28 @@ def _collect_output_files(workspace: Path, cwd: Path, patterns: List[Any]) -> Li
                 }
             )
     return output_files
+
+
+def _dedupe_output_files(output_files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+    for output_file in output_files:
+        if not isinstance(output_file, dict):
+            deduped.append(output_file)
+            continue
+        key = output_file.get("path") or output_file.get("contentRef")
+        if key:
+            try:
+                marker = ("path", str(Path(str(key)).resolve()))
+            except OSError:
+                marker = ("path", str(key))
+        else:
+            marker = ("entry", json.dumps(output_file, sort_keys=True, default=str))
+        if marker in seen:
+            continue
+        seen.add(marker)
+        deduped.append(output_file)
+    return deduped
 
 
 def _output_file_type(path: str) -> str:

@@ -18,6 +18,8 @@ The job-shop example exposes two file-candidate targets:
 
 Use this when the LLM should generate or revise a priority rule:
 
+Study config fragment:
+
 ```yaml
 environmentConfig: ../environments/job_shop_scheduling/environment_dispatch_rule.yaml
 ```
@@ -64,6 +66,8 @@ The same method config is used by the Strategic Airlift editing study. The metho
 
 Use this when the LLM should write a complete solver wrapper, for example a heuristic solver or an OR-Tools script:
 
+Study config fragment:
+
 ```yaml
 environmentConfig: ../environments/job_shop_scheduling/environment_solver_code.yaml
 ```
@@ -92,7 +96,7 @@ uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
 
 ## Method Shape
 
-A native LLM method can be a normal batch method:
+A native LLM method can be a normal batch method. This is a minimal complete method config template for a user-owned file-writing method:
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -120,7 +124,9 @@ The method can read:
 
 - `study_state["candidate_context"]` for editable files and method instructions
 - `evidence_view` or previous observations for feedback
-- files listed by the environment's `methodContext`
+- files listed by the environment's `methodContext`, including natural-language notes, CSV files, SQLite databases, or other reference material
+- `evidence_view.records(...)` for structured rows extracted after evaluation
+- `evidence_view.artifacts(...)` for evaluator output files such as logs, JSON reports, plots, CSV files, or SQLite databases
 
 It returns file candidates through `CandidateFileStore`.
 

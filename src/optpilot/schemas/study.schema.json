@@ -26,7 +26,6 @@
         }
       }
     },
-    "instances": {"$ref": "defs/instances.schema.json#/definitions/instances"},
     "budget": {
       "type": "object",
       "additionalProperties": false,

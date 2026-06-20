@@ -1,11 +1,11 @@
-"""Method that solves job-shop instances with JobShopLib simulated annealing."""
+"""Method that solves job-shop cases with JobShopLib simulated annealing."""
 
 from __future__ import annotations
 
 import uuid
 from typing import Any, Dict, List
 
-from examples.methods.job_shop_lib_solvers import solve_study_instances
+from examples.methods.job_shop_lib_solvers import solve_job_shop_cases
 
 
 JsonDict = Dict[str, Any]
@@ -30,7 +30,7 @@ class JobShopLibSimulatedAnnealingMethod:
             from job_shop_lib.metaheuristics import SimulatedAnnealingSolver
         except ImportError as exc:
             raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --extra examples`.") from exc
-        solutions = solve_study_instances(
+        solutions = solve_job_shop_cases(
             study_state,
             lambda: SimulatedAnnealingSolver(
                 initial_temperature=initial_temperature,

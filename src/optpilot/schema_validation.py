@@ -124,7 +124,6 @@ def _schema_relative_paths() -> Iterable[str]:
     yield "defs/runtime.schema.json"
     yield "defs/candidate.schema.json"
     yield "defs/metrics.schema.json"
-    yield "defs/instances.schema.json"
 
 
 def _json_path(parts: Iterable[Any]) -> str:

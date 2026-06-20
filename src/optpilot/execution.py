@@ -31,7 +31,6 @@ class Evaluator:
 
     def run_trial(self, trial_spec: TrialSpec) -> List[Observation]:
         workspace = self.evidence_store.create_trial_workspace(trial_spec.trial_id)
-        instance_results: List[Dict[str, Any]] = []
         started = time.monotonic()
         candidate_context = {
             "trial_id": trial_spec.trial_id,
@@ -91,35 +90,32 @@ class Evaluator:
             return [observation]
 
         self._record_candidate(trial_spec, validation_report, materialization_record)
-        for index, instance in enumerate(trial_spec.instances):
-            context = {
-                "trial_id": trial_spec.trial_id,
-                "study_id": trial_spec.study_id,
-                "workspace": str(workspace),
-                "instance_index": index,
-                "resource_profile": {
-                    "cpu": trial_spec.resource_profile.cpu,
-                    "memoryGiB": trial_spec.resource_profile.memory_gib,
-                    "gpu": trial_spec.resource_profile.gpu,
-                    "gpuClass": trial_spec.resource_profile.gpu_class,
-                    "timeoutSeconds": trial_spec.resource_profile.timeout_seconds,
-                },
-                "sandbox_spec": {
-                    "runtimeType": trial_spec.sandbox_spec.runtime_type,
-                    "networkPolicy": trial_spec.sandbox_spec.network_policy,
-                    "cleanupPolicy": trial_spec.sandbox_spec.cleanup_policy,
-                },
-                "backend_identity": trial_spec.metadata.get("backend_identity", {}),
-                "backend_worker": trial_spec.metadata.get("backend_worker", {}),
-            }
-            try:
-                result = self.environment_adapter.evaluate(materialization_record.runtime_spec, instance, context)
-                _validate_environment_result(result)
-            except Exception as exc:
-                result = _exception_instance_result(exc, "environment_evaluation", workspace, index)
-            instance_results.append(result)
+        context = {
+            "trial_id": trial_spec.trial_id,
+            "study_id": trial_spec.study_id,
+            "workspace": str(workspace),
+            "resource_profile": {
+                "cpu": trial_spec.resource_profile.cpu,
+                "memoryGiB": trial_spec.resource_profile.memory_gib,
+                "gpu": trial_spec.resource_profile.gpu,
+                "gpuClass": trial_spec.resource_profile.gpu_class,
+                "timeoutSeconds": trial_spec.resource_profile.timeout_seconds,
+            },
+            "sandbox_spec": {
+                "runtimeType": trial_spec.sandbox_spec.runtime_type,
+                "networkPolicy": trial_spec.sandbox_spec.network_policy,
+                "cleanupPolicy": trial_spec.sandbox_spec.cleanup_policy,
+            },
+            "backend_identity": trial_spec.metadata.get("backend_identity", {}),
+            "backend_worker": trial_spec.metadata.get("backend_worker", {}),
+        }
+        try:
+            result = self.environment_adapter.evaluate(materialization_record.runtime_spec, context)
+            _validate_environment_result(result)
+        except Exception as exc:
+            result = _exception_evaluation_result(exc, "environment_evaluation", workspace)
         elapsed = time.monotonic() - started
-        observation = self._aggregate_results(trial_spec, instance_results, elapsed, materialization_record)
+        observation = self._observation_from_result(trial_spec, result, elapsed, materialization_record)
         self._record_trial(trial_spec, observation.status)
         self.evidence_store.record_observation(observation.to_dict())
         return [observation]
@@ -158,7 +154,6 @@ class Evaluator:
                 "candidate_id": trial_spec.candidate["candidate_id"],
                 "format": trial_spec.candidate["format"],
                 "candidate": dict(trial_spec.candidate),
-                "instance_count": len(trial_spec.instances),
                 "status": status,
                 "resource_profile": trial_spec.resource_profile.to_dict(),
                 "sandbox_spec": trial_spec.sandbox_spec.to_dict(),
@@ -169,46 +164,36 @@ class Evaluator:
             }
         )
 
-    def _aggregate_results(
+    def _observation_from_result(
         self,
         trial_spec: TrialSpec,
-        instance_results: List[Dict[str, Any]],
+        result: Dict[str, Any],
         wall_clock_seconds: float,
         materialization_record: MaterializationRecord,
     ) -> Observation:
         primary_metric = trial_spec.objective["primaryMetric"]["name"]
-        aggregated_metrics = _aggregate_metric_values(instance_results, trial_spec.objective)
         output_files = list(materialization_record.output_files)
-        for result in instance_results:
-            output_files.extend(result.get("output_files", []))
+        output_files.extend(result.get("output_files", []))
         output_files = self._retain_output_files(trial_spec.trial_id, output_files)
-        statuses = {result.get("status", "success") for result in instance_results}
-        status = _aggregate_status(statuses)
-        failure_events = [
-            result.get("event_summary", {}).get("error")
-            for result in instance_results
-            if result.get("event_summary", {}).get("error")
-        ]
+        event_summary = dict(result.get("event_summary", {}))
+        event_summary.setdefault("primary_metric", primary_metric)
+        event_summary["materialization"] = materialization_record.metadata
+        if event_summary.get("error") and "errors" not in event_summary:
+            event_summary["errors"] = [event_summary["error"]]
         return Observation(
             trial_id=trial_spec.trial_id,
             study_id=trial_spec.study_id,
             candidate_id=trial_spec.candidate["candidate_id"],
             environment_id=self.study_spec.environment["environmentId"],
-            instance_descriptor={"mode": self.study_spec.instances["mode"], "count": len(trial_spec.instances)},
-            status=status,
-            metric_values=aggregated_metrics,
-            constraint_results={},
+            status=result.get("status", "success"),
+            metric_values=dict(result.get("metric_values", {})),
+            constraint_results=dict(result.get("constraint_results", {})),
             resource_usage={
                 "requested": trial_spec.resource_profile.to_dict(),
                 "wallClockSeconds": wall_clock_seconds,
             },
             output_files=output_files,
-            event_summary={
-                "primary_metric": primary_metric,
-                "evaluated_instances": len(trial_spec.instances),
-                "materialization": materialization_record.metadata,
-                "errors": failure_events,
-            },
+            event_summary=event_summary,
             provenance={
                 "method_id": trial_spec.method_id,
                 "environment_version": self.study_spec.environment.get("environmentVersion"),
@@ -299,7 +284,6 @@ class Evaluator:
             study_id=trial_spec.study_id,
             candidate_id=trial_spec.candidate["candidate_id"],
             environment_id=self.study_spec.environment["environmentId"],
-            instance_descriptor={"mode": self.study_spec.instances["mode"], "count": len(trial_spec.instances)},
             status=status,
             metric_values={},
             constraint_results={},
@@ -310,7 +294,6 @@ class Evaluator:
             output_files=list(materialization_record.output_files),
             event_summary={
                 "primary_metric": trial_spec.objective["primaryMetric"]["name"],
-                "evaluated_instances": 0,
                 "materialization": materialization_record.metadata,
                 "error": error,
                 "errors": [error],
@@ -713,18 +696,18 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
         )
 
 
-def _aggregate_metric_values(instance_results: List[Dict[str, Any]], objective: Dict[str, Any]) -> Dict[str, Any]:
-    if not instance_results:
+def _aggregate_metric_values(results: List[Dict[str, Any]], objective: Dict[str, Any]) -> Dict[str, Any]:
+    if not results:
         return {}
     metric_names = set()
-    for result in instance_results:
+    for result in results:
         metric_names.update(result.get("metric_values", {}).keys())
     aggregation = objective.get("aggregation", {}).get("mode", "mean")
     aggregated: Dict[str, Any] = {}
     for metric_name in metric_names:
         values = [
             float(result.get("metric_values", {})[metric_name])
-            for result in instance_results
+            for result in results
             if metric_name in result.get("metric_values", {})
         ]
         if not values:
@@ -786,13 +769,13 @@ def _validation_exception_report(exc: Exception) -> ValidationReport:
     )
 
 
-def _exception_instance_result(exc: Exception, phase: str, workspace: Path, instance_index: int) -> Dict[str, Any]:
+def _exception_evaluation_result(exc: Exception, phase: str, workspace: Path) -> Dict[str, Any]:
     status = _status_for_exception(exc)
     return {
         "status": status,
         "metric_values": {},
         "constraint_results": {},
-        "output_files": _failure_output_files(workspace, instance_index),
+        "output_files": _failure_output_files(workspace),
         "event_summary": {
             "error": _error_payload(exc, phase),
         },
@@ -853,14 +836,14 @@ def _error_payload(exc: Exception, phase: str) -> Dict[str, Any]:
     }
 
 
-def _failure_output_files(workspace: Path, instance_index: int) -> List[Dict[str, Any]]:
+def _failure_output_files(workspace: Path) -> List[Dict[str, Any]]:
     output_files = []
     for name, file_type, path in [
-        ("cli_candidate_input", "json", workspace / f"cli_candidate_{instance_index}.json"),
-        ("cli_instance_input", "json", workspace / f"cli_instance_{instance_index}.json"),
-        ("cli_result_output", "json", workspace / f"cli_result_{instance_index}.json"),
-        ("cli_stdout", "log", workspace / f"cli_stdout_{instance_index}.log"),
-        ("cli_stderr", "log", workspace / f"cli_stderr_{instance_index}.log"),
+        ("cli_candidate_input", "json", workspace / "cli_candidate.json"),
+        ("cli_settings_input", "json", workspace / "cli_settings.json"),
+        ("cli_result_output", "json", workspace / "cli_result.json"),
+        ("cli_stdout", "log", workspace / "cli_stdout.log"),
+        ("cli_stderr", "log", workspace / "cli_stderr.log"),
     ]:
         if path.exists():
             output_files.append({"type": file_type, "name": name, "path": str(path)})
@@ -952,7 +935,6 @@ def _backend_terminal_observation(
         study_id=trial_spec.study_id,
         candidate_id=trial_spec.candidate["candidate_id"],
         environment_id=study_spec.environment["environmentId"],
-        instance_descriptor={"mode": study_spec.instances["mode"], "count": len(trial_spec.instances)},
         status=status,
         metric_values={},
         constraint_results={},
@@ -963,7 +945,6 @@ def _backend_terminal_observation(
         output_files=output_files,
         event_summary={
             "primary_metric": trial_spec.objective["primaryMetric"]["name"],
-            "evaluated_instances": 0,
             "error": error,
             "errors": [error],
         },
@@ -995,7 +976,6 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
         study_id=payload["study_id"],
         method_id=payload["method_id"],
         candidate=dict(payload["candidate"]),
-        instances=list(payload["instances"]),
         objective=dict(payload["objective"]),
         resource_profile=ResourceProfile.from_dict(payload.get("resource_profile")),
         sandbox_spec=SandboxSpec.from_dict(payload.get("sandbox_spec")),

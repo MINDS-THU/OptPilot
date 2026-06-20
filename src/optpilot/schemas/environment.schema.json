@@ -56,7 +56,10 @@
             "required": ["name", "path"],
             "properties": {
               "name": {"type": "string"},
-              "path": {"type": "string"}
+              "path": {"type": "string"},
+              "description": {"type": "string"},
+              "type": {"type": "string"},
+              "mimeType": {"type": "string"}
             }
           }
         }

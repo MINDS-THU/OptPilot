@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import yaml
+
 from .simulator import (
     load_instance,
     schedule_by_dispatch_rule,
@@ -19,16 +21,77 @@ from .simulator import (
 JsonDict = Dict[str, Any]
 
 
-def evaluate(candidate_runtime: JsonDict, instance: JsonDict, context: JsonDict) -> JsonDict:
-    job_shop = load_instance(instance)
+def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
     workspace = Path(candidate_runtime.get("workspace") or context["workspace"]).resolve()
     candidate_root = Path(candidate_runtime.get("candidateRoot") or workspace).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
-
     mode = _evaluation_mode(candidate_runtime, candidate_root)
+    case_results = []
+    output_files = []
+    for case in _load_cases(context.get("settings", {})):
+        result = _evaluate_case(candidate_runtime, candidate_root, context, case, mode)
+        case_results.append(result)
+        schedule_path = workspace / f"schedule_{case['id']}.json"
+        metrics_path = workspace / f"job_shop_metrics_{case['id']}.json"
+        schedule_path.write_text(
+            json.dumps({"case_id": case["id"], "operations": result["schedule"]}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        metrics_path.write_text(json.dumps(result["metrics"], indent=2, sort_keys=True), encoding="utf-8")
+        output_files.extend(
+            [
+                {"type": "json", "name": f"schedule_{case['id']}", "path": str(schedule_path)},
+                {"type": "json", "name": f"job_shop_metrics_{case['id']}", "path": str(metrics_path)},
+            ]
+        )
+
+    aggregated_metrics = _aggregate_metrics([result["metrics"] for result in case_results])
+    summary_path = workspace / "job_shop_metrics.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "metrics": aggregated_metrics,
+                "cases": [
+                    {
+                        "id": result["id"],
+                        "name": result["name"],
+                        "metrics": result["metrics"],
+                        "operation_count": len(result["schedule"]),
+                    }
+                    for result in case_results
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    output_files.append({"type": "json", "name": "job_shop_metrics", "path": str(summary_path)})
+    return {
+        "status": "success",
+        "metric_values": aggregated_metrics,
+        "output_files": output_files,
+        "event_summary": {
+            "adapter": "job_shop_scheduling_evaluator",
+            "mode": mode,
+            "case_count": len(case_results),
+            "cases": [result["id"] for result in case_results],
+        },
+    }
+
+
+def _evaluate_case(
+    candidate_runtime: JsonDict,
+    candidate_root: Path,
+    context: JsonDict,
+    case: JsonDict,
+    mode: str,
+) -> JsonDict:
+    instance = dict(case["payload"])
+    job_shop = load_instance(instance)
     if mode == "parameters":
         if "solutions" in candidate_runtime:
-            schedule = _extract_solution_schedule(candidate_runtime, instance)
+            schedule = _extract_solution_schedule(candidate_runtime, case["id"])
         else:
             schedule = schedule_by_dispatch_rule(job_shop, weighted_dispatch_score(candidate_runtime))
     elif mode == "dispatch_rule":
@@ -47,23 +110,11 @@ def evaluate(candidate_runtime: JsonDict, instance: JsonDict, context: JsonDict)
 
     validated = validate_schedule(job_shop, schedule)
     metrics = summarize_schedule(job_shop, validated)
-    schedule_path = workspace / "schedule.json"
-    metrics_path = workspace / "job_shop_metrics.json"
-    schedule_path.write_text(json.dumps({"operations": validated}, indent=2, sort_keys=True), encoding="utf-8")
-    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
     return {
-        "status": "success",
-        "metric_values": metrics,
-        "output_files": [
-            {"type": "json", "name": "schedule", "path": str(schedule_path)},
-            {"type": "json", "name": "job_shop_metrics", "path": str(metrics_path)},
-        ],
-        "event_summary": {
-            "adapter": "job_shop_scheduling_evaluator",
-            "mode": mode,
-            "instance": job_shop.name,
-            "operation_count": len(validated),
-        },
+        "id": case["id"],
+        "name": job_shop.name,
+        "metrics": metrics,
+        "schedule": validated,
     }
 
 
@@ -83,20 +134,55 @@ def _evaluation_mode(candidate_runtime: JsonDict, candidate_root: Path) -> str:
     raise ValueError("File candidate must materialize dispatch_rule.py or solver.py.")
 
 
-def _extract_solution_schedule(candidate_runtime: JsonDict, instance: JsonDict) -> List[JsonDict]:
+def _extract_solution_schedule(candidate_runtime: JsonDict, case_id: str) -> List[JsonDict]:
     solutions = candidate_runtime.get("solutions")
     if not isinstance(solutions, dict):
         raise TypeError("Schedule-solution candidates must define a solutions object.")
-    instance_id = str(instance.get("_optpilot_instance_id") or instance.get("name") or "")
-    if not instance_id:
-        raise ValueError("Cannot select a schedule solution because the instance has no OptPilot instance id.")
-    solution = solutions.get(instance_id)
+    solution = solutions.get(case_id)
     if not isinstance(solution, dict):
-        raise KeyError(f"Schedule-solution candidate does not define a solution for instance {instance_id!r}.")
+        raise KeyError(f"Schedule-solution candidate does not define a solution for case {case_id!r}.")
     operations = solution.get("operations")
     if not isinstance(operations, list):
-        raise TypeError(f"Solution for instance {instance_id!r} must define an operations list.")
+        raise TypeError(f"Solution for case {case_id!r} must define an operations list.")
     return list(operations)
+
+
+def _load_cases(settings: JsonDict) -> List[JsonDict]:
+    cases = settings.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise ValueError("Job-shop evaluator settings.cases must be a non-empty list.")
+    loaded = []
+    base_dir = Path(__file__).resolve().parent
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            raise TypeError(f"Job-shop evaluator settings.cases[{index}] must be an object.")
+        case_id = str(case.get("id") or "")
+        if not case_id:
+            raise ValueError(f"Job-shop evaluator settings.cases[{index}] must define id.")
+        if "payload" in case:
+            payload = case["payload"]
+        elif "path" in case:
+            path = Path(str(case["path"]))
+            if not path.is_absolute():
+                path = base_dir / path
+            with path.open("r", encoding="utf-8") as handle:
+                payload = yaml.safe_load(handle) or {}
+        else:
+            raise ValueError(f"Job-shop evaluator settings.cases[{index}] must define path or payload.")
+        if not isinstance(payload, dict):
+            raise TypeError(f"Job-shop case {case_id!r} must load to an object.")
+        loaded.append({"id": case_id, "payload": dict(payload)})
+    return loaded
+
+
+def _aggregate_metrics(metrics_by_case: List[JsonDict]) -> JsonDict:
+    metric_names = sorted({key for metrics in metrics_by_case for key in metrics})
+    aggregated: JsonDict = {}
+    for name in metric_names:
+        values = [float(metrics[name]) for metrics in metrics_by_case if isinstance(metrics.get(name), (int, float, bool))]
+        if values:
+            aggregated[name] = sum(values) / len(values)
+    return aggregated
 
 
 def _load_module(path: Path, name: str):

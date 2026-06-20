@@ -46,7 +46,9 @@ uv run optpilot validate examples/studies/job_shop_lib_dispatching_rule.yaml
 uv run optpilot run examples/studies/job_shop_lib_dispatching_rule.yaml
 ```
 
-The JobShopLib method reads `study_state.instances`, calls JobShopLib for each instance, and emits a schedule-solution candidate:
+The JobShopLib method reads the job-shop case references exposed through `methodContext.references`, calls JobShopLib for each case, and emits a schedule-solution candidate:
+
+Candidate `spec` payload fragment:
 
 ```yaml
 solutions:
@@ -66,6 +68,8 @@ from job_shop_lib.dispatching.rules import DispatchingRuleSolver
 ```
 
 JobShopLib also exposes individual rule functions and scorers such as shortest processing time, first-come first-served, most work remaining, most operations remaining, and random operation. To use a different built-in rule, change the method setting:
+
+Method `settings` fragment:
 
 ```yaml
 settings:

@@ -65,6 +65,7 @@ nav:
   - Getting Started: getting-started.md
   - Core Model:
       - Concepts: concepts.md
+      - Candidate Contracts: candidate-contracts.md
       - Methods: methods.md
       - How A Run Works: how-it-works.md
       - Evidence: evidence.md

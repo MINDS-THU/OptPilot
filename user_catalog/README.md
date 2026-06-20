@@ -17,8 +17,6 @@ user_catalog/
     my_environment/
       environment.yaml       # reusable environment config
       evaluator.py           # Python evaluator, command helper, or adapter code
-      instances/
-        default.yaml
       prompts/
       assets/
   methods/
@@ -47,6 +45,8 @@ id: my-environment
 
 evaluator:
   python: user_catalog.environments.my_environment.evaluator:evaluate
+  settings:
+    target: 0.5
 
 candidate:
   format: parameters
@@ -65,10 +65,11 @@ metrics:
 Minimal evaluator:
 
 ```python
-def evaluate(candidate_runtime, instance, context):
+def evaluate(candidate_runtime, context):
+    target = context["settings"]["target"]
     return {
         "status": "success",
-        "metric_values": {"score": 1.0},
+        "metric_values": {"score": 1.0 - abs(candidate_runtime["x"] - target)},
         "constraint_results": {},
         "output_files": [],
         "event_summary": {},

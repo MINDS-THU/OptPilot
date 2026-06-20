@@ -93,6 +93,65 @@ class EvidenceView:
                 )
         return _limit_tail(streams, limit)
 
+    def output_files(
+        self,
+        name: Optional[str] = None,
+        *,
+        kind: Optional[str] = None,
+        limit: Optional[int] = None,
+        status: Optional[str] = None,
+        trial_id: Optional[str] = None,
+        candidate_id: Optional[str] = None,
+        newest_first: bool = False,
+    ) -> List[JsonDict]:
+        """Return evaluator and materialization output file metadata.
+
+        This gives methods a stable artifact-discovery API for unstructured
+        outputs such as logs, JSON reports, CSV files, SQLite databases, plots,
+        and copied candidate workspaces. It intentionally returns metadata and
+        paths/content refs rather than reading file contents into memory.
+        """
+
+        files: List[JsonDict] = []
+        for observation_index, observation in enumerate(self.store.read_observations()):
+            if status is not None and observation.get("status") != status:
+                continue
+            if trial_id is not None and observation.get("trial_id") != trial_id:
+                continue
+            if candidate_id is not None and observation.get("candidate_id") != candidate_id:
+                continue
+            for file_index, output_file in enumerate(observation.get("output_files", []) or []):
+                if not isinstance(output_file, dict):
+                    continue
+                if name is not None and output_file.get("name") != name:
+                    continue
+                if kind is not None and output_file.get("type") != kind:
+                    continue
+                item = dict(output_file)
+                item.update(
+                    {
+                        "trial_id": observation.get("trial_id"),
+                        "candidate_id": observation.get("candidate_id"),
+                        "status": observation.get("status"),
+                        "observation_index": observation_index,
+                        "output_file_index": file_index,
+                    }
+                )
+                files.append(item)
+        if newest_first:
+            files.reverse()
+            if limit is None:
+                return files
+            if limit <= 0:
+                return []
+            return files[:limit]
+        return _limit_tail(files, limit)
+
+    def artifacts(self, *args: Any, **kwargs: Any) -> List[JsonDict]:
+        """Alias for output_files for method code that talks about artifacts."""
+
+        return self.output_files(*args, **kwargs)
+
     def records(
         self,
         name: Optional[str] = None,
@@ -262,6 +321,8 @@ class EvidenceView:
                 }
                 for observation in recent_failures
             ],
+            "recent_output_files": self.output_files(limit=10, newest_first=True),
+            "record_streams": self.record_streams(limit=10),
         }
 
     def _read_event_type(self, event_type: str) -> List[JsonDict]:

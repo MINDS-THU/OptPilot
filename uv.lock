@@ -1464,6 +1464,9 @@ examples = [
     { name = "job-shop-lib" },
     { name = "stable-baselines3" },
 ]
+sa = [
+    { name = "xdevs" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1473,8 +1476,9 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "stable-baselines3", marker = "extra == 'examples'", specifier = ">=2.3,<3" },
+    { name = "xdevs", marker = "extra == 'sa'", git = "https://github.com/iscar-ucm/xdevs.py.git?rev=v3.0.0" },
 ]
-provides-extras = ["docs", "examples"]
+provides-extras = ["docs", "examples", "sa"]
 
 [[package]]
 name = "ortools"
@@ -2487,3 +2491,8 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/db/d9/c495884c6e548fce18a8f40568ff120bc3a4b7b99813081c8ac0c936fa64/watchdog-6.0.0-py3-none-win_amd64.whl", hash = "sha256:cbafb470cf848d93b5d013e2ecb245d4aa1c8fd0504e863ccefa32445359d680", size = 79070, upload-time = "2024-11-01T14:07:10.686Z" },
     { url = "https://files.pythonhosted.org/packages/33/e8/e40370e6d74ddba47f002a32919d91310d6074130fe4e17dabcafc15cbf1/watchdog-6.0.0-py3-none-win_ia64.whl", hash = "sha256:a1914259fa9e1454315171103c6a30961236f508b9b623eae470268bbcc6a22f", size = 79067, upload-time = "2024-11-01T14:07:11.845Z" },
 ]
+
+[[package]]
+name = "xdevs"
+version = "3.0.0"
+source = { git = "https://github.com/iscar-ucm/xdevs.py.git?rev=v3.0.0#51a2fd1138aa4067e712d08385a64e8147ec13d3" }

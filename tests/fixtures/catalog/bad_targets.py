@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def non_numeric_metric(candidate, instance, context):
+def non_numeric_metric(candidate, context):
     return {
         "status": "success",
         "metric_values": {

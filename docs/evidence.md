@@ -19,7 +19,7 @@ The run directory shows what actually happened: which candidates were proposed, 
 
 ## Run Directory
 
-By default, runs are written under `runs/` next to the study config. You can also choose another output root through the CLI or study evidence settings.
+By default, runs are written to a `runs/` directory next to the directory that contains the study config. The built-in job-shop studies live under `examples/studies/`, so their default output root is `examples/runs/`. You can override this with `--output-root` or `evidence.outputDir`.
 
 Common files:
 
@@ -38,6 +38,37 @@ Common files:
 | `run_lineage.json` | Resume and branch lineage metadata. |
 
 The exact set can vary by evidence level and by which parts of the runtime are used.
+
+A typical local run looks like:
+
+```text
+runs/my-study-2026-06-20T.../
+  summary.json
+  study_spec.json
+  run_policy.json
+  run_lineage.json
+  environment_snapshot.json
+  candidates.jsonl
+  trials.jsonl
+  observations.jsonl
+  method_calls.jsonl
+  scheduler_events.jsonl
+  prompts/
+    prompt-.../prompt.json
+  candidates/
+    candidate-.../files/...
+  trials/
+    trial-.../
+      candidate/
+      candidate.json
+      workspace_manifest.json
+      evaluator outputs...
+  evidence_files/
+    trial-.../
+      copied outputs when evidence.outputFileStorage: copy
+```
+
+The most important files for debugging are usually `summary.json`, `observations.jsonl`, `candidates.jsonl`, and the corresponding `trials/<trial-id>/` directory.
 
 ## Storage Roles
 
@@ -83,21 +114,32 @@ Typical information available through this API includes:
 - scheduler events
 - method events
 - extracted records
+- evaluator output files and artifacts
 
 This gives methods a stable way to learn from previous trials without parsing raw run files by hand.
+
+```python
+def propose(self, n_candidates, study_state, evidence_view):
+    recent = evidence_view.observations(limit=3)
+    traces = evidence_view.artifacts(kind="json", limit=5)
+    rows = evidence_view.records("events", limit=20)
+    ...
+```
+
+`records(...)` reads rows extracted from configured JSONL, CSV, SQLite, or custom record streams. `artifacts(...)` and `output_files(...)` return metadata for files produced during evaluation, such as logs, plots, JSON reports, CSV files, or SQLite databases. They return paths and content references so a method can decide what to read.
 
 ## Resume And Branch
 
 Resume appends more trials to an existing run:
 
 ```bash
-uv run optpilot run examples/studies/sa_baseline.yaml \
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml \
   --resume-run-dir path/to/existing-run
 ```
 
 Branch starts a new run that records a previous run as its parent:
 
 ```bash
-uv run optpilot run examples/studies/sa_baseline.yaml \
+uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml \
   --branch-from-run-dir path/to/existing-run
 ```

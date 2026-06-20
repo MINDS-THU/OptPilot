@@ -10,13 +10,31 @@ OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework. T
 4. OptPilot records trials, observations, saved output files, method calls, and run metadata.
 5. The method can use the accumulated evidence to propose the next candidates.
 
+```mermaid
+flowchart LR
+  Env["Environment\nwhat can be evaluated"]
+  Method["Method\nhow candidates are produced"]
+  Study["Study\nobjective + budget + runtime"]
+  Runner["OptPilot runner\nvalidate + materialize + evaluate"]
+  Evidence["Evidence\nobservations + artifacts"]
+
+  Study --> Env
+  Study --> Method
+  Env --> Runner
+  Method --> Runner
+  Runner --> Evidence
+  Evidence --> Method
+```
+
+The boundary between environment and method is the candidate contract. Start with `docs/candidate-contracts.md` after the quickstart if you are adding a new integration.
+
 ## Current Surface
 
 Users author three public YAML config files:
 
 - `config: environment`: candidate contract, evaluator, metrics, trial workspace, saved output-file rules, and optional records.
 - `config: method`: method entrypoint, protocol, settings, compatibility requirements, and optional method runtime.
-- `config: study`: the concrete run binding an environment config to a method config with objective, instances, budget, execution, and evidence settings.
+- `config: study`: the concrete run binding an environment config to a method config with objective, budget, execution, and evidence settings.
 
 OptPilot validates those YAML files with packaged JSON Schemas, compiles them into an internal `StudySpec`, and writes the compiled spec into every run directory.
 
@@ -29,7 +47,7 @@ Included in the current release:
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
-- curated job-shop scheduling tutorial environment with shared instances, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
+- curated job-shop scheduling tutorial environment with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
 - strategic-airlift DEVS example using an external generated simulator
 - local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
 
@@ -62,7 +80,7 @@ uv run optpilot --help
 
 Start with the job-shop parameter baseline. It is the recommended first run, works from a fresh checkout, and does not require API keys or external solvers.
 
-The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, shared instances, objective, budget, and runtime.
+The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, objective, budget, and runtime.
 
 Run the job-shop parameter baseline:
 
@@ -82,81 +100,20 @@ Open the local UI:
 uv run optpilot ui --open-browser
 ```
 
-The UI scans `examples/` and `user_catalog/` by default.
+The UI scans `examples/` and `user_catalog/` by default. Stop the local server
+with `Ctrl-C` in the terminal when you are done.
 
 Some advanced examples and integration templates, such as Strategic Airlift and upstream `llm_heuristic_search` repository wrappers, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
 
-## Minimal Config Shape
+## Full Config Examples
 
-Study config:
+The first tutorial shows the full environment, method, and study YAML files for a runnable job-shop baseline:
 
-```yaml
-apiVersion: optpilot.io/v1
-config: study
-name: job-shop-rule-parameters-baseline
+- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml`
+- `examples/methods/fixed_rule_parameters/method.yaml`
+- `examples/studies/job_shop_rule_parameters_baseline.yaml`
 
-environmentConfig: ../environments/job_shop_scheduling/environment_rule_parameters.yaml
-methodConfig: ../methods/fixed_rule_parameters/method.yaml
-
-objective:
-  metric: normalized_makespan
-  direction: minimize
-
-instances:
-  source: files
-  paths:
-    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
-
-budget:
-  maxTrials: 1
-
-execution:
-  backend: local
-  parallelism: 1
-```
-
-Environment evaluator:
-
-```yaml
-apiVersion: optpilot.io/v1
-config: environment
-id: my-environment
-
-evaluator:
-  python: user_catalog.environments.my_environment.evaluator:evaluate
-
-candidate:
-  format: parameters
-  parameters:
-    schema:
-      x:
-        valueType: float
-        min: 0.0
-        max: 1.0
-
-metrics:
-  source: return
-  keys: [score]
-```
-
-Method entrypoint:
-
-```yaml
-apiVersion: optpilot.io/v1
-config: method
-id: my-method
-
-entrypoint:
-  python: user_catalog.methods.my_method.method:MyMethod
-  protocol: batch
-
-accepts:
-  formats: [parameters]
-  requires:
-    context: [candidate.parameters.schema]
-```
-
-Python evaluator references use `module:function`. Python method references use `module:Class`.
+Read [Getting Started](docs/getting-started.md) for the full configs and the explanation of how the three files fit together. Python evaluator references use `module:function`; Python method references use `module:Class`.
 
 ## User-Owned Catalog
 
@@ -167,7 +124,6 @@ user_catalog/
   environments/my_environment/
     environment.yaml
     evaluator.py
-    instances/
     assets/
   methods/my_method/
     method.yaml
@@ -217,10 +173,12 @@ runtime:
 
 - [Getting Started](docs/getting-started.md)
 - [Concepts](docs/concepts.md)
+- [Candidate Contracts](docs/candidate-contracts.md)
 - [Methods](docs/methods.md)
 - [How A Run Works](docs/how-it-works.md)
 - [Evidence](docs/evidence.md)
 - [Examples](docs/examples.md)
+- [Job-Shop Environment](docs/job-shop-environment.md)
 - [Configuration Reference](docs/configuration.md)
 - [User Catalog](docs/user-catalog.md)
 - [UI](docs/ui.md)

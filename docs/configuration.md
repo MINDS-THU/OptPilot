@@ -12,6 +12,8 @@ It covers the three public config roles: `environment`, `method`, and `study`.
 
 For the conceptual model behind those roles, use [Concepts](concepts.md). For the runtime procedure after these files are loaded and validated, use [How A Run Works](how-it-works.md).
 
+If you are deciding how to connect a new method to a new environment, read [Candidate Contracts](candidate-contracts.md) before using this field reference. The reference tells you which fields exist; the contract guide explains how the fields fit together.
+
 Every public config starts with:
 
 ```yaml
@@ -31,7 +33,7 @@ The public config uses concrete names for concrete jobs.
 | `format` | Identifies candidate representation: `parameters`, `files`, or `opaque`. |
 | `valueType` | Identifies one parameter value shape inside `candidate.parameters.schema`. |
 | `python`, `command`, `adapter` | Identify how evaluator or method code is invoked without a separate discriminator field. |
-| `source` | Identifies where a value comes from for selector fields such as `metrics.source`, `records[].source`, and `instances.source`. |
+| `source` | Identifies where a value comes from for selector fields such as `metrics.source` and `records[].source`. |
 | `backend` | Identifies how trials are scheduled. |
 
 Candidate compatibility is based on the candidate format plus required contract paths and capabilities. OptPilot does not require a separate candidate domain label.
@@ -82,7 +84,7 @@ examples/
     strategic_airlift_devs/
       environment.yaml
       evaluator.py
-      instances/
+      assets/
       prompts/
   methods/
     baseline_file_copy/
@@ -96,7 +98,6 @@ user_catalog/
     my_environment/
       environment.yaml
       evaluator.py
-      instances/
       assets/
   methods/
     my_method/
@@ -113,7 +114,7 @@ Environment and method configs are reusable. A single environment implementation
 
 | Field | Relative to |
 | --- | --- |
-| `study.environmentConfig`, `study.methodConfig`, `instances.paths`, `evidence.outputDir` | The study config file. |
+| `study.environmentConfig`, `study.methodConfig`, `evidence.outputDir` | The study config file. |
 | `environment.evaluator.pythonPath`, `environment.trialWorkspace[].from`, `environment.methodContext.instructions`, `environment.methodContext.references[].path` | The environment config file. |
 | `method.entrypoint.pythonPath`, `method.runtime.container.build.context` | The method config file. |
 | `study.execution.runtime.container.build.context` | The study config file. |
@@ -131,12 +132,14 @@ and evaluates for each candidate.
 Example:
 
 - `examples/studies/job_shop_rule_parameters_baseline.yaml` resolves `environmentConfig` relative to the study file
-- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves any `trialWorkspace` or `methodContext` entries relative to the environment file
+- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative to the environment file
 - `examples/methods/fixed_rule_parameters/method.yaml` resolves any `pythonPath` entries relative to the method file
 
 ## Environment Config
 
 An environment config describes what can be evaluated and how the evaluation happens.
+
+The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [Getting Started](getting-started.md) and the files under `examples/`.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -152,11 +155,11 @@ tags: [tutorial]
 # Required. Exactly one of python, command, or adapter.
 evaluator:
   # Python import. Function signature:
-  # evaluate(candidate_runtime, instance, context) -> dict
+  # evaluate(candidate_runtime, context) -> dict
   python: user_catalog.environments.my_environment.evaluator:evaluate
 
   # Alternative command evaluator.
-  # command: [python, run_eval.py, "{candidate_json}", "{metrics_file}"]
+  # command: [python, run_eval.py, "{candidate_json}", "{settings_file}", "{metrics_file}"]
 
   # Alternative custom adapter class.
   # Use only when a direct Python function or command is not enough.
@@ -169,7 +172,10 @@ evaluator:
   cwd: .
   env:
     MY_ENV: value
-  settings: {}
+  # Free object passed to the evaluator in context["settings"].
+  # Use it for environment-owned scenario, dataset, query, case-list, or simulator arguments.
+  settings:
+    target_x: 4.0
 
 # Optional runtime for the environment evaluator.
 runtime:
@@ -202,6 +208,14 @@ methodContext:
   references:
     - name: dataset_notes
       path: assets/notes.md
+      type: markdown
+      description: Natural-language dataset notes for the method.
+      mimeType: text/markdown
+    - name: historical_results
+      path: assets/results.sqlite
+      type: sqlite
+      description: Read-only historical evaluation database.
+      mimeType: application/vnd.sqlite3
 
 # Required. Declares where metrics come from.
 metrics:
@@ -234,7 +248,8 @@ For a first runnable environment config, the minimum important fields are usuall
 Python evaluators normally return:
 
 ```python
-def evaluate(candidate_runtime, instance, context):
+def evaluate(candidate_runtime, context):
+    settings = context["settings"]
     return {
         "status": "success",
         "metric_values": {"score": 0.9},
@@ -245,6 +260,42 @@ def evaluate(candidate_runtime, instance, context):
 ```
 
 For parameter candidates, `candidate_runtime` is the candidate parameter dictionary. For file candidates, it contains the trial workspace, candidate root, manifest path, and candidate file records.
+
+`evaluator.settings` is intentionally a plain object. OptPilot does not define
+domain-specific concepts such as scenarios, datasets, queries, or benchmark
+cases. If an environment needs those inputs, put them in
+`evaluator.settings` and let the evaluator or custom adapter interpret them.
+For example:
+
+```yaml
+evaluator:
+  python: user_catalog.environments.my_environment.evaluator:evaluate
+  settings:
+    dataset: data/train.csv
+    split: validation
+    simulation:
+      duration: 1000
+      num_aircraft: 4
+```
+
+For multi-case benchmarks, keep the same pattern:
+
+```yaml
+evaluator:
+  adapter: user_catalog.environments.my_environment.adapter:BenchmarkAdapter
+  settings:
+    cases:
+      - id: small
+        path: assets/cases/small.yaml
+      - id: medium
+        path: assets/cases/medium.yaml
+```
+
+The adapter can loop over `cases`, call domain code, aggregate metrics, and
+return one OptPilot evaluator result. If a method must read the same case files
+before proposing a candidate, expose those files through `methodContext.references`
+or method `settings`. That keeps case handling owned by the environment/method
+integration instead of making it a built-in OptPilot abstraction.
 
 ### Command Placeholders
 
@@ -258,15 +309,16 @@ Command evaluators can use these placeholders:
 | `{candidate_file}` | Single candidate file path when unambiguous, otherwise candidate root. |
 | `{candidate}` | Alias for `{candidate_file}`. |
 | `{candidate_json}` | JSON file containing the candidate runtime payload. |
+| `{settings_file}` | JSON file containing `evaluator.settings`. |
 | `{metrics_file}` | Expected metrics file path. |
-| `{instance_file}` | JSON file containing the current instance. |
 | `{trial_id}` | Trial id. |
 | `{study_id}` | Study id. |
-| `{instance_index}` | Zero-based instance index. |
 
 ### Candidate Formats
 
 `parameters` candidates are JSON-like assignments validated against a schema:
+
+Candidate field fragment:
 
 ```yaml
 candidate:
@@ -296,7 +348,62 @@ candidate:
                 right: {const: 2.0}
 ```
 
+#### Parameter Constraints
+
+`candidate.parameters.constraints` is optional. Use it when individual parameter bounds are not enough and a valid candidate must satisfy relationships among fields.
+
+Each constraint has an `id`, an optional `description`, and an `expr`. The expression is a small YAML/JSON tree. It is intentionally simple so OptPilot can validate it before a run and evaluate it during candidate materialization.
+
+Boolean expression nodes:
+
+| Node | Meaning |
+| --- | --- |
+| `compare` | Compare two scalar expressions. |
+| `all` | Every child expression must be true. |
+| `any` | At least one child expression must be true. |
+| `not` | Negates one child expression. |
+
+Comparison operators:
+
+| Operator | Meaning |
+| --- | --- |
+| `<`, `<=`, `>`, `>=` | Numeric or ordered comparison. |
+| `==`, `!=` | Equality comparison. |
+| `in`, `not_in` | Membership comparison. |
+
+Scalar expression nodes:
+
+| Node | Meaning |
+| --- | --- |
+| `{param: name}` | Read a candidate value from `spec.name`. |
+| `{const: value}` | Use a literal value. |
+| `{op: add, args: [...]}` | Add scalar expressions. |
+| `{op: sub, args: [...]}` | Subtract scalar expressions from the first argument. |
+| `{op: mul, args: [...]}` | Multiply scalar expressions. |
+| `{op: div, args: [...]}` | Divide the first argument by each following argument. |
+
+For example, this constraint requires `batch_size * workers <= 256`:
+
+```yaml
+constraints:
+  - id: total-worker-batch-limit
+    description: Total worker batch must fit the memory budget.
+    expr:
+      compare:
+        left:
+          op: mul
+          args:
+            - {param: batch_size}
+            - {param: workers}
+        op: "<="
+        right: {const: 256}
+```
+
+If a candidate violates a constraint, OptPilot rejects it before calling the evaluator and records the failed constraint id in candidate evidence.
+
 `files` candidates are generated file sets. `trialWorkspace` seeds the workspace; the method returns references to generated files; the materializer copies those files into `candidate.materialize.root`.
+
+Environment field fragments:
 
 ```yaml
 trialWorkspace:
@@ -320,6 +427,8 @@ candidate:
 
 `opaque` candidates are for custom method/environment pairs that share their own payload semantics:
 
+Candidate field fragment:
+
 ```yaml
 candidate:
   format: opaque
@@ -330,6 +439,8 @@ candidate:
 ## Method Config
 
 A method config describes candidate proposal code and declares which environment contracts it accepts.
+
+The block below is an annotated field template, not a runnable example file. A real method config should choose one entrypoint style and only include the fields it uses.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -359,12 +470,20 @@ accepts:
       - candidate.parameters.schema
     capabilities: []
 
+# Optional: use only when this method submits a known candidate shape.
+produces:
+  format: parameters
+  parameters:
+    schema:
+      x:
+        valueType: float
+
 # Optional method runtime. Useful for command methods with their own dependencies.
 runtime:
   sandbox: host          # enum: host | container
 ```
 
-For a first runnable method config, the minimum important fields are usually `id`, `entrypoint`, and `accepts`.
+For a first runnable method config, the minimum important fields are usually `id`, `entrypoint`, and `accepts`. Add `produces` when the method always submits a known candidate shape; OptPilot compares it structurally with the environment candidate contract. Omit `produces` for schema-general methods that read `candidate.parameters.schema` and generate candidates for whatever parameter schema the environment declares.
 
 Batch Python methods can implement:
 
@@ -395,6 +514,8 @@ Command methods receive a JSON request on stdin unless `{input_file}` is present
 
 A study config binds one environment config to one method config.
 
+The block below is an annotated field template. [Getting Started](getting-started.md) shows a complete runnable study config from `examples/studies/`.
+
 ```yaml
 apiVersion: optpilot.io/v1
 config: study
@@ -413,11 +534,6 @@ objective:
   aggregation: mean      # enum: mean | median | min | max | sum | last | weighted_mean
   secondaryMetrics: []
 
-instances:
-  source: files          # enum: none | inline | files | sampler
-  paths:
-    - ../environments/my_environment/instances/default.yaml
-
 budget:
   maxTrials: 10
   maxFailures: 5
@@ -435,26 +551,16 @@ reproducibility:
   seed: 0
 ```
 
-Instance alternatives:
-
-```yaml
-instances:
-  source: inline
-  value:
-    target_x: 4.0
-```
-
-```yaml
-instances:
-  source: sampler
-  sampler:
-    python: user_catalog.environments.my_environment.instances:Sampler
-    count: 5
-    settings:
-      base: 4.0
-```
+A study config does not describe domain inputs directly. If the selected
+environment needs a scenario, dataset, query, simulator argument set, or
+benchmark case list, put that in the environment config's `evaluator.settings`
+or create another environment config variant. This keeps studies small: they
+choose the environment, method, objective, budget, runtime, evidence policy,
+and seed.
 
 Containerized environment execution:
+
+Study `execution.runtime` fragment:
 
 ```yaml
 execution:
@@ -470,6 +576,33 @@ execution:
         dockerfile: Dockerfile.environment
         tag: my-env:latest
 ```
+
+### Environment Variants And Inputs
+
+Environment configs are the reusable place to bind evaluator-specific inputs.
+Use multiple environment YAML files when the same evaluator should be run with
+different datasets, fidelity levels, simulator arguments, case suites, or
+metric extraction settings.
+
+For example, these are separate environment configs rather than different
+OptPilot study concepts:
+
+```text
+user_catalog/environments/my_benchmark/
+  environment_small.yaml
+  environment_large.yaml
+  evaluator.py
+  assets/
+```
+
+Both files can point to the same evaluator but use different `evaluator.settings`.
+The study then chooses which environment variant to run.
+
+When an environment needs to evaluate several internal cases for one candidate,
+implement that loop inside the evaluator or a custom adapter. The evaluator
+still returns one OptPilot result with metric values, output files, records,
+and event summary. If per-case details matter, write them as configured
+`records` or `outputFiles` so they appear in evidence.
 
 ## JSON Schema Files
 

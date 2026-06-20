@@ -12,11 +12,6 @@ objective:
   direction: maximize
   secondaryMetrics: [delivered_count, expired_count, mean_latency]
 
-instances:
-  source: files
-  paths:
-    - ../environments/strategic_airlift_devs/instances/sa_default.yaml
-
 budget:
   maxTrials: 4
 

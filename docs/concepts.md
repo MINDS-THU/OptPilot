@@ -42,12 +42,23 @@ OptPilot does not split methods into separate controller and engine concepts. A 
 A study binds one environment config to one method config and chooses the run policy:
 
 - objective metric and direction
-- instances
 - trial budget
 - execution backend and runtime
 - evidence level and reproducibility seed
 
 Environment and method configs should be reusable. Study configs should be concrete.
+
+## Evaluator Settings
+
+Environment-specific inputs live in the environment config, under `evaluator.settings`.
+
+```python
+evaluate(candidate_runtime, context)
+```
+
+The evaluator receives those settings through `context["settings"]`. For a job-shop environment, settings may list validation case files. For a simulator environment, settings may hold scenario parameters. For a data environment, settings may identify dataset splits, query files, or service options. In all cases, OptPilot stores and transports the settings; the environment evaluator interprets and validates them.
+
+If a method also needs read-only access to the same case files or background material, the environment can expose them through `methodContext.references`. If a reusable evaluator does not natively expose the input shape you want, wrap it with an adapter that maps `settings` to the evaluator's native arguments.
 
 ## Candidate
 
@@ -66,6 +77,8 @@ The full candidate contract is more than the format. For example, a file-editing
 ## Compatibility
 
 Method/environment compatibility is explicit:
+
+Method compatibility fragment:
 
 ```yaml
 accepts:
@@ -97,6 +110,8 @@ Users author configs. OptPilot creates runtime folders.
 | `metrics`, `records`, and `outputFiles` say what to collect. | Evidence store records observations, metadata, and file references. |
 
 This distinction keeps the public schema focused on user intent while still supporting retries, parallel trials, container runtimes, and evidence inspection.
+
+`methodContext.references` is the environment-authored place for method-readable background material: natural-language descriptions, data dictionaries, CSV files, SQLite databases, example traces, or other read-only files. Evaluation outputs created later are not placed back into `methodContext`; methods discover those through `EvidenceView.records(...)` and `EvidenceView.artifacts(...)`.
 
 ## Trial Workspace
 

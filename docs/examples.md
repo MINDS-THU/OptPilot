@@ -17,9 +17,9 @@ The examples are organized in the same order as the docs navigation:
 
 ## Shared Job-Shop Comparison Set
 
-The job-shop studies are the main runnable comparison set. They intentionally reuse the same small instances and objective whenever the candidate contract allows it:
+The job-shop studies are the main runnable comparison set. They intentionally reuse the same small validation cases and objective whenever the candidate contract allows it:
 
-- instances: `examples/environments/job_shop_scheduling/instances/ft06_small.yaml` and `examples/environments/job_shop_scheduling/instances/la01_tiny.yaml`
+- validation cases: `examples/environments/job_shop_scheduling/cases/ft06_small.yaml` and `examples/environments/job_shop_scheduling/cases/la01_tiny.yaml`
 - objective: minimize `normalized_makespan`
 - secondary metrics: `makespan`, `tardiness`, and `utilization`
 - budget: one trial per bundled method example
@@ -34,10 +34,10 @@ This lets users compare dependency-free rules, generated file candidates, JobSho
 | Dispatching rules | Turnkey code | None for baselines; `uv sync --extra examples` for JobShopLib wrapper | Native and JobShopLib dispatching rules |
 | Simulated annealing | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's metaheuristic solver |
 | OR-Tools CP-SAT | JobShopLib wrapper | `uv sync --extra examples` | Reusing JobShopLib's constraint-programming solver |
-| Reinforcement learning | Runnable Stable-Baselines3 code | `uv sync --extra examples` | Training on method-owned samples and rolling out schedules on shared validation instances |
+| Reinforcement learning | Runnable Stable-Baselines3 code | `uv sync --extra examples` | Training on method-owned samples and rolling out schedules on shared validation cases |
 | LLM code-writing methods | Runnable file-editor code | Provider credentials only for real LLM edits; bundled baseline path runs without credentials | Agents that write `dispatch_rule.py` or `solver.py` |
 | LLM heuristic repositories | Runnable local fixture plus templates | None for local fixture; upstream clone, dependency install, command wiring, and often provider credentials for real repositories | Wrapping existing LLM search repositories |
-| DEVS-Gen simulation environments | Advanced pattern | Generated simulator tree under `resource/`; provider credentials only for real LLM edits | Wrapping generated simulation projects as OptPilot environments |
+| DEVS-Gen simulation environments | Advanced pattern | Generated simulator tree under `resource/`; `uv sync --extra sa` for the bundled Strategic Airlift simulator; provider credentials only for real LLM edits | Wrapping generated simulation projects as OptPilot environments |
 
 ## Main Tutorial Environment
 
@@ -78,7 +78,7 @@ The upstream [JobShopLib package](https://github.com/Pabloo22/job_shop_lib/tree/
 - `job_shop_lib.constraint_programming.ORToolsSolver`
 - `job_shop_lib.reinforcement_learning.SingleJobShopGraphEnv`
 
-The bundled reinforcement-learning study trains a small Stable-Baselines3 policy on separate training instances, then rolls it out on the shared validation instances. A user-owned RL method can load a checkpoint, change the policy class, or train for longer while emitting the same schedule-solution candidate used by the solver wrappers.
+The bundled reinforcement-learning study trains a small Stable-Baselines3 policy on separate training cases, then rolls it out on the shared validation cases. A user-owned RL method can load a checkpoint, change the policy class, or train for longer while emitting the same schedule-solution candidate used by the solver wrappers.
 
 Support modules such as JobShopLib generation, graphs, benchmarking, and visualization are useful around experiments, but they are not method wrappers by themselves. Keep those dependencies in method code or analysis tooling unless your environment genuinely evaluates them.
 
@@ -147,7 +147,7 @@ examples/
     sa_*.yaml
 ```
 
-Environment and method directories own reusable implementation code plus reusable config variants. Study files are concrete run plans: each study chooses one environment config, one method config, objective, instances, budget, and runtime policy.
+Environment and method directories own reusable implementation code plus reusable config variants. Study files are concrete run plans: each study chooses one environment config, one method config, objective, budget, and runtime policy.
 
 ## Adapting An Example
 

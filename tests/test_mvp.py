@@ -42,6 +42,26 @@ from optpilot.ui.server import (
 
 
 class MvpIntegrationTest(unittest.TestCase):
+    def test_openai_file_editor_rejects_empty_edit_payloads(self) -> None:
+        from examples.methods.openai_file_editor.method import _extract_edited_files
+
+        with self.assertRaisesRegex(ValueError, "non-empty `files` list"):
+            _extract_edited_files({"summary": "No changes."}, ["dispatch_rule.py"])
+
+        with self.assertRaisesRegex(ValueError, "not editable"):
+            _extract_edited_files(
+                {"files": [{"path": "other.py", "content": "print('nope')\n"}]},
+                ["dispatch_rule.py"],
+            )
+
+        self.assertEqual(
+            _extract_edited_files(
+                {"files": [{"path": "dispatch_rule.py", "content": ""}]},
+                ["dispatch_rule.py"],
+            ),
+            {"dispatch_rule.py": ""},
+        )
+
     def test_sample_study_runs_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
@@ -101,6 +121,9 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("scheduler_identity", trials[0])
             for observation in observations:
                 self.assertIn("throughput", observation["metric_values"])
+                self.assertTrue(
+                    any(Path(output_file["path"]).name == "metrics.csv" for output_file in observation["output_files"])
+                )
                 self.assertGreaterEqual(observation["resource_usage"]["wallClockSeconds"], 0.0)
                 self.assertEqual(observation["provenance"]["seed"], 7)
                 self.assertEqual(
@@ -149,79 +172,8 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(observations[0]["status"], "success")
             self.assertIn("normalized_makespan", observations[0]["metric_values"])
 
-    def test_distribution_scope_is_reproducible(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
-        base_spec["metadata"]["name"] = "toy-distribution-repro"
-        base_spec["instances"] = {
-            "mode": "Distribution",
-            "definition": {
-                "sampleCount": 3,
-                "sampler": {
-                    "implementation": "builtin.parameter_sampler",
-                    "config": {
-                        "target_x": [3.5, 4.5],
-                        "target_y": [6, 8],
-                    },
-                },
-            },
-        }
-        base_spec["stopping"]["maxTrials"] = 8
-        base_spec["method"]["config"]["batchSize"] = 4
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            spec_path = Path(tmp_dir) / "distribution.yaml"
-            spec_path.write_text(yaml.safe_dump(base_spec, sort_keys=False), encoding="utf-8")
-
-            first = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
-            second = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
-
-            first_observations = self._read_jsonl(Path(first.run_dir) / "observations.jsonl")
-            second_observations = self._read_jsonl(Path(second.run_dir) / "observations.jsonl")
-
-            self.assertEqual(first.best_metric, second.best_metric)
-            self.assertEqual(
-                sorted(self._metric_signature(entry) for entry in first_observations),
-                sorted(self._metric_signature(entry) for entry in second_observations),
-            )
-
-    def test_instance_set_aggregation_and_minimize_direction(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
-        base_spec["metadata"]["name"] = "toy-instance-set-minimize"
-        base_spec["objective"]["primaryMetric"] = {"name": "cycle_time", "direction": "minimize"}
-        base_spec["instances"] = {
-            "mode": "InstanceSet",
-            "definition": {
-                "instanceRefs": ["instance_a.yaml", "instance_b.yaml"],
-            },
-        }
-        base_spec["stopping"]["maxTrials"] = 8
-        base_spec["method"]["config"]["batchSize"] = 4
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            (tmp_path / "instance_a.yaml").write_text("target_x: 4.2\ntarget_y: 7\n", encoding="utf-8")
-            (tmp_path / "instance_b.yaml").write_text("target_x: 4.4\ntarget_y: 7\n", encoding="utf-8")
-            spec_path = tmp_path / "instance_set.yaml"
-            spec_path.write_text(yaml.safe_dump(base_spec, sort_keys=False), encoding="utf-8")
-            study_spec = load_expanded_study_spec(str(spec_path))
-            instance_context = study_spec.method_instance_context()
-
-            self.assertEqual([item["id"] for item in instance_context], ["instance_a", "instance_b"])
-            self.assertEqual(instance_context[0]["payload"]["_optpilot_instance_id"], "instance_a")
-
-            summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
-            observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
-            best_cycle_time = min(entry["metric_values"]["cycle_time"] for entry in observations)
-
-            self.assertEqual(summary.best_metric, best_cycle_time)
-            for observation in observations:
-                self.assertEqual(observation["instance_descriptor"]["count"], 2)
-                self.assertGreaterEqual(len(observation["output_files"]), 2)
-
     def test_documented_objective_aggregation_modes(self) -> None:
-        instance_results = [
+        metric_results = [
             {"metric_values": {"score": 1.0}},
             {"metric_values": {"score": 3.0}},
             {"metric_values": {"score": 7.0}},
@@ -242,7 +194,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     "primaryMetric": {"name": "score", "direction": "maximize"},
                     "aggregation": {"mode": mode},
                 }
-                self.assertEqual(_aggregate_metric_values(instance_results, objective)["score"], value)
+                self.assertEqual(_aggregate_metric_values(metric_results, objective)["score"], value)
 
     def test_authoring_config_accepts_weighted_mean_aggregation(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -272,8 +224,49 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(spec["objective"]["aggregation"]["mode"], "weighted_mean")
 
-    def test_weighted_mean_supports_per_instance_weights(self) -> None:
-        instance_results = [
+    def test_study_config_rejects_top_level_instances(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "instances_study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "instances-study",
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "instances": {"source": "files", "paths": ["unused.yaml"]},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "instances"):
+                compile_authoring_config(study_path)
+
+    def test_job_shop_case_settings_match_method_references(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        spec = compile_authoring_config(repo_root / "examples" / "studies" / "job_shop_ortools_cpsat.yaml")
+
+        settings_cases = {
+            case["id"]
+            for case in spec["environment"]["adapter"]["config"]["evaluate"]["config"]["cases"]
+        }
+        reference_cases = {
+            reference["name"]
+            for reference in spec["candidate"]["context"]["methodContext"]["references"]
+            if reference.get("type") == "job_shop_case"
+        }
+
+        self.assertEqual(reference_cases, settings_cases)
+        self.assertEqual(settings_cases, {"ft06_small", "la01_tiny"})
+
+    def test_weighted_mean_supports_per_result_weights(self) -> None:
+        metric_results = [
             {"metric_values": {"score": 1.0}},
             {"metric_values": {"score": 3.0}},
             {"metric_values": {"score": 7.0}},
@@ -284,18 +277,13 @@ class MvpIntegrationTest(unittest.TestCase):
             "aggregation": {"mode": "weighted_mean", "weights": {"score": [1, 1, 2, 2]}},
         }
 
-        self.assertEqual(_aggregate_metric_values(instance_results, objective)["score"], 6.0)
+        self.assertEqual(_aggregate_metric_values(metric_results, objective)["score"], 6.0)
 
     def test_candidate_parallelism_reduces_elapsed_time(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         base_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
         base_spec["metadata"]["name"] = "toy-parallel-check"
-        base_spec["instances"] = {
-            "mode": "FixedInstance",
-            "definition": {
-                "instance": {"target_x": 4.2, "target_y": 7, "sleep_seconds": 0.2},
-            },
-        }
+        base_spec["environment"]["adapter"]["config"]["evaluate"]["config"]["sleep_seconds"] = 0.2
         base_spec["stopping"]["maxTrials"] = 4
         base_spec["method"]["config"]["batchSize"] = 4
         base_spec["execution"]["parallelism"]["candidateParallelism"] = 4
@@ -511,7 +499,15 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                         "methodContext": {
                             "instructions": ["instructions.md"],
-                            "references": [{"name": "historical_database", "path": "history.db"}],
+                            "references": [
+                                {
+                                    "name": "historical_database",
+                                    "path": "history.db",
+                                    "type": "sqlite",
+                                    "description": "Historical evaluation rows for prompt context.",
+                                    "mimeType": "application/vnd.sqlite3",
+                                }
+                            ],
                         },
                         "metrics": {"source": "stdout", "keys": ["score"]},
                     },
@@ -567,6 +563,11 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(candidate_context["files"]["root"], "candidate")
             self.assertEqual(candidate_context["methodContext"]["instructions"], [str(instructions.resolve())])
             self.assertEqual(candidate_context["methodContext"]["references"][0]["path"], str(database.resolve()))
+            self.assertEqual(candidate_context["methodContext"]["references"][0]["type"], "sqlite")
+            self.assertEqual(
+                candidate_context["methodContext"]["references"][0]["description"],
+                "Historical evaluation rows for prompt context.",
+            )
             self.assertEqual(candidate_context["capabilities"][0]["id"], "historical_db_query")
             self.assertEqual(adapter_config["workspace"]["copy"][1]["from"], str(database.resolve()))
             self.assertEqual(adapter_config["workspace"]["copy"][1]["to"], "database.db")
@@ -934,9 +935,6 @@ class MvpIntegrationTest(unittest.TestCase):
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml"
         raw_spec = compile_authoring_config(spec_path)
         raw_spec["stopping"]["maxTrials"] = 4
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -955,7 +953,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(first_observation["provenance"]["backend_identity"]["implementation"], "builtin.local_backend")
             output_file_names = {candidate["name"]: candidate for candidate in first_observation["output_files"] if "name" in candidate}
             self.assertIn("candidate_payload", output_file_names)
-            self.assertIn("instance", output_file_names)
+            self.assertIn("settings", output_file_names)
             self.assertIn("metrics", output_file_names)
             self.assertIn("stdout", output_file_names)
             self.assertIn("stderr", output_file_names)
@@ -1017,10 +1015,6 @@ class MvpIntegrationTest(unittest.TestCase):
                         "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "methodConfig": "command_stdin_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
-                        "instances": {
-                            "source": "files",
-                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
-                        },
                         "budget": {"maxTrials": 2},
                         "execution": {"backend": "local", "parallelism": 2, "timeoutSeconds": 120},
                     },
@@ -1097,10 +1091,6 @@ class MvpIntegrationTest(unittest.TestCase):
                         "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "methodConfig": "command_file_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
-                        "instances": {
-                            "source": "files",
-                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
-                        },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
                     },
@@ -1225,10 +1215,6 @@ class MvpIntegrationTest(unittest.TestCase):
                         "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                         "methodConfig": "container_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
-                        "instances": {
-                            "source": "files",
-                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
-                        },
                         "budget": {"maxTrials": 1},
                         "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
                     },
@@ -1449,7 +1435,10 @@ class MvpIntegrationTest(unittest.TestCase):
                         "apiVersion": "optpilot.io/v1",
                         "config": "environment",
                         "id": "custom-extractor-env",
-                        "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                        "evaluator": {
+                            "python": "tests.fixtures.catalog.toy_factory_env:evaluate",
+                            "settings": {"target_x": 4.2, "target_y": 7},
+                        },
                         "candidate": {
                             "format": "parameters",
                             "description": "Toy parameters.",
@@ -1488,10 +1477,6 @@ class MvpIntegrationTest(unittest.TestCase):
                         "environmentConfig": "custom_extractors_env.yaml",
                         "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "fixed_parameter_method.yaml"),
                         "objective": {"metric": "throughput", "direction": "maximize"},
-                        "instances": {
-                            "source": "files",
-                            "paths": [str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml")],
-                        },
                         "budget": {"maxTrials": 1},
                     },
                     sort_keys=False,
@@ -1501,45 +1486,18 @@ class MvpIntegrationTest(unittest.TestCase):
 
             summary = run_study(str(study_path), output_root=tmp_dir)
             observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
-            records = EvidenceView(LocalEvidenceStore.open_run_dir(Path(summary.run_dir)), load_study_spec(str(study_path))).records("custom_events")
+            evidence = EvidenceView(LocalEvidenceStore.open_run_dir(Path(summary.run_dir)), load_study_spec(str(study_path)))
+            records = evidence.records("custom_events")
+            artifacts = evidence.artifacts(name="records_to_extract_report")
+            decision_context = evidence.decision_context()
 
         self.assertEqual(summary.best_metric, 33.0)
         self.assertEqual(observations[0]["metric_values"]["throughput"], 33.0)
         self.assertEqual([row["record"]["value"] for row in records], ["recorded", "recorded"])
-
-    def test_custom_sampler_generates_instance_batch(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            study_path = Path(tmp_dir) / "custom_sampler.yaml"
-            study_path.write_text(
-                yaml.safe_dump(
-                    {
-                        "apiVersion": "optpilot.io/v1",
-                        "config": "study",
-                        "name": "custom-sampler",
-                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
-                        "objective": {"metric": "throughput", "direction": "maximize"},
-                        "instances": {
-                            "source": "sampler",
-                            "sampler": {
-                                "python": "tests.fixtures.bad_targets:CustomSampler",
-                                "count": 2,
-                                "settings": {"base": 4.0},
-                            },
-                        },
-                        "budget": {"maxTrials": 1},
-                    },
-                    sort_keys=False,
-                ),
-                encoding="utf-8",
-            )
-            study_spec = load_study_spec(str(study_path))
-
-        self.assertEqual(
-            study_spec.build_instance_batch(__import__("random").Random(0)),
-            [{"target_x": 4.0, "target_y": 7}, {"target_x": 5.0, "target_y": 7}],
-        )
+        self.assertEqual(len(artifacts), 1)
+        self.assertEqual(artifacts[0]["trial_id"], observations[0]["trial_id"])
+        self.assertEqual(decision_context["record_streams"][0]["name"], "custom_events")
+        self.assertTrue(any(item["name"] == "records_to_extract_report" for item in decision_context["recent_output_files"]))
 
     def test_environment_config_rejects_malformed_custom_hook_refs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1626,18 +1584,6 @@ class MvpIntegrationTest(unittest.TestCase):
                 },
                 "execution.runtime.sandbox",
             ),
-            (
-                {
-                    "instances": {
-                        "source": "sampler",
-                        "sampler": {
-                            "python": "python:tests.fixtures.bad_targets:CustomSampler",
-                            "settings": {"target_x": [1, 2]},
-                        },
-                    },
-                },
-                "instances.sampler.python",
-            ),
         ]
         for overrides, error in cases:
             with self.subTest(error=error):
@@ -1662,9 +1608,6 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-resume-run"
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
 
@@ -1690,9 +1633,6 @@ class MvpIntegrationTest(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_user_method.yaml")
         raw_spec["metadata"]["name"] = "toy-branch-run"
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["stopping"]["maxTrials"] = 1
 
@@ -1759,7 +1699,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "runtimeContract": {"timeoutSeconds": 30},
                 },
                 "objective": {"primaryMetric": {"name": "score", "direction": "maximize"}},
-                "instances": {"mode": "FixedInstance", "definition": {"instance": {}}},
                 "candidate": {
                     "format": "files",
                     "context": {
@@ -1862,9 +1801,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-container-backend"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -1984,9 +1920,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["method"]["config"]["candidates"] = [{"x": 99.0, "y": 7, "mode": "balanced"}]
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "invalid.yaml"
@@ -2014,9 +1947,6 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 99.0, "y": 7, "mode": "balanced"},
             {"x": 4.2, "y": 7, "mode": "balanced"},
         ]
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "max_failures.yaml"
@@ -2040,9 +1970,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-cli-failure"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["environment"]["adapter"]["config"]["evaluate"]["command"] = [
             "python3",
             "-c",
@@ -2068,9 +1995,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-invalid-target-output"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["environment"]["adapter"]["config"]["evaluate"]["callable"] = "tests.fixtures.bad_targets:non_numeric_metric"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2090,9 +2014,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-cli-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["environment"]["adapter"]["config"]["evaluate"]["timeoutSeconds"] = 1
         raw_spec["environment"]["adapter"]["config"]["evaluate"]["command"] = [
             "python3",
@@ -2116,9 +2037,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-resource-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
         raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
         raw_spec["environment"]["runtimeContract"] = {"timeoutSeconds": 30}
@@ -2172,21 +2090,20 @@ class MvpIntegrationTest(unittest.TestCase):
                         "candidateRoot": str(simulator_root),
                     },
                     {
-                        "duration": 600.0,
-                        "num_aircraft": 2,
-                        "pallet_interval": 20.0,
-                        "pallet_expiration_time": 120.0,
-                        "flight_time": 30.0,
-                        "unload_time": 2.0,
-                        "return_time": 30.0,
-                        "maintenance_time": 10.0,
-                        "timeoutSeconds": 1,
-                    },
-                    {
                         "workspace": str(workspace),
-                        "instance_index": 0,
                         "trial_id": "trial-timeout",
                         "study_id": "study-timeout",
+                        "settings": {
+                            "duration": 600.0,
+                            "num_aircraft": 2,
+                            "pallet_interval": 20.0,
+                            "pallet_expiration_time": 120.0,
+                            "flight_time": 30.0,
+                            "unload_time": 2.0,
+                            "return_time": 30.0,
+                            "maintenance_time": 10.0,
+                            "timeoutSeconds": 1,
+                        },
                     },
                 )
 
@@ -2206,9 +2123,6 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "subprocess_success.yaml"
@@ -2228,12 +2142,7 @@ class MvpIntegrationTest(unittest.TestCase):
         raw_spec["metadata"]["name"] = "toy-subprocess-timeout"
         raw_spec["stopping"]["maxTrials"] = 1
         raw_spec["method"]["config"]["batchSize"] = 1
-        raw_spec["instances"] = {
-            "mode": "FixedInstance",
-            "definition": {
-                "instance": {"target_x": 4.2, "target_y": 7, "sleep_seconds": 5.0},
-            },
-        }
+        raw_spec["environment"]["adapter"]["config"]["evaluate"]["config"]["sleep_seconds"] = 5.0
         raw_spec["execution"]["backend"]["implementation"] = "builtin.local_subprocess_backend"
         raw_spec["execution"].setdefault("defaults", {})["resourceProfile"] = {"timeoutSeconds": 1}
         raw_spec["method"].setdefault("resourceProfile", {})["timeoutSeconds"] = 1
@@ -2304,7 +2213,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "runtimeContract": {"timeoutSeconds": 30},
                 },
                 "objective": {"primaryMetric": {"name": "score", "direction": "maximize"}},
-                "instances": {"mode": "FixedInstance", "definition": {"instance": {}}},
                 "candidate": {
                     "format": "parameters",
                     "context": {"candidate": {"format": "parameters"}},
@@ -2361,9 +2269,6 @@ class MvpIntegrationTest(unittest.TestCase):
             {"x": 4.2, "y": 7, "mode": "balanced"},
             {"x": 99.0, "y": 7, "mode": "balanced"},
         ]
-        raw_spec["instances"]["definition"]["instanceRef"] = str(
-            repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"
-        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             spec_path = Path(tmp_dir) / "mixed.yaml"
@@ -2612,7 +2517,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "backend": "local",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
-                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
 
@@ -2635,15 +2539,34 @@ class MvpIntegrationTest(unittest.TestCase):
                     "backend": "local",
                     "parallelism": 1,
                     "timeoutSeconds": 180,
-                    "instances": "",
                 },
             )
 
             self.assertTrue(sa_draft["validation"]["valid"], sa_draft)
-            self.assertEqual(sa_draft["draft"]["instances"]["source"], "files")
-            self.assertEqual(
-                sa_draft["draft"]["instances"]["paths"],
-                [str(repo_root / "examples" / "environments" / "strategic_airlift_devs" / "instances" / "sa_default.yaml")],
+            self.assertNotIn("instances", sa_draft["draft"])
+            incompatible_schedule_draft = _draft_study(
+                examples_state,
+                {
+                    "environment_path": str(repo_root / "examples" / "environments" / "job_shop_scheduling" / "environment_rule_parameters.yaml"),
+                    "method_path": str(repo_root / "examples" / "methods" / "ortools_cpsat_solver" / "method.yaml"),
+                    "name": "bad-schedule-draft",
+                    "metric": "makespan",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "local",
+                    "parallelism": 1,
+                    "timeoutSeconds": 120,
+                },
+            )
+            self.assertFalse(incompatible_schedule_draft["compatibility"]["compatible"])
+            self.assertFalse(incompatible_schedule_draft["validation"]["valid"])
+            self.assertIn(
+                "produced parameter 'solutions' is not accepted by environment candidate.parameters.schema",
+                " ".join(incompatible_schedule_draft["validation"]["errors"]),
+            )
+            self.assertIn(
+                "produced parameter 'solutions' is not accepted by environment candidate.parameters.schema",
+                " ".join(incompatible_schedule_draft["compatibility"]["reasons"]),
             )
 
             container_draft = _draft_study(
@@ -2660,7 +2583,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "containerExecutable": "docker",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
-                    "instances": str(repo_root / "tests" / "fixtures" / "catalog" / "instances" / "toy_factory_case.yaml"),
                 },
             )
             self.assertTrue(container_draft["validation"]["valid"], container_draft)

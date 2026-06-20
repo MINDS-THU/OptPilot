@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import inspect
 from pathlib import Path
-import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import yaml
 
@@ -17,7 +15,6 @@ REQUIRED_TOP_LEVEL = {
     "metadata",
     "environment",
     "objective",
-    "instances",
     "candidate",
     "method",
     "execution",
@@ -39,7 +36,6 @@ SUPPORTED_MUTATION_POLICIES = {
     "TrialWorkspaceOnly",
     "MethodConfigOnly",
 }
-SUPPORTED_EVALUATION_SCOPES = {"FixedInstance", "InstanceSet", "Distribution"}
 SUPPORTED_DIRECTIONS = {"maximize", "minimize"}
 SUPPORTED_AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
 
@@ -68,10 +64,6 @@ class StudySpec:
     @property
     def objective(self) -> Dict[str, Any]:
         return self.raw["objective"]
-
-    @property
-    def instances(self) -> Dict[str, Any]:
-        return self.raw["instances"]
 
     @property
     def method(self) -> Dict[str, Any]:
@@ -114,126 +106,6 @@ class StudySpec:
         if candidate.is_absolute():
             return candidate
         return (self.base_dir / candidate).resolve()
-
-    def load_ref_or_inline(self, field: str, ref_key: str = "instanceRef") -> Dict[str, Any]:
-        data = self.instances.get("definition", {})
-        if ref_key in data:
-            with self.resolve_path(data[ref_key]).open("r", encoding="utf-8") as handle:
-                return yaml.safe_load(handle) or {}
-        return dict(data.get(field, {}))
-
-    def build_instance_batch(self, rng) -> List[Dict[str, Any]]:
-        mode = self.instances["mode"]
-        definition = self.instances.get("definition", {})
-        if mode == "FixedInstance":
-            if "instance" in definition:
-                return [_attach_instance_id(dict(definition["instance"]), "inline")]
-            if "instanceRef" in definition:
-                return [self._load_instance_ref(definition["instanceRef"])]
-            raise ValueError("FixedInstance scope requires 'instance' or 'instanceRef'.")
-        if mode == "InstanceSet":
-            refs = definition.get("instanceRefs", [])
-            if not refs:
-                raise ValueError("InstanceSet scope requires 'instanceRefs'.")
-            return [self._load_instance_ref(ref) for ref in refs]
-        if mode == "Distribution":
-            sampler = definition.get("sampler", {})
-            config = sampler.get("config", {})
-            sample_count = int(definition.get("sampleCount", 1))
-            implementation = sampler.get("implementation", "builtin.parameter_sampler")
-            if implementation != "builtin.parameter_sampler":
-                return _sample_custom_distribution(
-                    implementation,
-                    config,
-                    sample_count,
-                    rng,
-                    python_path=sampler.get("pythonPath", []) or [],
-                )
-            return [_sample_distribution_instance(config, rng) for _ in range(sample_count)]
-        raise NotImplementedError(f"Unsupported instances mode: {mode}")
-
-    def method_instance_context(self) -> List[Dict[str, Any]]:
-        mode = self.instances["mode"]
-        definition = self.instances.get("definition", {})
-        if mode == "FixedInstance":
-            if "instance" in definition:
-                payload = _attach_instance_id(dict(definition["instance"]), "inline")
-                return [{"id": payload["_optpilot_instance_id"], "payload": payload}]
-            if "instanceRef" in definition:
-                return [self._method_instance_ref(definition["instanceRef"])]
-            return []
-        if mode == "InstanceSet":
-            return [self._method_instance_ref(ref) for ref in definition.get("instanceRefs", []) or []]
-        return []
-
-    def _load_instance_ref(self, ref: str) -> Dict[str, Any]:
-        path = self.resolve_path(ref)
-        with path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
-        return _attach_instance_id(dict(payload), path.stem)
-
-    def _method_instance_ref(self, ref: str) -> Dict[str, Any]:
-        path = self.resolve_path(ref)
-        payload = self._load_instance_ref(ref)
-        return {
-            "id": payload["_optpilot_instance_id"],
-            "path": str(path),
-            "payload": payload,
-        }
-
-
-def _sample_distribution_instance(config: Dict[str, Any], rng) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
-    for key, value in config.items():
-        if isinstance(value, list) and len(value) == 2 and all(isinstance(item, (int, float)) for item in value):
-            low, high = value
-            result[key] = rng.uniform(low, high)
-            continue
-        if isinstance(value, list):
-            result[key] = rng.choice(value)
-            continue
-        result[key] = value
-    return result
-
-
-def _attach_instance_id(payload: Dict[str, Any], fallback: str) -> Dict[str, Any]:
-    payload.setdefault("_optpilot_instance_id", str(payload.get("_optpilot_instance_id") or fallback))
-    return payload
-
-
-def _sample_custom_distribution(
-    implementation: str,
-    config: Dict[str, Any],
-    sample_count: int,
-    rng,
-    *,
-    python_path: List[str],
-) -> List[Dict[str, Any]]:
-    from .registry import resolve_component
-
-    for path in reversed([str(Path(item).resolve()) for item in python_path if item]):
-        if path not in sys.path:
-            sys.path.insert(0, path)
-    component = resolve_component("sampler", implementation)
-    payload = {"config": dict(config), "sample_count": sample_count, "rng": rng}
-    sampler_object = component
-    if inspect.isclass(component):
-        sampler_object = component(config)
-    if hasattr(sampler_object, "sample_batch"):
-        samples = sampler_object.sample_batch(sample_count, rng)
-    elif hasattr(sampler_object, "sample"):
-        samples = [sampler_object.sample(rng) for _ in range(sample_count)]
-    elif callable(sampler_object):
-        samples = sampler_object(payload)
-    else:
-        raise TypeError("Custom sampler must be callable or implement sample/sample_batch.")
-    if not isinstance(samples, list):
-        raise TypeError("Custom sampler must return a list of instance dictionaries.")
-    for sample in samples:
-        if not isinstance(sample, dict):
-            raise TypeError("Custom sampler returned a non-object instance.")
-    return samples
-
 
 def load_study_spec(path: str) -> StudySpec:
     spec_path = Path(path).resolve()
@@ -292,12 +164,6 @@ def _validate_study_spec(raw: Dict[str, Any]) -> None:
     if aggregation not in SUPPORTED_AGGREGATIONS:
         raise ValueError(
             f"Unsupported objective aggregation {aggregation!r}; expected one of {sorted(SUPPORTED_AGGREGATIONS)}."
-        )
-
-    scope_mode = raw["instances"].get("mode")
-    if scope_mode not in SUPPORTED_EVALUATION_SCOPES:
-        raise NotImplementedError(
-            f"Unsupported instances mode {scope_mode!r}; implemented modes are {sorted(SUPPORTED_EVALUATION_SCOPES)}"
         )
 
     _require_component("environment.adapter", environment.get("adapter", {}))

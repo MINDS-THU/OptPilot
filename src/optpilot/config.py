@@ -26,7 +26,6 @@ CONFIG_STUDY = "study"
 METHOD_PROTOCOLS = {"batch", "session"}
 CANDIDATE_FORMATS = {"parameters", "files", "opaque"}
 METRIC_SOURCES = {"custom", "return", "file", "stdout", "sqlite"}
-INSTANCE_SOURCES = {"none", "inline", "files", "sampler"}
 OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
 AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
 BACKENDS = {"local", "local_subprocess"}
@@ -83,7 +82,6 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
         },
         "environment": _compile_environment(environment, environment_path, candidate),
         "objective": _compile_objective(study["objective"]),
-        "instances": _compile_instances(study.get("instances"), config_path),
         "candidate": _compile_candidate_contract(environment, environment_path, candidate),
         "method": compiled_method,
         "execution": execution,
@@ -267,6 +265,17 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
     for key in ("context", "capabilities"):
         if requires.get(key) is not None:
             _require_string_list(requires[key], f"{location} accepts.requires.{key}")
+    if method.get("produces") is not None:
+        produced = _normalize_candidate(_require_mapping(method, "produces", location))
+        if produced["format"] not in formats:
+            raise ValueError(
+                f"{location} produces.format {produced['format']!r} must be listed in accepts.formats {formats!r}."
+            )
+        if produced["format"] == "parameters":
+            _validate_parameter_schema(produced.get("parameters", {}).get("schema", {}), f"{location} produces")
+            _validate_parameter_constraints(produced.get("parameters", {}).get("constraints", []), f"{location} produces")
+        if produced["format"] == "files":
+            _validate_file_candidate(produced, f"{location} produces")
     _validate_runtime(method.get("runtime", {}) or {}, f"{location} runtime")
 
 
@@ -283,22 +292,6 @@ def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     budget = _require_mapping(study, "budget", location)
     if int(budget.get("maxTrials", 0) or 0) < 1:
         raise ValueError(f"{location} budget.maxTrials must be a positive integer.")
-
-    instances = study.get("instances", {"source": "none"})
-    if not isinstance(instances, dict):
-        raise ValueError(f"{location} instances must be an object.")
-    source = instances.get("source", "none")
-    if source not in INSTANCE_SOURCES:
-        raise ValueError(f"{location} instances.source must be one of {sorted(INSTANCE_SOURCES)}.")
-    if source == "files":
-        paths = instances.get("paths", [])
-        if not isinstance(paths, list) or not paths:
-            raise ValueError(f"{location} instances.source files requires non-empty paths.")
-    if source == "sampler":
-        sampler = _require_mapping(instances, "sampler", f"{location} instances")
-        _require_plain_python_import(_require_field(sampler, "python", f"{location} instances.sampler"), f"{location} instances.sampler.python")
-        if int(sampler.get("count", 1) or 1) < 1:
-            raise ValueError(f"{location} instances.sampler.count must be a positive integer.")
 
     execution = study.get("execution", {}) or {}
     if not isinstance(execution, dict):
@@ -350,6 +343,27 @@ def _validate_method_environment_compatibility(
                 f"{method_location} is incompatible with {environment_location}: "
                 f"required capability {required!r} is not provided."
             )
+
+    if method.get("produces") is not None:
+        error = candidate_contract_mismatch(candidate, method["produces"])
+        if error:
+            raise ValueError(
+                f"{method_location} is incompatible with {environment_location}: {error}"
+            )
+
+
+def candidate_contract_mismatch(environment_candidate: Dict[str, Any], produced_candidate: Dict[str, Any]) -> str | None:
+    """Return a structural candidate-contract mismatch message, if any.
+
+    Methods may declare the candidate shape they produce with ``produces``. This
+    helper compares that produced shape against the environment candidate
+    contract without relying on environment-specific context path names.
+    """
+
+    return _candidate_contract_mismatch(
+        _normalize_candidate(environment_candidate),
+        _normalize_candidate(produced_candidate),
+    )
 
 
 def _normalize_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,6 +443,98 @@ def _validate_parameter_constraints(constraints: Any, location: str) -> None:
         if "expr" not in constraint:
             raise ValueError(f"{location} candidate.parameters.constraints[{index}] must define expr.")
         _validate_constraint_expr(constraint["expr"], location)
+
+
+def _candidate_contract_mismatch(environment_candidate: Dict[str, Any], produced_candidate: Dict[str, Any]) -> str | None:
+    if produced_candidate["format"] != environment_candidate["format"]:
+        return (
+            f"produces.format {produced_candidate['format']!r} does not match "
+            f"environment candidate.format {environment_candidate['format']!r}."
+        )
+    if produced_candidate["format"] == "parameters":
+        return _parameter_schema_mismatch(
+            environment_candidate.get("parameters", {}).get("schema", {}),
+            produced_candidate.get("parameters", {}).get("schema", {}),
+            "candidate.parameters.schema",
+        )
+    if produced_candidate["format"] == "files":
+        return _file_contract_mismatch(
+            environment_candidate.get("files", {}),
+            produced_candidate.get("files", {}),
+        )
+    if produced_candidate["format"] == "opaque":
+        expected_family = environment_candidate.get("opaque", {}).get("family")
+        produced_family = produced_candidate.get("opaque", {}).get("family")
+        if expected_family and produced_family and expected_family != produced_family:
+            return f"produces.opaque.family {produced_family!r} does not match environment opaque family {expected_family!r}."
+    return None
+
+
+def _parameter_schema_mismatch(environment_schema: Dict[str, Any], produced_schema: Dict[str, Any], location: str) -> str | None:
+    if not isinstance(produced_schema, dict) or not produced_schema:
+        return f"produces.{location} must be a non-empty object."
+    if not isinstance(environment_schema, dict) or not environment_schema:
+        return f"environment {location} is not available."
+    for name, produced_definition in produced_schema.items():
+        environment_definition = environment_schema.get(name)
+        if environment_definition is None:
+            return f"produced parameter {name!r} is not accepted by environment {location}."
+        mismatch = _parameter_definition_mismatch(environment_definition, produced_definition, f"{location}.{name}")
+        if mismatch:
+            return mismatch
+    return None
+
+
+def _parameter_definition_mismatch(environment_definition: Dict[str, Any], produced_definition: Dict[str, Any], location: str) -> str | None:
+    environment_type = environment_definition.get("valueType")
+    produced_type = produced_definition.get("valueType")
+    if produced_type != environment_type:
+        return f"produces.{location}.valueType {produced_type!r} does not match environment valueType {environment_type!r}."
+    if produced_type == "categorical":
+        environment_values = environment_definition.get("values")
+        produced_values = produced_definition.get("values")
+        if isinstance(environment_values, list) and isinstance(produced_values, list):
+            missing = [value for value in produced_values if value not in environment_values]
+            if missing:
+                return f"produces.{location}.values contains values not accepted by the environment: {missing!r}."
+    if produced_type == "array":
+        if "items" in produced_definition and "items" in environment_definition:
+            return _parameter_definition_mismatch(environment_definition["items"], produced_definition["items"], f"{location}.items")
+    if produced_type == "object":
+        environment_properties = environment_definition.get("properties", {})
+        produced_properties = produced_definition.get("properties", {})
+        for required in environment_definition.get("required", []) or []:
+            if isinstance(produced_properties, dict) and required not in produced_properties:
+                return f"produces.{location}.properties is missing required environment property {required!r}."
+        if isinstance(produced_properties, dict):
+            for name, child in produced_properties.items():
+                if not isinstance(environment_properties, dict) or name not in environment_properties:
+                    return f"produces.{location}.properties.{name} is not accepted by the environment."
+                mismatch = _parameter_definition_mismatch(environment_properties[name], child, f"{location}.properties.{name}")
+                if mismatch:
+                    return mismatch
+    return None
+
+
+def _file_contract_mismatch(environment_files: Dict[str, Any], produced_files: Dict[str, Any]) -> str | None:
+    allow = set(environment_files.get("allow", []) or environment_files.get("required", []) or [])
+    produced_paths = {
+        str(item.get("path"))
+        for key in ("editable", "required")
+        for item in produced_files.get(key, []) or []
+        if isinstance(item, dict) and item.get("path")
+    }
+    produced_paths.update(
+        str(item)
+        for key in ("required", "allow")
+        for item in produced_files.get(key, []) or []
+        if isinstance(item, str)
+    )
+    if allow and produced_paths:
+        missing = sorted(path for path in produced_paths if path not in allow)
+        if missing:
+            return f"produces.files paths are not allowed by the environment: {missing!r}."
+    return None
 
 
 def _validate_constraint_expr(expr: Any, location: str) -> None:
@@ -785,6 +891,7 @@ def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate:
         "config": settings,
         "settings": deepcopy(method.get("settings", {})),
         "compatibility": _compile_accepts(method.get("accepts", {})),
+        "produces": deepcopy(method.get("produces")),
         "resourceProfile": dict(method.get("resourceProfile", {})),
         "sandboxSpec": {},
     }
@@ -817,34 +924,6 @@ def _compile_objective(objective: Dict[str, Any]) -> Dict[str, Any]:
         "secondaryMetrics": list(objective.get("secondaryMetrics", [])),
         "aggregation": {"mode": objective.get("aggregation", "mean")},
     }
-
-
-def _compile_instances(instances: Any, study_path: Path) -> Dict[str, Any]:
-    data = dict(instances or {"source": "none"})
-    source = data.get("source", "none")
-    if source == "none":
-        return {"mode": "FixedInstance", "definition": {"instance": {}}}
-    if source == "inline":
-        return {"mode": "FixedInstance", "definition": {"instance": dict(data.get("value", {}))}}
-    if source == "files":
-        paths = [str(_resolve_path(path, study_path)) for path in data.get("paths", []) or []]
-        if len(paths) == 1:
-            return {"mode": "FixedInstance", "definition": {"instanceRef": paths[0]}}
-        return {"mode": "InstanceSet", "definition": {"instanceRefs": paths}}
-    if source == "sampler":
-        sampler = data["sampler"]
-        return {
-            "mode": "Distribution",
-            "definition": {
-                "sampler": {
-                    "implementation": _component_ref(sampler["python"]),
-                    "config": dict(sampler.get("settings", {})),
-                    "pythonPath": [str(_resolve_path(path, study_path)) for path in sampler.get("pythonPath", []) or []],
-                },
-                "sampleCount": int(sampler.get("count", 1)),
-            },
-        }
-    raise ValueError(f"Unsupported instances.source: {source}")
 
 
 def _compile_execution(

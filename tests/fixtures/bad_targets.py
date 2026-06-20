@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def non_numeric_metric(candidate, instance, context):
+def non_numeric_metric(candidate, context):
     return {
         "status": "success",
         "metric_values": {
@@ -19,7 +19,7 @@ class CustomAdapter:
         self.definition = definition
         self.study_spec = study_spec
 
-    def evaluate(self, candidate_runtime, instance, context):
+    def evaluate(self, candidate_runtime, context):
         return {
             "status": "success",
             "metric_values": {"throughput": 12.5},

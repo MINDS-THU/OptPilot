@@ -23,7 +23,8 @@ SIMULATION_ARGS = (
 )
 
 
-def evaluate(candidate_runtime: Dict[str, Any], instance: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate(candidate_runtime: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    settings = dict(context.get("settings", {}) or {})
     workspace = Path(candidate_runtime.get("workspace") or context["workspace"]).resolve()
     simulator_root = Path(candidate_runtime.get("candidateRoot") or (workspace / "simulator")).resolve()
     stdout_path = workspace / "sa_events.jsonl"
@@ -32,10 +33,10 @@ def evaluate(candidate_runtime: Dict[str, Any], instance: Dict[str, Any], contex
 
     command = [sys.executable, "-m", "devs_project.run_strategicairlift_d0"]
     for name in SIMULATION_ARGS:
-        if name in instance:
-            command.extend([f"--{name}", str(instance[name])])
+        if name in settings:
+            command.extend([f"--{name}", str(settings[name])])
 
-    timeout_seconds = int(instance.get("timeoutSeconds", 180))
+    timeout_seconds = int(settings.get("timeoutSeconds", 180))
     process = subprocess.Popen(
         command,
         cwd=str(simulator_root),

@@ -25,6 +25,7 @@
       ]
     },
     "settings": {"type": "object"},
+    "produces": {"$ref": "defs/candidate.schema.json#/definitions/candidate"},
     "accepts": {
       "type": "object",
       "additionalProperties": false,

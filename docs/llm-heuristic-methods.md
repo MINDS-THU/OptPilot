@@ -71,7 +71,7 @@ The generated file then follows the same runtime path as any other file candidat
 
 ## Method Config
 
-Each upstream repository gets a small method config.
+Each upstream repository gets a method config. The template below is a complete method config shape; replace the command, repository paths, and generated-file path for your upstream repository.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -137,6 +137,8 @@ The upstream repository produces a file. The environment decides where that file
 
 For the common single-file case, the environment has exactly one editable file:
 
+Environment candidate-contract fragment:
+
 ```yaml
 candidate:
   format: files
@@ -152,6 +154,8 @@ candidate:
 In that case, the adapter can infer the candidate target path and the method config does not need `settings.candidatePath`.
 
 If the environment exposes multiple editable files, set `settings.candidatePath` explicitly:
+
+Method `settings` fragment:
 
 ```yaml
 settings:

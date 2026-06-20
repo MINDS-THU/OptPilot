@@ -101,7 +101,6 @@ class TrialSpec:
     study_id: str
     method_id: str
     candidate: JsonDict
-    instances: List[JsonDict]
     objective: JsonDict
     resource_profile: ResourceProfile
     sandbox_spec: SandboxSpec
@@ -114,7 +113,6 @@ class Observation:
     study_id: str
     candidate_id: str
     environment_id: str
-    instance_descriptor: JsonDict
     status: str
     metric_values: JsonDict
     constraint_results: JsonDict

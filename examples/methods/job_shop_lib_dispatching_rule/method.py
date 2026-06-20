@@ -1,11 +1,11 @@
-"""Method that solves job-shop instances with a JobShopLib dispatching rule."""
+"""Method that solves job-shop cases with a JobShopLib dispatching rule."""
 
 from __future__ import annotations
 
 import uuid
 from typing import Any, Dict, List
 
-from examples.methods.job_shop_lib_solvers import solve_study_instances
+from examples.methods.job_shop_lib_solvers import solve_job_shop_cases
 
 
 JsonDict = Dict[str, Any]
@@ -26,7 +26,7 @@ class JobShopLibDispatchingRuleMethod:
             from job_shop_lib.dispatching.rules import DispatchingRuleSolver
         except ImportError as exc:
             raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --extra examples`.") from exc
-        solutions = solve_study_instances(study_state, lambda: DispatchingRuleSolver(rule))
+        solutions = solve_job_shop_cases(study_state, lambda: DispatchingRuleSolver(rule))
         return [
             {
                 "candidate_id": f"job-shop-lib-dispatch-{uuid.uuid4().hex[:12]}",

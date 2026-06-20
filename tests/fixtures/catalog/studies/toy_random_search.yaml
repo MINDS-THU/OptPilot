@@ -11,11 +11,6 @@ objective:
   metric: throughput
   direction: maximize
 
-instances:
-  source: files
-  paths:
-    - ../instances/toy_factory_case.yaml
-
 budget:
   maxTrials: 12
 

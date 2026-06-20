@@ -21,3 +21,11 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
+
+produces:
+  format: parameters
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}

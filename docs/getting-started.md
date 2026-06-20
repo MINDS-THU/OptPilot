@@ -47,7 +47,7 @@ uv run optpilot ui --open-browser
 
 ## Validate And Run
 
-The first example evaluates weighted dispatch-rule parameters on two small job-shop scheduling instances.
+The first example evaluates weighted dispatch-rule parameters on two small job-shop scheduling cases.
 
 Validate it:
 
@@ -84,14 +84,101 @@ The study uses:
 
 ## Environment Config
 
-The environment config declares a parameter candidate contract:
+The full environment config is:
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: environment
 id: job-shop-rule-parameters
+description: Evaluate weighted dispatch-rule parameters on small job-shop scheduling cases.
+tags: [job-shop, scheduling, parameters, tutorial]
+
+evaluator:
+  python: examples.environments.job_shop_scheduling.evaluator:evaluate
+  timeoutSeconds: 60
+  settings:
+    cases:
+      - id: ft06_small
+        path: cases/ft06_small.yaml
+      - id: la01_tiny
+        path: cases/la01_tiny.yaml
 
 candidate:
+  format: parameters
+  description: Numeric weights for a priority dispatching rule.
+  parameters:
+    schema:
+      remaining_work_weight:
+        valueType: float
+        min: -5.0
+        max: 5.0
+        default: 1.0
+        description: Weight for remaining work in the current job.
+      processing_time_weight:
+        valueType: float
+        min: -5.0
+        max: 5.0
+        default: -1.0
+        description: Weight for the candidate operation duration.
+      machine_ready_weight:
+        valueType: float
+        min: -2.0
+        max: 2.0
+        default: -0.1
+        description: Weight for the selected machine ready time.
+      job_ready_weight:
+        valueType: float
+        min: -2.0
+        max: 2.0
+        default: -0.1
+        description: Weight for the selected job ready time.
+
+metrics:
+  source: return
+  keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
+
+outputFiles:
+  - schedule_*.json
+  - job_shop_metrics*.json
+```
+
+For `format: parameters`, `parameters.schema` is required. It is owned by the environment because the environment decides which parameter names, types, ranges, and defaults it knows how to evaluate.
+
+Parameter schemas can also include cross-parameter constraints, written as a small YAML expression tree. This first example does not need constraints, but they are still supported. See [Parameter Constraints](configuration.md#parameter-constraints) for the supported nodes such as `compare`, `all`, `any`, `not`, `param`, `const`, `add`, `sub`, `mul`, and `div`.
+
+The evaluator converts the parameter candidate into a dispatching rule, simulates a schedule, validates feasibility, and returns metrics. The environment advertises the metric keys it expects from that evaluator, including `normalized_makespan`.
+
+The `evaluator.settings` block is normal environment-owned input to the evaluator. In this example it lists two validation case files. OptPilot passes that object to the Python evaluator as `context["settings"]`; the evaluator decides how to load the files and aggregate results.
+
+## Method Config
+
+The full method config is:
+
+```yaml
+apiVersion: optpilot.io/v1
+config: method
+id: fixed-rule-parameters
+description: Emits one fixed weighted dispatch-rule parameter candidate.
+tags: [baseline, parameters, job-shop, no-api]
+
+entrypoint:
+  python: examples.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
+  protocol: batch
+
+settings:
+  batchSize: 1
+  values:
+    remaining_work_weight: 1.0
+    processing_time_weight: -1.0
+    machine_ready_weight: -0.1
+    job_ready_weight: -0.1
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: []
+
+produces:
   format: parameters
   parameters:
     schema:
@@ -103,47 +190,32 @@ candidate:
         valueType: float
         min: -5.0
         max: 5.0
+      machine_ready_weight:
+        valueType: float
+        min: -2.0
+        max: 2.0
+      job_ready_weight:
+        valueType: float
+        min: -2.0
+        max: 2.0
 ```
 
-It points to a Python evaluator:
+`accepts` is the method-side compatibility declaration. It tells OptPilot which environment candidate formats the method can target. If a method lists `candidate.parameters.schema` under `accepts.requires.context`, it means the method wants OptPilot to provide the environment's parameter schema in the method request context.
 
-```yaml
-evaluator:
-  python: examples.environments.job_shop_scheduling.evaluator:evaluate
-```
+This baseline method is not schema-general. Its method settings contain four fixed values, and the method always returns those four parameter names. Its `produces` block is therefore a method output promise: this method returns a parameter candidate with these fields. It is not an environment-specific block; it is useful for any environment whose candidate contract accepts the same four fields.
 
-The evaluator converts the parameter candidate into a dispatching rule, simulates a schedule, validates feasibility, and returns metrics.
-
-## Method Config
-
-The matching method emits one fixed parameter candidate:
-
-```yaml
-apiVersion: optpilot.io/v1
-config: method
-id: fixed-rule-parameters
-
-entrypoint:
-  python: examples.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
-  protocol: batch
-
-accepts:
-  formats: [parameters]
-  requires:
-    context:
-      - candidate.parameters.schema
-```
-
-`accepts` is the compatibility declaration. It tells OptPilot that this method can work with environments whose candidate format is `parameters` and whose context includes a parameter schema.
+A schema-general method would look different: it would request `candidate.parameters.schema`, inspect whatever fields the selected environment declares, and generate values for those fields at runtime. That kind of method usually omits `produces` because its output shape depends on the environment schema it receives.
 
 ## Study Config
 
-The study binds the environment and method:
+The full study config is:
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: study
 name: job-shop-rule-parameters-baseline
+description: Evaluate a fixed weighted dispatching rule on the job-shop parameter environment.
+tags: [job-shop, baseline, parameters]
 
 environmentConfig: ../environments/job_shop_scheduling/environment_rule_parameters.yaml
 methodConfig: ../methods/fixed_rule_parameters/method.yaml
@@ -151,18 +223,38 @@ methodConfig: ../methods/fixed_rule_parameters/method.yaml
 objective:
   metric: normalized_makespan
   direction: minimize
-
-instances:
-  source: files
-  paths:
-    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
-    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
+  secondaryMetrics: [makespan, tardiness, utilization]
 
 budget:
   maxTrials: 1
+
+execution:
+  backend: local
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0
 ```
 
+The study binds one environment and one method. The objective metric name, `normalized_makespan`, comes from the environment config's `metrics.keys`. The evaluator returns those metric keys after each trial. In the job-shop example, `normalized_makespan` is computed as `makespan / lower_bound`, where `lower_bound` comes from each case file. The study chooses which returned metric is primary and whether lower or higher is better.
+
+The job-shop cases belong to the environment config because they are evaluator inputs. OptPilot does not know job-shop semantics or run a special case loop. It calls the evaluator once per trial:
+
+```python
+evaluate(candidate_runtime, context)
+```
+
+The selected environment decides how to interpret `context["settings"]`. In this job-shop environment, each case file contains machine count, jobs, operations, durations, and optional metadata such as `lower_bound` and `due_date`; the evaluator converts those dictionaries into job-shop problems and averages numeric metrics across the configured cases. A different environment could use `settings` for simulator scenarios, dataset slices, SQL query specs, benchmark cases, or any other environment-owned input shape.
+
+Methods that need to read the same case files can get them through `methodContext.references` in the environment config. That keeps method-visible data explicit without adding a separate OptPilot concept for benchmark cases.
+
 Study paths are resolved from the study file. Environment paths are resolved from the environment file. Method paths are resolved from the method file.
+
+When you run this study, OptPilot compiles the three public YAML files into `study_spec.json` inside the run directory. That compiled spec is evidence of the exact environment, method, objective, evaluator settings, and runtime that were executed.
 
 ## Try File Candidates
 
@@ -203,7 +295,7 @@ See [How A Run Works](how-it-works.md) and [Evidence](evidence.md) for the full 
 uv run optpilot ui --open-browser
 ```
 
-The UI scans `examples/` and `user_catalog/` by default. It lets you browse environments and methods, check compatibility, draft studies, launch runs, and inspect previous run evidence.
+The UI scans `examples/` and `user_catalog/` by default. It lets you browse environments and methods, check compatibility, draft studies, launch runs, and inspect previous run evidence. The command starts a local server; stop it with `Ctrl-C` in the terminal when you are done.
 
 ## Add Your Own Code
 

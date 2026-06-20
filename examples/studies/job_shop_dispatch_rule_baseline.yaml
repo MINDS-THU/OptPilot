@@ -12,12 +12,6 @@ objective:
   direction: minimize
   secondaryMetrics: [makespan, tardiness, utilization]
 
-instances:
-  source: files
-  paths:
-    - ../environments/job_shop_scheduling/instances/ft06_small.yaml
-    - ../environments/job_shop_scheduling/instances/la01_tiny.yaml
-
 budget:
   maxTrials: 1
 
