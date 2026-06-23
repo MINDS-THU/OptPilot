@@ -16,5 +16,6 @@ examples/**/runs/
 frontier_pid_study.yaml
 *.env
 **/runs/
+workspace/
 .optpilot-ui/
 .venv/

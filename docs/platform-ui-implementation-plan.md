@@ -36,18 +36,21 @@ The current local UI already has useful pieces:
 - code-server is correctly treated as an editor service. It should remain
   separate from the assistant runtime.
 
-The prototype still has mismatches:
+The current local UI has already addressed the first demo mismatches:
 
-- Workspace records are derived in the browser from the first catalog entries
-  instead of persisted as real folders.
-- New workspace still means "new environment" in the demo.
-- Separate `Validate` and `Promote` actions imply a workspace has exactly one
-  catalog identity.
-- `Open IDE` is ambiguous because selecting a workspace already opens the
-  embedded IDE.
-- The assistant still looks too similar to page navigation.
-- The assistant is a mocked chat timeline rather than a runtime with tools,
-  durable conversations, file edits, and event streaming.
+- Workspace records are persisted under `.optpilot-ui/workspaces/` and can
+  represent blank, catalog, and run workspaces.
+- New workspace creates a generic project folder, not a new environment.
+- The workspace action is `Register to Catalog`, so one workspace can later map
+  to one or more catalog entries.
+- The separate-window action is labeled `Open Separate Window`; selecting a
+  workspace opens the embedded editor canvas.
+- Assistant sessions, messages, workspace attachments, and context packets are
+  persisted under `.optpilot-ui/agent_sessions/`.
+
+The remaining gaps are the production OpenHands dispatch path, safe file and
+shell tools scoped to attached workspaces, streaming tool/event updates, richer
+workspace tooling, and production isolation for users, secrets, and quotas.
 
 ## Target Mental Model
 
@@ -168,8 +171,8 @@ editable copies for all catalog changes and apply them through
 
 Selecting a workspace focuses that folder in the embedded code-server editor.
 
-Rename the separate-window action from **Open IDE** to **Open Separate Window**.
-This action means:
+The separate-window action is labeled **Open Separate Window**. This action
+means:
 
 ```text
 Open the selected workspace folder in a new browser window backed by code-server.
@@ -822,14 +825,13 @@ as workspace tools declared by the registered environment or method.
 
 ## Frontend Implementation
 
-Immediate demo cleanup:
+Frontend behavior already present in the local UI:
 
-- Rename **Open IDE** to **Open Separate Window**.
-- Replace **Validate** and **Promote** with **Register to Catalog**.
-- Make Assistant a light sidecar launcher that visually extends from the left
-  rail toward the content area.
-- Reduce workspace card font weight.
-- New workspace should create a generic workspace, not a new environment.
+- **Open Separate Window** is the separate-window action.
+- **Register to Catalog** replaces earlier validate/promote wording.
+- Assistant appears as a sidecar launcher in the left rail.
+- Workspace cards use quieter typography and show registration state.
+- New workspace creates a generic workspace, not a new environment.
 
 Workspace UI:
 
@@ -856,43 +858,39 @@ Runs UI:
 - Run detail should keep the structured evidence browser, but the workspace
   gives the assistant full file-level access to artifacts.
 
-## Migration From Current Prototype
+## Migration From Current Local UI
 
-1. **Rename and visual cleanup**
-   Update labels and CSS only. Keep current browser-derived sessions for the
-   demo while changing visible terms.
+Completed foundation:
 
-2. **Persistent workspace registry**
-   Add `.optpilot-ui/workspaces/index.json`, workspace CRUD endpoints, and
-   front-end loading from `/api/workspaces`.
+- Labels, visual cleanup, sidecar assistant launcher, generic workspace
+  creation, and catalog/run workspace open flows are implemented in the local
+  UI.
+- `.optpilot-ui/workspaces/index.json`, workspace CRUD endpoints, and
+  front-end loading from `/api/workspaces` are implemented.
+- Config discovery, registration manifests, validation, diff review, and
+  registration apply endpoints are wired to `Register to Catalog`.
+- Assistant sessions, messages, events, workspace attachments, and context
+  packets are persisted under `.optpilot-ui/agent_sessions/`.
+- `src/optpilot/agent.py` provides the OpenHands configuration/status boundary
+  and the OptPilot tool list exposed to the assistant context.
 
-3. **Generic workspace creation**
-   Replace `newEnvironmentSession()` with `createWorkspace({source_type:
-   "blank"})`.
+Remaining migration work:
 
-4. **Catalog/run workspace open**
-   Add backend endpoints that create workspace records for catalog entries and
-   run directories.
+1. **OpenHands dispatch**
+   Connect queued assistant messages to an OpenHands runtime, translate
+   messages/events, and execute approved OptPilot tools through the platform
+   boundary.
 
-5. **Registration menu**
-   Add config discovery, registration manifest, validation, diff review, and
-   apply endpoints. Wire `Register to Catalog` to open the assistant panel with
-   the menu.
+2. **Event streaming**
+   Stream assistant model output, tool calls, tool results, and approval
+   requests to the panel instead of relying on local queued transcripts.
 
-6. **OpenHands adapter**
-   Add a platform-side `optpilot.agent` module that starts/connects to
-   OpenHands, translates messages/events, and registers OptPilot custom tools.
-
-7. **Event streaming**
-   Store assistant messages/events in `.optpilot-ui/agent_sessions/` and stream
-   them to the panel.
-
-8. **Specialized tools**
+3. **Specialized tools**
    Add the Add-ons page and registry. Register `resource/devs_display_new`,
    GitHub import helpers, dataset profiling, knowledge bases, MCP servers, and
    visualization launchers behind the same capability service.
 
-9. **Production hardening**
+4. **Production hardening**
    Add authentication, per-user workspace roots, quotas, secrets management,
    approval policies, and sandbox profiles.
 

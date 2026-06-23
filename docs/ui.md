@@ -14,6 +14,34 @@ uv run optpilot ui --open-browser
 This starts a local server and opens the browser. Stop the server with `Ctrl-C`
 in the terminal when you are done.
 
+## Assistant-Enabled Startup
+
+For the full Studio experience with the OpenHands assistant and embedded VS Code
+editor, run these services locally:
+
+```bash
+# Terminal 1: OpenHands agent server
+OPENHANDS_SUPPRESS_BANNER=1 uv run agent-server --host 127.0.0.1 --port 8781
+
+# Terminal 2: OptPilot Studio
+uv run optpilot ui --host 127.0.0.1 --port 8866
+```
+
+The embedded VS Code server is managed by OptPilot Studio. Start it from the
+Editor page, or trigger it after the GUI is up:
+
+```bash
+curl -s -X POST http://127.0.0.1:8866/api/code-server/start \
+  -H "Content-Type: application/json" \
+  -d "{\"folder\":\"$PWD\"}" | uv run python -m json.tool
+```
+
+Expected local ports:
+
+- OptPilot Studio: `http://127.0.0.1:8866/`
+- VS Code server: `http://127.0.0.1:8766/`
+- OpenHands agent server: `http://127.0.0.1:8781/`
+
 By default, the UI scans:
 
 - `examples/`

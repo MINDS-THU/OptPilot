@@ -81,7 +81,8 @@ class StableBaselinesJobShopMethod:
             from stable_baselines3.common.env_util import make_vec_env
         except ImportError as exc:
             raise RuntimeError(
-                "This example requires Stable-Baselines3. Install it with `uv sync --extra examples`."
+                "This example requires a working Stable-Baselines3/PyTorch stack. "
+                "Install it with `uv sync --extra examples` and ensure PyTorch can be imported."
             ) from exc
 
         total_timesteps = int(self.settings.get("totalTimesteps", 256))

@@ -21,6 +21,7 @@ import yaml
 
 from optpilot.candidate_materialization import BoundsCandidateValidator, FileCandidateManifestValidator, WorkspaceBundleMaterializer
 from optpilot.adapters import ReadOnlySQLiteQuery
+from optpilot.agent import OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
 from optpilot.cli import build_parser, main as cli_main
 from optpilot.candidate_files import CandidateFileStore, store_candidate_file
 from optpilot.config import compile_authoring_config
@@ -34,7 +35,10 @@ from optpilot.storage import LocalEvidenceStore
 from optpilot.ui.server import (
     CodeServerOptions,
     UiState,
+    _agent_context_packet,
+    _agent_session_by_id,
     _append_agent_message,
+    _append_jsonl,
     _agent_settings_payload,
     _attach_agent_workspace,
     _catalog_payload,
@@ -48,10 +52,29 @@ from optpilot.ui.server import (
     _list_ui_workspaces,
     _list_runs,
     _open_study_workspace,
+    _read_agent_approvals,
+    _read_agent_events,
+    _read_agent_messages,
+    _reject_agent_action,
+    _sync_agent_session,
     _update_agent_settings,
+    _execute_agent_tool,
     _local_code_server_executable,
     _validate_study,
 )
+
+
+def _stable_baselines3_stack_importable() -> bool:
+    if importlib.util.find_spec("stable_baselines3") is None:
+        return False
+    if importlib.util.find_spec("gymnasium") is None:
+        return False
+    try:
+        __import__("stable_baselines3")
+        __import__("gymnasium")
+    except Exception:
+        return False
+    return True
 
 
 class MvpIntegrationTest(unittest.TestCase):
@@ -172,7 +195,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     self.assertEqual(observations[0]["status"], "success")
                     self.assertIn("normalized_makespan", observations[0]["metric_values"])
 
-    @unittest.skipUnless(importlib.util.find_spec("stable_baselines3"), "stable-baselines3 example extra is not installed")
+    @unittest.skipUnless(_stable_baselines3_stack_importable(), "stable-baselines3 example stack is not importable")
     def test_job_shop_stable_baselines_example_runs_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         study_path = repo_root / "examples" / "studies" / "job_shop_rl_stable_baselines.yaml"
@@ -2504,6 +2527,23 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(draft["validation"]["valid"], draft)
             self.assertTrue(Path(draft["path"]).exists())
             self.assertEqual(draft["draft"]["name"], "ui-draft-toy")
+            no_failure_limit_draft = _draft_study(
+                state,
+                {
+                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                    "name": "ui-draft-no-failure-limit",
+                    "metric": "throughput",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "maxFailures": 0,
+                    "backend": "local",
+                    "parallelism": 1,
+                    "timeoutSeconds": 120,
+                },
+            )
+            self.assertTrue(no_failure_limit_draft["validation"]["valid"], no_failure_limit_draft)
+            self.assertNotIn("maxFailures", no_failure_limit_draft["draft"]["budget"])
 
             examples_state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
             examples_state.jobs_dir = Path(tmp_dir) / "example-jobs"
@@ -2651,16 +2691,762 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(message_result["message"]["context"]["selected_workspace"]["id"], workspace["id"])
         self.assertEqual(message_result["message"]["context"]["current_page"], "catalog")
         self.assertEqual(message_result["message"]["context"]["selected_catalog_entry"]["id"], "toy-factory")
-        self.assertEqual(message_result["message"]["context"]["selected_study_plan"]["id"], "plan-1")
-        self.assertEqual(message_result["message"]["context"]["selected_run"]["id"], "run-1")
-        self.assertEqual(message_result["message"]["context"]["code_editor"]["status"], "ready")
-        self.assertEqual(message_result["message"]["context"]["registration_menu"]["status"], "draft")
+        self.assertIsNone(message_result["message"]["context"]["selected_study_plan"])
+        self.assertIsNone(message_result["message"]["context"]["selected_run"])
+        self.assertIsNone(message_result["message"]["context"]["code_editor"])
+        self.assertIsNone(message_result["message"]["context"]["registration_menu"])
         self.assertEqual(message_result["message"]["context"]["runtime"]["runtime"], "openhands")
-        self.assertIn("optpilot_addon_list", message_result["message"]["context"]["available_tools"])
+        self.assertIn("optpilot_workspace_list", message_result["message"]["context"]["available_tools"])
         self.assertEqual(detached["attached_workspace_ids"], [])
         self.assertEqual(persisted["attached_workspace_ids"], [])
         self.assertTrue(any(message["content"].startswith("Inspect this workspace") for message in persisted["messages"]))
         self.assertTrue(any(event["type"] == "workspace_detached" for event in persisted["events"]))
+
+    def test_ui_agent_context_uses_user_facing_page_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Page names"})
+
+            stale_tab_state = {
+                "current_page": "workspace",
+                "assistant_mode": "chat",
+                "selected_catalog_entry": {"kind": "environment", "id": "default-catalog-selection"},
+                "selected_study_plan": {"id": "default-plan"},
+                "selected_run": {"id": "default-run"},
+                "registration_menu": {"status": "draft"},
+                "code_editor": {"status": "ready", "folder": str(tmp_path)},
+            }
+            editor_context = _agent_context_packet(state, session, stale_tab_state)
+            studies_context = _agent_context_packet(state, session, {"current_page": "experiments"})
+
+        self.assertEqual(editor_context["current_page"], "editor")
+        self.assertEqual(studies_context["current_page"], "studies")
+        self.assertIsNone(editor_context["selected_catalog_entry"])
+        self.assertIsNone(editor_context["selected_study_plan"])
+        self.assertIsNone(editor_context["selected_run"])
+        self.assertIsNone(editor_context["registration_menu"])
+        self.assertEqual(editor_context["code_editor"]["status"], "ready")
+        self.assertNotIn("current_page", editor_context["visible_state"])
+
+    def test_ui_agent_tools_enforce_workspace_boundaries_and_approvals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Editable assistant workspace",
+                    "root": str(tmp_path / "editable"),
+                    "source_type": "tool",
+                },
+            )
+            read_only = _create_ui_workspace(
+                state,
+                {
+                    "title": "Read-only assistant workspace",
+                    "root": str(tmp_path / "read-only"),
+                    "mode": "read-only",
+                    "source_type": "catalog",
+                },
+            )
+            unattached = _create_ui_workspace(
+                state,
+                {
+                    "title": "Unattached workspace",
+                    "root": str(tmp_path / "unattached"),
+                },
+            )
+            session = _create_agent_session(state, {"title": "Tool safety"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+            _attach_agent_workspace(state, session["id"], read_only["id"], select=False)
+
+            written = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_write",
+                {"path": "configs/demo.yaml", "content": "config: note\n"},
+            )
+            read = _execute_agent_tool(state, session["id"], "optpilot_file_read", {"path": "configs/demo.yaml"})
+            diff = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_diff",
+                {"path": "configs/demo.yaml", "content": "config: changed\n"},
+            )
+            tree = _execute_agent_tool(state, session["id"], "optpilot_file_tree", {"path": ".", "max_files": 20})
+            shell = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": [sys.executable, "-c", "print('assistant ok')"]},
+            )
+            approval = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": ["uv", "pip", "install", "demo-package"]},
+            )
+            approvals = _read_agent_approvals(state, session["id"])
+            rejected = _reject_agent_action(state, session["id"], approvals[-1]["id"], "Unit test rejection.")
+
+            self.assertTrue(written["ok"], written)
+            self.assertTrue(written["data"]["created"])
+            self.assertEqual(read["data"]["content"], "config: note\n")
+            self.assertIn("-config: note", diff["data"]["diff"])
+            self.assertTrue(any(item["path"] == "configs/demo.yaml" for item in tree["data"]["files"]))
+            self.assertTrue(shell["ok"], shell)
+            self.assertIn("assistant ok", shell["data"]["stdout"])
+            self.assertFalse(approval["ok"])
+            self.assertTrue(approval["data"]["approval_required"])
+            self.assertEqual(rejected["approval"]["status"], "rejected")
+            with self.assertRaises(PermissionError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_write",
+                    {"path": "../outside.txt", "content": "escape\n"},
+                )
+            with self.assertRaises(PermissionError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_write",
+                    {"workspace_id": read_only["id"], "path": "blocked.txt", "content": "nope\n"},
+                )
+            with self.assertRaises(PermissionError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_read",
+                    {"workspace_id": unattached["id"], "path": "README.md"},
+                )
+
+    def test_ui_agent_docs_and_smoke_tools_are_available(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
+        session = _create_agent_session(state, {"title": "Docs and smoke"})
+
+        docs = _execute_agent_tool(
+            state,
+            session["id"],
+            "optpilot_docs_search",
+            {"query": "methodContext references", "limit": 3},
+        )
+        smoke = _execute_agent_tool(
+            state,
+            session["id"],
+            "optpilot_smoke_test_study",
+            {"study_path": str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"), "max_trials": 1},
+        )
+
+        self.assertTrue(docs["ok"], docs)
+        self.assertTrue(docs["data"]["results"])
+        self.assertFalse(smoke["ok"], smoke)
+        self.assertTrue(smoke["data"]["approval_required"])
+
+    def test_ui_agent_session_dispatches_to_openhands_http_bridge(self) -> None:
+        requests = []
+
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                requests.append((self.path, body))
+                if self.path == "/api/conversations":
+                    self._send_json({"id": "oh-test-conversation"})
+                    return
+                if self.path == "/api/conversations/oh-test-conversation/events":
+                    self._send_json({"success": True})
+                    return
+                if self.path == "/api/conversations/oh-test-conversation/ask_agent":
+                    self._send_json({"response": "OpenHands saw the Catalog context."})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/conversations/oh-test-conversation/events/search"):
+                    self._send_json({
+                        "items": [
+                            {
+                                "kind": "MessageEvent",
+                                "source": "agent",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "OpenHands saw the Catalog context."}],
+                                },
+                            }
+                        ],
+                        "next_page_id": None,
+                    })
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Live OpenHands"})
+                result = _append_agent_message(
+                    state,
+                    session["id"],
+                    {
+                        "role": "user",
+                        "title": "User",
+                        "content": "What catalog item is selected?",
+                        "ui_context": {
+                            "current_page": "catalog",
+                            "selected_catalog_entry": {"kind": "environment", "id": "toy-factory"},
+                        },
+                    },
+                )
+                persisted = _agent_session_by_id(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["session"]["status"], "idle")
+        self.assertEqual(result["session"]["openhands_conversation_id"], "oh-test-conversation")
+        self.assertTrue(any(message["content"] == "OpenHands saw the Catalog context." for message in persisted["messages"]))
+        self.assertTrue(any(event["type"] == "openhands_dispatch_completed" for event in persisted["events"]))
+        start_payload = next(body for path, body in requests if path == "/api/conversations")
+        event_payload = next(body for path, body in requests if path.endswith("/events"))
+        self.assertEqual(start_payload["agent"]["llm"]["model"], "openrouter/deepseek/deepseek-v4-flash")
+        self.assertIn("OptPilot Assistant", start_payload["agent"]["agent_context"]["system_message_suffix"])
+        self.assertTrue(any(tool["name"] == "optpilot_catalog_list" for tool in start_payload["client_tools"]))
+        for tool in start_payload["client_tools"]:
+            self.assertNotIn("kind", tool.get("parameters", {}).get("properties", {}))
+        self.assertIn("\"current_page\": \"catalog\"", event_payload["content"][0]["text"])
+        self.assertIn("\"id\": \"toy-factory\"", event_payload["content"][0]["text"])
+
+    def test_ui_agent_session_executes_openhands_client_tool_requests(self) -> None:
+        requests = []
+        server_state = {"user_message_seen": False, "tool_result_seen": False}
+
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                requests.append((self.path, body))
+                if self.path == "/api/conversations":
+                    self._send_json({"id": "oh-tool-conversation"})
+                    return
+                if self.path == "/api/conversations/oh-tool-conversation/events":
+                    text = body.get("content", [{}])[0].get("text", "") if isinstance(body.get("content"), list) else ""
+                    if "OptPilot tool result for optpilot_catalog_list" in text:
+                        server_state["tool_result_seen"] = True
+                    else:
+                        server_state["user_message_seen"] = True
+                    self._send_json({"success": True})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/conversations/oh-tool-conversation/events/search"):
+                    if server_state["tool_result_seen"]:
+                        self._send_json(
+                            {
+                                "items": [
+                                    {
+                                        "kind": "MessageEvent",
+                                        "source": "agent",
+                                        "message": {
+                                            "role": "assistant",
+                                            "content": [{"type": "text", "text": "Catalog tool result received."}],
+                                        },
+                                    }
+                                ],
+                            }
+                        )
+                    elif server_state["user_message_seen"]:
+                        self._send_json(
+                            {
+                                "items": [
+                                    {
+                                        "kind": "ActionEvent",
+                                        "tool_name": "optpilot_catalog_list",
+                                        "tool_call_id": "call-catalog-1",
+                                        "action": {"kind": "optpilot_catalog_list"},
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        self._send_json({"items": []})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Tool OpenHands"})
+                result = _append_agent_message(
+                    state,
+                    session["id"],
+                    {
+                        "role": "user",
+                        "title": "User",
+                        "content": "List catalog entries.",
+                        "ui_context": {"current_page": "catalog"},
+                    },
+                )
+                persisted = _agent_session_by_id(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["session"]["status"], "idle")
+        self.assertTrue(server_state["tool_result_seen"])
+        self.assertTrue(any(message["content"] == "Catalog tool result received." for message in persisted["messages"]))
+        tool_call_event = next(event for event in persisted["events"] if event.get("payload", {}).get("tool") == "optpilot_catalog_list" and event["type"] == "openhands_event")
+        tool_result_event = next(event for event in persisted["events"] if event["type"] == "optpilot_tool_result")
+        self.assertEqual(tool_call_event["payload"]["category"], "tool_call")
+        self.assertIn("arguments_preview", tool_call_event["payload"])
+        self.assertIn("result_preview", tool_result_event["payload"])
+        self.assertIn('"ok": true', tool_result_event["payload"]["result_preview"])
+        tool_result_payload = next(body for _path, body in requests if "OptPilot tool result for optpilot_catalog_list" in json.dumps(body))
+        self.assertIn('"ok": true', tool_result_payload["content"][0]["text"])
+
+    def test_ui_agent_http_bridge_ignores_previous_assistant_events(self) -> None:
+        server_state = {"message_count": 0}
+
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                if self.path == "/api/conversations":
+                    self._send_json({"id": "oh-stale-conversation"})
+                    return
+                if self.path == "/api/conversations/oh-stale-conversation/events":
+                    text = body.get("content", [{}])[0].get("text", "") if isinstance(body.get("content"), list) else ""
+                    if "Second question" in text:
+                        server_state["message_count"] = 2
+                    elif "First question" in text:
+                        server_state["message_count"] = 1
+                    self._send_json({"success": True})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/conversations/oh-stale-conversation/events/search"):
+                    items = []
+                    if server_state["message_count"] >= 1:
+                        items.append(
+                            {
+                                "id": "evt-old-answer",
+                                "kind": "MessageEvent",
+                                "source": "agent",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "First answer."}],
+                                },
+                            }
+                        )
+                    if server_state["message_count"] >= 2:
+                        items.append(
+                            {
+                                "id": "evt-new-answer",
+                                "kind": "MessageEvent",
+                                "source": "agent",
+                                "message": {
+                                    "role": "assistant",
+                                    "content": [{"type": "text", "text": "Second answer."}],
+                                },
+                            }
+                        )
+                    self._send_json({"items": items})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Stale event guard"})
+                _append_agent_message(
+                    state,
+                    session["id"],
+                    {"role": "user", "title": "User", "content": "First question", "ui_context": {"current_page": "catalog"}},
+                )
+                _append_agent_message(
+                    state,
+                    session["id"],
+                    {"role": "user", "title": "User", "content": "Second question", "ui_context": {"current_page": "catalog"}},
+                )
+                persisted = _agent_session_by_id(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
+        self.assertEqual(contents.count("First answer."), 1)
+        self.assertEqual(contents.count("Second answer."), 1)
+
+    def test_ui_agent_http_bridge_rejects_cached_final_response_on_reused_conversation(self) -> None:
+        server_state = {"message_count": 0, "search_count": 0}
+
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                if self.path == "/api/conversations":
+                    self._send_json({"id": "oh-cached-final-conversation"})
+                    return
+                if self.path == "/api/conversations/oh-cached-final-conversation/events":
+                    text = body.get("content", [{}])[0].get("text", "") if isinstance(body.get("content"), list) else ""
+                    if "Second question" in text:
+                        server_state["message_count"] = 2
+                    elif "First question" in text:
+                        server_state["message_count"] = 1
+                    self._send_json({"success": True})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/conversations/oh-cached-final-conversation/events/search"):
+                    server_state["search_count"] += 1
+                    if server_state["message_count"] >= 2 and server_state["search_count"] > 4:
+                        self._send_json(
+                            {
+                                "items": [
+                                    {
+                                        "id": "evt-fresh-answer",
+                                        "kind": "MessageEvent",
+                                        "source": "agent",
+                                        "llm_message": {
+                                            "role": "assistant",
+                                            "content": [{"type": "text", "text": "Second answer."}],
+                                        },
+                                    }
+                                ]
+                            }
+                        )
+                    else:
+                        self._send_json({"items": []})
+                    return
+                if self.path == "/api/conversations/oh-cached-final-conversation/agent_final_response":
+                    self._send_json({"response": "First answer."})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Cached final response guard"})
+                first = _append_agent_message(
+                    state,
+                    session["id"],
+                    {"role": "user", "title": "User", "content": "First question", "ui_context": {"current_page": "catalog"}},
+                )
+                second = _append_agent_message(
+                    state,
+                    session["id"],
+                    {"role": "user", "title": "User", "content": "Second question", "ui_context": {"current_page": "catalog"}},
+                )
+                synced = _sync_agent_session(state, session["id"])
+                persisted = _agent_session_by_id(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
+        self.assertEqual(first["session"]["status"], "idle")
+        self.assertEqual(second["session"]["status"], "waiting_for_agent")
+        self.assertEqual(synced["status"], "idle")
+        self.assertEqual(contents.count("First answer."), 1)
+        self.assertEqual(contents.count("Second answer."), 1)
+
+    def test_ui_agent_openhands_parser_does_not_treat_user_llm_message_as_assistant(self) -> None:
+        adapter = OpenHandsAdapter(OpenHandsRuntimeConfig(enabled=False))
+        user_event = {
+            "id": "evt-user",
+            "kind": "MessageEvent",
+            "source": "user",
+            "llm_message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": 'User request:\nhello\n\nVisible OptPilot Studio context packet:\n{"current_page": "runs"}',
+                    }
+                ],
+            },
+        }
+        assistant_event = {
+            "id": "evt-assistant",
+            "kind": "MessageEvent",
+            "source": "agent",
+            "llm_message": {
+                "role": "assistant",
+                "reasoning_content": "The user greeted me, so I should greet back and offer OptPilot help.",
+                "content": [{"type": "text", "text": "Hello from assistant."}],
+            },
+        }
+        tool_call_event = {
+            "id": "evt-tool-call",
+            "kind": "ActionEvent",
+            "tool_name": "optpilot_catalog_list",
+            "tool_call_id": "call-1",
+            "action": {"kind": "optpilot_catalog_list", "config_kind": "method"},
+        }
+        tool_feedback_event = {
+            "id": "evt-tool-feedback",
+            "kind": "MessageEvent",
+            "source": "user",
+            "llm_message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "OptPilot tool result for optpilot_catalog_list (call-1).\n```json\n{}\n```"}],
+            },
+        }
+
+        self.assertEqual(adapter._event_assistant_text(user_event), "")
+        self.assertEqual(adapter._event_assistant_text(assistant_event), "Hello from assistant.")
+        self.assertIn("greet back", adapter._event_reasoning_text(assistant_event))
+        self.assertEqual(adapter._compact_openhands_event_summary(user_event), "User request sent to OpenHands: hello")
+        self.assertNotIn("current_page", adapter._event_payload_preview(user_event))
+        self.assertIn("Studio context packet redacted", adapter._event_payload_preview(user_event))
+        reasoning_payload = adapter._openhands_event_trace(assistant_event)["payload"]
+        self.assertEqual(reasoning_payload["category"], "reasoning")
+        self.assertIn("greet back", reasoning_payload["reasoning"])
+        tool_payload = adapter._openhands_event_trace(tool_call_event)["payload"]
+        self.assertEqual(tool_payload["category"], "tool_call")
+        self.assertEqual(tool_payload["tool"], "optpilot_catalog_list")
+        self.assertIn('"config_kind": "method"', tool_payload["arguments_preview"])
+        self.assertEqual(adapter._openhands_event_trace(tool_feedback_event)["payload"]["category"], "tool_result_feedback")
+
+    def test_ui_agent_messages_hide_malformed_context_echoes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Malformed echo"})
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "messages.jsonl",
+                {
+                    "role": "assistant",
+                    "title": "OpenHands",
+                    "content": 'User request: hello\n\nVisible OptPilot Studio context packet:\n{"current_page": "runs"}',
+                },
+            )
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "messages.jsonl",
+                {"role": "assistant", "title": "OpenHands", "content": "Real answer."},
+            )
+
+            messages = _read_agent_messages(state, session["id"])
+
+        self.assertFalse(any("Visible OptPilot Studio context packet" in message["content"] for message in messages))
+        self.assertTrue(any(message["content"] == "Real answer." for message in messages))
+
+    def test_ui_agent_events_hide_internal_context_packet_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Step redaction"})
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "type": "openhands_event",
+                    "payload": {
+                        "event_type": "MessageEvent",
+                        "summary": 'User request:\nhello\n\nVisible OptPilot Studio context packet:\n{"current_page": "runs"}',
+                        "raw_preview": '"text": "User request:\\nhello\\n\\nVisible OptPilot Studio context packet:\\n{\\"current_page\\": \\"runs\\"}"',
+                    },
+                },
+            )
+
+            events = _read_agent_events(state, session["id"])
+
+        self.assertEqual(events[1]["payload"]["summary"], "User request sent to OpenHands: hello")
+        self.assertNotIn("current_page", events[1]["payload"]["summary"])
+        self.assertNotIn("current_page", events[1]["payload"]["raw_preview"])
+
+    def test_ui_agent_session_running_dispatch_does_not_store_placeholder_answer(self) -> None:
+        class SlowAdapter:
+            def status(self) -> JsonDict:
+                return {"runtime": "openhands", "available_tools": []}
+
+            def context_packet(self, **kwargs: object) -> JsonDict:
+                return dict(kwargs)
+
+            def dispatch_message(self, **kwargs: object) -> JsonDict:
+                return {
+                    "status": "running",
+                    "dispatch": "openhands_http",
+                    "conversation_id": "slow-conversation",
+                    "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                    "events": [{"type": "openhands_dispatch_started", "payload": {"conversation_id": "slow-conversation"}}],
+                }
+
+            def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                return {
+                    "status": "answered",
+                    "conversation_id": conversation_id,
+                    "assistant_message": {"role": "assistant", "title": "OpenHands", "content": "Late OpenHands answer."},
+                    "events": [],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            state.agent_adapter = SlowAdapter()
+            session = _create_agent_session(state, {"title": "Slow OpenHands"})
+            result = _append_agent_message(
+                state,
+                session["id"],
+                {"role": "user", "title": "User", "content": "Slow question", "ui_context": {"current_page": "workspace"}},
+            )
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "messages.jsonl",
+                {"role": "assistant", "title": "OpenHands", "content": "Message sent to OpenHands. Refresh the assistant session to see later events."},
+            )
+            messages_after_dispatch = _read_agent_messages(state, session["id"])
+            synced = _sync_agent_session(state, session["id"])
+            messages_after_sync = _read_agent_messages(state, session["id"])
+
+        self.assertEqual(result["session"]["status"], "waiting_for_agent")
+        self.assertFalse(any("Message sent to OpenHands" in message["content"] for message in messages_after_dispatch))
+        self.assertFalse(any(message["role"] == "assistant" and message["content"] == "" for message in messages_after_dispatch))
+        self.assertEqual(synced["status"], "idle")
+        self.assertTrue(any(message["content"] == "Late OpenHands answer." for message in messages_after_sync))
+
+    def test_optpilot_assistant_prompt_is_loaded_from_agent_folder(self) -> None:
+        prompt = load_assistant_system_prompt()
+
+        self.assertIn("OptPilot Assistant", prompt)
+        self.assertIn("evaluator.settings", prompt)
+        self.assertIn("methodContext.references", prompt)
+
+    def test_openhands_status_reports_reachable_agent_server(self) -> None:
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{\"title\":\"OpenHands Agent Server\"}")
+
+            def log_message(self, format, *args):  # noqa: A002
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            adapter = OpenHandsAdapter(
+                OpenHandsRuntimeConfig(
+                    enabled=True,
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    session_endpoint="/api/conversations",
+                    model="gpt-test",
+                    api_key="sk-test",
+                )
+            )
+            status = adapter.status()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(status["dispatch"], "openhands_http")
+        self.assertTrue(status["connected"])
 
     def test_ui_agent_settings_store_openhands_config_without_echoing_key(self) -> None:
         with patch.dict(

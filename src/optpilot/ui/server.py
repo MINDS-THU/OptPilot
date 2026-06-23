@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import difflib
 import fnmatch
 import json
 import mimetypes
 import os
+import shlex
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -678,8 +681,14 @@ def _handler_factory(state: UiState):
             if not session:
                 self._send_json({"error": "Agent session not found"}, status=HTTPStatus.NOT_FOUND)
                 return
+            if len(parts) == 5 and parts[4] == "context":
+                self._send_json({"context": _agent_context_packet(state, _require_agent_session(state, session_id), {})})
+                return
             if len(parts) == 5 and parts[4] == "events":
                 self._send_json({"events": _read_agent_events(state, session_id)})
+                return
+            if len(parts) == 5 and parts[4] == "approvals":
+                self._send_json({"approvals": _read_agent_approvals(state, session_id)})
                 return
             self._send_json({"session": session})
 
@@ -709,6 +718,20 @@ def _handler_factory(state: UiState):
                 return
             if len(parts) == 5 and parts[4] == "cancel":
                 self._send_json({"session": _mark_agent_session_idle(state, session_id)})
+                return
+            if len(parts) == 5 and parts[4] == "sync":
+                self._send_json({"session": _sync_agent_session(state, session_id)})
+                return
+            if len(parts) == 6 and parts[4] == "tools":
+                payload = self._read_json_body()
+                self._send_json(_execute_agent_tool(state, session_id, parts[5], payload))
+                return
+            if len(parts) == 7 and parts[4] == "approvals" and parts[6] in {"approve", "reject"}:
+                if parts[6] == "approve":
+                    self._send_json(_approve_agent_action(state, session_id, parts[5]))
+                else:
+                    payload = self._read_json_body()
+                    self._send_json(_reject_agent_action(state, session_id, parts[5], str(payload.get("reason") or "")))
                 return
             self._send_json({"error": "Unknown agent session action"}, status=HTTPStatus.NOT_FOUND)
 
@@ -1296,7 +1319,11 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         "evidence": {"level": evidence_level, "outputFileStorage": evidence_storage},
     }
     if max_failures_raw not in (None, ""):
-        draft["budget"]["maxFailures"] = int(max_failures_raw)
+        max_failures = int(max_failures_raw)
+        if max_failures < 0:
+            raise ValueError("maxFailures must be >= 1 when provided, or blank/0 for no limit.")
+        if max_failures > 0:
+            draft["budget"]["maxFailures"] = max_failures
     execution_config = _draft_execution_config({**payload, "backend": requested_backend})
     if requested_backend == "container" and execution_config:
         container = {}
@@ -1586,20 +1613,701 @@ def _read_agent_messages(state: UiState, session_id: str) -> List[JsonDict]:
     path = _agent_messages_path(state, session_id)
     if not path.exists():
         return []
-    return _read_jsonl(path)
+    return [
+        message for message in _read_jsonl(path)
+        if not _is_legacy_openhands_placeholder(message)
+        and not _is_malformed_openhands_context_echo(message)
+    ]
+
+
+def _is_legacy_openhands_placeholder(message: JsonDict) -> bool:
+    return str(message.get("content") or "").strip() == "Message sent to OpenHands. Refresh the assistant session to see later events."
+
+
+def _is_malformed_openhands_context_echo(message: JsonDict) -> bool:
+    content = str(message.get("content") or "").strip()
+    return (
+        message.get("role") == "assistant"
+        and content.startswith("User request:")
+        and "Visible OptPilot Studio context packet:" in content
+    )
 
 
 def _read_agent_events(state: UiState, session_id: str) -> List[JsonDict]:
     path = _agent_events_path(state, session_id)
     if not path.exists():
         return []
-    return _read_jsonl(path)
+    return [_sanitize_agent_event(event) for event in _read_jsonl(path)]
+
+
+def _sanitize_agent_event(event: JsonDict) -> JsonDict:
+    if not isinstance(event, dict):
+        return event
+    sanitized = json.loads(json.dumps(event, default=str))
+    payload = sanitized.get("payload")
+    if not isinstance(payload, dict):
+        return sanitized
+    if sanitized.get("type") != "openhands_event":
+        return sanitized
+    if isinstance(payload.get("summary"), str):
+        payload["summary"] = _sanitize_openhands_step_text(payload["summary"])
+    if isinstance(payload.get("raw_preview"), str):
+        payload["raw_preview"] = _sanitize_openhands_step_text(payload["raw_preview"])
+    return sanitized
+
+
+def _sanitize_openhands_step_text(text: str) -> str:
+    marker = "Visible OptPilot Studio context packet:"
+    if marker not in text:
+        return text
+    if "User request:" in text:
+        request = text.split("User request:", 1)[1].split(marker, 1)[0].strip()
+        request = " ".join(request.split())
+        if request:
+            return f"User request sent to OpenHands: {request[:220]}"
+        return "User request and Studio context sent to OpenHands."
+    return "[Studio context packet redacted from step preview]"
+
+
+def _agent_approvals_path(state: UiState, session_id: str) -> Path:
+    return _agent_session_dir(state, session_id) / "approvals.json"
+
+
+def _read_agent_approvals(state: UiState, session_id: str) -> List[JsonDict]:
+    path = _agent_approvals_path(state, session_id)
+    if not path.exists():
+        return []
+    raw = _read_json(path)
+    approvals = raw.get("approvals", []) if isinstance(raw, dict) else []
+    return [item for item in approvals if isinstance(item, dict) and item.get("id")]
+
+
+def _write_agent_approvals(state: UiState, session_id: str, approvals: List[JsonDict]) -> None:
+    path = _agent_approvals_path(state, session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"approvals": approvals}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _upsert_agent_approval(state: UiState, session_id: str, approval: JsonDict) -> JsonDict:
+    approvals = [item for item in _read_agent_approvals(state, session_id) if item.get("id") != approval.get("id")]
+    approvals.append(approval)
+    _write_agent_approvals(state, session_id, approvals)
+    return approval
+
+
+def _tool_result(tool: str, ok: bool, summary: str, *, data: Optional[JsonDict] = None, artifacts: Optional[List[JsonDict]] = None, events: Optional[List[JsonDict]] = None) -> JsonDict:
+    return {
+        "ok": ok,
+        "tool": tool,
+        "summary": summary,
+        "data": data or {},
+        "artifacts": artifacts or [],
+        "events": events or [],
+    }
+
+
+def _request_agent_approval(
+    state: UiState,
+    session_id: str,
+    *,
+    tool: str,
+    arguments: JsonDict,
+    kind: str,
+    title: str,
+    summary: str,
+    targets: Optional[List[str]] = None,
+) -> JsonDict:
+    approval = {
+        "id": f"approval_{uuid.uuid4().hex[:10]}",
+        "session_id": session_id,
+        "tool": tool,
+        "kind": kind,
+        "title": title,
+        "summary": summary,
+        "targets": targets or [],
+        "arguments": arguments,
+        "status": "pending",
+        "created_at": _now_iso(),
+    }
+    _upsert_agent_approval(state, session_id, approval)
+    _append_jsonl(
+        _agent_events_path(state, session_id),
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "approval_requested",
+            "created_at": approval["created_at"],
+            "payload": approval,
+        },
+    )
+    return _tool_result(
+        tool,
+        False,
+        f"Approval required: {summary}",
+        data={"approval": approval, "approval_required": True},
+        events=[{"level": "warning", "message": summary}],
+    )
+
+
+def _approve_agent_action(state: UiState, session_id: str, approval_id: str) -> JsonDict:
+    approvals = _read_agent_approvals(state, session_id)
+    approval = next((item for item in approvals if item.get("id") == approval_id), None)
+    if not approval:
+        raise KeyError(approval_id)
+    if approval.get("status") != "pending":
+        return {"approval": approval, "result": approval.get("result")}
+    arguments = dict(approval.get("arguments", {}) if isinstance(approval.get("arguments"), dict) else {})
+    arguments["approved"] = True
+    result = _execute_agent_tool(state, session_id, str(approval["tool"]), arguments)
+    approval["status"] = "approved"
+    approval["approved_at"] = _now_iso()
+    approval["result"] = result
+    _upsert_agent_approval(state, session_id, approval)
+    _append_jsonl(
+        _agent_events_path(state, session_id),
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "approval_approved",
+            "created_at": approval["approved_at"],
+            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "ok": result.get("ok")},
+        },
+    )
+    return {"approval": approval, "result": result}
+
+
+def _reject_agent_action(state: UiState, session_id: str, approval_id: str, reason: str = "") -> JsonDict:
+    approvals = _read_agent_approvals(state, session_id)
+    approval = next((item for item in approvals if item.get("id") == approval_id), None)
+    if not approval:
+        raise KeyError(approval_id)
+    approval["status"] = "rejected"
+    approval["rejected_at"] = _now_iso()
+    approval["rejection_reason"] = reason or "Rejected by user."
+    _upsert_agent_approval(state, session_id, approval)
+    _append_jsonl(
+        _agent_events_path(state, session_id),
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "approval_rejected",
+            "created_at": approval["rejected_at"],
+            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "reason": approval["rejection_reason"]},
+        },
+    )
+    return {"approval": approval}
+
+
+def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: Optional[JsonDict] = None) -> JsonDict:
+    arguments = arguments or {}
+    if tool == "optpilot_workspace_list":
+        sessions = _read_agent_session_index(state)
+        session = _require_agent_session(state, session_id)
+        attached = set(session.get("attached_workspace_ids", []) or [])
+        workspaces = []
+        for workspace in _list_ui_workspaces(state):
+            item = dict(workspace)
+            item["attached_to_current_session"] = item.get("id") in attached
+            workspaces.append(item)
+        return _tool_result(tool, True, f"Found {len(workspaces)} workspace(s).", data={"workspaces": workspaces, "sessions": sessions})
+    if tool == "optpilot_workspace_create":
+        workspace = _create_ui_workspace(state, arguments)
+        _attach_agent_workspace(state, session_id, workspace["id"], select=True)
+        return _tool_result(tool, True, f"Created workspace {workspace['id']}.", data={"workspace": workspace})
+    if tool == "optpilot_workspace_attach":
+        session = _attach_agent_workspace(state, session_id, str(arguments.get("workspace_id") or ""), select=True)
+        return _tool_result(tool, True, "Workspace attached.", data={"session": session})
+    if tool == "optpilot_workspace_detach":
+        session = _detach_agent_workspace(state, session_id, str(arguments.get("workspace_id") or ""))
+        return _tool_result(tool, True, "Workspace detached.", data={"session": session})
+    if tool == "optpilot_workspace_focus":
+        session = _select_agent_workspace(state, session_id, str(arguments.get("workspace_id") or ""))
+        return _tool_result(tool, True, "Workspace selected.", data={"session": session, "focus_path": str(arguments.get("path") or "")})
+    if tool == "optpilot_file_tree":
+        workspace, root, target = _resolve_agent_workspace_path(state, session_id, arguments, default_path=".")
+        max_files = min(max(int(arguments.get("max_files") or 200), 1), 500)
+        files = _workspace_file_tree(root, target, max_files=max_files)
+        return _tool_result(tool, True, f"Listed {len(files)} file(s).", data={"workspace": workspace, "root": str(root), "path": _relative_path(target, root), "files": files})
+    if tool == "optpilot_file_read":
+        workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+        if not path.is_file():
+            raise FileNotFoundError(_relative_path(path, root))
+        if path.stat().st_size > 1_000_000:
+            raise ValueError("File is too large to read through the assistant tool.")
+        return _tool_result(tool, True, f"Read {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "content": path.read_text(encoding="utf-8", errors="replace")})
+    if tool == "optpilot_file_write":
+        workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+        _require_editable_workspace(workspace)
+        content = str(arguments.get("content") or "")
+        if len(content.encode("utf-8")) > 2_000_000:
+            raise ValueError("Content is too large to write through the assistant tool.")
+        existed = path.exists()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return _tool_result(tool, True, f"Wrote {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "created": not existed, "bytes": len(content.encode("utf-8"))})
+    if tool == "optpilot_file_diff":
+        workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+        new_content = str(arguments.get("content") or "")
+        old_content = path.read_text(encoding="utf-8", errors="replace") if path.exists() and path.is_file() else ""
+        diff = "".join(difflib.unified_diff(old_content.splitlines(True), new_content.splitlines(True), fromfile=f"a/{_relative_path(path, root)}", tofile=f"b/{_relative_path(path, root)}"))
+        return _tool_result(tool, True, f"Prepared diff for {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "diff": diff})
+    if tool == "optpilot_shell_run":
+        return _agent_tool_shell_run(state, session_id, tool, arguments)
+    if tool == "optpilot_catalog_list":
+        catalog = _catalog_payload(state)
+        kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
+        kind_keys = {"environment": "environments", "method": "methods", "study": "studies", "environments": "environments", "methods": "methods", "studies": "studies"}
+        data = catalog if not kind else {kind_keys.get(kind, kind): catalog.get(kind_keys.get(kind, kind), [])}
+        return _tool_result(tool, True, "Catalog listed.", data=data)
+    if tool == "optpilot_catalog_detail":
+        kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
+        uid = str(arguments.get("uid") or "")
+        path = str(arguments.get("path") or "")
+        if path and not uid:
+            uid = _encode_id(_resolve_user_path(path, state.cwd))
+        detail = _catalog_detail(state, kind, uid)
+        return _tool_result(tool, True, f"Loaded {kind} catalog detail.", data=detail)
+    if tool == "optpilot_compatibility_check":
+        env_path = arguments.get("environment_path")
+        method_path = arguments.get("method_path")
+        if env_path and method_path:
+            environment_path = _resolve_user_path(env_path, state.cwd)
+            method_path_resolved = _resolve_user_path(method_path, state.cwd)
+            data = _compatibility_result(_catalog_entry(environment_path, _read_yaml(environment_path)), _read_yaml(environment_path), _catalog_entry(method_path_resolved, _read_yaml(method_path_resolved)), _read_yaml(method_path_resolved))
+        else:
+            data = _compatibility_payload(state)
+        return _tool_result(tool, True, "Compatibility checked.", data=data)
+    if tool == "optpilot_config_discover":
+        workspace_id = str(arguments.get("workspace_id") or _selected_agent_workspace_id(state, session_id))
+        data = _discover_workspace_configs(state, workspace_id)
+        return _tool_result(tool, True, f"Discovered {len(data.get('configs', []))} config(s).", data=data)
+    if tool == "optpilot_config_validate":
+        path = _resolve_agent_or_allowed_path(state, session_id, arguments)
+        validation = validate_authoring_config(path)
+        return _tool_result(tool, bool(validation.get("valid")), "Config validation passed." if validation.get("valid") else "Config validation failed.", data={"validation": validation, "path": str(path)})
+    if tool == "optpilot_registration_prepare":
+        workspace_id = str(arguments.get("workspace_id") or _selected_agent_workspace_id(state, session_id))
+        data = _create_registration_manifest(state, workspace_id, arguments)
+        return _tool_result(tool, True, "Registration manifest prepared.", data=data)
+    if tool == "optpilot_registration_validate":
+        data = _validate_registration_manifest(state, str(arguments.get("workspace_id") or ""), str(arguments.get("registration_id") or ""))
+        return _tool_result(tool, data.get("registration", {}).get("status") == "validated", "Registration validated.", data=data)
+    if tool == "optpilot_registration_apply":
+        if not arguments.get("approved"):
+            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="registration_apply", title="Apply catalog registration", summary="Apply selected workspace files into user_catalog.", targets=[str(arguments.get("registration_id") or "")])
+        data = _apply_registration_manifest(state, str(arguments.get("workspace_id") or ""), str(arguments.get("registration_id") or ""))
+        return _tool_result(tool, bool(data.get("applied")), "Registration applied." if data.get("applied") else "Registration was not applied.", data=data)
+    if tool == "optpilot_study_draft":
+        data = _draft_study(state, arguments)
+        return _tool_result(tool, bool(data.get("validation", {}).get("valid")), "Study draft prepared.", data=data)
+    if tool == "optpilot_study_save":
+        workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+        _require_editable_workspace(workspace)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(arguments.get("yaml") or ""), encoding="utf-8")
+        return _tool_result(tool, True, f"Saved study YAML to {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "validation": _validate_study(path)})
+    if tool == "optpilot_study_launch":
+        study_path = _resolve_agent_or_allowed_path(state, session_id, {"path": arguments.get("study_path"), "workspace_id": arguments.get("workspace_id")})
+        validation = _validate_study(study_path)
+        if not validation.get("valid"):
+            return _tool_result(tool, False, "Study validation failed; launch blocked.", data={"validation": validation})
+        if not arguments.get("approved"):
+            return _request_agent_approval(state, session_id, tool=tool, arguments={**arguments, "study_path": str(study_path)}, kind="study_launch", title="Launch OptPilot study", summary=f"Launch {study_path.name} into the configured output root.", targets=[str(study_path)])
+        output_root = _optional_user_path(arguments.get("output_root"), state.cwd)
+        job = state.launch_study(study_path, output_root, study_name=validation.get("name"), environment_id=validation.get("environment_id"))
+        return _tool_result(tool, True, "Study launched.", data={"job": job.to_dict(), "validation": validation})
+    if tool == "optpilot_job_stop":
+        if not arguments.get("approved"):
+            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="job_stop", title="Stop OptPilot job", summary=f"Stop job {arguments.get('job_id')}.", targets=[str(arguments.get("job_id") or "")])
+        return _tool_result(tool, True, "Job stopped.", data={"job": state.stop_job(str(arguments.get("job_id") or ""))})
+    if tool == "optpilot_run_list":
+        runs = _list_runs(state)
+        return _tool_result(tool, True, f"Found {len(runs)} run(s).", data={"runs": runs})
+    if tool == "optpilot_run_detail":
+        run_dir = _resolve_run_tool_path(arguments)
+        return _tool_result(tool, True, "Run detail loaded.", data=_run_detail(run_dir))
+    if tool == "optpilot_run_file_read":
+        run_dir = _resolve_run_tool_path(arguments)
+        relative = str(arguments.get("path") or "")
+        path = (run_dir / relative).resolve()
+        if not _is_relative_to(path, run_dir.resolve()) or not path.is_file():
+            raise FileNotFoundError(relative)
+        if path.stat().st_size > 1_000_000:
+            raise ValueError("Run file is too large to read through the assistant tool.")
+        return _tool_result(tool, True, f"Read run file {relative}.", data={"path": relative, "content": path.read_text(encoding="utf-8", errors="replace")})
+    if tool == "optpilot_run_open_workspace":
+        run_dir = _resolve_run_tool_path(arguments)
+        workspace = _open_run_workspace(state, run_dir)
+        _attach_agent_workspace(state, session_id, workspace["id"], select=True)
+        return _tool_result(tool, True, "Run opened as analysis workspace.", data={"workspace": workspace})
+    if tool == "optpilot_run_compare":
+        runs = [_run_detail(_resolve_run_tool_path({"run_id": item})) for item in arguments.get("runs", []) or []]
+        return _tool_result(tool, True, f"Compared {len(runs)} run(s).", data={"runs": [_run_compare_summary(run) for run in runs], "comparable": _runs_comparable(runs)})
+    if tool == "optpilot_smoke_test_study":
+        return _agent_tool_smoke_test_study(state, session_id, tool, arguments)
+    if tool == "optpilot_docs_search":
+        results = _docs_search(state, str(arguments.get("query") or ""), limit=int(arguments.get("limit") or 5))
+        return _tool_result(tool, True, f"Found {len(results)} doc result(s).", data={"results": results})
+    return _tool_result(tool, False, f"Unknown OptPilot assistant tool: {tool}", data={"known_tools": state.agent_adapter.status().get("available_tools", [])})
+
+
+def _selected_agent_workspace_id(state: UiState, session_id: str) -> str:
+    session = _require_agent_session(state, session_id)
+    selected = str(session.get("selected_workspace_id") or "")
+    attached = [str(item) for item in session.get("attached_workspace_ids", []) or []]
+    if selected and selected in attached:
+        return selected
+    if attached:
+        return attached[0]
+    raise ValueError("No workspace is attached to this assistant session.")
+
+
+def _resolve_agent_workspace_path(
+    state: UiState,
+    session_id: str,
+    arguments: JsonDict,
+    *,
+    default_path: Optional[str] = None,
+) -> tuple[JsonDict, Path, Path]:
+    workspace_id = str(arguments.get("workspace_id") or _selected_agent_workspace_id(state, session_id))
+    session = _require_agent_session(state, session_id)
+    if workspace_id not in (session.get("attached_workspace_ids", []) or []):
+        raise PermissionError("Workspace is not attached to this assistant session.")
+    workspace = _require_ui_workspace(state, workspace_id)
+    root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+    raw_path = arguments.get("path", default_path)
+    if raw_path in (None, ""):
+        raise ValueError("path is required.")
+    requested = Path(str(raw_path)).expanduser()
+    target = requested if requested.is_absolute() else root / requested
+    target = target.resolve()
+    if not _is_relative_to(target, root):
+        raise PermissionError("Path is outside the attached workspace root.")
+    return workspace, root, target
+
+
+def _require_editable_workspace(workspace: JsonDict) -> None:
+    if str(workspace.get("mode") or "editable") != "editable":
+        raise PermissionError("This workspace is read-only; attach an editable copy before writing.")
+
+
+def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[JsonDict]:
+    if target.is_file():
+        stat = target.stat()
+        return [{"path": _relative_path(target, root), "type": "file", "size": stat.st_size}]
+    if not target.exists() or not target.is_dir():
+        raise FileNotFoundError(_relative_path(target, root))
+    files: List[JsonDict] = []
+    stack = [target]
+    while stack and len(files) < max_files:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+        except OSError:
+            continue
+        for child in entries:
+            if child.name in EXCLUDED_SCAN_DIRS:
+                continue
+            resolved = child.resolve()
+            if not _is_relative_to(resolved, root):
+                continue
+            if child.is_dir():
+                files.append({"path": _relative_path(resolved, root), "type": "directory"})
+                stack.append(resolved)
+            elif child.is_file():
+                stat = child.stat()
+                files.append({"path": _relative_path(resolved, root), "type": "file", "size": stat.st_size})
+            if len(files) >= max_files:
+                break
+    return files
+
+
+def _resolve_agent_or_allowed_path(state: UiState, session_id: str, arguments: JsonDict) -> Path:
+    raw_path = arguments.get("path") or arguments.get("study_path")
+    if not raw_path:
+        raise ValueError("path is required.")
+    workspace_id = str(arguments.get("workspace_id") or "")
+    if workspace_id:
+        return _resolve_agent_workspace_path(state, session_id, {**arguments, "path": raw_path})[2]
+    candidate = _resolve_user_path(raw_path, state.cwd)
+    allowed_roots = [
+        state.cwd,
+        *state.catalog_roots,
+        *state.run_roots,
+        state.sessions_dir,
+        state.workspaces_dir,
+    ]
+    if any(_is_relative_to(candidate, root.resolve()) for root in allowed_roots):
+        return candidate
+    raise PermissionError(f"Path is outside OptPilot-controlled roots: {candidate}")
+
+
+def _resolve_run_tool_path(arguments: JsonDict) -> Path:
+    raw = str(arguments.get("run_id") or arguments.get("path") or "")
+    if not raw:
+        raise ValueError("run_id or path is required.")
+    candidates: List[Path] = []
+    try:
+        candidates.append(_decode_id(raw))
+    except Exception:
+        pass
+    candidates.append(Path(raw).expanduser().resolve())
+    for candidate in candidates:
+        if _is_run_dir(candidate):
+            return candidate
+    raise FileNotFoundError(f"Run not found: {raw}")
+
+
+def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
+    workspace, root, cwd = _resolve_agent_workspace_path(
+        state,
+        session_id,
+        {**arguments, "path": arguments.get("cwd") or arguments.get("path") or "."},
+        default_path=".",
+    )
+    _require_editable_workspace(workspace)
+    if cwd.is_file():
+        cwd = cwd.parent
+    if not cwd.exists() or not cwd.is_dir():
+        raise FileNotFoundError(_relative_path(cwd, root))
+    command = _normalize_shell_command(arguments.get("command"))
+    if not command:
+        raise ValueError("command is required.")
+    timeout_seconds = min(max(int(arguments.get("timeout_seconds") or 30), 1), 120)
+    if _shell_needs_approval(command) and not arguments.get("approved"):
+        return _request_agent_approval(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "command": command, "cwd": _relative_path(cwd, root), "timeout_seconds": timeout_seconds},
+            kind="shell_run",
+            title="Run workspace command",
+            summary=f"Run {' '.join(shlex.quote(part) for part in command)} in {workspace.get('title') or workspace.get('id')}.",
+            targets=[str(root), _relative_path(cwd, root)],
+        )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in {"HOME", "PATH", "SHELL", "LANG", "LC_ALL", "VIRTUAL_ENV", "UV_CACHE_DIR"}
+    }
+    python_path = str(state.cwd)
+    if env.get("PYTHONPATH"):
+        python_path = f"{python_path}{os.pathsep}{env['PYTHONPATH']}"
+    env["PYTHONPATH"] = python_path
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    return _tool_result(
+        tool,
+        completed.returncode == 0,
+        f"Command exited with {completed.returncode}.",
+        data={
+            "workspace": workspace,
+            "cwd": _relative_path(cwd, root),
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": _cap_text(completed.stdout, 12000),
+            "stderr": _cap_text(completed.stderr, 12000),
+        },
+    )
+
+
+def _normalize_shell_command(raw: Any) -> List[str]:
+    if isinstance(raw, str):
+        return shlex.split(raw)
+    if isinstance(raw, list):
+        return [str(item) for item in raw if str(item)]
+    raise ValueError("command must be a string or list of strings.")
+
+
+def _shell_needs_approval(command: List[str]) -> bool:
+    if not command:
+        return False
+    first = Path(command[0]).name
+    tokens = {item.lower() for item in command[1:]}
+    if first in {"curl", "wget", "brew", "docker", "podman", "pip", "pip3", "rm", "mv", "cp", "chmod", "chown"}:
+        return True
+    if first in {"npm", "pnpm", "yarn"}:
+        return True
+    if first == "git":
+        return len(command) > 1 and command[1] in {"clone", "push", "pull", "fetch", "reset", "checkout", "clean", "merge", "rebase"}
+    if first == "uv":
+        risky = {"add", "remove", "sync", "lock", "tool", "pip", "build", "publish"}
+        return bool(tokens.intersection(risky) or "install" in tokens or "--with" in tokens)
+    return False
+
+
+def _agent_tool_smoke_test_study(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
+    study_path = _resolve_agent_or_allowed_path(state, session_id, {"path": arguments.get("study_path"), "workspace_id": arguments.get("workspace_id")})
+    validation = _validate_study(study_path)
+    if not validation.get("valid"):
+        return _tool_result(tool, False, "Study validation failed; smoke test blocked.", data={"validation": validation})
+    if not arguments.get("approved"):
+        return _request_agent_approval(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "study_path": str(study_path)},
+            kind="smoke_test_study",
+            title="Run study smoke test",
+            summary=f"Execute {study_path.name} into a temporary output directory.",
+            targets=[str(study_path)],
+        )
+    with tempfile.TemporaryDirectory(prefix="optpilot-assistant-smoke-") as tmp_dir:
+        tmp = Path(tmp_dir)
+        smoke_study = _smoke_study_file(study_path, tmp, int(arguments.get("max_trials") or 0))
+        output_root = tmp / "runs"
+        completed = subprocess.run(
+            [sys.executable, "-m", "optpilot", "run", str(smoke_study), "--output-root", str(output_root)],
+            cwd=str(state.cwd),
+            env={**os.environ, "PYTHONPATH": f"{state.cwd}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep)},
+            capture_output=True,
+            text=True,
+            timeout=min(max(int(arguments.get("timeout_seconds") or 120), 10), 300),
+            check=False,
+        )
+        run_dirs = _find_run_dirs([output_root])
+        detail = _run_detail(run_dirs[0]) if run_dirs else {}
+        return _tool_result(
+            tool,
+            completed.returncode == 0,
+            "Smoke test completed." if completed.returncode == 0 else "Smoke test failed.",
+            data={
+                "validation": validation,
+                "returncode": completed.returncode,
+                "stdout": _cap_text(completed.stdout, 12000),
+                "stderr": _cap_text(completed.stderr, 12000),
+                "summary": detail.get("summary", {}),
+                "run": detail.get("run", {}),
+            },
+        )
+
+
+def _smoke_study_file(study_path: Path, tmp: Path, max_trials: int) -> Path:
+    raw = _read_yaml(study_path)
+    if max_trials > 0:
+        raw.setdefault("budget", {})["maxTrials"] = max_trials
+    for key in ("environmentConfig", "methodConfig"):
+        if raw.get(key):
+            raw[key] = str(_resolve_config_path(raw[key], study_path))
+    output = tmp / study_path.name
+    output.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return output
+
+
+def _run_compare_summary(run: JsonDict) -> JsonDict:
+    summary = run.get("summary", {}) if isinstance(run.get("summary"), dict) else {}
+    info = run.get("run", {}) if isinstance(run.get("run"), dict) else {}
+    return {
+        "id": info.get("id"),
+        "path": info.get("path"),
+        "name": info.get("name"),
+        "status": info.get("status"),
+        "environment_id": info.get("environment_id"),
+        "method": info.get("method"),
+        "objective": info.get("objective"),
+        "completed_trials": info.get("completed_trials"),
+        "best_metric": summary.get("best_metric", info.get("best_metric")),
+        "best_trial_id": summary.get("best_trial_id", info.get("best_trial_id")),
+        "failure_count": summary.get("failure_count", info.get("failure_count")),
+    }
+
+
+def _runs_comparable(runs: List[JsonDict]) -> JsonDict:
+    if len(runs) < 2:
+        return {"compatible": True, "caveats": ["Only one run was provided."]}
+    summaries = [_run_compare_summary(run) for run in runs]
+    envs = {str(item.get("environment_id") or "") for item in summaries}
+    objectives = {json.dumps(item.get("objective") or {}, sort_keys=True) for item in summaries}
+    caveats = []
+    if len(envs) > 1:
+        caveats.append("Runs use different environment ids.")
+    if len(objectives) > 1:
+        caveats.append("Runs use different objective settings.")
+    return {"compatible": not caveats, "caveats": caveats}
+
+
+def _docs_search(state: UiState, query: str, *, limit: int = 5) -> List[JsonDict]:
+    terms = [term.lower() for term in query.split() if term.strip()]
+    if not terms:
+        return []
+    roots = [
+        state.cwd / "docs",
+        state.cwd / ".agents" / "optpilot-assistant",
+        state.cwd / "src" / "optpilot" / "schemas",
+    ]
+    matches: List[JsonDict] = []
+    suffixes = {".md", ".yaml", ".yml", ".json", ".py"}
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in suffixes:
+                continue
+            if any(part in EXCLUDED_SCAN_DIRS for part in path.parts):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            lower = text.lower()
+            score = sum(lower.count(term) for term in terms)
+            if score <= 0:
+                continue
+            line_number, snippet = _snippet_for_terms(text, terms)
+            matches.append(
+                {
+                    "path": str(path.relative_to(state.cwd) if _is_relative_to(path, state.cwd) else path),
+                    "line": line_number,
+                    "score": score,
+                    "snippet": snippet,
+                }
+            )
+    return sorted(matches, key=lambda item: (-int(item["score"]), str(item["path"])))[: max(1, min(limit, 20))]
+
+
+def _snippet_for_terms(text: str, terms: List[str]) -> tuple[int, str]:
+    lines = text.splitlines()
+    for index, line in enumerate(lines, start=1):
+        lower = line.lower()
+        if any(term in lower for term in terms):
+            start = max(index - 2, 1)
+            end = min(index + 2, len(lines))
+            snippet = "\n".join(lines[start - 1 : end])
+            return index, _cap_text(snippet, 1200)
+    return 1, _cap_text(text, 1200)
+
+
+def _cap_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n... truncated ..."
 
 
 def _append_jsonl(path: Path, record: JsonDict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _append_agent_event_record(state: UiState, session_id: str, event: JsonDict) -> None:
+    event_id = str(event.get("id") or "")
+    path = _agent_events_path(state, session_id)
+    if event_id and any(str(existing.get("id") or "") == event_id for existing in _read_agent_events(state, session_id)):
+        return
+    _append_jsonl(
+        path,
+        {
+            "id": event_id or f"evt_{uuid.uuid4().hex[:10]}",
+            "type": str(event.get("type") or "openhands_event"),
+            "created_at": event.get("created_at") or _now_iso(),
+            "payload": event.get("payload", {}),
+        },
+    )
 
 
 def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
@@ -1609,7 +2317,8 @@ def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
         messages = [_default_agent_message()]
         _append_jsonl(_agent_messages_path(state, str(session["id"])), messages[0])
     payload["messages"] = messages
-    payload["events"] = _read_agent_events(state, str(session["id"]))[-50:]
+    payload["events"] = _read_agent_events(state, str(session["id"]))
+    payload["approvals"] = _read_agent_approvals(state, str(session["id"]))
     return payload
 
 
@@ -1671,6 +2380,7 @@ def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:
         "updated_at": now,
         "attached_workspace_ids": attached,
         "selected_workspace_id": str(payload.get("selected_workspace_id") or (attached[0] if attached else "")),
+        "openhands_conversation_id": str(payload.get("openhands_conversation_id") or ""),
     }
     _agent_session_dir(state, session_id).mkdir(parents=True, exist_ok=True)
     _append_jsonl(_agent_messages_path(state, session_id), _default_agent_message())
@@ -1773,13 +2483,14 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
     ui_context = payload.get("ui_context") if isinstance(payload.get("ui_context"), dict) else {}
     if not content:
         raise ValueError("Message content is required.")
+    context = _agent_context_packet(state, session, ui_context)
     message = {
         "id": f"msg_{uuid.uuid4().hex[:10]}",
         "role": role,
         "title": title,
         "content": content,
         "created_at": _now_iso(),
-        "context": _agent_context_packet(state, session, ui_context),
+        "context": context,
     }
     _append_jsonl(_agent_messages_path(state, session_id), message)
     _append_jsonl(
@@ -1792,18 +2503,150 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
         },
     )
     if role == "user":
-        assistant_message = {
-            "id": f"msg_{uuid.uuid4().hex[:10]}",
-            "role": "assistant",
-            "title": "Queued for agent",
-            "content": "This message is stored with the current OptPilot context. The OpenHands runtime adapter will process it when connected.",
-            "created_at": _now_iso(),
-            "context": _agent_context_packet(state, session, ui_context),
-        }
-        _append_jsonl(_agent_messages_path(state, session_id), assistant_message)
-    session["status"] = "waiting_for_agent" if role == "user" else session.get("status", "idle")
+        session["status"] = "running"
+        _append_agent_event_record(
+            state,
+            session_id,
+            {
+                "id": f"evt_{uuid.uuid4().hex[:10]}",
+                "type": "openhands_dispatch_started",
+                "created_at": _now_iso(),
+                "payload": {
+                    "dispatch": state.agent_adapter.status().get("dispatch"),
+                    "conversation_id": str(session.get("openhands_conversation_id") or ""),
+                },
+            },
+        )
+        dispatch = state.agent_adapter.dispatch_message(
+            message=content,
+            context=context,
+            conversation_id=str(session.get("openhands_conversation_id") or "") or None,
+            tool_executor=lambda tool_name, arguments: _execute_agent_tool(state, session_id, tool_name, arguments),
+            ignored_response_texts=_assistant_response_texts(state, session_id),
+        )
+        conversation_id = str(dispatch.get("conversation_id") or "")
+        if conversation_id:
+            session["openhands_conversation_id"] = conversation_id
+        sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
+        if sync_state:
+            session["openhands_pending_sync"] = sync_state
+        for event in dispatch.get("events", []) or []:
+            if not isinstance(event, dict):
+                continue
+            _append_agent_event_record(state, session_id, event)
+        raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
+        assistant_content = str(raw_assistant.get("content") or "").strip()
+        if assistant_content:
+            assistant_message = {
+                "id": f"msg_{uuid.uuid4().hex[:10]}",
+                "role": "assistant",
+                "title": str(raw_assistant.get("title") or "Assistant"),
+                "content": assistant_content,
+                "created_at": _now_iso(),
+                "context": context,
+                "dispatch": {
+                    "status": dispatch.get("status"),
+                    "mode": dispatch.get("mode"),
+                    "transport": dispatch.get("dispatch"),
+                    "conversation_id": conversation_id,
+                },
+            }
+            _append_jsonl(_agent_messages_path(state, session_id), assistant_message)
+        dispatch_status = str(dispatch.get("status") or "")
+        if dispatch_status in {"answered", "dispatched"}:
+            session["status"] = "idle"
+            session.pop("openhands_pending_sync", None)
+        elif dispatch_status == "failed":
+            session["status"] = "error"
+            session.pop("openhands_pending_sync", None)
+        else:
+            session["status"] = "waiting_for_agent"
+    else:
+        session["status"] = session.get("status", "idle")
     updated = _upsert_agent_session(state, session)
     return {"session": updated, "message": message}
+
+
+def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
+    session = _require_agent_session(state, session_id)
+    conversation_id = str(session.get("openhands_conversation_id") or "")
+    if not conversation_id or session.get("status") not in {"waiting_for_agent", "running"}:
+        return _agent_session_payload(state, session)
+    handled_tool_calls = _handled_optpilot_tool_call_ids(state, session_id)
+    pending_sync = session.get("openhands_pending_sync") if isinstance(session.get("openhands_pending_sync"), dict) else {}
+    ignored_event_ids = {
+        str(event_id)
+        for event_id in pending_sync.get("ignored_event_ids", [])
+        if event_id
+    }
+    ignored_response_texts = {
+        str(text)
+        for text in pending_sync.get("ignored_response_texts", [])
+        if text
+    }
+    ignored_response_texts.update(_assistant_response_texts(state, session_id))
+    dispatch = state.agent_adapter.sync_conversation(
+        conversation_id,
+        tool_executor=lambda tool_name, arguments: _execute_agent_tool(state, session_id, tool_name, arguments),
+        ignored_tool_calls=handled_tool_calls,
+        ignored_event_ids=ignored_event_ids,
+        ignored_response_texts=ignored_response_texts,
+        allow_final_response_fallback=bool(pending_sync.get("allow_final_response_fallback")),
+        poll_seconds=3.0,
+    )
+    for event in dispatch.get("events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        _append_agent_event_record(state, session_id, event)
+    raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
+    assistant_content = str(raw_assistant.get("content") or "").strip()
+    if assistant_content:
+        _append_jsonl(
+            _agent_messages_path(state, session_id),
+            {
+                "id": f"msg_{uuid.uuid4().hex[:10]}",
+                "role": "assistant",
+                "title": str(raw_assistant.get("title") or "Assistant"),
+                "content": assistant_content,
+                "created_at": _now_iso(),
+                "dispatch": {
+                    "status": dispatch.get("status"),
+                    "transport": "openhands_http",
+                    "conversation_id": conversation_id,
+                },
+            },
+        )
+        session["status"] = "idle"
+        session.pop("openhands_pending_sync", None)
+    elif dispatch.get("status") == "failed":
+        session["status"] = "error"
+        session.pop("openhands_pending_sync", None)
+    else:
+        session["status"] = "waiting_for_agent"
+        sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
+        if sync_state:
+            session["openhands_pending_sync"] = sync_state
+    return _upsert_agent_session(state, session)
+
+
+def _assistant_response_texts(state: UiState, session_id: str) -> set[str]:
+    return {
+        str(message.get("content") or "").strip()
+        for message in _read_agent_messages(state, session_id)
+        if message.get("role") == "assistant" and str(message.get("content") or "").strip()
+    }
+
+
+def _handled_optpilot_tool_call_ids(state: UiState, session_id: str) -> set[str]:
+    handled = set()
+    for event in _read_agent_events(state, session_id):
+        if event.get("type") != "optpilot_tool_result":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        call_id = str(payload.get("tool_call_id") or "")
+        if call_id:
+            handled.add(call_id)
+    return handled
 
 
 def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optional[JsonDict] = None) -> JsonDict:
@@ -1827,6 +2670,13 @@ def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optiona
     if session.get("selected_workspace_id"):
         selected_workspace = next((item for item in attached if item["id"] == session.get("selected_workspace_id")), None)
     catalog = _catalog_payload(state)
+    current_page = _assistant_page_name(ui_context.get("current_page"))
+    assistant_mode = str(ui_context.get("assistant_mode") or "chat")
+    selected_catalog_entry = ui_context.get("selected_catalog_entry") if current_page == "catalog" and isinstance(ui_context.get("selected_catalog_entry"), dict) else None
+    selected_study_plan = ui_context.get("selected_study_plan") if current_page == "studies" and isinstance(ui_context.get("selected_study_plan"), dict) else None
+    selected_run = ui_context.get("selected_run") if current_page == "runs" and isinstance(ui_context.get("selected_run"), dict) else None
+    registration_menu = ui_context.get("registration_menu") if assistant_mode == "registration" and isinstance(ui_context.get("registration_menu"), dict) else None
+    code_editor = ui_context.get("code_editor") if current_page == "editor" and isinstance(ui_context.get("code_editor"), dict) else None
     return state.agent_adapter.context_packet(
         session_id=str(session.get("id") or ""),
         selected_workspace=selected_workspace,
@@ -1837,18 +2687,26 @@ def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optiona
             "studies": len(catalog["studies"]),
         },
         run_count=len(_list_runs(state)),
-        current_page=str(ui_context.get("current_page") or "workspace"),
-        registration_menu=ui_context.get("registration_menu") if isinstance(ui_context.get("registration_menu"), dict) else None,
-        selected_catalog_entry=ui_context.get("selected_catalog_entry") if isinstance(ui_context.get("selected_catalog_entry"), dict) else None,
-        selected_study_plan=ui_context.get("selected_study_plan") if isinstance(ui_context.get("selected_study_plan"), dict) else None,
-        selected_run=ui_context.get("selected_run") if isinstance(ui_context.get("selected_run"), dict) else None,
-        code_editor=ui_context.get("code_editor") if isinstance(ui_context.get("code_editor"), dict) else None,
+        current_page=current_page,
+        registration_menu=registration_menu,
+        selected_catalog_entry=selected_catalog_entry,
+        selected_study_plan=selected_study_plan,
+        selected_run=selected_run,
+        code_editor=code_editor,
         visible_state={
             key: value
             for key, value in ui_context.items()
-            if key not in {"registration_menu", "selected_catalog_entry", "selected_study_plan", "selected_run", "code_editor"}
+            if key not in {"current_page", "registration_menu", "selected_catalog_entry", "selected_study_plan", "selected_run", "code_editor"}
         },
     )
+
+
+def _assistant_page_name(value: Any) -> str:
+    page = str(value or "editor")
+    return {
+        "workspace": "editor",
+        "experiments": "studies",
+    }.get(page, page)
 
 
 def _read_workspace_index(state: UiState) -> List[JsonDict]:
@@ -2375,10 +3233,6 @@ def _run_status(summary: JsonDict, job: Optional[JsonDict]) -> str:
         return "running"
     if not summary:
         return "incomplete"
-    completed = int(summary.get("completed_trials", 0) or 0)
-    failures = int(summary.get("failure_count", 0) or 0)
-    if completed > 0 and failures >= completed:
-        return "failed"
     return "completed"
 
 

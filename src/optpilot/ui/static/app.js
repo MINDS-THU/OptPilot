@@ -14,15 +14,20 @@ const state = {
   agentWorkspaceAttachments: {},
   selectedWorkspaceByAgentSession: {},
   assistantMessagesBySession: {},
+  agentApprovalsBySession: {},
+  agentEventsBySession: {},
   agentSessionSeq: 1,
   plans: [],
   selectedSessionId: null,
   selectedFileKey: null,
   selectedComponentKey: null,
   componentFilter: "all",
+  componentSearch: "",
+  planSearch: "",
   selectedPlanId: null,
   selectedRunId: null,
   selectedRun: null,
+  runStatusFilter: "all",
   activeRunTab: "overview",
   sessionTab: "terminal",
   workbenchMode: "code",
@@ -32,6 +37,7 @@ const state = {
   registrationDraft: null,
   embeddedCodeUrl: "",
   embeddedCodeFolder: "",
+  platformReady: false,
   codeWorkspaceStatus: "idle",
   codeWorkspaceMessage: "",
   codeWorkspacePaused: false,
@@ -48,12 +54,15 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   loadAll();
   setInterval(loadRunsAndJobs, 3000);
+  setInterval(syncActiveAgentSession, 5000);
+  setInterval(refreshPlatformStatus, 6000);
 });
 
 function cacheElements() {
   for (const id of [
     "healthStatus",
     "sidebarCodeServer",
+    "sidebarServiceStatus",
     "settingsButton",
     "pageTitle",
     "pageSubtitle",
@@ -65,6 +74,7 @@ function cacheElements() {
     "assistantSubtitle",
     "assistantSessionList",
     "assistantSessionCards",
+    "assistantContextHint",
     "assistantResizeHandle",
     "closeAssistantButton",
     "openCodeServerButton",
@@ -97,7 +107,6 @@ function cacheElements() {
     "pauseCodeWorkspaceButton",
     "agentTimeline",
     "agentInput",
-    "attachContextButton",
     "sendAgentButton",
     "sessionBottom",
     "componentList",
@@ -109,6 +118,8 @@ function cacheElements() {
     "completedTrials",
     "failureCount",
     "runFilter",
+    "componentSearch",
+    "planSearch",
     "runsTable",
     "runDetail",
     "assistantLauncherSubtitle",
@@ -139,6 +150,12 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.componentFilter = button.dataset.componentFilter;
       renderCatalog();
+    });
+  });
+  document.querySelectorAll("[data-run-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.runStatusFilter = button.dataset.runFilter;
+      renderRuns();
     });
   });
   document.querySelectorAll("[data-session-tab]").forEach((button) => {
@@ -182,18 +199,32 @@ function bindEvents() {
   on(els.reloadEmbeddedCodeButton, "click", reloadEmbeddedCodeWorkspace);
   on(els.pauseCodeWorkspaceButton, "click", stopCodeServer);
   on(els.primaryActionButton, "click", primaryAction);
-  on(els.attachContextButton, "click", attachContext);
   on(els.sendAgentButton, "click", sendAgentMessage);
+  on(els.agentInput, "keydown", handleAgentInputKeydown);
   on(els.agentInput, "input", () => {
-    els.agentInput.dataset.touched = "true";
+    els.agentInput.dataset.touched = els.agentInput.value ? "true" : "";
   });
   on(els.runFilter, "input", renderRuns);
+  on(els.componentSearch, "input", () => {
+    state.componentSearch = els.componentSearch.value;
+    renderCatalog();
+  });
+  on(els.planSearch, "input", () => {
+    state.planSearch = els.planSearch.value;
+    renderExperiments();
+  });
 }
 
 async function loadAll() {
   await Promise.all([loadWorkspace(), loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings(), loadCatalogAndCompatibility(), loadUiWorkspaces(), loadAgentSessions(), loadRunsAndJobs()]);
   rebuildDerivedState();
   renderAll();
+}
+
+async function refreshPlatformStatus() {
+  await Promise.all([loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings()]);
+  renderPlatformStatus();
+  renderOpenHandsStatus();
 }
 
 async function loadAgentSettings() {
@@ -211,15 +242,19 @@ async function loadWorkspace() {
   try {
     state.workspace = await getJson("/api/workspace");
     if (state.workspace.code_server) state.codeServer = state.workspace.code_server;
-    els.healthStatus.textContent = "Ready";
+    state.platformReady = true;
   } catch (error) {
     state.workspace = null;
-    els.healthStatus.textContent = "Unavailable";
+    state.platformReady = false;
   }
 }
 
 async function loadRuntimeHealth() {
-  state.runtime = await getJson("/api/runtime/health");
+  try {
+    state.runtime = await getJson("/api/runtime/health");
+  } catch (error) {
+    state.runtime = { error: String(error.message || error) };
+  }
 }
 
 async function loadCodeServerStatus() {
@@ -260,20 +295,22 @@ async function loadAgentSessions() {
     state.agentWorkspaceAttachments = {};
     state.selectedWorkspaceByAgentSession = {};
     state.assistantMessagesBySession = {};
+    state.agentApprovalsBySession = {};
+    state.agentEventsBySession = {};
     sessions.forEach((session) => {
       state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
       state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || (session.attached_workspace_ids || [])[0] || null;
-      state.assistantMessagesBySession[session.id] = (session.messages || []).map((message) => [
-        message.role === "assistant" ? "assistant" : message.role || "user",
-        message.title || (message.role === "assistant" ? "Assistant" : "User"),
-        message.content || "",
-      ]);
+      state.assistantMessagesBySession[session.id] = (session.messages || []).map(agentMessageFromPayload);
+      state.agentApprovalsBySession[session.id] = session.approvals || [];
+      state.agentEventsBySession[session.id] = session.events || [];
     });
     if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
       state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
     }
   } catch (error) {
     state.agentSessions = [];
+    state.agentApprovalsBySession = {};
+    state.agentEventsBySession = {};
   }
 }
 
@@ -312,7 +349,10 @@ function rebuildDerivedState() {
   state.plans = buildPlans();
   ensureAgentSessions();
   const attachedIds = attachedWorkspaceIds();
-  state.selectedSessionId = attachedIds.includes(previousSessionId)
+  const agentSelectedWorkspace = state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId];
+  state.selectedSessionId = attachedIds.includes(agentSelectedWorkspace)
+    ? agentSelectedWorkspace
+    : attachedIds.includes(previousSessionId)
     ? previousSessionId
     : attachedIds[0] || null;
   if (currentAgentSession()) state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = state.selectedSessionId;
@@ -341,6 +381,7 @@ function ensureAgentSessions() {
     state.agentWorkspaceAttachments[session.id] = workspaceIds.slice();
     state.selectedWorkspaceByAgentSession[session.id] = workspaceIds[0] || null;
     state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
+    state.agentEventsBySession[session.id] = [];
     return;
   }
   const known = new Set(workspaceIds);
@@ -350,6 +391,9 @@ function ensureAgentSessions() {
     if (!state.assistantMessagesBySession[session.id]) {
       state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
     }
+    if (!state.agentEventsBySession[session.id]) {
+      state.agentEventsBySession[session.id] = [];
+    }
   });
   if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
     state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
@@ -357,7 +401,20 @@ function ensureAgentSessions() {
 }
 
 function defaultAssistantMessages() {
-  return [["assistant", "Ready", "I can use the selected session, attached workspace roots, catalog, study plans, runs, and code editor context."]];
+  return [["assistant", "Ready", "I can use the selected session, attached workspace roots, catalog, study plans, runs, and code editor context.", { id: "default-ready", createdAt: "" }]];
+}
+
+function agentMessageFromPayload(message) {
+  return [
+    message.role === "assistant" ? "assistant" : message.role || "user",
+    "",
+    message.content || "",
+    {
+      id: message.id || "",
+      title: message.title || "",
+      createdAt: message.created_at || message.createdAt || "",
+    },
+  ];
 }
 
 function currentAgentSession() {
@@ -371,15 +428,57 @@ function currentAssistantMessages() {
   return state.assistantMessagesBySession[session.id];
 }
 
+function currentAssistantApprovals() {
+  const session = currentAgentSession();
+  if (!session) return [];
+  return (state.agentApprovalsBySession[session.id] || []).filter((approval) => approval.status === "pending");
+}
+
+function currentAssistantEvents() {
+  const session = currentAgentSession();
+  if (!session) return [];
+  return state.agentEventsBySession[session.id] || [];
+}
+
+async function syncActiveAgentSession() {
+  if (!state.assistantOpen) return;
+  const session = currentAgentSession();
+  if (!session || session.id.startsWith("agent-session-")) return;
+  if (!["waiting_for_agent", "running"].includes(session.status || "")) return;
+  try {
+    const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/sync`, {});
+    if (payload.session) {
+      await updateAgentSessionFromPayload(payload.session);
+    }
+  } catch (error) {
+    // Keep the transcript stable; the next poll or refresh can retry.
+  }
+}
+
 function pushAssistantMessage(message) {
   const session = currentAgentSession();
   if (!session) return;
   if (!state.assistantMessagesBySession[session.id]) state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
-  state.assistantMessagesBySession[session.id].push(message);
+  state.assistantMessagesBySession[session.id].push(localAssistantMessage(message));
+}
+
+function localAssistantMessage(message) {
+  if (message && message[3] && message[3].createdAt) return message;
+  return [
+    message && message[0] || "assistant",
+    message && message[1] || "",
+    message && message[2] || "",
+    { id: `local-${Date.now().toString(36)}`, createdAt: new Date().toISOString() },
+  ];
 }
 
 function assistantVisibleContext() {
   const workspace = currentSession();
+  const isCatalogPage = state.view === "catalog";
+  const isStudiesPage = state.view === "experiments";
+  const isRunsPage = state.view === "runs";
+  const isEditorPage = state.view === "workspace";
+  const isRegistrationMode = state.assistantMode === "registration";
   const component = componentByKey(state.selectedComponentKey);
   const plan = currentPlan();
   const selectedRun = state.selectedRun && state.selectedRun.run
@@ -396,13 +495,13 @@ function assistantVisibleContext() {
       kind: workspace.kind,
       registered_entries: workspace.registeredEntries || [],
     } : null,
-    selected_catalog_entry: component ? {
+    selected_catalog_entry: isCatalogPage && component ? {
       kind: component.kind,
       id: component.entry.id,
       label: component.entry.label,
       path: component.entry.path,
     } : null,
-    selected_study_plan: plan ? {
+    selected_study_plan: isStudiesPage && plan ? {
       id: plan.id,
       title: plan.title,
       source: plan.source,
@@ -411,7 +510,7 @@ function assistantVisibleContext() {
       environment_id: plan.environment && plan.environment.id || "",
       method_id: plan.method && plan.method.id || "",
     } : null,
-    selected_run: selectedRun ? {
+    selected_run: isRunsPage && selectedRun ? {
       id: selectedRun.id,
       name: selectedRun.name,
       path: selectedRun.path,
@@ -419,18 +518,18 @@ function assistantVisibleContext() {
       method_id: selectedRun.method && selectedRun.method.id || "",
       environment_id: selectedRun.environment_id || "",
     } : null,
-    registration_menu: state.registrationDraft ? {
+    registration_menu: isRegistrationMode && state.registrationDraft ? {
       workspace_id: state.registrationDraft.backendWorkspaceId || state.registrationDraft.workspaceId,
       status: state.registrationDraft.status,
       selected_configs: (state.registrationDraft.configs || [])
         .filter((config) => config.selected)
         .map((config) => ({ path: config.backendPath || config.label, kind: config.kind, validation: config.validation })),
     } : null,
-    code_editor: {
+    code_editor: isEditorPage ? {
       embedded_url: state.embeddedCodeUrl,
       folder: state.embeddedCodeFolder,
       status: state.codeWorkspaceStatus,
-    },
+    } : null,
     assistant_runtime: state.agentRuntimeStatus || null,
   };
 }
@@ -446,7 +545,7 @@ async function persistAssistantMessage(message) {
       content,
       ui_context: assistantVisibleContext(),
     });
-    if (payload.session) mergeAgentSessionPayload(payload.session);
+    if (payload.session) await updateAgentSessionFromPayload(payload.session);
     return payload;
   } catch (error) {
     // Keep the local transcript usable if the backend is unavailable.
@@ -455,8 +554,11 @@ async function persistAssistantMessage(message) {
 }
 
 function mergeAgentSessionPayload(session) {
-  if (!session || !session.id) return;
+  if (!session || !session.id) return false;
   const existing = state.agentSessions.find((item) => item.id === session.id);
+  const previousAttachments = state.agentWorkspaceAttachments[session.id] || [];
+  const nextAttachments = session.attached_workspace_ids || [];
+  const workspacesChanged = !sameStringList(previousAttachments, nextAttachments);
   const summary = {
     id: session.id,
     title: session.title,
@@ -467,15 +569,36 @@ function mergeAgentSessionPayload(session) {
   state.agentSessions = existing
     ? state.agentSessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
     : [summary, ...state.agentSessions];
-  state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
-  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || (session.attached_workspace_ids || [])[0] || null;
+  state.agentWorkspaceAttachments[session.id] = nextAttachments;
+  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || nextAttachments[0] || null;
+  state.agentApprovalsBySession[session.id] = session.approvals || state.agentApprovalsBySession[session.id] || [];
+  state.agentEventsBySession[session.id] = session.events || state.agentEventsBySession[session.id] || [];
   if (session.messages) {
-    state.assistantMessagesBySession[session.id] = session.messages.map((message) => [
-      message.role === "assistant" ? "assistant" : message.role || "user",
-      message.title || (message.role === "assistant" ? "Assistant" : "User"),
-      message.content || "",
-    ]);
+    state.assistantMessagesBySession[session.id] = session.messages.map(agentMessageFromPayload);
   }
+  return workspacesChanged;
+}
+
+async function updateAgentSessionFromPayload(session) {
+  const workspacesChanged = mergeAgentSessionPayload(session);
+  if (workspacesChanged) {
+    await refreshAgentWorkspaceState();
+  } else {
+    renderAssistant();
+  }
+}
+
+function sameStringList(left, right) {
+  const a = (left || []).map(String);
+  const b = (right || []).map(String);
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}
+
+async function refreshAgentWorkspaceState() {
+  await loadUiWorkspaces();
+  rebuildDerivedState();
+  renderWorkspace();
+  renderAssistant();
 }
 
 function attachedWorkspaceIds(agentSessionId = state.selectedAgentSessionId) {
@@ -499,7 +622,7 @@ function attachWorkspaceToCurrent(workspaceId) {
   setSelectedWorkspace(workspaceId);
   if (workspace && workspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
     postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`, { workspace_id: workspace.backendWorkspaceId })
-      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .then((payload) => updateAgentSessionFromPayload(payload.session))
       .catch(() => {});
   }
 }
@@ -528,6 +651,7 @@ function setSelectedWorkspace(workspaceId) {
 
 function renderAll() {
   renderNavigation();
+  renderPlatformStatus();
   renderWorkspace();
   renderCatalog();
   renderExperiments();
@@ -601,7 +725,7 @@ function renderOpenHandsStatus() {
 function assistantRuntimeLabel(status) {
   if (!status || status.error) return "Assistant settings unavailable";
   if (!status.enabled) return "OpenHands disabled";
-  if (status.mode === "configured") return status.connected ? "OpenHands connected" : "OpenHands configured";
+  if (status.mode === "configured") return status.connected ? "Tell OptPilot Assistant what you want to do" : "OpenHands configured";
   if (status.mode) return `OpenHands ${status.mode}`;
   return "OpenHands not configured";
 }
@@ -626,6 +750,7 @@ async function saveSettings() {
   }
   fillSettingsForm();
   renderSettingsModal();
+  renderPlatformStatus();
   renderAssistant();
 }
 
@@ -684,26 +809,409 @@ function renderAssistant() {
         ? "Discover configs, validate targets, and register selected files"
       : `${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached - ${pageLabel}`;
   }
+  if (els.assistantContextHint) {
+    const selected = currentSession();
+    const selectedLabel = selected ? selected.title : "No workspace";
+    els.assistantContextHint.textContent = `${pageLabel} - ${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached - ${selectedLabel}`;
+  }
   if (els.assistantSessionList) els.assistantSessionList.hidden = !isSessionList;
   if (els.agentTimeline) {
     els.agentTimeline.hidden = isSessionList;
-    els.agentTimeline.innerHTML = isRegistration ? registrationMenuHtml() : currentAssistantMessages().map(timelineItem).join("");
+    els.agentTimeline.innerHTML = isRegistration ? registrationMenuHtml() : assistantTimelineHtml(session);
   }
   const composer = document.querySelector(".agent-panel .composer");
   if (composer) composer.hidden = isSessionList;
   updateAssistantInputPlaceholder();
+  updateAssistantComposerState();
   renderOpenHandsStatus();
   renderAssistantSessionList();
+  bindAssistantApprovals();
   bindRegistrationMenu();
+  queueAssistantStepAutoScroll();
+}
+
+function queueAssistantStepAutoScroll() {
+  if (!els.agentTimeline) return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(scrollWorkingAssistantStepsToBottom);
+  });
+}
+
+function scrollWorkingAssistantStepsToBottom() {
+  if (!els.agentTimeline) return;
+  els.agentTimeline.querySelectorAll(".assistant-step-group.working .assistant-step-scroll").forEach((scroller) => {
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+}
+
+function assistantTimelineHtml(session) {
+  return `${assistantApprovalsHtml()}${assistantInterleavedTimelineHtml(session)}`;
+}
+
+function assistantApprovalsHtml() {
+  const approvals = currentAssistantApprovals();
+  if (!approvals.length) return "";
+  return `
+    <div class="approval-stack">
+      ${approvals.map((approval) => `
+        <div class="approval-card">
+          <div>
+            <span>${escapeHtml(approval.kind || "approval")}</span>
+            <strong>${escapeHtml(approval.title || "Approval requested")}</strong>
+            <p>${escapeHtml(approval.summary || "")}</p>
+            ${(approval.targets || []).length ? `<small>${escapeHtml((approval.targets || []).join(" - "))}</small>` : ""}
+          </div>
+          <div class="approval-actions">
+            <button class="ghost-button" data-reject-approval="${escapeHtml(approval.id)}" type="button">Reject</button>
+            <button class="primary-button" data-approve-approval="${escapeHtml(approval.id)}" type="button">Approve</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function assistantInterleavedTimelineHtml(session) {
+  const messages = currentAssistantMessages();
+  const events = currentAssistantEvents()
+    .map((event, index) => ({ ...event, __index: index }))
+    .sort((left, right) => {
+      const byTime = eventTimestampMs(left) - eventTimestampMs(right);
+      return Number.isFinite(byTime) && byTime !== 0 ? byTime : left.__index - right.__index;
+    });
+  if (!messages.length) return "";
+  const html = [];
+  const messageTimes = messages.map(messageTimestampMs);
+  const renderedEventIndexes = new Set();
+  messages.forEach((message, index) => {
+    html.push(timelineItem(message));
+    if (message[0] !== "user") return;
+    const messageTime = messageTimes[index];
+    if (!Number.isFinite(messageTime)) return;
+    const nextUserIndex = messages
+      .slice(index + 1)
+      .findIndex((candidate) => candidate[0] === "user");
+    const turnEndIndex = nextUserIndex === -1 ? messages.length : index + 1 + nextUserIndex;
+    const turnMessages = messages.slice(index + 1, turnEndIndex);
+    const hasAssistantReply = turnMessages.some((candidate) => candidate[0] === "assistant" || candidate[0] === "agent");
+    const isLatestUserTurn = turnEndIndex === messages.length;
+    const isWorking = isLatestUserTurn && !hasAssistantReply && (!session || session.status !== "error");
+    const nextUserTime = messages
+      .slice(index + 1)
+      .filter((candidate) => candidate[0] === "user")
+      .map(messageTimestampMs)
+      .find(Number.isFinite) ?? Number.POSITIVE_INFINITY;
+    const turnEvents = events.filter((event) => {
+      if (renderedEventIndexes.has(event.__index)) return false;
+      const eventTime = eventTimestampMs(event);
+      return Number.isFinite(eventTime) && eventTime >= messageTime && eventTime < nextUserTime;
+    });
+    turnEvents.forEach((event) => renderedEventIndexes.add(event.__index));
+    if (turnEvents.length || isWorking) {
+      html.push(assistantStepGroupHtml(turnEvents, { isWorking, open: isWorking }));
+    }
+  });
+  return html.join("");
+}
+
+function assistantStepGroupHtml(events, options = {}) {
+  const visibleEvents = events.filter(assistantEventIsInformative);
+  if (!visibleEvents.length && !options.isWorking) return "";
+  const start = firstFinite(visibleEvents.map(eventTimestampMs));
+  const end = lastFinite(visibleEvents.map(eventTimestampMs));
+  const label = options.isWorking
+    ? "Working"
+    : Number.isFinite(start) && Number.isFinite(end)
+    ? `Worked for ${formatDuration(Math.max(0, end - start))}`
+    : `${visibleEvents.length} assistant step${visibleEvents.length === 1 ? "" : "s"}`;
+  return `
+    <details class="assistant-step-group ${options.isWorking ? "working" : ""}" ${options.open ? "open" : ""}>
+      <summary>
+        ${options.isWorking ? assistantTypingDotsHtml() : ""}
+        <span>${escapeHtml(label)}</span>
+        <strong>${visibleEvents.length}</strong>
+      </summary>
+      <div class="assistant-step-scroll">
+        ${visibleEvents.length ? `
+          <ol>
+            ${visibleEvents.map((event) => {
+              const step = assistantStepSummary(event);
+              return `
+                <li class="${escapeHtml(step.status)}">
+                  <span>${escapeHtml(step.time)}</span>
+                  <div>
+                    <strong>${escapeHtml(step.title)}</strong>
+                    ${step.detail ? `<p>${escapeHtml(step.detail)}</p>` : ""}
+                    ${step.codeBlock ? `<pre class="assistant-step-pre">${escapeHtml(step.codeBlock)}</pre>` : ""}
+                    <code>${escapeHtml(step.type)}</code>
+                  </div>
+                </li>
+              `;
+            }).join("")}
+          </ol>
+        ` : `<p class="assistant-step-empty">Waiting for intermediate steps...</p>`}
+      </div>
+    </details>
+  `;
+}
+
+function assistantTypingDotsHtml() {
+  return `
+    <span class="typing-dots" aria-hidden="true">
+      <i></i>
+      <i></i>
+      <i></i>
+    </span>
+  `;
+}
+
+function assistantEventIsInformative(event) {
+  if (!event || typeof event !== "object") return false;
+  const type = event.type || "";
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  if (type === "optpilot_tool_result") return true;
+  if (type === "openhands_event") {
+    const category = payload.category || "";
+    if (String(payload.summary || "").startsWith("OptPilot tool result for ")) return false;
+    return ["reasoning", "tool_call", "user_message", "error"].includes(category) || Boolean(payload.tool || payload.reasoning);
+  }
+  if (type === "approval_requested" || type === "approval_approved" || type === "approval_rejected") return true;
+  if (type === "workspace_attached" || type === "workspace_detached") return true;
+  return type.includes("failed") || type.includes("error");
+}
+
+function assistantStepSummary(event) {
+  const payload = event && typeof event.payload === "object" && event.payload ? event.payload : {};
+  const type = event && event.type || "backend_event";
+  const base = {
+    status: eventStatus(event),
+    time: formatEventTime(event && event.created_at),
+    type,
+    title: humanizeEventType(type),
+    detail: payloadPreview(payload),
+  };
+  if (event.type === "optpilot_tool_result") {
+    return {
+      ...base,
+      title: payload.tool ? `Tool result: ${payload.tool}` : "Tool result",
+      detail: payload.summary || (payload.ok === false ? "Tool failed." : "Tool completed."),
+      codeBlock: payload.result_preview || "",
+    };
+  }
+  if (event.type === "openhands_event") {
+    const category = payload.category || "";
+    if (category === "reasoning") {
+      return {
+        ...base,
+        title: "Reasoning",
+        detail: payload.reasoning || payload.summary || "",
+        codeBlock: "",
+      };
+    }
+    if (category === "tool_call" || payload.tool) {
+      return {
+        ...base,
+        title: payload.tool ? `Tool call: ${payload.tool}` : "Tool call",
+        detail: payload.reasoning || (payload.tool_call_id ? `Call ${payload.tool_call_id}` : ""),
+        codeBlock: payload.arguments_preview || "",
+      };
+    }
+    if (category === "user_message") {
+      return {
+        ...base,
+        title: "User request sent",
+        detail: payload.summary || "",
+        codeBlock: "",
+      };
+    }
+    if (category === "error") {
+      return {
+        ...base,
+        title: "OpenHands error",
+        detail: payload.summary || payload.raw_preview || "",
+        codeBlock: "",
+      };
+    }
+    return {
+      ...base,
+      title: payload.event_type ? `OpenHands ${payload.event_type}` : "OpenHands event",
+      detail: payload.summary || payload.raw_preview || "",
+    };
+  }
+  if (event.type === "workspace_attached") {
+    return { ...base, title: "Workspace attached", detail: payload.workspace_id || "" };
+  }
+  if (event.type === "workspace_detached") {
+    return { ...base, title: "Workspace detached", detail: payload.workspace_id || "" };
+  }
+  if (event.type === "approval_requested") {
+    return { ...base, title: payload.title || "Approval requested", detail: payload.summary || payload.tool || "" };
+  }
+  if (event.type === "approval_approved") {
+    return { ...base, title: "Approval approved", detail: payload.tool || "" };
+  }
+  if (event.type === "approval_rejected") {
+    return { ...base, title: "Approval rejected", detail: payload.reason || payload.tool || "" };
+  }
+  if (event.type === "openhands_dispatch_failed") {
+    return { ...base, title: "OpenHands dispatch failed", detail: payload.error || "" };
+  }
+  if (event.type === "openhands_dispatch_queued") {
+    return { ...base, title: "OpenHands dispatch queued", detail: payload.mode || "" };
+  }
+  if (event.type === "openhands_dispatch_started") {
+    return { ...base, title: "OpenHands dispatch started", detail: payload.dispatch || payload.mode || "" };
+  }
+  if (event.type === "openhands_dispatch_completed") {
+    return { ...base, title: "OpenHands dispatch completed", detail: payload.dispatch || payload.status || "" };
+  }
+  if (event.type === "openhands_chat_completion_completed") {
+    return { ...base, title: "OpenHands chat completed", detail: payload.conversation_id || "" };
+  }
+  if (event.type === "openhands_model_chat_completed") {
+    return { ...base, title: "Model chat completed", detail: payload.model || "" };
+  }
+  if (event.type === "message") {
+    return { ...base, title: `${capitalize(payload.role || "assistant")} message stored`, detail: payload.message_id || "" };
+  }
+  if (event.type === "session_created") {
+    return { ...base, title: "Session created", detail: payload.title || "" };
+  }
+  return base;
+}
+
+function eventStatus(event) {
+  const type = String(event && event.type || "");
+  const payload = event && typeof event.payload === "object" && event.payload ? event.payload : {};
+  if (payload.ok === false || type.includes("failed") || type.includes("rejected") || type.includes("error")) return "failed";
+  if (type.includes("requested") || type.includes("queued")) return "waiting";
+  if (type.includes("started") || type.includes("running")) return "running";
+  return "done";
+}
+
+function eventTimestampMs(event) {
+  return timestampMs(event && (event.created_at || event.createdAt));
+}
+
+function messageTimestampMs(message) {
+  const meta = message && message[3] && typeof message[3] === "object" ? message[3] : {};
+  return timestampMs(meta.createdAt || meta.created_at);
+}
+
+function timestampMs(value) {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function firstFinite(values) {
+  return values.find(Number.isFinite) ?? Number.POSITIVE_INFINITY;
+}
+
+function lastFinite(values) {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (Number.isFinite(values[index])) return values[index];
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return "";
+  if (ms < 1000) return "<1s";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const hours = Math.floor(minutes / 60);
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatEventTime(value) {
+  const ms = timestampMs(value);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function humanizeEventType(type) {
+  return String(type || "backend_event")
+    .replace(/^openhands_/, "OpenHands ")
+    .replace(/^optpilot_/, "OptPilot ")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function payloadPreview(payload) {
+  if (!payload || typeof payload !== "object" || !Object.keys(payload).length) return "";
+  const text = JSON.stringify(payload);
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text;
+}
+
+function capitalize(value) {
+  const text = String(value || "");
+  return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
+}
+
+function bindAssistantApprovals() {
+  const session = currentAgentSession();
+  if (!session || !session.id || session.id.startsWith("agent-session-")) return;
+  document.querySelectorAll("[data-approve-approval]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await resolveAssistantApproval(session.id, button.dataset.approveApproval, "approve");
+    });
+  });
+  document.querySelectorAll("[data-reject-approval]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await resolveAssistantApproval(session.id, button.dataset.rejectApproval, "reject");
+    });
+  });
+}
+
+async function resolveAssistantApproval(sessionId, approvalId, action) {
+  if (!approvalId) return;
+  try {
+    const payload = await postJson(
+      `/api/agent-sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}/${action}`,
+      action === "reject" ? { reason: "Rejected in the assistant panel." } : {},
+    );
+    if (payload.approval) {
+      const approvals = state.agentApprovalsBySession[sessionId] || [];
+      state.agentApprovalsBySession[sessionId] = approvals.map((item) => item.id === approvalId ? payload.approval : item);
+    }
+    const result = payload.result || {};
+    pushAssistantMessage([
+      result.ok === false ? "tool" : "assistant",
+      action === "approve" ? "Approval handled" : "Approval rejected",
+      result.summary || (action === "approve" ? "The approved action finished." : "The requested action was rejected."),
+    ]);
+    await loadAgentSessions();
+    await refreshAgentWorkspaceState();
+  } catch (error) {
+    pushAssistantMessage(["tool", "Approval failed", String(error.message || error)]);
+  }
+  renderAssistant();
 }
 
 function updateAssistantInputPlaceholder() {
   if (!els.agentInput) return;
-  const defaultText = assistantPromptForContext();
-  if (!els.agentInput.dataset.touched) {
-    els.agentInput.value = defaultText;
+  els.agentInput.placeholder = assistantPromptForContext();
+}
+
+function handleAgentInputKeydown(event) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    sendAgentMessage();
   }
-  els.agentInput.placeholder = defaultText;
+}
+
+function updateAssistantComposerState() {
+  if (!els.sendAgentButton) return;
+  els.sendAgentButton.disabled = assistantIsBusy();
+}
+
+function assistantIsBusy() {
+  const session = currentAgentSession();
+  return Boolean(session && ["waiting_for_agent", "running"].includes(session.status || ""));
 }
 
 function assistantPromptForContext() {
@@ -722,7 +1230,9 @@ function assistantPromptForContext() {
 }
 
 function renderNavigation() {
-  document.body.classList.toggle("view-workspace", state.view === "workspace");
+  ["workspace", "catalog", "experiments", "runs"].forEach((view) => {
+    document.body.classList.toggle(`view-${view}`, state.view === view);
+  });
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.view);
   });
@@ -1162,7 +1672,7 @@ async function selectSession(sessionId) {
   const selectedWorkspace = state.sessions.find((item) => item.id === sessionId);
   if (agentSession && selectedWorkspace && selectedWorkspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
     postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`, { workspace_id: selectedWorkspace.backendWorkspaceId })
-      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .then((payload) => updateAgentSessionFromPayload(payload.session))
       .catch(() => {});
   }
   const next = currentSession();
@@ -1238,7 +1748,7 @@ async function createAgentSession() {
       attached_workspace_ids: attached,
       selected_workspace_id: attached[0] || "",
     });
-    mergeAgentSessionPayload(payload.session);
+    await updateAgentSessionFromPayload(payload.session);
     state.selectedAgentSessionId = payload.session.id;
   } catch (error) {
     const id = `agent-session-${Date.now().toString(36)}`;
@@ -1253,6 +1763,7 @@ async function createAgentSession() {
     state.agentWorkspaceAttachments[id] = state.selectedSessionId ? [state.selectedSessionId] : [];
     state.selectedWorkspaceByAgentSession[id] = state.selectedSessionId || null;
     state.assistantMessagesBySession[id] = defaultAssistantMessages();
+    state.agentEventsBySession[id] = [];
     state.selectedAgentSessionId = id;
   }
   state.assistantMode = "chat";
@@ -1268,7 +1779,7 @@ async function closeWorkspaceFromCurrentSession(workspaceId) {
   state.agentWorkspaceAttachments[agentSession.id] = attachedWorkspaceIds(agentSession.id).filter((id) => id !== workspaceId);
   if (!agentSession.id.startsWith("agent-session-")) {
     postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`, { workspace_id: workspaceId })
-      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .then((payload) => updateAgentSessionFromPayload(payload.session))
       .catch(() => {});
   }
   if (workspace && workspace.backendWorkspaceId) {
@@ -1294,12 +1805,164 @@ function renderCodeServerCard(session) {
 }
 
 function updateSidebarCodeServerStatus() {
-  const status = state.codeServer || {};
-  const running = Boolean(status.running);
-  const installed = Boolean(status.installed || status.available);
-  if (els.sidebarCodeServer) {
-    els.sidebarCodeServer.textContent = running ? "Code editor running" : installed ? "Code editor ready" : "Code editor not installed";
+  renderPlatformStatus();
+}
+
+function renderPlatformStatus() {
+  const services = platformServices();
+  const requiredBlocked = services.some((service) => service.required && service.level === "failed");
+  const requiredWaiting = services.some((service) => service.required && service.level === "review");
+  const hasLimited = services.some((service) => service.level === "review");
+  const summary = requiredBlocked
+    ? ["Needs setup", "failed"]
+    : requiredWaiting || hasLimited
+    ? ["Limited", "review"]
+    : ["Ready", "ready"];
+  if (els.healthStatus) els.healthStatus.textContent = summary[0];
+  if (els.sidebarServiceStatus) {
+    els.sidebarServiceStatus.innerHTML = services.map(sidebarServiceRow).join("");
   }
+}
+
+function platformServices() {
+  const code = state.codeServer || {};
+  const runtime = state.runtime || {};
+  const agent = state.agentRuntimeStatus || {};
+  return [
+    {
+      label: "Studio",
+      badge: state.platformReady ? "ready" : "offline",
+      level: state.platformReady ? "ready" : "failed",
+      detail: state.platformReady ? "Local UI serving" : "Local UI unreachable",
+      required: true,
+    },
+    codeEditorService(code),
+    openHandsService(agent),
+    sandboxService(runtime),
+  ];
+}
+
+function codeEditorService(status) {
+  if (status.running) {
+    return {
+      label: "Code Server",
+      badge: "running",
+      level: "ready",
+      detail: `Port ${status.port || 8766}${status.workspace_root ? ` - ${shortPath(status.workspace_root)}` : ""}`,
+      required: true,
+    };
+  }
+  if (status.installed || status.available) {
+    return {
+      label: "Code Server",
+      badge: "ready",
+      level: "review",
+      detail: "Installed; start from Editor",
+      required: true,
+    };
+  }
+  return {
+    label: "Code Server",
+    badge: "missing",
+    level: "failed",
+    detail: status.error || status.install_hint || "code-server not installed",
+    required: true,
+  };
+}
+
+function openHandsService(status) {
+  if (status.enabled && status.connected) {
+    return {
+      label: "OpenHands",
+      badge: "connected",
+      level: "ready",
+      detail: status.model || "Agent server reachable",
+      required: true,
+    };
+  }
+  if (!status.enabled) {
+    return {
+      label: "OpenHands",
+      badge: "off",
+      level: "failed",
+      detail: "Assistant runtime disabled",
+      required: true,
+    };
+  }
+  if (!status.credentials_configured) {
+    return {
+      label: "OpenHands",
+      badge: "setup",
+      level: "failed",
+      detail: !status.model ? "Model missing" : "API key missing",
+      required: true,
+    };
+  }
+  if (status.server_configured) {
+    return {
+      label: "OpenHands",
+      badge: "offline",
+      level: "failed",
+      detail: status.base_url || "Agent server not reachable",
+      required: true,
+    };
+  }
+  return {
+    label: "OpenHands",
+    badge: "chat",
+    level: "review",
+    detail: "No agent server URL configured",
+    required: true,
+  };
+}
+
+function sandboxService(runtime) {
+  const docker = runtime.docker || {};
+  const podman = runtime.podman || {};
+  if (docker.ok) {
+    return {
+      label: "Sandbox",
+      badge: "docker",
+      level: "ready",
+      detail: compactVersion(docker.version) || "Docker ready",
+      required: false,
+    };
+  }
+  if (podman.ok) {
+    return {
+      label: "Sandbox",
+      badge: "podman",
+      level: "ready",
+      detail: compactVersion(podman.version) || "Podman ready",
+      required: false,
+    };
+  }
+  return {
+    label: "Sandbox",
+    badge: "host",
+    level: "review",
+    detail: "Container sandbox unavailable; host runs only",
+    required: false,
+  };
+}
+
+function sidebarServiceRow(service) {
+  const title = `${service.label}: ${service.detail || service.badge || service.level}`;
+  return `
+    <div class="sidebar-service-row ${escapeHtml(service.level)}" title="${escapeHtml(title)}">
+      <span class="service-dot ${escapeHtml(service.level)}" aria-hidden="true"></span>
+      <span class="sidebar-service-label">${escapeHtml(service.label)}</span>
+      <span class="sidebar-service-badge">${escapeHtml(compactServiceBadge(service))}</span>
+    </div>
+  `;
+}
+
+function compactServiceBadge(service) {
+  return service.level === "ready" ? "ON" : "OFF";
+}
+
+function compactVersion(value) {
+  return String(value || "").replace(/,\s*build\s+.*/i, "").trim();
 }
 
 function renderSessionEditor(session) {
@@ -1444,12 +2107,17 @@ function renderSessionBottom() {
 }
 
 function renderCatalog() {
+  if (els.componentSearch && els.componentSearch.value !== state.componentSearch) {
+    els.componentSearch.value = state.componentSearch;
+  }
   document.querySelectorAll("[data-component-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.componentFilter === state.componentFilter);
   });
+  const query = normalizeSearch(state.componentSearch);
   const components = allComponents().filter((item) => {
     const matchesFilter = state.componentFilter === "all" || item.kind === state.componentFilter;
-    return matchesFilter;
+    const matchesSearch = !query || catalogSearchText(item).includes(query);
+    return matchesFilter && matchesSearch;
   });
   if (!components.some((item) => item.key === state.selectedComponentKey)) {
     state.selectedComponentKey = components[0] && components[0].key;
@@ -1515,7 +2183,12 @@ function renderComponentDetail() {
 }
 
 function renderExperiments() {
-  els.planList.innerHTML = state.plans.map(planButton).join("") || emptyInline("No plans yet.");
+  if (els.planSearch && els.planSearch.value !== state.planSearch) {
+    els.planSearch.value = state.planSearch;
+  }
+  const query = normalizeSearch(state.planSearch);
+  const plans = state.plans.filter((plan) => !query || planSearchText(plan).includes(query));
+  els.planList.innerHTML = plans.map(planButton).join("") || emptyInline(query ? "No studies match." : "No plans yet.");
   document.querySelectorAll("[data-plan-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedPlanId = button.dataset.planId;
@@ -1523,6 +2196,39 @@ function renderExperiments() {
     });
   });
   renderPlanDetail();
+}
+
+function normalizeSearch(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function catalogSearchText(component) {
+  const summary = component.entry && component.entry.summary || {};
+  return normalizeSearch([
+    component.kind,
+    component.id,
+    component.path,
+    component.entry && component.entry.label,
+    summary.description,
+    summary.goal,
+    summary.candidate_format,
+    summary.protocol,
+    summary.implementation_type,
+    ...[].concat(summary.candidate_formats || []),
+    ...[].concat(summary.metrics || []),
+  ].filter(Boolean).join(" "));
+}
+
+function planSearchText(plan) {
+  return normalizeSearch([
+    plan.title,
+    plan.source,
+    plan.status,
+    plan.environment && plan.environment.id,
+    plan.method && plan.method.id,
+    plan.metric,
+    plan.direction,
+  ].filter(Boolean).join(" "));
 }
 
 function renderPlanDetail() {
@@ -1589,7 +2295,7 @@ function studyConfigEditor(plan, locked) {
       <h3>Run Policy</h3>
       <div class="control-grid">
         ${inputField("Max trials", "maxTrials", plan.maxTrials || "", "number", locked, "1")}
-        ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "0")}
+        ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "1")}
         ${selectField("Backend", "backend", plan.backend || "local", ["local", "local_subprocess"], locked)}
         ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1")}
         ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1")}
@@ -1678,17 +2384,28 @@ function refreshPlanPreview(plan) {
 }
 
 function renderRuns() {
-  const query = els.runFilter.value.trim().toLowerCase();
+  document.querySelectorAll("[data-run-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.runFilter === state.runStatusFilter);
+  });
+  const query = els.runFilter ? els.runFilter.value.trim().toLowerCase() : "";
   const rows = runRowsWithJobs();
-  const runs = rows.filter((run) => `${run.name} ${run.path} ${run.status} ${run.environment_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
-  els.totalRuns.textContent = String(rows.length);
-  els.runningRuns.textContent = String(rows.filter((run) => run.status === "running").length);
-  els.completedTrials.textContent = String(sum(state.runs.map((run) => Number(run.completed_trials || 0))));
-  els.failureCount.textContent = String(sum(state.runs.map((run) => Number(run.failure_count || 0))));
+  const runs = rows.filter((run) => {
+    const matchesStatus = state.runStatusFilter === "all" || run.status === state.runStatusFilter;
+    const matchesSearch = !query || runSearchText(run).includes(query);
+    return matchesStatus && matchesSearch;
+  });
+  if (els.totalRuns) els.totalRuns.textContent = String(rows.length);
+  if (els.runningRuns) els.runningRuns.textContent = String(rows.filter((run) => run.status === "running").length);
+  if (els.completedTrials) els.completedTrials.textContent = String(sum(state.runs.map((run) => Number(run.completed_trials || 0))));
+  if (els.failureCount) els.failureCount.textContent = String(sum(state.runs.map((run) => Number(run.failure_count || 0))));
   els.runsTable.innerHTML = runs.map(runRow).join("") || emptyInline("No runs match.");
   document.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
   });
+}
+
+function runSearchText(run) {
+  return `${run.name} ${run.path} ${run.status} ${run.environment_id || ""} ${run.method && run.method.id || ""}`.toLowerCase();
 }
 
 function runRowsWithJobs() {
@@ -2082,21 +2799,17 @@ async function primaryAction() {
   await openRegistrationMenu();
 }
 
-function attachContext() {
-  const session = currentSession();
-  const message = ["user", "Context attached", `Current workspace: ${session ? session.title : "none"}. Attached workspace roots, catalog, studies, runs, and code context are available.`];
-  pushAssistantMessage(message);
-  persistAssistantMessage(message);
-  renderAssistant();
-}
-
 async function sendAgentMessage() {
+  if (assistantIsBusy()) return;
   const message = els.agentInput.value.trim();
   if (!message) return;
   const userMessage = ["user", "User", message];
   pushAssistantMessage(userMessage);
+  const session = currentAgentSession();
+  if (session && !session.id.startsWith("agent-session-")) session.status = "running";
   els.agentInput.value = "";
   delete els.agentInput.dataset.touched;
+  renderAssistant();
   const persisted = await persistAssistantMessage(userMessage);
   if (!persisted) {
     pushAssistantMessage(["assistant", "Runtime unavailable", "This message is visible in the local transcript, but the backend assistant session could not store it."]);
@@ -2114,7 +2827,7 @@ function planPayload(plan) {
     aggregation: plan.aggregation || "mean",
     secondaryMetrics: plan.secondaryMetrics || [],
     maxTrials: Number(plan.maxTrials || 8),
-    maxFailures: plan.maxFailures === "" || plan.maxFailures === null || plan.maxFailures === undefined ? null : Number(plan.maxFailures),
+    maxFailures: positiveOptionalNumber(plan.maxFailures),
     backend: plan.backend || "local",
     parallelism: Number(plan.parallelism || 1),
     timeoutSeconds: Number(plan.timeoutSeconds || 120),
@@ -2251,8 +2964,9 @@ function planYamlPreview(plan) {
     "budget:",
     `  maxTrials: ${Number(plan.maxTrials || 1)}`,
   );
-  if (plan.maxFailures !== "" && plan.maxFailures !== null && plan.maxFailures !== undefined) {
-    lines.push(`  maxFailures: ${Number(plan.maxFailures || 0)}`);
+  const maxFailures = positiveOptionalNumber(plan.maxFailures);
+  if (maxFailures !== null) {
+    lines.push(`  maxFailures: ${maxFailures}`);
   }
   lines.push(
     "",
@@ -2461,11 +3175,11 @@ function summaryCell([label, value]) {
 }
 
 function timelineItem([kind, title, text]) {
+  const isAssistantOutput = kind === "assistant" || kind === "agent" || kind === "tool";
   return `
     <div class="timeline-item ${escapeHtml(kind)}">
       <span>${escapeHtml(kind)}</span>
-      <strong>${escapeHtml(title)}</strong>
-      <p>${escapeHtml(text)}</p>
+      <div class="timeline-content">${isAssistantOutput ? renderMarkdown(text) : `<p>${escapeHtml(text)}</p>`}</div>
     </div>
   `;
 }
@@ -2645,10 +3359,10 @@ function capabilityItem(capability) {
 
 function statusClass(status) {
   const value = String(status || "unknown");
-  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved"].includes(value)) return "status-ready";
-  if (["failed", "invalid", "incompatible", "unavailable"].includes(value)) return "status-failed";
+  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "docker", "podman"].includes(value)) return "status-ready";
+  if (["failed", "invalid", "incompatible", "unavailable", "offline", "missing", "off", "setup"].includes(value)) return "status-failed";
   if (["running", "validating", "opening"].includes(value)) return "status-running";
-  if (["review", "draft", "read-only", "idle", "optional"].includes(value)) return "status-review";
+  if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited"].includes(value)) return "status-review";
   return `status-${escapeHtml(value)}`;
 }
 
@@ -2663,6 +3377,12 @@ function formatMetric(value) {
   const numeric = Number(value);
   if (Number.isFinite(numeric)) return numeric.toFixed(Math.abs(numeric) >= 100 ? 1 : 4).replace(/\.?0+$/, "");
   return escapeHtml(String(value));
+}
+
+function positiveOptionalNumber(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
 function formatBytes(value) {
@@ -2692,6 +3412,165 @@ function emptyInline(message) {
 
 function emptyState(message) {
   return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
+function renderMarkdown(value) {
+  const text = normalizeAssistantMarkdown(value);
+  if (!text) return "";
+  const lines = text.split("\n");
+  const html = [];
+  let paragraph = [];
+  let listItems = [];
+  let listTag = "ul";
+  let codeLines = [];
+  let inCode = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    html.push(`<${listTag}>${listItems.map((item) => `<li>${inlineMarkdown(item)}</li>`).join("")}</${listTag}>`);
+    listItems = [];
+    listTag = "ul";
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      flushParagraph();
+      flushList();
+      const rendered = renderMarkdownTable(lines, index);
+      html.push(rendered.html);
+      index = rendered.nextIndex - 1;
+      continue;
+    }
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const level = Math.min(heading[1].length + 2, 5);
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (/^[-*_]{3,}$/.test(trimmed)) {
+      flushParagraph();
+      flushList();
+      html.push("<hr>");
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const nextTag = ordered ? "ol" : "ul";
+      if (listItems.length && listTag !== nextTag) flushList();
+      listTag = nextTag;
+      listItems.push((unordered || ordered)[1]);
+      continue;
+    }
+    flushList();
+    paragraph.push(trimmed);
+  }
+  if (inCode) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  flushParagraph();
+  flushList();
+  return html.join("");
+}
+
+function normalizeAssistantMarkdown(value) {
+  let text = String(value ?? "").replace(/\r\n/g, "\n").trim();
+  if (!text) return "";
+  text = text.replace(/[ \t]+---[ \t]+/g, "\n\n---\n\n");
+  text = text.replace(/[ \t]+(#{1,4})[ \t]+/g, "\n\n$1 ");
+  text = text.replace(/[ \t]+([-*])[ \t]+(?=(?:\*\*)?[A-Za-z0-9])/g, "\n$1 ");
+  text = text.replace(/[ \t]+(\d+\.)[ \t]+(?=(?:\*\*)?[A-Za-z0-9])/g, "\n$1 ");
+  text = normalizeCollapsedMarkdownTables(text);
+  return text;
+}
+
+function normalizeCollapsedMarkdownTables(text) {
+  return text.split("\n").map((line) => {
+    if (!line.includes("||")) return line;
+    if (!/\|\|\s*:?-{3,}:?/.test(line) && !/:?-{3,}:?\s*\|\|/.test(line)) return line;
+    return line.replace(/\|\|/g, "|\n|");
+  }).join("\n");
+}
+
+function isMarkdownTableStart(lines, index) {
+  if (index + 1 >= lines.length) return false;
+  const header = lines[index].trim();
+  const divider = lines[index + 1].trim();
+  return splitMarkdownTableRow(header).length > 1 && isMarkdownTableDivider(divider);
+}
+
+function renderMarkdownTable(lines, startIndex) {
+  const headers = splitMarkdownTableRow(lines[startIndex]);
+  const rows = [];
+  let nextIndex = startIndex + 2;
+  while (nextIndex < lines.length) {
+    const line = lines[nextIndex].trim();
+    if (!line || splitMarkdownTableRow(line).length < 2 || isMarkdownTableDivider(line)) break;
+    rows.push(splitMarkdownTableRow(line));
+    nextIndex += 1;
+  }
+  return {
+    nextIndex,
+    html: `
+      <div class="markdown-table-wrap">
+        <table>
+          <thead><tr>${headers.map((cell) => `<th>${inlineMarkdown(cell)}</th>`).join("")}</tr></thead>
+          <tbody>${rows.map((row) => `<tr>${headers.map((_, cellIndex) => `<td>${inlineMarkdown(row[cellIndex] || "")}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table>
+      </div>
+    `,
+  };
+}
+
+function splitMarkdownTableRow(line) {
+  let value = String(line || "").trim();
+  if (!value.includes("|")) return [];
+  if (value.startsWith("|")) value = value.slice(1);
+  if (value.endsWith("|")) value = value.slice(0, -1);
+  return value.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableDivider(line) {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function inlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 }
 
 function escapeHtml(value) {

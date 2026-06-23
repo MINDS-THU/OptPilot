@@ -6,14 +6,36 @@
     <title>OptPilot Studio</title>
     <script>
       if (window.location.protocol === "file:") {
-        window.location.replace("http://127.0.0.1:8767/");
+        window.addEventListener("DOMContentLoaded", () => {
+          document.body.classList.add("file-mode");
+        });
       }
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260623g" />
+    <style>
+      body.file-mode .app-shell {
+        display: none;
+      }
+
+      body.file-mode .file-mode-notice {
+        display: block;
+        max-width: 720px;
+        margin: 18vh auto 0;
+        padding: 18px 20px;
+        border: 1px solid #d5dfe5;
+        border-radius: 8px;
+        color: #4b5965;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+    </style>
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260623j" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
-      OptPilot Studio must be opened from the local UI server. Redirecting to http://127.0.0.1:8767/.
+      OptPilot Studio must be opened from the local UI server. Start it with
+      <code>uv run optpilot ui --open-browser</code>, or open the URL printed by the
+      running server.
     </div>
     <div class="app-shell">
       <aside class="sidebar">
@@ -31,19 +53,19 @@
           <button class="nav-button" data-view="catalog" type="button">
             <span class="nav-label">
               <strong>Catalog</strong>
-              <small aria-hidden="true">Components</small>
+              <small aria-hidden="true">Available Environments and Methods</small>
             </span>
           </button>
           <button class="nav-button" data-view="experiments" type="button">
             <span class="nav-label">
               <strong>Studies</strong>
-              <small aria-hidden="true">Plans</small>
+              <small aria-hidden="true">Experiment Configurations</small>
             </span>
           </button>
           <button class="nav-button" data-view="runs" type="button">
             <span class="nav-label">
               <strong>Runs</strong>
-              <small aria-hidden="true">Evidence</small>
+              <small aria-hidden="true">Experiment Runs</small>
             </span>
           </button>
         </nav>
@@ -69,9 +91,15 @@
         </section>
 
         <div class="sidebar-foot">
-          <div class="muted">Platform status</div>
-          <div id="healthStatus">Checking</div>
-          <div id="sidebarCodeServer" class="sidebar-status">Code editor unavailable</div>
+          <div class="platform-status-head">
+            <div>
+              <div class="muted">Platform status</div>
+              <strong id="healthStatus">Checking</strong>
+            </div>
+          </div>
+          <div id="sidebarServiceStatus" class="sidebar-service-list">
+            <div id="sidebarCodeServer" class="sidebar-status">Code editor unavailable</div>
+          </div>
           <button id="settingsButton" class="settings-button" type="button">Settings</button>
         </div>
       </aside>
@@ -103,18 +131,9 @@
           </div>
           <div id="agentTimeline" class="agent-timeline"></div>
           <div class="composer">
-            <div class="assistant-scopes" aria-label="Assistant context">
-              <span>Session</span>
-              <span>Workspace</span>
-              <span>Register</span>
-              <span>Catalog</span>
-              <span>Studies</span>
-              <span>Runs</span>
-              <span>Code</span>
-            </div>
-            <textarea id="agentInput" spellcheck="false">Create an experiment plan from this context and launch it after validation passes.</textarea>
+            <div id="assistantContextHint" class="assistant-context-hint" aria-label="Assistant context"></div>
+            <textarea id="agentInput" spellcheck="false"></textarea>
             <div class="form-actions">
-              <button id="attachContextButton" class="ghost-button" type="button">Attach</button>
               <button id="sendAgentButton" class="primary-button" type="button">Send</button>
             </div>
           </div>
@@ -204,11 +223,8 @@
         <section id="catalogView" class="view">
           <div class="entity-layout">
             <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <h2>Catalog</h2>
-                  <span class="path-text">environments and methods</span>
-                </div>
+              <div class="panel-header panel-search-header">
+                <input id="componentSearch" class="search-input panel-search-input" type="search" placeholder="Search catalog" aria-label="Search catalog" />
               </div>
               <div class="tabs">
                 <button class="tab active" data-component-filter="all" type="button">All</button>
@@ -226,11 +242,8 @@
         <section id="experimentsView" class="view">
           <div class="entity-layout plan-view">
             <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <h2>Study Configs</h2>
-                  <span class="path-text">drafts and saved launch configs</span>
-                </div>
+              <div class="panel-header panel-search-header">
+                <input id="planSearch" class="search-input panel-search-input" type="search" placeholder="Search studies" aria-label="Search studies" />
               </div>
               <div id="planList" class="entity-list"></div>
             </section>
@@ -241,17 +254,16 @@
         </section>
 
         <section id="runsView" class="view">
-          <div class="summary-grid">
-            <div class="metric-tile"><span>Runs</span><strong id="totalRuns">0</strong></div>
-            <div class="metric-tile"><span>Running</span><strong id="runningRuns">0</strong></div>
-            <div class="metric-tile"><span>Completed Trials</span><strong id="completedTrials">0</strong></div>
-            <div class="metric-tile"><span>Failures</span><strong id="failureCount">0</strong></div>
-          </div>
           <div class="runs-layout">
             <section class="panel">
-              <div class="panel-header">
-                <h2>Study Runs</h2>
-                <input id="runFilter" class="search-input" type="search" placeholder="Filter runs" />
+              <div class="panel-header panel-search-header">
+                <input id="runFilter" class="search-input panel-search-input" type="search" placeholder="Search runs" aria-label="Search runs" />
+              </div>
+              <div class="tabs">
+                <button class="tab active" data-run-filter="all" type="button">All</button>
+                <button class="tab" data-run-filter="running" type="button">Running</button>
+                <button class="tab" data-run-filter="completed" type="button">Completed</button>
+                <button class="tab" data-run-filter="incomplete" type="button">Incomplete</button>
               </div>
               <div id="runsTable" class="run-list" role="list"></div>
             </section>
@@ -316,6 +328,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=studio-20260623g"></script>
+    <script src="/static/app.js?v=studio-20260623j"></script>
   </body>
 </html>
