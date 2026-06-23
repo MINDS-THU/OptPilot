@@ -3,190 +3,239 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OptPilot Workbench</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <title>OptPilot Studio</title>
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://127.0.0.1:8767/");
+      }
+    </script>
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260623g" />
   </head>
   <body>
+    <div id="fileModeNotice" class="file-mode-notice">
+      OptPilot Studio must be opened from the local UI server. Redirecting to http://127.0.0.1:8767/.
+    </div>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">OP</div>
+          <div class="brand-mark">
+            <img src="/static/minds-thu.png" alt="MINDS-THU logo" />
+          </div>
           <div>
-            <div class="brand-title">OptPilot</div>
-            <div class="brand-subtitle">Workbench</div>
+            <div class="brand-title">OptPilot Studio</div>
+            <div class="brand-subtitle"> AI-Assisted Iterative Optimization</div>
           </div>
         </div>
+
         <nav class="nav" aria-label="Main navigation">
-          <button class="nav-button active" data-view="home" type="button">Home</button>
-          <button class="nav-button" data-view="environments" type="button">Environments</button>
-          <button class="nav-button" data-view="methods" type="button">Methods</button>
-          <button class="nav-button" data-view="builder" type="button">Study Builder</button>
-          <button class="nav-button" data-view="runs" type="button">Runs</button>
-          <button class="nav-button" data-view="config" type="button">Config Editor</button>
+          <button class="nav-button" data-view="catalog" type="button">
+            <span class="nav-label">
+              <strong>Catalog</strong>
+              <small aria-hidden="true">Components</small>
+            </span>
+          </button>
+          <button class="nav-button" data-view="experiments" type="button">
+            <span class="nav-label">
+              <strong>Studies</strong>
+              <small aria-hidden="true">Plans</small>
+            </span>
+          </button>
+          <button class="nav-button" data-view="runs" type="button">
+            <span class="nav-label">
+              <strong>Runs</strong>
+              <small aria-hidden="true">Evidence</small>
+            </span>
+          </button>
         </nav>
+
+        <button id="assistantToggleButton" class="assistant-launcher" type="button">
+          <strong>Assistant</strong>
+          <small id="assistantLauncherSubtitle">global project agent</small>
+        </button>
+
+        <section class="sidebar-workspaces">
+          <div class="sidebar-workspaces-header">
+            <div>
+              <h2>Workspaces</h2>
+              <span class="path-text">open in editor</span>
+            </div>
+            <div class="header-actions">
+              <span id="sessionCount" class="status-pill">0</span>
+              <button id="refreshButton" class="ghost-button rail-action-button" type="button" aria-label="Refresh" title="Refresh">&#8635;</button>
+              <button id="newWorkspaceButton" class="ghost-button icon-small-button" type="button" title="Create workspace">+</button>
+            </div>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+        </section>
+
         <div class="sidebar-foot">
-          <div class="muted">Local server</div>
+          <div class="muted">Platform status</div>
           <div id="healthStatus">Checking</div>
+          <div id="sidebarCodeServer" class="sidebar-status">Code editor unavailable</div>
+          <button id="settingsButton" class="settings-button" type="button">Settings</button>
         </div>
       </aside>
 
       <main class="main">
         <header class="topbar">
           <div>
-            <h1 id="pageTitle">Home</h1>
-            <p id="pageSubtitle">Connect methods to environments, launch studies, and inspect evidence.</p>
-          </div>
-          <div class="topbar-actions">
-            <button id="refreshButton" class="ghost-button" type="button">Refresh</button>
+            <div class="eyebrow">OptPilot Studio</div>
+            <h1 id="pageTitle">Editor</h1>
+            <p id="pageSubtitle">Attached workspaces, one embedded code editor, and catalog registration.</p>
           </div>
         </header>
 
-        <section id="homeView" class="view active-view">
-          <div class="summary-grid">
-            <div class="metric-tile"><span>Environments</span><strong id="homeEnvironmentCount">0</strong></div>
-            <div class="metric-tile"><span>Methods</span><strong id="homeMethodCount">0</strong></div>
-            <div class="metric-tile"><span>Runs</span><strong id="homeRunCount">0</strong></div>
-            <div class="metric-tile"><span>Running</span><strong id="homeRunningCount">0</strong></div>
+        <aside class="panel agent-panel">
+          <div id="assistantResizeHandle" class="assistant-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize assistant"></div>
+          <div class="panel-header">
+            <button id="assistantBackButton" class="ghost-button assistant-back-button" type="button" aria-label="Back to sessions">&larr;</button>
+            <div class="assistant-heading">
+              <h2 id="assistantTitle">OptPilot Assistant</h2>
+              <span id="assistantSubtitle" class="path-text">Project assistant</span>
+            </div>
+            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
           </div>
-          <div class="home-grid">
-            <section class="panel">
-              <div class="panel-header"><h2>Runtime Health</h2></div>
-              <div id="runtimeHealth" class="list"></div>
+          <div id="assistantSessionList" class="assistant-session-list">
+            <div class="assistant-session-actions">
+              <button id="newSessionButton" class="primary-button" type="button">New Session</button>
+            </div>
+            <div id="assistantSessionCards" class="assistant-session-cards"></div>
+          </div>
+          <div id="agentTimeline" class="agent-timeline"></div>
+          <div class="composer">
+            <div class="assistant-scopes" aria-label="Assistant context">
+              <span>Session</span>
+              <span>Workspace</span>
+              <span>Register</span>
+              <span>Catalog</span>
+              <span>Studies</span>
+              <span>Runs</span>
+              <span>Code</span>
+            </div>
+            <textarea id="agentInput" spellcheck="false">Create an experiment plan from this context and launch it after validation passes.</textarea>
+            <div class="form-actions">
+              <button id="attachContextButton" class="ghost-button" type="button">Attach</button>
+              <button id="sendAgentButton" class="primary-button" type="button">Send</button>
+            </div>
+          </div>
+        </aside>
+
+        <section id="workspaceView" class="view active-view">
+          <div class="workspace-grid code-focused">
+            <section class="panel workspace-surface">
+              <div class="panel-header">
+                <div>
+                  <h2 id="sessionTitle">Workspace</h2>
+                  <span id="sessionPath" class="path-text">-</span>
+                </div>
+                <span id="sessionStatus" class="status-pill">draft</span>
+              </div>
+              <div id="sessionSummary" class="session-summary"></div>
+              <div class="workspace-body">
+                <aside class="workspace-files">
+                  <section>
+                    <div class="mini-label">Files</div>
+                    <div id="sessionFiles" class="file-tree"></div>
+                  </section>
+                  <section>
+                    <div class="mini-label">Context</div>
+                    <div id="sessionContext" class="tag-row"></div>
+                  </section>
+                  <section>
+                    <div class="mini-label">Tools</div>
+                    <div id="sessionTools" class="tool-list"></div>
+                  </section>
+                  <section>
+                    <div class="mini-label">Workspace</div>
+                    <div id="sessionWorkspaceActions" class="file-tree"></div>
+                  </section>
+                </aside>
+                <section class="editor-panel">
+                  <div class="editor-toolbar">
+                    <div class="workspace-crumb">
+                      <strong>Code Editor</strong>
+                      <span id="embeddedCodeWorkspacePath" class="path-text">-</span>
+                    </div>
+                    <div class="code-workbench-actions">
+                      <button id="primaryActionButton" class="primary-button" type="button">Register to Catalog</button>
+                      <button id="reloadEmbeddedCodeButton" class="ghost-button" type="button">Reload</button>
+                      <button id="pauseCodeWorkspaceButton" class="ghost-button" type="button">Pause</button>
+                      <button id="openCodeServerButton" class="ghost-button" type="button">Open Separate Window</button>
+                    </div>
+                  </div>
+                  <div id="fileTabs" class="tab-strip file-tab-strip"></div>
+                  <div class="workbench-mode-bar">
+                    <button class="workbench-mode" data-workbench-mode="contract" type="button">Contract</button>
+                    <button class="workbench-mode" data-workbench-mode="code" type="button">Code</button>
+                    <button class="workbench-mode" data-workbench-mode="evidence" type="button">Evidence</button>
+                    <span id="fileState" class="status-pill">draft</span>
+                  </div>
+                  <div id="contractWorkbench" class="workbench-pane contract-workbench">
+                    <div id="sessionLenses" class="contract-lens"></div>
+                    <pre id="sessionEditor" class="code-box editor-code"></pre>
+                  </div>
+                  <div id="codeWorkbench" class="workbench-pane code-workbench active-workbench">
+                    <iframe id="embeddedCodeWorkspace" class="code-workspace-frame" title="Embedded code workspace"></iframe>
+                    <div id="embeddedCodeWorkspaceEmpty" class="embedded-empty">
+                      <div>
+                        <h2 id="codeWorkspaceEmptyTitle">Start the code editor</h2>
+                        <p id="codeWorkspaceEmptyBody">Inspect or edit this component without leaving OptPilot.</p>
+                        <button id="startEmbeddedCodeButton" class="primary-button" type="button">Start Code Editor</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="evidenceWorkbench" class="workbench-pane evidence-workbench"></div>
+                </section>
+              </div>
+            </section>
+
+            <section class="panel bottom-panel">
+              <div class="tabs">
+                <button class="tab active" data-session-tab="terminal" type="button">Terminal</button>
+                <button class="tab" data-session-tab="checks" type="button">Checks</button>
+                <button class="tab" data-session-tab="preview" type="button">Preview</button>
+                <button class="tab" data-session-tab="diff" type="button">Diff</button>
+              </div>
+              <div id="sessionBottom" class="tab-content"></div>
             </section>
           </div>
-          <section class="panel">
-            <div class="panel-header"><h2>Recent Runs</h2></div>
-            <div id="homeRecentRuns" class="compact-list"></div>
-          </section>
         </section>
 
-        <section id="environmentsView" class="view">
+        <section id="catalogView" class="view">
           <div class="entity-layout">
             <section class="panel">
               <div class="panel-header">
-                <h2>Environments</h2>
-                <input id="environmentFilter" class="search-input" type="search" placeholder="Filter" />
+                <div>
+                  <h2>Catalog</h2>
+                  <span class="path-text">environments and methods</span>
+                </div>
               </div>
-              <div id="environmentsList" class="entity-list"></div>
+              <div class="tabs">
+                <button class="tab active" data-component-filter="all" type="button">All</button>
+                <button class="tab" data-component-filter="environment" type="button">Environments</button>
+                <button class="tab" data-component-filter="method" type="button">Methods</button>
+              </div>
+              <div id="componentList" class="entity-list"></div>
             </section>
             <section class="panel detail-panel">
-              <div id="environmentDetail" class="detail-content"></div>
+              <div id="componentDetail" class="detail-content"></div>
             </section>
           </div>
         </section>
 
-        <section id="methodsView" class="view">
-          <div class="entity-layout">
+        <section id="experimentsView" class="view">
+          <div class="entity-layout plan-view">
             <section class="panel">
               <div class="panel-header">
-                <h2>Methods</h2>
-                <input id="methodFilter" class="search-input" type="search" placeholder="Filter" />
+                <div>
+                  <h2>Study Configs</h2>
+                  <span class="path-text">drafts and saved launch configs</span>
+                </div>
               </div>
-              <div id="methodsList" class="entity-list"></div>
+              <div id="planList" class="entity-list"></div>
             </section>
             <section class="panel detail-panel">
-              <div id="methodDetail" class="detail-content"></div>
-            </section>
-          </div>
-        </section>
-
-        <section id="builderView" class="view">
-          <div class="builder-grid">
-            <section class="panel">
-              <div class="panel-header"><h2>Study Builder</h2></div>
-              <form id="builderForm" class="form-stack">
-                <label>
-                  <span>Environment</span>
-                  <select id="builderEnvironment"></select>
-                </label>
-                <label>
-                  <span>Method</span>
-                  <select id="builderMethod"></select>
-                </label>
-                <div id="builderCompatibility" class="compat-box"></div>
-                <div class="form-row">
-                  <label>
-                    <span>Study name</span>
-                    <input id="builderName" type="text" />
-                  </label>
-                  <label>
-                    <span>Metric</span>
-                    <input id="builderMetric" type="text" />
-                  </label>
-                </div>
-                <div class="form-row">
-                  <label>
-                    <span>Direction</span>
-                    <select id="builderDirection">
-                      <option value="maximize">maximize</option>
-                      <option value="minimize">minimize</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Max trials</span>
-                    <input id="builderMaxTrials" type="number" min="1" value="12" />
-                  </label>
-                </div>
-                <div class="form-row">
-                  <label>
-                    <span>Backend</span>
-                    <select id="builderBackend">
-                      <option value="local">local</option>
-                      <option value="local_subprocess">local_subprocess</option>
-                      <option value="container">container</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Parallelism</span>
-                    <input id="builderParallelism" type="number" min="1" value="1" />
-                  </label>
-                </div>
-                <div id="containerBackendFields" class="conditional-fields">
-                  <div class="form-row">
-                    <label>
-                      <span>Container image</span>
-                      <input id="builderContainerImage" type="text" placeholder="python:3.11-slim" />
-                    </label>
-                    <label>
-                      <span>Container executable</span>
-                      <input id="builderContainerExecutable" type="text" value="docker" />
-                    </label>
-                  </div>
-                  <div class="form-row">
-                    <label>
-                      <span>Build context</span>
-                      <input id="builderContainerBuildContext" type="text" placeholder="." />
-                    </label>
-                    <label>
-                      <span>Build dockerfile</span>
-                      <input id="builderContainerBuildDockerfile" type="text" placeholder="Dockerfile" />
-                    </label>
-                  </div>
-                  <label>
-                    <span>Build tag</span>
-                    <input id="builderContainerBuildTag" type="text" placeholder="optpilot-study-runtime" />
-                  </label>
-                </div>
-                <div class="form-row">
-                  <label>
-                    <span>Timeout seconds</span>
-                    <input id="builderTimeout" type="number" min="1" value="120" />
-                  </label>
-                  <label>
-                    <span>Output root</span>
-                    <input id="builderOutputRoot" type="text" value="runs" />
-                  </label>
-                </div>
-                <div class="form-actions">
-                  <button id="draftButton" type="button">Generate draft</button>
-                  <button id="launchDraftButton" class="primary-button" type="submit">Launch draft</button>
-                </div>
-              </form>
-            </section>
-            <section class="panel">
-              <div class="panel-header"><h2>Generated Study Config</h2></div>
-              <div id="builderValidation" class="validation-box"></div>
-              <pre id="builderYaml" class="code-box yaml-preview"></pre>
+              <div id="planDetail" class="detail-content"></div>
             </section>
           </div>
         </section>
@@ -204,65 +253,69 @@
                 <h2>Study Runs</h2>
                 <input id="runFilter" class="search-input" type="search" placeholder="Filter runs" />
               </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Status</th>
-                      <th>Method</th>
-                      <th>Trials</th>
-                      <th>Best</th>
-                      <th>Environment</th>
-                    </tr>
-                  </thead>
-                  <tbody id="runsTable"></tbody>
-                </table>
-              </div>
+              <div id="runsTable" class="run-list" role="list"></div>
             </section>
             <section class="panel detail-panel">
               <div id="runDetail" class="detail-content"></div>
             </section>
           </div>
-          <section class="panel compare-panel">
-            <div class="panel-header"><h2>Compare Runs</h2></div>
-            <div class="compare-controls">
-              <select id="compareRunA"></select>
-              <select id="compareRunB"></select>
-              <button id="compareRunsButton" class="ghost-button" type="button">Compare</button>
-            </div>
-            <div id="compareRunsResult" class="compare-result"></div>
-          </section>
-          <section class="panel jobs-panel">
-            <div class="panel-header"><h2>UI Jobs</h2></div>
-            <div id="jobsList" class="compact-list"></div>
-          </section>
-        </section>
-
-        <section id="configView" class="view">
-          <section class="panel">
-            <div class="panel-header"><h2>Lightweight Config Editor</h2></div>
-            <div class="config-editor">
-              <label>
-                <span>Catalog config</span>
-                <select id="configEditorSelect"></select>
-              </label>
-              <label>
-                <span>File path</span>
-                <input id="configEditorPath" type="text" placeholder="user_catalog/studies/my_study.yaml" />
-              </label>
-              <div class="form-actions">
-                <button id="configOpenButton" class="ghost-button" type="button">Open</button>
-                <button id="configSaveButton" class="primary-button" type="button">Save</button>
-              </div>
-              <div id="configEditorStatus" class="validation-box"></div>
-              <textarea id="configEditorContent" class="config-textarea" spellcheck="false"></textarea>
-            </div>
-          </section>
         </section>
       </main>
     </div>
 
-    <script src="/static/app.js"></script>
+    <div id="settingsModal" class="modal-backdrop" hidden>
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <header class="modal-header">
+          <div>
+            <h2 id="settingsTitle">Settings</h2>
+            <p>Configure the project assistant runtime.</p>
+          </div>
+          <button id="settingsCloseButton" class="ghost-button" type="button" aria-label="Close settings">Close</button>
+        </header>
+        <div class="settings-body">
+          <section class="settings-section">
+            <div class="settings-section-heading">
+              <div>
+                <h3>OpenHands Assistant</h3>
+                <p>OptPilot stores the conversation context locally and can pass it to an OpenHands runtime when configured.</p>
+              </div>
+              <label class="switch-row">
+                <input id="openHandsEnabled" type="checkbox" />
+                <span>Enabled</span>
+              </label>
+            </div>
+            <div id="openHandsStatus" class="settings-status"></div>
+            <div class="settings-grid">
+              <label class="control-field">
+                <span>OpenHands server URL</span>
+                <input id="openHandsBaseUrl" type="url" placeholder="http://127.0.0.1:3000" autocomplete="off" />
+              </label>
+              <label class="control-field">
+                <span>Session endpoint</span>
+                <input id="openHandsSessionEndpoint" type="text" placeholder="/api/conversations" autocomplete="off" />
+              </label>
+              <label class="control-field">
+                <span>Assistant model id</span>
+                <input id="openHandsModel" type="text" placeholder="gpt-4.1 or provider/model-id" autocomplete="off" />
+              </label>
+              <label class="control-field">
+                <span>API key</span>
+                <input id="openHandsApiKey" type="password" placeholder="Paste API key" autocomplete="new-password" />
+              </label>
+            </div>
+            <label class="checkbox-row">
+              <input id="openHandsClearApiKey" type="checkbox" />
+              <span>Clear stored API key on save</span>
+            </label>
+          </section>
+        </div>
+        <footer class="modal-actions">
+          <button id="settingsCancelButton" class="ghost-button" type="button">Cancel</button>
+          <button id="settingsSaveButton" class="primary-button" type="button">Save Settings</button>
+        </footer>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=studio-20260623g"></script>
   </body>
 </html>

@@ -1,20 +1,44 @@
 const state = {
-  view: "home",
+  view: "workspace",
   workspace: null,
   runtime: null,
-  catalog: { environments: [], methods: [], studies: [], builtins: {} },
+  codeServer: null,
+  uiWorkspaces: [],
+  catalog: { environments: [], methods: [], studies: [] },
   compatibility: { pairs: [] },
   runs: [],
   jobs: [],
-  selectedEnvironmentUid: null,
-  selectedMethodUid: null,
+  sessions: [],
+  agentSessions: [],
+  selectedAgentSessionId: null,
+  agentWorkspaceAttachments: {},
+  selectedWorkspaceByAgentSession: {},
+  assistantMessagesBySession: {},
+  agentSessionSeq: 1,
+  plans: [],
+  selectedSessionId: null,
+  selectedFileKey: null,
+  selectedComponentKey: null,
+  componentFilter: "all",
+  selectedPlanId: null,
   selectedRunId: null,
   selectedRun: null,
   activeRunTab: "overview",
-  draft: null,
-  builderAutoName: "",
+  sessionTab: "terminal",
+  workbenchMode: "code",
+  assistantOpen: false,
+  assistantMode: "chat",
+  assistantPanelWidth: 320,
+  registrationDraft: null,
+  embeddedCodeUrl: "",
+  embeddedCodeFolder: "",
+  codeWorkspaceStatus: "idle",
+  codeWorkspaceMessage: "",
+  codeWorkspacePaused: false,
   pendingJobId: null,
-  configEditorPath: "",
+  agentSettings: null,
+  agentRuntimeStatus: null,
+  settingsOpen: false,
 };
 
 const els = {};
@@ -29,43 +53,57 @@ document.addEventListener("DOMContentLoaded", () => {
 function cacheElements() {
   for (const id of [
     "healthStatus",
+    "sidebarCodeServer",
+    "settingsButton",
     "pageTitle",
     "pageSubtitle",
     "refreshButton",
-    "homeEnvironmentCount",
-    "homeMethodCount",
-    "homeRunCount",
-    "homeRunningCount",
-    "runtimeHealth",
-    "homeRecentRuns",
-    "environmentFilter",
-    "environmentsList",
-    "environmentDetail",
-    "methodFilter",
-    "methodsList",
-    "methodDetail",
-    "builderForm",
-    "builderEnvironment",
-    "builderMethod",
-    "builderCompatibility",
-    "builderName",
-    "builderMetric",
-    "builderDirection",
-    "builderMaxTrials",
-    "builderBackend",
-    "containerBackendFields",
-    "builderContainerImage",
-    "builderContainerExecutable",
-    "builderContainerBuildContext",
-    "builderContainerBuildDockerfile",
-    "builderContainerBuildTag",
-    "builderParallelism",
-    "builderTimeout",
-    "builderOutputRoot",
-    "draftButton",
-    "launchDraftButton",
-    "builderValidation",
-    "builderYaml",
+    "newSessionButton",
+    "assistantToggleButton",
+    "assistantBackButton",
+    "assistantTitle",
+    "assistantSubtitle",
+    "assistantSessionList",
+    "assistantSessionCards",
+    "assistantResizeHandle",
+    "closeAssistantButton",
+    "openCodeServerButton",
+    "primaryActionButton",
+    "sessionCount",
+    "sessionList",
+    "newWorkspaceButton",
+    "sessionTitle",
+    "sessionPath",
+    "sessionStatus",
+    "sessionSummary",
+    "sessionFiles",
+    "sessionContext",
+    "sessionTools",
+    "sessionWorkspaceActions",
+    "fileTabs",
+    "fileState",
+    "sessionEditor",
+    "sessionLenses",
+    "contractWorkbench",
+    "codeWorkbench",
+    "evidenceWorkbench",
+    "embeddedCodeWorkspace",
+    "embeddedCodeWorkspaceEmpty",
+    "embeddedCodeWorkspacePath",
+    "codeWorkspaceEmptyTitle",
+    "codeWorkspaceEmptyBody",
+    "startEmbeddedCodeButton",
+    "reloadEmbeddedCodeButton",
+    "pauseCodeWorkspaceButton",
+    "agentTimeline",
+    "agentInput",
+    "attachContextButton",
+    "sendAgentButton",
+    "sessionBottom",
+    "componentList",
+    "componentDetail",
+    "planList",
+    "planDetail",
     "totalRuns",
     "runningRuns",
     "completedTrials",
@@ -73,69 +111,106 @@ function cacheElements() {
     "runFilter",
     "runsTable",
     "runDetail",
-    "compareRunA",
-    "compareRunB",
-    "compareRunsButton",
-    "compareRunsResult",
-    "jobsList",
-    "configEditorSelect",
-    "configEditorPath",
-    "configOpenButton",
-    "configSaveButton",
-    "configEditorStatus",
-    "configEditorContent",
+    "assistantLauncherSubtitle",
+    "settingsModal",
+    "settingsCloseButton",
+    "settingsCancelButton",
+    "settingsSaveButton",
+    "openHandsEnabled",
+    "openHandsBaseUrl",
+    "openHandsSessionEndpoint",
+    "openHandsModel",
+    "openHandsApiKey",
+    "openHandsClearApiKey",
+    "openHandsStatus",
   ]) {
     els[id] = document.getElementById(id);
   }
 }
 
 function bindEvents() {
-  document.querySelectorAll(".nav-button").forEach((button) => {
+  const on = (element, eventName, handler) => {
+    if (element) element.addEventListener(eventName, handler);
+  };
+  document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
   });
-  document.querySelectorAll("[data-view-target]").forEach((button) => {
-    button.addEventListener("click", () => setView(button.dataset.viewTarget));
+  document.querySelectorAll("[data-component-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.componentFilter = button.dataset.componentFilter;
+      renderCatalog();
+    });
   });
-  els.refreshButton.addEventListener("click", loadAll);
-  els.environmentFilter.addEventListener("input", renderEnvironments);
-  els.methodFilter.addEventListener("input", renderMethods);
-  els.runFilter.addEventListener("input", renderRuns);
-  els.builderEnvironment.addEventListener("change", () => {
-    state.selectedEnvironmentUid = els.builderEnvironment.value || state.selectedEnvironmentUid;
-    renderBuilderOptions();
-    fillBuilderDefaults();
-    renderBuilderCompatibility();
+  document.querySelectorAll("[data-session-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.sessionTab = button.dataset.sessionTab;
+      renderSessionBottom();
+    });
   });
-  els.builderMethod.addEventListener("change", () => {
-    state.selectedMethodUid = els.builderMethod.value || state.selectedMethodUid;
-    fillBuilderDefaults();
-    renderBuilderCompatibility();
+  document.querySelectorAll("[data-workbench-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.workbenchMode === "code") {
+        openCodeServerEmbedded();
+      } else {
+        setWorkbenchMode(button.dataset.workbenchMode);
+      }
+    });
   });
-  els.builderForm.addEventListener("input", markBuilderDirty);
-  els.builderForm.addEventListener("change", markBuilderDirty);
-  els.draftButton.addEventListener("click", generateDraft);
-  els.builderForm.addEventListener("submit", launchDraft);
-  els.builderBackend.addEventListener("change", renderBackendFields);
-  els.compareRunsButton.addEventListener("click", compareRuns);
-  els.configEditorSelect.addEventListener("change", () => {
-    const selected = configEntryByPath(els.configEditorSelect.value);
-    if (!selected) return;
-    els.configEditorPath.value = shortPath(selected.path);
-    openConfigPath(selected.path);
+  on(els.refreshButton, "click", loadAll);
+  on(els.settingsButton, "click", openSettings);
+  on(els.settingsCloseButton, "click", closeSettings);
+  on(els.settingsCancelButton, "click", closeSettings);
+  on(els.settingsSaveButton, "click", saveSettings);
+  on(els.settingsModal, "click", (event) => {
+    if (event.target === els.settingsModal) closeSettings();
   });
-  els.configOpenButton.addEventListener("click", () => openConfigPath(els.configEditorPath.value));
-  els.configSaveButton.addEventListener("click", saveConfigFile);
+  on(els.newSessionButton, "click", createAgentSession);
+  on(els.newWorkspaceButton, "click", createBlankSession);
+  on(els.assistantToggleButton, "click", toggleAssistant);
+  on(els.assistantResizeHandle, "pointerdown", startAssistantResize);
+  on(els.assistantResizeHandle, "mousedown", startAssistantResize);
+  on(els.assistantBackButton, "click", () => {
+    state.assistantMode = "sessions";
+    renderAssistant();
+  });
+  on(els.closeAssistantButton, "click", () => {
+    state.assistantMode = "chat";
+    setAssistantOpen(false);
+  });
+  on(els.openCodeServerButton, "click", startCodeWorkspaceFromUser);
+  on(els.startEmbeddedCodeButton, "click", startCodeWorkspaceFromUser);
+  on(els.reloadEmbeddedCodeButton, "click", reloadEmbeddedCodeWorkspace);
+  on(els.pauseCodeWorkspaceButton, "click", stopCodeServer);
+  on(els.primaryActionButton, "click", primaryAction);
+  on(els.attachContextButton, "click", attachContext);
+  on(els.sendAgentButton, "click", sendAgentMessage);
+  on(els.agentInput, "input", () => {
+    els.agentInput.dataset.touched = "true";
+  });
+  on(els.runFilter, "input", renderRuns);
 }
 
 async function loadAll() {
-  await Promise.all([loadWorkspace(), loadRuntimeHealth(), loadCatalogAndCompatibility(), loadRunsAndJobs()]);
-  chooseDefaults();
+  await Promise.all([loadWorkspace(), loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings(), loadCatalogAndCompatibility(), loadUiWorkspaces(), loadAgentSessions(), loadRunsAndJobs()]);
+  rebuildDerivedState();
   renderAll();
+}
+
+async function loadAgentSettings() {
+  try {
+    const payload = await getJson("/api/agent/settings");
+    state.agentSettings = payload.settings || null;
+    state.agentRuntimeStatus = payload.status || null;
+  } catch (error) {
+    state.agentSettings = null;
+    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "unavailable", error: String(error.message || error) };
+  }
 }
 
 async function loadWorkspace() {
   try {
     state.workspace = await getJson("/api/workspace");
+    if (state.workspace.code_server) state.codeServer = state.workspace.code_server;
     els.healthStatus.textContent = "Ready";
   } catch (error) {
     state.workspace = null;
@@ -147,14 +222,69 @@ async function loadRuntimeHealth() {
   state.runtime = await getJson("/api/runtime/health");
 }
 
+async function loadCodeServerStatus() {
+  try {
+    state.codeServer = await getJson("/api/code-server/status");
+  } catch (error) {
+    state.codeServer = { available: false, installed: false, running: false, error: String(error.message || error) };
+  }
+  updateSidebarCodeServerStatus();
+}
+
 async function loadCatalogAndCompatibility() {
   const [catalog, compatibility] = await Promise.all([getJson("/api/catalog"), getJson("/api/compatibility")]);
   state.catalog = catalog;
   state.compatibility = compatibility;
 }
 
+async function loadUiWorkspaces() {
+  try {
+    const payload = await getJson("/api/workspaces");
+    state.uiWorkspaces = payload.workspaces || [];
+  } catch (error) {
+    state.uiWorkspaces = [];
+  }
+}
+
+async function loadAgentSessions() {
+  try {
+    const payload = await getJson("/api/agent-sessions");
+    const sessions = payload.sessions || [];
+    state.agentSessions = sessions.map((session) => ({
+      id: session.id,
+      title: session.title,
+      description: session.description,
+      status: session.status || "idle",
+      createdAt: session.created_at || session.createdAt || "",
+    }));
+    state.agentWorkspaceAttachments = {};
+    state.selectedWorkspaceByAgentSession = {};
+    state.assistantMessagesBySession = {};
+    sessions.forEach((session) => {
+      state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
+      state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || (session.attached_workspace_ids || [])[0] || null;
+      state.assistantMessagesBySession[session.id] = (session.messages || []).map((message) => [
+        message.role === "assistant" ? "assistant" : message.role || "user",
+        message.title || (message.role === "assistant" ? "Assistant" : "User"),
+        message.content || "",
+      ]);
+    });
+    if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
+      state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
+    }
+  } catch (error) {
+    state.agentSessions = [];
+  }
+}
+
 async function loadRunsAndJobs() {
-  const [runsPayload, jobsPayload] = await Promise.all([getJson("/api/runs"), getJson("/api/jobs")]);
+  let runsPayload;
+  let jobsPayload;
+  try {
+    [runsPayload, jobsPayload] = await Promise.all([getJson("/api/runs"), getJson("/api/jobs")]);
+  } catch (error) {
+    return;
+  }
   state.runs = runsPayload.runs || [];
   state.jobs = jobsPayload.jobs || [];
   if (state.pendingJobId) {
@@ -163,403 +293,1463 @@ async function loadRunsAndJobs() {
       const run = state.runs.find((item) => item.path === job.run_dir);
       if (run) {
         state.pendingJobId = null;
-        await loadRunDetail(run.id);
+        await loadRunDetail(run.id, { keepTab: true });
         setView("runs");
       }
     }
   }
-  renderHome();
-  renderRuns();
-  renderJobs();
+  if (!state.selectedRunId && state.runs[0]) state.selectedRunId = state.runs[0].id;
+  if (state.selectedRunId && state.view === "runs" && (!state.selectedRun || state.selectedRun.run && state.selectedRun.run.id !== state.selectedRunId)) {
+    loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
+  }
+  if (state.view === "runs") renderRuns();
 }
 
-function chooseDefaults() {
-  if (!state.selectedEnvironmentUid && state.catalog.environments.length) {
-    state.selectedEnvironmentUid = state.catalog.environments[0].uid;
+function rebuildDerivedState() {
+  const previousSessionId = state.selectedSessionId;
+  const previousPlanId = state.selectedPlanId;
+  state.sessions = buildSessions();
+  state.plans = buildPlans();
+  ensureAgentSessions();
+  const attachedIds = attachedWorkspaceIds();
+  state.selectedSessionId = attachedIds.includes(previousSessionId)
+    ? previousSessionId
+    : attachedIds[0] || null;
+  if (currentAgentSession()) state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = state.selectedSessionId;
+  const session = currentSession();
+  state.selectedFileKey = session && session.files[state.selectedFileKey] ? state.selectedFileKey : firstFileKey(session);
+  state.selectedPlanId = state.plans.some((plan) => plan.id === previousPlanId)
+    ? previousPlanId
+    : state.plans[0] && state.plans[0].id;
+  if (!state.selectedComponentKey) {
+    const firstComponent = allComponents()[0];
+    state.selectedComponentKey = firstComponent && firstComponent.key;
   }
-  if (!state.selectedMethodUid && state.catalog.methods.length) {
-    const compatible = compatibleMethodsForEnvironment(state.selectedEnvironmentUid);
-    state.selectedMethodUid = compatible[0] ? compatible[0].method.uid : state.catalog.methods[0].uid;
+}
+
+function ensureAgentSessions() {
+  const workspaceIds = state.sessions.map((session) => session.id);
+  if (!state.agentSessions.length) {
+    const session = {
+      id: "agent-session-main",
+      title: "Main Session",
+      description: "General OptPilot work",
+      createdAt: "now",
+    };
+    state.agentSessions = [session];
+    state.selectedAgentSessionId = session.id;
+    state.agentWorkspaceAttachments[session.id] = workspaceIds.slice();
+    state.selectedWorkspaceByAgentSession[session.id] = workspaceIds[0] || null;
+    state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
+    return;
   }
-  if (!state.selectedRunId && state.runs.length) {
-    state.selectedRunId = state.runs[0].id;
+  const known = new Set(workspaceIds);
+  state.agentSessions.forEach((session) => {
+    const attached = state.agentWorkspaceAttachments[session.id] || [];
+    state.agentWorkspaceAttachments[session.id] = attached.filter((id) => known.has(id));
+    if (!state.assistantMessagesBySession[session.id]) {
+      state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
+    }
+  });
+  if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
+    state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
+  }
+}
+
+function defaultAssistantMessages() {
+  return [["assistant", "Ready", "I can use the selected session, attached workspace roots, catalog, study plans, runs, and code editor context."]];
+}
+
+function currentAgentSession() {
+  return state.agentSessions.find((session) => session.id === state.selectedAgentSessionId) || state.agentSessions[0] || null;
+}
+
+function currentAssistantMessages() {
+  const session = currentAgentSession();
+  if (!session) return defaultAssistantMessages();
+  if (!state.assistantMessagesBySession[session.id]) state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
+  return state.assistantMessagesBySession[session.id];
+}
+
+function pushAssistantMessage(message) {
+  const session = currentAgentSession();
+  if (!session) return;
+  if (!state.assistantMessagesBySession[session.id]) state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
+  state.assistantMessagesBySession[session.id].push(message);
+}
+
+function assistantVisibleContext() {
+  const workspace = currentSession();
+  const component = componentByKey(state.selectedComponentKey);
+  const plan = currentPlan();
+  const selectedRun = state.selectedRun && state.selectedRun.run
+    ? state.selectedRun.run
+    : state.runs.find((run) => run.id === state.selectedRunId);
+  return {
+    current_page: state.view,
+    assistant_mode: state.assistantMode,
+    selected_workspace: workspace ? {
+      id: workspace.backendWorkspaceId || workspace.id,
+      title: workspace.title,
+      root: workspace.codeFolder || workspace.path,
+      mode: workspace.mode,
+      kind: workspace.kind,
+      registered_entries: workspace.registeredEntries || [],
+    } : null,
+    selected_catalog_entry: component ? {
+      kind: component.kind,
+      id: component.entry.id,
+      label: component.entry.label,
+      path: component.entry.path,
+    } : null,
+    selected_study_plan: plan ? {
+      id: plan.id,
+      title: plan.title,
+      source: plan.source,
+      status: plan.status,
+      study_path: plan.study && plan.study.path || plan.draft && plan.draft.path || "",
+      environment_id: plan.environment && plan.environment.id || "",
+      method_id: plan.method && plan.method.id || "",
+    } : null,
+    selected_run: selectedRun ? {
+      id: selectedRun.id,
+      name: selectedRun.name,
+      path: selectedRun.path,
+      status: selectedRun.status,
+      method_id: selectedRun.method && selectedRun.method.id || "",
+      environment_id: selectedRun.environment_id || "",
+    } : null,
+    registration_menu: state.registrationDraft ? {
+      workspace_id: state.registrationDraft.backendWorkspaceId || state.registrationDraft.workspaceId,
+      status: state.registrationDraft.status,
+      selected_configs: (state.registrationDraft.configs || [])
+        .filter((config) => config.selected)
+        .map((config) => ({ path: config.backendPath || config.label, kind: config.kind, validation: config.validation })),
+    } : null,
+    code_editor: {
+      embedded_url: state.embeddedCodeUrl,
+      folder: state.embeddedCodeFolder,
+      status: state.codeWorkspaceStatus,
+    },
+    assistant_runtime: state.agentRuntimeStatus || null,
+  };
+}
+
+async function persistAssistantMessage(message) {
+  const session = currentAgentSession();
+  if (!session || !session.id || session.id.startsWith("agent-session-")) return null;
+  const [role, title, content] = message;
+  try {
+    const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/message`, {
+      role: role === "agent" || role === "tool" ? "assistant" : role,
+      title,
+      content,
+      ui_context: assistantVisibleContext(),
+    });
+    if (payload.session) mergeAgentSessionPayload(payload.session);
+    return payload;
+  } catch (error) {
+    // Keep the local transcript usable if the backend is unavailable.
+    return null;
+  }
+}
+
+function mergeAgentSessionPayload(session) {
+  if (!session || !session.id) return;
+  const existing = state.agentSessions.find((item) => item.id === session.id);
+  const summary = {
+    id: session.id,
+    title: session.title,
+    description: session.description,
+    status: session.status || "idle",
+    createdAt: session.created_at || "",
+  };
+  state.agentSessions = existing
+    ? state.agentSessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
+    : [summary, ...state.agentSessions];
+  state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
+  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || (session.attached_workspace_ids || [])[0] || null;
+  if (session.messages) {
+    state.assistantMessagesBySession[session.id] = session.messages.map((message) => [
+      message.role === "assistant" ? "assistant" : message.role || "user",
+      message.title || (message.role === "assistant" ? "Assistant" : "User"),
+      message.content || "",
+    ]);
+  }
+}
+
+function attachedWorkspaceIds(agentSessionId = state.selectedAgentSessionId) {
+  const ids = state.agentWorkspaceAttachments[agentSessionId] || [];
+  const known = new Set(state.sessions.map((session) => session.id));
+  return ids.filter((id) => known.has(id));
+}
+
+function attachedWorkspaces() {
+  const attached = new Set(attachedWorkspaceIds());
+  return state.sessions.filter((session) => attached.has(session.id));
+}
+
+function attachWorkspaceToCurrent(workspaceId) {
+  const agentSession = currentAgentSession();
+  if (!agentSession || !workspaceId) return;
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  const attached = state.agentWorkspaceAttachments[agentSession.id] || [];
+  if (!attached.includes(workspaceId)) attached.push(workspaceId);
+  state.agentWorkspaceAttachments[agentSession.id] = attached;
+  setSelectedWorkspace(workspaceId);
+  if (workspace && workspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
+    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`, { workspace_id: workspace.backendWorkspaceId })
+      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .catch(() => {});
+  }
+}
+
+function keepWorkspaceSelected(workspaceId) {
+  if (!workspaceId) return;
+  state.selectedSessionId = workspaceId;
+  const agentSession = currentAgentSession();
+  if (agentSession) {
+    state.selectedWorkspaceByAgentSession[agentSession.id] = workspaceId;
+  }
+}
+
+function setSelectedWorkspace(workspaceId) {
+  state.selectedSessionId = workspaceId || null;
+  if (state.selectedAgentSessionId) {
+    state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = workspaceId || null;
+  }
+  if (state.registrationDraft && state.registrationDraft.workspaceId !== workspaceId) {
+    state.registrationDraft = null;
+    if (state.assistantMode === "registration") {
+      state.assistantMode = "chat";
+    }
   }
 }
 
 function renderAll() {
-  renderHome();
-  renderEnvironments();
-  renderMethods();
-  renderBuilder();
+  renderNavigation();
+  renderWorkspace();
+  renderCatalog();
+  renderExperiments();
   renderRuns();
-  renderJobs();
-  renderConfigEditorOptions();
-  if (state.selectedRunId) {
+  renderAssistant();
+  renderSettingsModal();
+  if (state.selectedRunId && state.view === "runs") {
     loadRunDetail(state.selectedRunId, { keepTab: true });
-  } else {
-    renderRunDetail();
   }
+}
+
+async function openSettings() {
+  state.settingsOpen = true;
+  await loadAgentSettings();
+  fillSettingsForm();
+  renderSettingsModal();
+}
+
+function closeSettings() {
+  state.settingsOpen = false;
+  renderSettingsModal();
+}
+
+function renderSettingsModal() {
+  if (!els.settingsModal) return;
+  els.settingsModal.hidden = !state.settingsOpen;
+  document.body.classList.toggle("settings-open", state.settingsOpen);
+  renderOpenHandsStatus();
+}
+
+function fillSettingsForm() {
+  const openhands = currentOpenHandsSettings();
+  if (els.openHandsEnabled) els.openHandsEnabled.checked = Boolean(openhands.enabled);
+  if (els.openHandsBaseUrl) els.openHandsBaseUrl.value = openhands.base_url || "";
+  if (els.openHandsSessionEndpoint) els.openHandsSessionEndpoint.value = openhands.session_endpoint || "";
+  if (els.openHandsModel) els.openHandsModel.value = openhands.model || "";
+  if (els.openHandsApiKey) {
+    els.openHandsApiKey.value = "";
+    els.openHandsApiKey.placeholder = openhands.api_key_configured ? "Configured; leave blank to keep" : "Paste API key";
+  }
+  if (els.openHandsClearApiKey) els.openHandsClearApiKey.checked = false;
+}
+
+function currentOpenHandsSettings() {
+  const assistant = state.agentSettings && state.agentSettings.assistant || {};
+  return assistant.openhands || {};
+}
+
+function renderOpenHandsStatus() {
+  const status = state.agentRuntimeStatus || {};
+  if (els.assistantLauncherSubtitle) {
+    els.assistantLauncherSubtitle.textContent = assistantRuntimeLabel(status);
+  }
+  if (!els.openHandsStatus) return;
+  const model = status.model || currentOpenHandsSettings().model || "-";
+  const server = status.base_url || currentOpenHandsSettings().base_url || "-";
+  const keyLabel = status.api_key_configured || currentOpenHandsSettings().api_key_configured ? "API key configured" : "API key missing";
+  els.openHandsStatus.innerHTML = `
+    <div>
+      <strong>${escapeHtml(assistantRuntimeLabel(status))}</strong>
+      <span>${escapeHtml(status.dispatch === "queued" ? "Messages are currently stored with OptPilot context until the OpenHands dispatch bridge is connected." : "Runtime dispatch is available.")}</span>
+    </div>
+    <div class="settings-status-grid">
+      <span>Model</span><strong>${escapeHtml(model)}</strong>
+      <span>Server</span><strong>${escapeHtml(server)}</strong>
+      <span>Credential</span><strong>${escapeHtml(keyLabel)}</strong>
+    </div>
+  `;
+}
+
+function assistantRuntimeLabel(status) {
+  if (!status || status.error) return "Assistant settings unavailable";
+  if (!status.enabled) return "OpenHands disabled";
+  if (status.mode === "configured") return status.connected ? "OpenHands connected" : "OpenHands configured";
+  if (status.mode) return `OpenHands ${status.mode}`;
+  return "OpenHands not configured";
+}
+
+async function saveSettings() {
+  const payload = {
+    openhands: {
+      enabled: Boolean(els.openHandsEnabled && els.openHandsEnabled.checked),
+      base_url: els.openHandsBaseUrl ? els.openHandsBaseUrl.value.trim() : "",
+      session_endpoint: els.openHandsSessionEndpoint ? els.openHandsSessionEndpoint.value.trim() : "",
+      model: els.openHandsModel ? els.openHandsModel.value.trim() : "",
+      api_key: els.openHandsApiKey ? els.openHandsApiKey.value.trim() : "",
+      clear_api_key: Boolean(els.openHandsClearApiKey && els.openHandsClearApiKey.checked),
+    },
+  };
+  const result = await postJson("/api/agent/settings", payload, { tolerateError: true });
+  if (result.error) {
+    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "unavailable", error: result.error };
+  } else {
+    state.agentSettings = result.settings || state.agentSettings;
+    state.agentRuntimeStatus = result.status || state.agentRuntimeStatus;
+  }
+  fillSettingsForm();
+  renderSettingsModal();
+  renderAssistant();
 }
 
 function setView(view) {
   state.view = view;
-  document.querySelectorAll(".nav-button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
+  renderNavigation();
+  if (view === "workspace") renderWorkspace();
+  if (view === "catalog") renderCatalog();
+  if (view === "experiments") renderExperiments();
+  if (view === "runs") {
+    renderRuns();
+    if (state.selectedRunId && (!state.selectedRun || state.selectedRun.run && state.selectedRun.run.id !== state.selectedRunId)) {
+      loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
+    }
+  }
+  renderAssistant();
+}
+
+function setWorkbenchMode(mode) {
+  state.workbenchMode = mode || "code";
+  renderWorkbenchMode();
+  if (state.workbenchMode === "evidence") renderEvidenceWorkbench();
+}
+
+function toggleAssistant() {
+  setAssistantOpen(!state.assistantOpen);
+}
+
+function setAssistantOpen(open) {
+  state.assistantOpen = Boolean(open);
+  if (state.assistantOpen && !state.assistantMode) state.assistantMode = "chat";
+  renderAssistant();
+}
+
+function renderAssistant() {
+  document.body.classList.toggle("assistant-open", state.assistantOpen);
+  document.body.classList.toggle("assistant-session-list-open", state.assistantOpen && state.assistantMode === "sessions");
+  document.documentElement.style.setProperty("--assistant-panel-width", `${state.assistantPanelWidth}px`);
+  if (els.assistantToggleButton) {
+    els.assistantToggleButton.classList.toggle("active", state.assistantOpen);
+    els.assistantToggleButton.setAttribute("aria-expanded", String(state.assistantOpen));
+  }
+  const session = currentAgentSession();
+  const isSessionList = state.assistantMode === "sessions";
+  const attachedCount = session ? attachedWorkspaceIds(session.id).length : 0;
+  const pageLabel = currentViewLabel();
+  const isRegistration = state.assistantMode === "registration";
+  if (els.assistantBackButton) els.assistantBackButton.hidden = isSessionList;
+  if (els.assistantTitle) {
+    els.assistantTitle.textContent = isSessionList ? "Agent Sessions" : isRegistration ? "Register to Catalog" : session ? session.title : "OptPilot Assistant";
+  }
+  if (els.assistantSubtitle) {
+    els.assistantSubtitle.textContent = isSessionList
+      ? "Resume a conversation or start a new one"
+      : isRegistration
+        ? "Discover configs, validate targets, and register selected files"
+      : `${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached - ${pageLabel}`;
+  }
+  if (els.assistantSessionList) els.assistantSessionList.hidden = !isSessionList;
+  if (els.agentTimeline) {
+    els.agentTimeline.hidden = isSessionList;
+    els.agentTimeline.innerHTML = isRegistration ? registrationMenuHtml() : currentAssistantMessages().map(timelineItem).join("");
+  }
+  const composer = document.querySelector(".agent-panel .composer");
+  if (composer) composer.hidden = isSessionList;
+  updateAssistantInputPlaceholder();
+  renderOpenHandsStatus();
+  renderAssistantSessionList();
+  bindRegistrationMenu();
+}
+
+function updateAssistantInputPlaceholder() {
+  if (!els.agentInput) return;
+  const defaultText = assistantPromptForContext();
+  if (!els.agentInput.dataset.touched) {
+    els.agentInput.value = defaultText;
+  }
+  els.agentInput.placeholder = defaultText;
+}
+
+function assistantPromptForContext() {
+  if (state.assistantOpen && state.assistantMode === "registration") {
+    return "Help me choose, validate, and register the right config files from this workspace.";
+  }
+  if (state.view === "runs") {
+    const runName = state.selectedRun && state.selectedRun.run && state.selectedRun.run.name;
+    return runName
+      ? `Summarize evidence for ${runName}, compare candidates, and explain failures or metrics.`
+      : "Summarize the selected run, compare candidates, and inspect failures or artifacts.";
+  }
+  if (state.view === "catalog") return "Help me inspect this catalog entry or open an editable workspace.";
+  if (state.view === "experiments") return "Help me configure a study plan, validate it, and prepare it for launch.";
+  return "Help me inspect this workspace, edit code, validate configs, or register catalog entries.";
+}
+
+function renderNavigation() {
+  document.body.classList.toggle("view-workspace", state.view === "workspace");
+  document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.view);
   });
   document.querySelectorAll(".view").forEach((section) => {
-    section.classList.toggle("active-view", section.id === `${view}View`);
+    section.classList.toggle("active-view", section.id === `${state.view}View`);
   });
   const titles = {
-    home: ["Home", "Connect methods to environments, launch studies, and inspect evidence."],
-    environments: ["Environments", "Inspect candidate contracts and see compatible methods."],
-    methods: ["Methods", "Inspect optimization methods and their compatible environments."],
-    builder: ["Study Builder", "Create a valid study from an environment and method."],
-    runs: ["Runs", "Monitor jobs, compare outcomes, and inspect run evidence."],
-    config: ["Config Editor", "Open and lightly edit YAML, JSON, and small support files."],
+    workspace: ["Editor", "Attached workspaces, one embedded code editor, and catalog registration."],
+    catalog: ["Catalog", "Reusable environments and methods with inspection and edit-copy entry points."],
+    experiments: ["Studies", "Configure objective, budget, runtime, and evidence before launch."],
+    runs: ["Runs", "Live and completed study evidence, artifacts, metrics, and logs."],
   };
-  els.pageTitle.textContent = titles[view][0];
-  els.pageSubtitle.textContent = titles[view][1];
+  els.pageTitle.textContent = titles[state.view][0];
+  els.pageSubtitle.textContent = titles[state.view][1];
+  if (els.primaryActionButton) els.primaryActionButton.textContent = state.view === "experiments" ? "Launch" : "Register to Catalog";
 }
 
-function renderHome() {
-  els.homeEnvironmentCount.textContent = String(state.catalog.environments.length);
-  els.homeMethodCount.textContent = String(state.catalog.methods.length);
-  els.homeRunCount.textContent = String(state.runs.length);
-  els.homeRunningCount.textContent = String(state.runs.filter((run) => run.status === "running").length);
-  renderRuntimeHealth();
-  els.homeRecentRuns.innerHTML = state.runs.slice(0, 6).map(renderRunCard).join("") || emptyInline("No runs discovered yet.");
-  document.querySelectorAll(".home-run-card").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await loadRunDetail(button.dataset.runId);
-      setView("runs");
-    });
-  });
-}
-
-function renderRuntimeHealth() {
-  if (!state.runtime) {
-    els.runtimeHealth.innerHTML = emptyState("Runtime health is unavailable.");
-    return;
-  }
-  const items = [
-    ["Python", state.runtime.python],
-    ["Docker", state.runtime.docker],
-    ["Podman", state.runtime.podman],
-  ];
-  els.runtimeHealth.innerHTML = items
-    .map(([label, info]) => `
-      <div class="list-item compact">
-        <div class="row-between">
-          <strong>${escapeHtml(label)}</strong>
-          ${statusPill(info && info.ok ? "ready" : "unavailable")}
-        </div>
-        <p class="path-text">${escapeHtml((info && (info.version || info.path)) || "Not found")}</p>
-      </div>
-    `)
-    .join("");
-}
-
-function renderEnvironments() {
-  const query = els.environmentFilter.value.trim().toLowerCase();
-  const environments = state.catalog.environments.filter((item) => searchable(item).includes(query));
-  els.environmentsList.innerHTML = environments.map((item) => entityButton(item, "environment")).join("") || emptyInline("No environments match.");
-  document.querySelectorAll("[data-environment-uid]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedEnvironmentUid = button.dataset.environmentUid;
-      renderEnvironments();
-      fillBuilderFromSelection();
-    });
-  });
-  renderEnvironmentDetail();
-}
-
-function renderEnvironmentDetail() {
-  const env = environmentByUid(state.selectedEnvironmentUid);
-  if (!env) {
-    els.environmentDetail.innerHTML = emptyState("Select an environment to inspect its contract.");
-    return;
-  }
-  const compatible = compatibleMethodsForEnvironment(env.uid);
-  const incompatible = incompatibleMethodsForEnvironment(env.uid);
-  els.environmentDetail.innerHTML = `
-    ${entityHeader(env)}
-    <div class="detail-grid">
-      ${kvPanel("Candidate Contract", [
-        ["Format", env.summary.candidate_format],
-        ["Metrics", (env.summary.metrics || []).join(", ") || "-"],
-        ["Evaluator", env.summary.evaluate_type],
-      ])}
-      ${kvPanel("Runtime", [
-        ["Evaluator type", env.summary.runtime && env.summary.runtime.evaluate_type],
-        ["Timeout", env.summary.runtime && env.summary.runtime.timeoutSeconds],
-        ["Python path", env.summary.runtime && env.summary.runtime.has_python_path ? "configured" : "default"],
-      ])}
-    </div>
-    <div class="panel-section">
-      <div class="section-heading">
-        <h3>Compatible Methods</h3>
-        <button class="ghost-button create-from-env" type="button">Create study</button>
-      </div>
-      ${compatList(compatible, "method")}
-    </div>
-    <div class="panel-section">
-      <h3>Incompatible Methods</h3>
-      ${compatList(incompatible, "method")}
-    </div>
-  `;
-  const create = document.querySelector(".create-from-env");
-  if (create) {
-    create.addEventListener("click", () => {
-      const compatibleMethod = compatible[0];
-      if (compatibleMethod) state.selectedMethodUid = compatibleMethod.method.uid;
-      state.selectedEnvironmentUid = env.uid;
-      setView("builder");
-      renderBuilder();
-    });
-  }
-  bindConfigEditButtons();
-}
-
-function renderMethods() {
-  const query = els.methodFilter.value.trim().toLowerCase();
-  const methods = state.catalog.methods.filter((item) => searchable(item).includes(query));
-  els.methodsList.innerHTML = methods.map((item) => entityButton(item, "method")).join("") || emptyInline("No methods match.");
-  document.querySelectorAll("[data-method-uid]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedMethodUid = button.dataset.methodUid;
-      renderMethods();
-      fillBuilderFromSelection();
-    });
-  });
-  renderMethodDetail();
-}
-
-function renderMethodDetail() {
-  const method = methodByUid(state.selectedMethodUid);
-  if (!method) {
-    els.methodDetail.innerHTML = emptyState("Select a method to inspect compatibility.");
-    return;
-  }
-  const compatible = compatibleEnvironmentsForMethod(method.uid);
-  const incompatible = incompatibleEnvironmentsForMethod(method.uid);
-  els.methodDetail.innerHTML = `
-    ${entityHeader(method)}
-    <div class="detail-grid">
-      ${kvPanel("Implementation", [
-        ["Type", method.summary.implementation_type],
-        ["Protocol", method.summary.protocol],
-        ["Batch size", method.summary.batch_size],
-      ])}
-      ${kvPanel("Runtime", [
-        ["Runtime", method.summary.runtime && method.summary.runtime.type],
-        ["Image", method.summary.runtime && method.summary.runtime.image],
-        ["Build", method.summary.runtime && method.summary.runtime.has_build ? "configured" : "not configured"],
-        ["Network", method.summary.runtime && method.summary.runtime.networkPolicy],
-      ])}
-      ${kvPanel("Compatibility", [
-        ["Candidate formats", (method.summary.candidate_formats || []).join(", ")],
-        ["Capabilities", (method.summary.required_capabilities || []).join(", ") || "-"],
-      ])}
-    </div>
-    <div class="panel-section">
-      <div class="section-heading">
-        <h3>Compatible Environments</h3>
-        <button class="ghost-button create-from-method" type="button">Create study</button>
-      </div>
-      ${compatList(compatible, "environment")}
-    </div>
-    <div class="panel-section">
-      <h3>Incompatible Environments</h3>
-      ${compatList(incompatible, "environment")}
-    </div>
-  `;
-  const create = document.querySelector(".create-from-method");
-  if (create) {
-    create.addEventListener("click", () => {
-      const compatibleEnvironment = compatible[0];
-      if (compatibleEnvironment) state.selectedEnvironmentUid = compatibleEnvironment.environment.uid;
-      state.selectedMethodUid = method.uid;
-      setView("builder");
-      renderBuilder();
-    });
-  }
-  bindConfigEditButtons();
-}
-
-function renderBuilder() {
-  renderBuilderOptions();
-  fillBuilderDefaults();
-  renderBuilderCompatibility();
-  renderBackendFields();
-}
-
-function renderBuilderOptions() {
-  els.builderEnvironment.innerHTML = state.catalog.environments.map((env) => option(env, state.selectedEnvironmentUid)).join("");
-  const compatible = new Set(compatibleMethodsForEnvironment(state.selectedEnvironmentUid).map((pair) => pair.method.uid));
-  els.builderMethod.innerHTML = state.catalog.methods
-    .map((method) => {
-      const label = compatible.has(method.uid) ? method.label : `${method.label} (incompatible)`;
-      return `<option value="${escapeHtml(method.uid)}" ${method.uid === state.selectedMethodUid ? "selected" : ""}>${escapeHtml(label)}</option>`;
-    })
-    .join("");
-}
-
-function fillBuilderDefaults() {
-  const env = environmentByUid(els.builderEnvironment.value || state.selectedEnvironmentUid);
-  const method = methodByUid(els.builderMethod.value || state.selectedMethodUid);
-  if (env) state.selectedEnvironmentUid = env.uid;
-  if (method) state.selectedMethodUid = method.uid;
-  const defaultName = env && method ? `${env.id}-${method.id}` : "";
-  const currentName = els.builderName.value.trim();
-  if (defaultName && (!currentName || currentName === state.builderAutoName)) {
-    els.builderName.value = defaultName;
-    state.builderAutoName = defaultName;
-  }
-  if (env && (!els.builderMetric.value || !((env.summary.metrics || []).includes(els.builderMetric.value)))) {
-    els.builderMetric.value = (env.summary.metrics || [])[0] || "score";
-  }
-}
-
-function fillBuilderFromSelection() {
-  els.builderName.value = "";
-  els.builderMetric.value = "";
-  state.builderAutoName = "";
-  state.draft = null;
-  renderBuilder();
-}
-
-function markBuilderDirty() {
-  state.draft = null;
-}
-
-function renderBuilderCompatibility() {
-  const pair = pairFor(state.selectedEnvironmentUid, state.selectedMethodUid);
-  if (!pair) {
-    els.builderCompatibility.innerHTML = `<div class="compat-warning">Select an environment and method.</div>`;
-    return;
-  }
-  els.builderCompatibility.innerHTML = compatibilityBox(pair);
-}
-
-function renderBackendFields() {
-  const backend = els.builderBackend.value;
-  els.containerBackendFields.classList.toggle("active", backend === "container");
-}
-
-async function generateDraft() {
-  const result = await postJson("/api/studies/draft", builderPayload(), { tolerateError: true });
-  state.draft = result;
-  renderDraft(result);
-  return result;
-}
-
-async function launchDraft(event) {
-  event.preventDefault();
-  const result = state.draft && state.draft.path ? state.draft : await generateDraft();
-  if (!result.path || (result.validation && !result.validation.valid)) {
-    renderDraft(result);
-    return;
-  }
-  const launched = await postJson("/api/studies/launch", {
-    study_path: result.path,
-    output_root: els.builderOutputRoot.value.trim() || "runs",
-  }, { tolerateError: true });
-  if (launched.job) {
-    state.pendingJobId = launched.job.job_id;
-    els.builderValidation.innerHTML = validationHtml({
-      valid: true,
-      launched: true,
-      name: launched.job.study_name,
-      path: launched.job.study_path,
-      environment_id: launched.job.environment_id,
-      job_id: launched.job.job_id,
-    });
-    await loadRunsAndJobs();
-    setView("runs");
-  } else {
-    els.builderValidation.innerHTML = validationHtml(launched);
-  }
-}
-
-function builderPayload() {
+function currentViewLabel() {
   return {
-    environment_path: environmentByUid(els.builderEnvironment.value).path,
-    method_path: methodByUid(els.builderMethod.value).path,
-    name: els.builderName.value.trim(),
-    metric: els.builderMetric.value.trim(),
-    direction: els.builderDirection.value,
-    maxTrials: Number(els.builderMaxTrials.value || 1),
-    backend: els.builderBackend.value,
-    containerImage: els.builderContainerImage.value.trim(),
-    containerExecutable: els.builderContainerExecutable.value.trim(),
-    containerBuildContext: els.builderContainerBuildContext.value.trim(),
-    containerBuildDockerfile: els.builderContainerBuildDockerfile.value.trim(),
-    containerBuildTag: els.builderContainerBuildTag.value.trim(),
-    parallelism: Number(els.builderParallelism.value || 1),
-    timeoutSeconds: Number(els.builderTimeout.value || 120),
+    workspace: "Editor",
+    catalog: "Catalog",
+    experiments: "Studies",
+    runs: "Runs",
+  }[state.view] || "Editor";
+}
+
+function buildSessions() {
+  return (state.uiWorkspaces || []).map(uiWorkspaceSession);
+}
+
+function uiWorkspaceSession(workspace) {
+  const entries = workspace.registered_entries || [];
+  const primary = entries[0] || null;
+  const focusFiles = workspace.focus_paths && workspace.focus_paths.length ? workspace.focus_paths : ["README.md"];
+  const files = {};
+  focusFiles.slice(0, 6).forEach((path, index) => {
+    files[`file${index}`] = {
+      label: path,
+      state: workspace.mode === "read-only" || workspace.mode === "analysis" ? "read-only" : "editable",
+      content: `# ${path}\n\nOpen this workspace in the embedded or separate code editor to inspect the live file contents.\n`,
+    };
+  });
+  if (!Object.keys(files).length) {
+    files.notes = {
+      label: "workspace_notes.md",
+      state: "draft",
+      content: "# Workspace Notes\n\nNo focus files have been recorded for this workspace yet.\n",
+    };
+  }
+  const sourceType = workspace.source_type || "workspace";
+  return {
+    id: workspace.id,
+    backendWorkspaceId: workspace.id,
+    kind: primary ? primary.kind : sourceType,
+    mode: workspace.mode || "editable",
+    title: workspace.title || "Workspace",
+    status: workspace.status || (entries.length ? "registered" : "ready"),
+    target: workspace.source_path || workspace.root,
+    path: shortPath(workspace.root || workspace.source_path || ""),
+    ideFolder: shortPath(workspace.root || ""),
+    codeFolder: workspace.root,
+    context: [sourceType, workspace.description || "workspace", shortPath(workspace.root || "")].filter(Boolean),
+    tools: workspaceCapabilities(workspace),
+    registrationEnabled: workspace.registration_enabled !== false,
+    registeredEntries: entries,
+    files,
+    lenses: [["Source", sourceType], ["Mode", workspace.mode || "editable"], ["Registered", entries.length ? String(entries.length) : "none"]],
+    timeline: [["assistant", "Workspace attached", workspace.description || "Workspace is available to the current assistant session."]],
+    terminal: workspace.registration_enabled === false
+      ? ["$ optpilot inspect-run", `root: ${shortPath(workspace.root || "")}`]
+      : ["$ optpilot discover-configs", `root: ${shortPath(workspace.root || "")}`],
+    checks: [["Workspace root", shortPath(workspace.root || ""), "ready"], ["Catalog registration", entries.length ? "registered" : "not registered", entries.length ? "ready" : "review"]],
   };
 }
 
-function renderDraft(result) {
-  els.builderYaml.textContent = result.yaml || "";
-  els.builderValidation.innerHTML = validationHtml(result.validation || result);
-  if (result.compatibility) {
-    els.builderCompatibility.innerHTML = compatibilityBox(result.compatibility);
+function workspaceCapabilities(workspace) {
+  if (Array.isArray(workspace.tools) && workspace.tools.length) {
+    return workspace.tools.map((tool) => typeof tool === "string" ? { label: tool, status: "available" } : tool);
   }
+  if (workspace.registration_enabled === false || workspace.source_type === "run") {
+    return [
+      { label: "Browse artifacts", status: "available" },
+      { label: "Analyze results", status: "available" },
+      { label: "Open code editor", status: "available" },
+    ];
+  }
+  if (workspace.mode === "read-only") {
+    return [
+      { label: "Inspect source", status: "available" },
+      { label: "Open code editor", status: "available" },
+    ];
+  }
+  return [
+    { label: "Discover configs", status: "available" },
+    { label: "Prepare registration", status: "available" },
+    { label: "Open preview", status: "optional" },
+  ];
+}
+
+function buildPlans() {
+  const plans = [];
+  for (const study of state.catalog.studies || []) {
+    const summary = study.summary || {};
+    const objective = summary.objective || {};
+    const budget = summary.budget || {};
+    const execution = summary.execution || {};
+    const evidence = summary.evidence || {};
+    const reproducibility = summary.reproducibility || {};
+    const environment = catalogEntryByPath("environment", summary.environmentPath) || catalogReference("environment", summary.environmentPath || summary.environment);
+    const method = catalogEntryByPath("method", summary.methodPath) || catalogReference("method", summary.methodPath || summary.method);
+    plans.push({
+      id: `saved-${study.uid}`,
+      title: study.label,
+      source: shortPath(study.path),
+      status: "saved",
+      study,
+      environment,
+      method,
+      metric: objective.metric || "",
+      direction: objective.direction || "",
+      aggregation: objective.aggregation || "mean",
+      secondaryMetrics: objective.secondaryMetrics || [],
+      maxTrials: budget.maxTrials || "",
+      maxFailures: budget.maxFailures || "",
+      backend: execution.backend || "local",
+      parallelism: execution.parallelism || "",
+      timeoutSeconds: execution.timeoutSeconds || "",
+      evidenceLevel: evidence.level || "",
+      evidenceStorage: evidence.outputFileStorage || "",
+      seed: reproducibility.seed ?? "",
+      checks: [],
+      yaml: study.yaml || `# Saved study\n# ${shortPath(study.path)}\n`,
+      draft: null,
+    });
+  }
+  return plans;
+}
+
+function renderWorkspace() {
+  const workspaces = attachedWorkspaces();
+  let session = currentSession();
+  if (session && session.id !== state.selectedSessionId) {
+    setSelectedWorkspace(session.id);
+  }
+  els.sessionCount.textContent = String(workspaces.length);
+  els.sessionList.innerHTML = workspaces.map(sessionCard).join("") || emptyInline("No workspaces attached to this session.");
+  document.querySelectorAll("[data-session-id]").forEach((button) => {
+    button.addEventListener("click", () => selectSession(button.dataset.sessionId));
+  });
+  document.querySelectorAll("[data-close-workspace-id]").forEach((button) => {
+    button.addEventListener("click", () => closeWorkspaceFromCurrentSession(button.dataset.closeWorkspaceId));
+  });
+  document.querySelectorAll("[data-workspace-action]").forEach((button) => {
+    button.addEventListener("click", () => runWorkspaceAction(button.dataset.workspaceAction));
+  });
+  if (!session) {
+    renderEmptyWorkspace();
+    return;
+  }
+  renderCodeServerCard(session);
+  els.sessionTitle.textContent = session.title;
+  els.sessionPath.textContent = session.path;
+  els.sessionStatus.textContent = session.status;
+  els.sessionStatus.className = `status-pill ${statusClass(session.status)}`;
+  els.sessionSummary.innerHTML = [
+    ["Mode", session.mode],
+    ["Target", shortPath(session.target)],
+    ["IDE folder", session.ideFolder],
+  ].map(summaryCell).join("");
+  els.sessionFiles.innerHTML = Object.entries(session.files).map(([key, file]) => `
+    <button class="file-tree-item ${key === state.selectedFileKey ? "active" : ""}" data-file-key="${escapeHtml(key)}" type="button">${escapeHtml(file.label)}</button>
+  `).join("");
+  document.querySelectorAll("[data-file-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedFileKey = button.dataset.fileKey;
+      renderWorkspace();
+    });
+  });
+  els.sessionContext.innerHTML = session.context.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
+  els.sessionTools.innerHTML = session.tools.map(capabilityItem).join("");
+  els.sessionWorkspaceActions.innerHTML = `
+    <button class="file-tree-item open-session-code" type="button">Focus folder in code editor</button>
+    <div class="path-text">${escapeHtml(shortPath(session.codeFolder || session.path))}</div>
+  `;
+  els.sessionWorkspaceActions.querySelector(".open-session-code").addEventListener("click", openCodeServerEmbedded);
+  renderSessionEditor(session);
+  renderWorkbenchMode();
+  renderEvidenceWorkbench();
+  renderAssistant();
+  renderSessionBottom();
+  maybeAutoOpenCodeWorkspace(session);
+}
+
+async function runWorkspaceAction(action) {
+  if (action === "register") {
+    await openRegistrationMenu();
+    return;
+  }
+  if (action === "open-ide") {
+    await openCodeServerFull();
+  }
+}
+
+function renderAssistantSessionList() {
+  if (!els.assistantSessionCards) return;
+  els.assistantSessionCards.innerHTML = state.agentSessions.map(agentSessionCard).join("");
+  document.querySelectorAll("#assistantSessionCards [data-agent-session-id]").forEach((button) => {
+    button.addEventListener("click", () => selectAgentSession(button.dataset.agentSessionId));
+  });
+}
+
+async function openRegistrationMenu() {
+  const session = currentSession();
+  if (!session) return;
+  state.registrationDraft = buildRegistrationDraft(session, []);
+  state.assistantMode = "registration";
+  state.assistantOpen = true;
+  pushAssistantMessage(["assistant", "Registration opened", `Prepared catalog registration for ${session.title}.`]);
+  renderAssistant();
+  if (!session.backendWorkspaceId) {
+    pushAssistantMessage(["tool", "Registration unavailable", "This workspace has not been persisted yet. Create or reopen it before registering catalog entries."]);
+    renderAssistant();
+    return;
+  }
+  try {
+    const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/discover-configs`, {});
+    state.registrationDraft = buildRegistrationDraft(session, payload.configs || []);
+    renderAssistant();
+  } catch (error) {
+    pushAssistantMessage(["tool", "Config discovery failed", String(error.message || error)]);
+    renderAssistant();
+  }
+}
+
+function buildRegistrationDraft(session, discoveredConfigs = null) {
+  const configs = (discoveredConfigs || [])
+    .map((config) => ({
+      key: config.relative_path || config.path,
+      label: config.relative_path || config.path,
+      kind: config.kind,
+      id: config.id || config.label,
+      selected: true,
+      validation: "not checked",
+      backendPath: config.relative_path || config.path,
+      discoveredValid: Boolean(config.valid),
+    }));
+  const registeredEntries = session.registeredEntries || [];
+  const alreadyRegistered = registeredEntries.length > 0 && configs.every((item) => item.validation === "read-only source");
+  return {
+    workspaceId: session.id,
+    backendWorkspaceId: session.backendWorkspaceId || "",
+    workspaceTitle: session.title,
+    status: alreadyRegistered ? "applied" : configs.length ? "draft" : "needs-config",
+    configs,
+    note: alreadyRegistered
+      ? "This workspace is already registered in the catalog. Create an editable copy if you want to modify and register a new version."
+      : configs.length
+      ? "Select one or more configs, validate them, then register selected files to user_catalog."
+      : "No OptPilot config file is selected yet. Ask the assistant to create one or add a config in the code editor.",
+  };
+}
+
+function registrationMenuHtml() {
+  const session = currentSession();
+  const draft = state.registrationDraft || (session ? buildRegistrationDraft(session) : null);
+  if (!draft) return emptyState("Select a workspace before registering to the catalog.");
+  state.registrationDraft = draft;
+  const configs = draft.configs || [];
+  return `
+    <div class="registration-panel">
+      <div class="registration-summary">
+        <span class="mini-label">Workspace</span>
+        <strong>${escapeHtml(draft.workspaceTitle)}</strong>
+        <p>${escapeHtml(draft.note)}</p>
+      </div>
+      <div class="registration-steps">
+        ${registrationStep("1", "Discover configs", configs.length ? `${configs.length} candidate config${configs.length === 1 ? "" : "s"} found` : "No config discovered", configs.length ? "ready" : "review")}
+        ${registrationStep("2", "Select targets", configs.filter((item) => item.selected).length ? "Targets selected" : "Choose at least one target", configs.some((item) => item.selected) ? "ready" : "review")}
+        ${registrationStep("3", "Validate", validationSummary(configs), configs.every((item) => item.validation === "valid" || item.validation === "read-only source") && configs.length ? "ready" : "review")}
+        ${registrationStep("4", "Register", draft.status === "applied" ? "Applied to catalog" : "Waiting for validation", draft.status === "applied" ? "ready" : "review")}
+      </div>
+      <div class="registration-targets">
+        ${configs.map(registrationTarget).join("") || emptyInline("No config files yet.")}
+      </div>
+      <div class="registration-actions">
+        <button class="ghost-button registration-discover" type="button">Discover configs</button>
+        <button class="ghost-button registration-validate" type="button" ${configs.length ? "" : "disabled"}>Validate selected</button>
+        <button class="primary-button registration-apply" type="button" ${configs.some((item) => item.validation === "valid") ? "" : "disabled"}>Register selected</button>
+      </div>
+    </div>
+  `;
+}
+
+function registrationStep(number, title, text, status) {
+  return `
+    <div class="registration-step">
+      <span>${escapeHtml(number)}</span>
+      <div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(text)}</p></div>
+      ${statusPill(status === "ready" ? "ready" : "review")}
+    </div>
+  `;
+}
+
+function registrationTarget(config) {
+  const stateText = config.selected ? "selected" : "not selected";
+  const validationText = config.validation === "not checked" ? "not validated" : config.validation;
+  return `
+    <label class="registration-target">
+      <input type="checkbox" data-registration-target="${escapeHtml(config.key)}" ${config.selected ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(config.label)}</strong>
+        <small>${escapeHtml(config.kind)} - ${escapeHtml(config.id)} - ${escapeHtml(stateText)} - ${escapeHtml(validationText)}</small>
+      </span>
+    </label>
+  `;
+}
+
+function validationSummary(configs) {
+  if (!configs.length) return "No configs";
+  if (configs.every((item) => item.validation === "read-only source")) return "Already registered";
+  const valid = configs.filter((item) => item.validation === "valid").length;
+  return valid ? `${valid} valid target${valid === 1 ? "" : "s"}` : "Not validated";
+}
+
+function bindRegistrationMenu() {
+  if (state.assistantMode !== "registration") return;
+  document.querySelectorAll("[data-registration-target]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const draft = state.registrationDraft;
+      if (!draft) return;
+      const target = draft.configs.find((item) => item.key === input.dataset.registrationTarget);
+      if (target) target.selected = input.checked;
+      renderAssistant();
+    });
+  });
+  const discover = document.querySelector(".registration-discover");
+  if (discover) discover.addEventListener("click", async () => {
+    const session = currentSession();
+    if (!session || !session.backendWorkspaceId) return;
+    try {
+      const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/discover-configs`, {});
+      state.registrationDraft = buildRegistrationDraft(session, payload.configs || []);
+    } catch (error) {
+      pushAssistantMessage(["tool", "Config discovery failed", String(error.message || error)]);
+    }
+    renderAssistant();
+  });
+  const validate = document.querySelector(".registration-validate");
+  if (validate) validate.addEventListener("click", async () => {
+    const draft = state.registrationDraft;
+    if (!draft) return;
+    const originalWorkspaceId = draft.workspaceId;
+    keepWorkspaceSelected(originalWorkspaceId);
+    if (!draft.backendWorkspaceId) {
+      pushAssistantMessage(["tool", "Registration validation blocked", "Persist this workspace before validating catalog registration."]);
+      keepWorkspaceSelected(originalWorkspaceId);
+      renderAssistant();
+      return;
+    }
+    try {
+      const selectedPaths = draft.configs.filter((item) => item.selected).map((item) => item.backendPath || item.label);
+      const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, { config_paths: selectedPaths });
+      draft.manifestId = created.registration && created.registration.id;
+      const validated = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/validate`, {});
+      const targets = validated.registration && validated.registration.targets || [];
+      draft.configs.forEach((item) => {
+        const target = targets.find((candidate) => candidate.config_path === (item.backendPath || item.label));
+        item.validation = target && target.validation && target.validation.valid ? "valid" : "invalid";
+      });
+      draft.status = validated.registration && validated.registration.status || "validated";
+      pushAssistantMessage(["tool", "Registration validation", "Selected configs were validated against the OptPilot authoring schema."]);
+    } catch (error) {
+      pushAssistantMessage(["tool", "Registration validation failed", String(error.message || error)]);
+    }
+    keepWorkspaceSelected(originalWorkspaceId);
+    renderAssistant();
+  });
+  const apply = document.querySelector(".registration-apply");
+  if (apply) apply.addEventListener("click", async () => {
+    const draft = state.registrationDraft;
+    const session = currentSession();
+    if (!draft || !session) return;
+    if (!draft.backendWorkspaceId) {
+      pushAssistantMessage(["tool", "Registration blocked", "Persist this workspace before registering catalog entries."]);
+      renderAssistant();
+      return;
+    }
+    try {
+      if (!draft.manifestId) {
+        const selectedPaths = draft.configs.filter((item) => item.selected).map((item) => item.backendPath || item.label);
+        const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, { config_paths: selectedPaths });
+        draft.manifestId = created.registration && created.registration.id;
+      }
+      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/apply`, {});
+      if (applied.workspace) {
+        state.uiWorkspaces = [applied.workspace, ...state.uiWorkspaces.filter((item) => item.id !== applied.workspace.id)];
+        const refreshed = uiWorkspaceSession(applied.workspace);
+        Object.assign(session, refreshed);
+      }
+      draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
+      pushAssistantMessage(["assistant", applied.applied ? "Registration applied" : "Registration blocked", applied.applied ? "Selected targets were copied into the user catalog." : "Validation must pass before registration can be applied."]);
+      renderWorkspace();
+    } catch (error) {
+      pushAssistantMessage(["tool", "Registration failed", String(error.message || error)]);
+    }
+    renderAssistant();
+  });
+}
+
+function renderEmptyWorkspace() {
+  updateSidebarCodeServerStatus();
+  els.sessionTitle.textContent = "No workspace attached";
+  els.sessionPath.textContent = "Create a workspace or attach one from Catalog or Studies.";
+  els.sessionStatus.textContent = "idle";
+  els.sessionStatus.className = "status-pill status-review";
+  els.sessionSummary.innerHTML = "";
+  els.sessionFiles.innerHTML = "";
+  els.sessionContext.innerHTML = "";
+  els.sessionTools.innerHTML = "";
+  els.sessionWorkspaceActions.innerHTML = `<button class="file-tree-item open-session-code" type="button" disabled>No code folder selected</button>`;
+  if (els.sessionEditor) els.sessionEditor.textContent = "";
+  if (els.sessionLenses) els.sessionLenses.innerHTML = "";
+  state.embeddedCodeUrl = "";
+  state.embeddedCodeFolder = "";
+  state.codeWorkspaceStatus = "detached";
+  state.codeWorkspaceMessage = "Attach or create a workspace to start editing.";
+  if (els.embeddedCodeWorkspace) els.embeddedCodeWorkspace.removeAttribute("src");
+  renderWorkbenchMode();
+  renderAssistant();
+  renderSessionBottom();
+}
+
+async function selectSession(sessionId) {
+  if (state.view !== "workspace") setView("workspace");
+  setSelectedWorkspace(sessionId);
+  const agentSession = currentAgentSession();
+  const selectedWorkspace = state.sessions.find((item) => item.id === sessionId);
+  if (agentSession && selectedWorkspace && selectedWorkspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
+    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`, { workspace_id: selectedWorkspace.backendWorkspaceId })
+      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .catch(() => {});
+  }
+  const next = currentSession();
+  state.selectedFileKey = firstFileKey(next);
+  if (isEmbeddedCodeWorkspaceActive() || shouldAutoOpenCodeWorkspace(next)) {
+    await openCodeServerEmbedded();
+    return;
+  }
+  renderWorkspace();
+}
+
+function startAssistantResize(event) {
+  if (!state.assistantOpen) return;
+  event.preventDefault();
+  if (document.body.classList.contains("resizing-assistant")) return;
+  const panel = document.querySelector(".agent-panel");
+  if (!panel) return;
+  const isMouseEvent = event.type === "mousedown";
+  const moveEventName = isMouseEvent ? "mousemove" : "pointermove";
+  const upEventName = isMouseEvent ? "mouseup" : "pointerup";
+  if (!isMouseEvent && event.currentTarget && event.currentTarget.setPointerCapture) {
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch (error) {
+      // Some synthetic pointer events do not support capture.
+    }
+  }
+  document.body.classList.add("resizing-assistant");
+  const onMove = (moveEvent) => {
+    const panelRect = panel.getBoundingClientRect();
+    const width = Math.round(moveEvent.clientX - panelRect.left);
+    state.assistantPanelWidth = Math.max(280, Math.min(560, width));
+    document.documentElement.style.setProperty("--assistant-panel-width", `${state.assistantPanelWidth}px`);
+  };
+  const onUp = () => {
+    if (!isMouseEvent && event.currentTarget && event.currentTarget.releasePointerCapture) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch (error) {
+        // Capture may already be released if the browser cancelled the drag.
+      }
+    }
+    document.body.classList.remove("resizing-assistant");
+    window.removeEventListener(moveEventName, onMove);
+    window.removeEventListener(upEventName, onUp);
+    renderAssistant();
+  };
+  window.addEventListener(moveEventName, onMove);
+  window.addEventListener(upEventName, onUp, { once: true });
+}
+
+async function selectAgentSession(sessionId) {
+  state.selectedAgentSessionId = sessionId;
+  state.assistantMode = "chat";
+  const selectedWorkspace = state.selectedWorkspaceByAgentSession[sessionId] || attachedWorkspaceIds(sessionId)[0] || null;
+  state.selectedSessionId = selectedWorkspace;
+  const next = currentSession();
+  state.selectedFileKey = firstFileKey(next);
+  if (next && (isEmbeddedCodeWorkspaceActive() || shouldAutoOpenCodeWorkspace(next))) {
+    await openCodeServerEmbedded();
+    return;
+  }
+  renderWorkspace();
+}
+
+async function createAgentSession() {
+  const selectedWorkspace = currentSession();
+  const attached = selectedWorkspace && selectedWorkspace.backendWorkspaceId ? [selectedWorkspace.backendWorkspaceId] : [];
+  try {
+    const payload = await postJson("/api/agent-sessions", {
+      title: `Session ${state.agentSessions.length + 1}`,
+      description: "New conversation",
+      attached_workspace_ids: attached,
+      selected_workspace_id: attached[0] || "",
+    });
+    mergeAgentSessionPayload(payload.session);
+    state.selectedAgentSessionId = payload.session.id;
+  } catch (error) {
+    const id = `agent-session-${Date.now().toString(36)}`;
+    const index = state.agentSessionSeq++;
+    const session = {
+      id,
+      title: `Session ${index}`,
+      description: "New conversation",
+      createdAt: "now",
+    };
+    state.agentSessions = [session, ...state.agentSessions];
+    state.agentWorkspaceAttachments[id] = state.selectedSessionId ? [state.selectedSessionId] : [];
+    state.selectedWorkspaceByAgentSession[id] = state.selectedSessionId || null;
+    state.assistantMessagesBySession[id] = defaultAssistantMessages();
+    state.selectedAgentSessionId = id;
+  }
+  state.assistantMode = "chat";
+  renderWorkspace();
+  setAssistantOpen(true);
+}
+
+async function closeWorkspaceFromCurrentSession(workspaceId) {
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  const label = workspace ? workspace.title : "this workspace";
+  const agentSession = currentAgentSession();
+  if (!agentSession) return;
+  state.agentWorkspaceAttachments[agentSession.id] = attachedWorkspaceIds(agentSession.id).filter((id) => id !== workspaceId);
+  if (!agentSession.id.startsWith("agent-session-")) {
+    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`, { workspace_id: workspaceId })
+      .then((payload) => mergeAgentSessionPayload(payload.session))
+      .catch(() => {});
+  }
+  if (workspace && workspace.backendWorkspaceId) {
+    postJson(`/api/workspaces/${encodeURIComponent(workspace.backendWorkspaceId)}/detach`, { session_id: agentSession.id }).catch(() => {});
+  }
+  if (state.selectedSessionId === workspaceId) {
+    const nextId = attachedWorkspaceIds(agentSession.id)[0] || null;
+    setSelectedWorkspace(nextId);
+    state.embeddedCodeUrl = "";
+    state.embeddedCodeFolder = "";
+    if (els.embeddedCodeWorkspace) els.embeddedCodeWorkspace.removeAttribute("src");
+    if (nextId) {
+      await openCodeServerEmbedded();
+      return;
+    }
+  }
+  pushAssistantMessage(["tool", "Workspace detached", `${label} was detached from this assistant session. Files remain on disk.`]);
+  renderWorkspace();
+}
+
+function renderCodeServerCard(session) {
+  updateSidebarCodeServerStatus();
+}
+
+function updateSidebarCodeServerStatus() {
+  const status = state.codeServer || {};
+  const running = Boolean(status.running);
+  const installed = Boolean(status.installed || status.available);
+  if (els.sidebarCodeServer) {
+    els.sidebarCodeServer.textContent = running ? "Code editor running" : installed ? "Code editor ready" : "Code editor not installed";
+  }
+}
+
+function renderSessionEditor(session) {
+  if (!session.files[state.selectedFileKey]) state.selectedFileKey = firstFileKey(session);
+  const file = session.files[state.selectedFileKey];
+  els.fileTabs.innerHTML = Object.entries(session.files).map(([key, item]) => `
+    <button class="tab ${key === state.selectedFileKey ? "active" : ""}" data-file-key="${escapeHtml(key)}" type="button">${escapeHtml(item.label)}</button>
+  `).join("");
+  document.querySelectorAll("#fileTabs [data-file-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedFileKey = button.dataset.fileKey;
+      renderWorkspace();
+    });
+  });
+  if (els.fileState) {
+    els.fileState.textContent = file.state;
+    els.fileState.className = `status-pill ${statusClass(file.state)}`;
+  }
+  els.sessionEditor.textContent = file.content;
+  els.sessionLenses.innerHTML = session.lenses.map(summaryCell).join("");
+}
+
+function renderWorkbenchMode() {
+  const mode = state.workbenchMode || "code";
+  const grid = document.querySelector("#workspaceView .workspace-grid");
+  if (grid) grid.classList.toggle("code-focused", mode === "code");
+  document.querySelectorAll("[data-workbench-mode]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.workbenchMode === mode);
+  });
+  [
+    ["contract", els.contractWorkbench],
+    ["code", els.codeWorkbench],
+    ["evidence", els.evidenceWorkbench],
+  ].forEach(([key, element]) => {
+    if (element) element.classList.toggle("active-workbench", key === mode);
+  });
+  const session = currentSession();
+  if (session && els.embeddedCodeWorkspacePath) {
+    els.embeddedCodeWorkspacePath.textContent = shortPath(session.codeFolder || session.path);
+  } else if (els.embeddedCodeWorkspacePath) {
+    els.embeddedCodeWorkspacePath.textContent = "-";
+  }
+  if (els.embeddedCodeWorkspaceEmpty) {
+    renderCodeWorkspacePlaceholder();
+  }
+  if (els.pauseCodeWorkspaceButton) {
+    els.pauseCodeWorkspaceButton.disabled = state.codeWorkspaceStatus === "opening" || !state.embeddedCodeUrl;
+  }
+  if (els.reloadEmbeddedCodeButton) {
+    els.reloadEmbeddedCodeButton.disabled = state.codeWorkspaceStatus === "opening" || !state.embeddedCodeUrl;
+  }
+  renderAssistant();
+}
+
+function renderCodeWorkspacePlaceholder() {
+  const active = Boolean(state.embeddedCodeUrl);
+  els.embeddedCodeWorkspaceEmpty.style.display = active ? "none" : "grid";
+  if (active) return;
+  const status = state.codeWorkspaceStatus || "idle";
+  const details = {
+    detached: [
+      "No workspace attached",
+      state.codeWorkspaceMessage || "Attach or create a workspace to start editing.",
+      "Create Workspace",
+      false,
+    ],
+    error: [
+      "Code editor unavailable",
+      state.codeWorkspaceMessage || "code-server could not open this workspace. Check the server logs or retry.",
+      "Retry Code Editor",
+      false,
+    ],
+    opening: [
+      "Opening code editor",
+      state.codeWorkspaceMessage || "Preparing the selected workspace folder in code-server.",
+      "Opening...",
+      true,
+    ],
+    paused: [
+      "Code editor paused",
+      "Start the selected workspace folder when you are ready to inspect or edit code.",
+      "Start Code Editor",
+      false,
+    ],
+    idle: [
+      "Starting code editor",
+      "OptPilot is preparing the selected workspace folder.",
+      "Start Code Editor",
+      false,
+    ],
+  }[status] || [
+    "Start the code editor",
+    "Inspect or edit this component without leaving OptPilot.",
+    "Start Code Editor",
+    false,
+  ];
+  if (els.codeWorkspaceEmptyTitle) els.codeWorkspaceEmptyTitle.textContent = details[0];
+  if (els.codeWorkspaceEmptyBody) els.codeWorkspaceEmptyBody.textContent = details[1];
+  if (els.startEmbeddedCodeButton) {
+    els.startEmbeddedCodeButton.textContent = details[2];
+    els.startEmbeddedCodeButton.disabled = details[3];
+  }
+}
+
+function renderEvidenceWorkbench() {
+  const session = currentSession();
+  if (!session || !els.evidenceWorkbench) return;
+  els.evidenceWorkbench.innerHTML = `
+    <div class="evidence-grid">
+      <section>
+        <div class="mini-label">Validation</div>
+        <div class="check-list">${(session.checks || []).map(checkRow).join("")}</div>
+      </section>
+      <section>
+        <div class="mini-label">Activity</div>
+        <div class="agent-timeline compact-timeline">${(session.timeline || []).map(timelineItem).join("")}</div>
+      </section>
+      <section>
+        <div class="mini-label">Preview</div>
+        ${previewHtml(session)}
+      </section>
+    </div>
+  `;
+}
+
+function renderSessionBottom() {
+  document.querySelectorAll("[data-session-tab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.sessionTab === state.sessionTab);
+  });
+  const session = currentSession();
+  if (!session) {
+    els.sessionBottom.innerHTML = emptyState("No workspace is attached to this agent session.");
+    return;
+  }
+  const content = {
+    terminal: `<pre class="code-box terminal-box">${escapeHtml((session.terminal || []).join("\n"))}</pre>`,
+    checks: `<div class="check-list">${(session.checks || []).map(checkRow).join("")}</div>`,
+    preview: previewHtml(session),
+    diff: `<pre class="code-box terminal-box">--- catalog/source\n+++ ${escapeHtml(session.path)}\n@@\n+ changes stay in the workspace until registration or launch\n</pre>`,
+  };
+  els.sessionBottom.innerHTML = content[state.sessionTab] || content.terminal;
+}
+
+function renderCatalog() {
+  document.querySelectorAll("[data-component-filter]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.componentFilter === state.componentFilter);
+  });
+  const components = allComponents().filter((item) => {
+    const matchesFilter = state.componentFilter === "all" || item.kind === state.componentFilter;
+    return matchesFilter;
+  });
+  if (!components.some((item) => item.key === state.selectedComponentKey)) {
+    state.selectedComponentKey = components[0] && components[0].key;
+  }
+  els.componentList.innerHTML = components.map(componentButton).join("") || emptyInline("No catalog entries match.");
+  document.querySelectorAll("[data-component-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedComponentKey = button.dataset.componentKey;
+      renderCatalog();
+    });
+  });
+  renderComponentDetail();
+}
+
+function renderComponentDetail() {
+  const component = componentByKey(state.selectedComponentKey);
+  if (!component) {
+    els.componentDetail.innerHTML = emptyState("Select a catalog component.");
+    return;
+  }
+  const item = component.entry;
+  const summary = item.summary || {};
+  const pairs = component.kind === "environment"
+    ? compatibleMethodsForEnvironment(item.uid)
+    : compatibleEnvironmentsForMethod(item.uid);
+  els.componentDetail.innerHTML = `
+    ${entityHeader(item, component.kind)}
+    <div class="action-row">
+      <button class="ghost-button component-inspect" type="button">Inspect</button>
+      <button class="ghost-button component-edit" type="button">Edit copy</button>
+    </div>
+    <div class="detail-grid">
+      ${kvPanel("Contract", component.kind === "environment" ? [
+        ["Candidate", summary.candidate_format],
+        ["Metrics", (summary.metrics || []).join(", ") || "-"],
+        ["Evaluator", summary.evaluate_type],
+      ] : [
+        ["Accepts", (summary.candidate_formats || []).join(", ") || "-"],
+        ["Protocol", summary.protocol],
+        ["Implementation", summary.implementation_type],
+      ])}
+      ${kvPanel("Runtime", component.kind === "environment" ? [
+        ["Timeout", summary.runtime && summary.runtime.timeoutSeconds],
+        ["Sandbox", summary.runtime && summary.runtime.sandbox],
+      ] : [
+        ["Runtime", summary.runtime && summary.runtime.type],
+        ["Image", summary.runtime && summary.runtime.image],
+      ])}
+    </div>
+    <div class="panel-section">
+      <h3>Compatible ${component.kind === "environment" ? "Methods" : "Environments"}</h3>
+      ${compatList(pairs, component.kind === "environment" ? "method" : "environment")}
+    </div>
+  `;
+  els.componentDetail.querySelector(".component-inspect").addEventListener("click", () => openComponentSession(component, "inspect"));
+  els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openComponentSession(component, "edit"));
+  els.componentDetail.querySelectorAll("[data-build-study-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const pair = pairs[Number(button.dataset.buildStudyIndex)];
+      if (pair) createPlanFromPair(pair);
+    });
+  });
+}
+
+function renderExperiments() {
+  els.planList.innerHTML = state.plans.map(planButton).join("") || emptyInline("No plans yet.");
+  document.querySelectorAll("[data-plan-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedPlanId = button.dataset.planId;
+      renderExperiments();
+    });
+  });
+  renderPlanDetail();
+}
+
+function renderPlanDetail() {
+  const plan = currentPlan();
+  if (!plan) {
+    els.planDetail.innerHTML = emptyState("Select a saved study config or build a draft from Catalog.");
+    return;
+  }
+  const draftValid = Boolean(plan.draft && plan.draft.path && (!plan.draft.validation || plan.draft.validation.valid));
+  const savedConfig = Boolean(plan.study && plan.study.path);
+  const launchEnabled = Boolean(savedConfig || plan.environment && plan.method);
+  const launchLabel = savedConfig || draftValid ? "Launch Study" : "Save & Launch";
+  const saveLabel = savedConfig ? "Save Copy" : plan.draft ? "Update Config" : "Save Config";
+  const locked = !plan.environment || !plan.method;
+  els.planDetail.innerHTML = `
+    <div class="detail-heading">
+      <div>
+        <h2>${escapeHtml(plan.title)}</h2>
+        <p class="path-text">${escapeHtml(plan.source)}</p>
+      </div>
+      ${plan.status && plan.status !== "saved" ? statusPill(plan.status) : ""}
+    </div>
+    <div class="action-row">
+      ${!locked ? `<button class="ghost-button plan-draft" type="button">${escapeHtml(saveLabel)}</button>` : ""}
+      <button class="primary-button plan-launch" type="button" ${launchEnabled ? "" : "disabled"}>${escapeHtml(launchLabel)}</button>
+    </div>
+    <div class="plan-layout">
+      <section class="study-config-grid">
+        ${studyConfigEditor(plan, locked)}
+        ${studyReadinessPanel(plan)}
+      </section>
+      <section>
+        <h3>Study YAML</h3>
+        <pre class="code-box yaml-preview">${escapeHtml(plan.draft && plan.draft.yaml || plan.yaml || planYamlPreview(plan) || "")}</pre>
+        <div class="validation-box">${plan.draft ? validationHtml(plan.draft.validation || plan.draft) : ""}</div>
+      </section>
+    </div>
+  `;
+  const saveButton = els.planDetail.querySelector(".plan-draft");
+  if (saveButton) saveButton.addEventListener("click", () => generatePlanDraft(plan));
+  els.planDetail.querySelector(".plan-launch").addEventListener("click", () => launchPlan(plan));
+  if (!locked) bindPlanConfigControls(plan);
+}
+
+function studyConfigEditor(plan, locked) {
+  return `
+    <section class="study-card">
+      <h3>Binding</h3>
+      <div class="study-binding">
+        ${readonlyField("Environment", plan.environment && plan.environment.label || "-")}
+        ${readonlyField("Method", plan.method && plan.method.label || "-")}
+      </div>
+    </section>
+    <section class="study-card">
+      <h3>Objective</h3>
+      <div class="control-grid">
+        ${selectField("Metric", "metric", plan.metric || "", metricOptions(plan), locked)}
+        ${selectField("Direction", "direction", plan.direction || "maximize", ["minimize", "maximize"], locked)}
+        ${selectField("Aggregation", "aggregation", plan.aggregation || "mean", ["mean", "median", "min", "max", "sum", "last", "weighted_mean"], locked)}
+        ${inputField("Secondary metrics", "secondaryMetrics", (plan.secondaryMetrics || []).join(", "), "text", locked)}
+      </div>
+    </section>
+    <section class="study-card">
+      <h3>Run Policy</h3>
+      <div class="control-grid">
+        ${inputField("Max trials", "maxTrials", plan.maxTrials || "", "number", locked, "1")}
+        ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "0")}
+        ${selectField("Backend", "backend", plan.backend || "local", ["local", "local_subprocess"], locked)}
+        ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1")}
+        ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1")}
+      </div>
+    </section>
+    <section class="study-card">
+      <h3>Evidence</h3>
+      <div class="control-grid">
+        ${selectField("Level", "evidenceLevel", plan.evidenceLevel || "standard", ["minimal", "standard", "full"], locked)}
+        ${selectField("File storage", "evidenceStorage", plan.evidenceStorage || "reference", ["reference", "copy"], locked)}
+        ${inputField("Seed", "seed", plan.seed ?? "", "number", locked, "0")}
+      </div>
+    </section>
+  `;
+}
+
+function readonlyField(label, value) {
+  return `<div class="readonly-field"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value || "-")}</strong></div>`;
+}
+
+function inputField(label, field, value, type = "text", disabled = false, min = "") {
+  return `
+    <label class="control-field">
+      <span>${escapeHtml(label)}</span>
+      <input data-plan-field="${escapeHtml(field)}" type="${escapeHtml(type)}" value="${escapeHtml(value ?? "")}" ${min !== "" ? `min="${escapeHtml(min)}"` : ""} ${disabled ? "disabled" : ""} />
+    </label>
+  `;
+}
+
+function selectField(label, field, value, options, disabled = false) {
+  const optionValues = Array.from(new Set([value, ...(options || [])].filter((item) => item !== "" && item !== null && item !== undefined)));
+  return `
+    <label class="control-field">
+      <span>${escapeHtml(label)}</span>
+      <select data-plan-field="${escapeHtml(field)}" ${disabled ? "disabled" : ""}>
+        ${optionValues.map((option) => `<option value="${escapeHtml(option)}" ${String(option) === String(value) ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function metricOptions(plan) {
+  const metrics = plan.environment && plan.environment.summary && plan.environment.summary.metrics || [];
+  return metrics.length ? metrics : [plan.metric || "score"];
+}
+
+function bindPlanConfigControls(plan) {
+  els.planDetail.querySelectorAll("[data-plan-field]").forEach((control) => {
+    const eventName = control.tagName === "SELECT" ? "change" : "input";
+    control.addEventListener(eventName, () => {
+      updatePlanField(plan, control.dataset.planField, control.value);
+      refreshPlanPreview(plan);
+    });
+  });
+}
+
+function updatePlanField(plan, field, value) {
+  if (plan.study) convertSavedPlanToDraft(plan);
+  if (field === "secondaryMetrics") {
+    plan.secondaryMetrics = value.split(",").map((item) => item.trim()).filter(Boolean);
+  } else {
+    plan[field] = value;
+  }
+  plan.draft = null;
+  plan.status = "draft";
+}
+
+function convertSavedPlanToDraft(plan) {
+  plan.originalStudy = plan.study;
+  plan.study = null;
+  plan.source = "draft copy";
+  plan.status = "draft";
+  plan.draft = null;
+  plan.yaml = planYamlPreview(plan);
+}
+
+function refreshPlanPreview(plan) {
+  const preview = els.planDetail.querySelector(".yaml-preview");
+  if (preview) preview.textContent = planYamlPreview(plan);
+  const validation = els.planDetail.querySelector(".validation-box");
+  if (validation && !plan.draft) validation.innerHTML = "";
+  const launchButton = els.planDetail.querySelector(".plan-launch");
+  if (launchButton) launchButton.textContent = plan.draft && plan.draft.path ? "Launch Study" : "Save & Launch";
+  const saveButton = els.planDetail.querySelector(".plan-draft");
+  if (saveButton) saveButton.textContent = plan.draft ? "Update Config" : "Save Config";
 }
 
 function renderRuns() {
   const query = els.runFilter.value.trim().toLowerCase();
-  const runs = state.runs.filter((run) => `${run.name} ${run.path} ${run.status} ${run.environment_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
-  els.totalRuns.textContent = String(state.runs.length);
-  els.runningRuns.textContent = String(state.runs.filter((run) => run.status === "running").length);
+  const rows = runRowsWithJobs();
+  const runs = rows.filter((run) => `${run.name} ${run.path} ${run.status} ${run.environment_id || ""} ${run.method && run.method.id || ""}`.toLowerCase().includes(query));
+  els.totalRuns.textContent = String(rows.length);
+  els.runningRuns.textContent = String(rows.filter((run) => run.status === "running").length);
   els.completedTrials.textContent = String(sum(state.runs.map((run) => Number(run.completed_trials || 0))));
   els.failureCount.textContent = String(sum(state.runs.map((run) => Number(run.failure_count || 0))));
-  els.runsTable.innerHTML = runs.map(runRow).join("") || `<tr><td colspan="6">${emptyInline("No runs match.")}</td></tr>`;
+  els.runsTable.innerHTML = runs.map(runRow).join("") || emptyInline("No runs match.");
   document.querySelectorAll(".run-row").forEach((row) => {
     row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
   });
-  renderCompareOptions();
 }
 
-function renderCompareOptions() {
-  const previousA = els.compareRunA.value;
-  const previousB = els.compareRunB.value;
-  const options = state.runs.map((run) => `<option value="${escapeHtml(run.id)}">${escapeHtml(run.name)}</option>`).join("");
-  els.compareRunA.innerHTML = options;
-  els.compareRunB.innerHTML = options;
-  if (previousA && state.runs.some((run) => run.id === previousA)) els.compareRunA.value = previousA;
-  else if (state.runs[0]) els.compareRunA.value = state.runs[0].id;
-  if (previousB && state.runs.some((run) => run.id === previousB)) els.compareRunB.value = previousB;
-  else if (state.runs[1]) els.compareRunB.value = state.runs[1].id;
-}
-
-async function compareRuns() {
-  const firstId = els.compareRunA.value;
-  const secondId = els.compareRunB.value;
-  if (!firstId || !secondId) {
-    els.compareRunsResult.innerHTML = emptyInline("Select two runs to compare.");
-    return;
-  }
-  const [first, second] = await Promise.all([
-    getJson(`/api/runs/${encodeURIComponent(firstId)}`),
-    getJson(`/api/runs/${encodeURIComponent(secondId)}`),
-  ]);
-  els.compareRunsResult.innerHTML = runComparisonTable(first.run, second.run);
+function runRowsWithJobs() {
+  const runPaths = new Set(state.runs.map((run) => run.path));
+  const jobRows = state.jobs
+    .filter((job) => !job.run_dir || !runPaths.has(job.run_dir))
+    .map((job) => ({
+      id: `job:${job.job_id}`,
+      name: job.study_name || job.job_id,
+      path: job.run_dir || job.study_path,
+      status: job.status || "running",
+      method: { id: "launch job" },
+      completed_trials: 0,
+      best_metric: null,
+      environment_id: "pending",
+      job,
+    }));
+  return [...jobRows, ...state.runs];
 }
 
 async function loadRunDetail(runId, options = {}) {
   state.selectedRunId = runId;
+  if (runId && runId.startsWith("job:")) {
+    const job = state.jobs.find((item) => `job:${item.job_id}` === runId);
+    state.selectedRun = job ? { job, run: jobRunSummary(job) } : null;
+    if (!options.keepTab) state.activeRunTab = "overview";
+    if (!options.skipListRender) renderRuns();
+    renderRunDetail();
+    renderAssistant();
+    return;
+  }
   state.selectedRun = await getJson(`/api/runs/${encodeURIComponent(runId)}`);
   if (!options.keepTab) state.activeRunTab = "overview";
-  renderRuns();
+  if (!options.skipListRender) renderRuns();
   renderRunDetail();
+  renderAssistant();
+}
+
+function jobRunSummary(job) {
+  return {
+    id: `job:${job.job_id}`,
+    name: job.study_name || job.job_id,
+    path: job.run_dir || job.study_path,
+    status: job.status || "running",
+    best_metric: null,
+    completed_trials: 0,
+    failure_count: 0,
+    method: { id: "launch job" },
+    environment_id: "pending",
+    objective: {},
+  };
 }
 
 function renderRunDetail() {
   const detail = state.selectedRun;
   if (!detail) {
     els.runDetail.innerHTML = emptyState("Select a run to inspect observations, candidates, events, and files.");
+    return;
+  }
+  if (detail.job && !detail.observations) {
+    renderJobDetail(detail.job);
     return;
   }
   const run = detail.run;
@@ -569,7 +1759,10 @@ function renderRunDetail() {
         <h2>${escapeHtml(run.name)}</h2>
         <p class="path-text">${escapeHtml(shortPath(run.path))}</p>
       </div>
-      ${statusPill(run.status)}
+      <div class="detail-actions">
+        ${statusPill(run.status)}
+        <button class="ghost-button run-workspace" type="button">Open as Workspace</button>
+      </div>
     </div>
     <div class="detail-stats">
       <div><span>Best metric</span><strong>${formatMetric(run.best_metric)}</strong></div>
@@ -579,7 +1772,7 @@ function renderRunDetail() {
     </div>
     ${metricChart(detail.observations || [], run.objective && run.objective.name)}
     <div class="tabs">
-      ${["overview", "trials", "candidates", "events", "runtime", "files"].map((tab) => `<button class="tab ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button">${tabLabel(tab)}</button>`).join("")}
+      ${["overview", "trials", "candidates", "events", "runtime", "files"].map((tab) => `<button class="tab ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button">${tab}</button>`).join("")}
     </div>
     <div class="tab-content">${runTabContent(detail)}</div>
   `;
@@ -589,6 +1782,8 @@ function renderRunDetail() {
       renderRunDetail();
     });
   });
+  const runWorkspaceButton = els.runDetail.querySelector(".run-workspace");
+  if (runWorkspaceButton) runWorkspaceButton.addEventListener("click", () => openRunWorkspace(run.id));
   document.querySelectorAll(".file-button").forEach((button) => {
     button.addEventListener("click", async () => {
       const response = await getJson(`/api/runs/${encodeURIComponent(detail.run.id)}/file?path=${encodeURIComponent(button.dataset.filePath)}`);
@@ -596,6 +1791,59 @@ function renderRunDetail() {
       preview.innerHTML = `<h3>${escapeHtml(response.relative_path)}</h3><pre class="code-box">${escapeHtml(response.content)}</pre>`;
     });
   });
+}
+
+function renderJobDetail(job) {
+  els.runDetail.innerHTML = `
+    <div class="detail-heading">
+      <div>
+        <h2>${escapeHtml(job.study_name || job.job_id)}</h2>
+        <p class="path-text">${escapeHtml(shortPath(job.study_path))}</p>
+      </div>
+      <div class="detail-actions">
+        ${statusPill(job.status)}
+        ${job.status === "running" ? `<button class="ghost-button stop-selected-job" type="button">Stop</button>` : ""}
+      </div>
+    </div>
+    <div class="detail-grid">
+      ${kvPanel("Launch Job", [
+        ["Job", job.job_id],
+        ["PID", job.process_id || "-"],
+        ["Exit", job.exit_code ?? "-"],
+        ["Run folder", job.run_dir ? shortPath(job.run_dir) : "waiting for run directory"],
+      ])}
+      ${kvPanel("Logs", [
+        ["stdout", shortPath(job.stdout_log || "")],
+        ["stderr", shortPath(job.stderr_log || "")],
+      ])}
+    </div>
+    <p class="path-text">This job will appear as a normal run once OptPilot writes its run directory and evidence files.</p>
+  `;
+  const stopButton = els.runDetail.querySelector(".stop-selected-job");
+  if (stopButton) {
+    stopButton.addEventListener("click", async () => {
+      await postJson(`/api/jobs/${encodeURIComponent(job.job_id)}/stop`, {});
+      await loadRunsAndJobs();
+      await loadRunDetail(`job:${job.job_id}`, { keepTab: true });
+    });
+  }
+}
+
+async function openRunWorkspace(runId) {
+  try {
+    const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/open-workspace`, {});
+    if (payload.workspace) {
+      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
+      const session = uiWorkspaceSession(payload.workspace);
+      upsertSession(session);
+      state.selectedSessionId = session.id;
+      state.selectedFileKey = firstFileKey(session);
+      setView("workspace");
+    }
+  } catch (error) {
+    pushAssistantMessage(["tool", "Run workspace failed", String(error.message || error)]);
+    setAssistantOpen(true);
+  }
 }
 
 function runTabContent(detail) {
@@ -607,19 +1855,8 @@ function runTabContent(detail) {
       ["Best candidate", detail.run.best_candidate_id],
     ]);
   }
-  if (state.activeRunTab === "trials") {
-    return tableFromRows(trialRows(detail), [
-      ["trial_id", "Trial"],
-      ["status", "Status"],
-      ["candidate_id", "Candidate"],
-      ["backend", "Backend"],
-      ["budget", "Budget"],
-      ["error", "Error"],
-    ]);
-  }
-  if (state.activeRunTab === "candidates") {
-    return tableFromRows((detail.candidates || []).map(candidateRecord), [["candidate_id", "Candidate"], ["format", "Format"], ["validation", "Validation"], ["generator", "Generator"]]);
-  }
+  if (state.activeRunTab === "trials") return tableFromRows(trialRows(detail), [["trial_id", "Trial"], ["status", "Status"], ["candidate_id", "Candidate"], ["backend", "Backend"], ["budget", "Budget"], ["error", "Error"]]);
+  if (state.activeRunTab === "candidates") return tableFromRows((detail.candidates || []).map(candidateRecord), [["candidate_id", "Candidate"], ["format", "Format"], ["validation", "Validation"], ["generator", "Generator"]]);
   if (state.activeRunTab === "events") {
     const events = [
       ...(detail.method_calls || []).map((record) => ({ type: "method call", ...record })),
@@ -629,13 +1866,468 @@ function runTabContent(detail) {
     return tableFromRows(events, [["type", "Type"], ["event", "Event"], ["method_id", "Method"], ["created_at", "Created"], ["payload", "Payload"]]);
   }
   if (state.activeRunTab === "runtime") {
-    return `<pre class="code-box">${escapeHtml(JSON.stringify({
-      policy: detail.run_policy,
-      environment_snapshot: detail.environment_snapshot,
-      lineage: detail.run_lineage,
-    }, null, 2))}</pre>`;
+    return `<pre class="code-box">${escapeHtml(JSON.stringify({ policy: detail.run_policy, environment_snapshot: detail.environment_snapshot, lineage: detail.run_lineage }, null, 2))}</pre>`;
   }
   return filesTab(detail);
+}
+
+async function openComponentSession(component, mode) {
+  try {
+    const action = mode === "edit" ? "edit-copy" : "open-workspace";
+    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/${action}`, {});
+    if (payload.workspace) {
+      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
+      const session = uiWorkspaceSession(payload.workspace);
+      upsertSession(session);
+      state.selectedSessionId = session.id;
+      state.selectedFileKey = firstFileKey(session);
+      attachWorkspaceToCurrent(session.id);
+      setView("workspace");
+      return;
+    }
+  } catch (error) {
+    pushAssistantMessage(["tool", "Workspace open failed", String(error.message || error)]);
+    setAssistantOpen(true);
+    renderAssistant();
+  }
+}
+
+async function createBlankSession() {
+  try {
+    const payload = await postJson("/api/workspaces", {
+      title: "New Workspace",
+      description: "Generic project workspace",
+      attached_sessions: state.selectedAgentSessionId ? [state.selectedAgentSessionId] : [],
+    });
+    if (payload.workspace) {
+      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
+      const session = uiWorkspaceSession(payload.workspace);
+      upsertSession(session);
+      state.selectedSessionId = session.id;
+      state.selectedFileKey = firstFileKey(session);
+      attachWorkspaceToCurrent(session.id);
+      setView("workspace");
+      return;
+    }
+  } catch (error) {
+    pushAssistantMessage(["tool", "Workspace create failed", String(error.message || error)]);
+    setAssistantOpen(true);
+    renderAssistant();
+  }
+}
+
+function createPlanFromPair(pair) {
+  if (!pair || !pair.environment || !pair.method) return;
+  const plan = planFromPair(pair);
+  upsertPlan(plan);
+  state.selectedPlanId = plan.id;
+  setView("experiments");
+}
+
+function createPlanFromCurrentContext() {
+  const pair = firstCompatiblePair();
+  if (!pair) return;
+  const plan = planFromPair(pair);
+  upsertPlan(plan);
+  state.selectedPlanId = plan.id;
+  setView("experiments");
+}
+
+async function generatePlanDraft(plan) {
+  await savePlanDraft(plan, { render: true });
+}
+
+async function savePlanDraft(plan, options = {}) {
+  if (!plan.environment || !plan.method) return;
+  if (plan.study) convertSavedPlanToDraft(plan);
+  const result = await postJson("/api/studies/draft", planPayload(plan), { tolerateError: true });
+  plan.draft = result;
+  plan.yaml = result.yaml || plan.yaml;
+  plan.status = result.validation && result.validation.valid ? "ready" : "review";
+  if (options.render !== false) renderExperiments();
+  return result;
+}
+
+async function launchPlan(plan) {
+  if (plan.study && plan.study.path) {
+    const launched = await postJson("/api/studies/launch", { study_path: plan.study.path, output_root: "runs" }, { tolerateError: true });
+    afterLaunch(launched);
+    return;
+  }
+  if (!plan.draft || !plan.draft.path || (plan.draft.validation && !plan.draft.validation.valid)) {
+    const saved = await savePlanDraft(plan, { render: false });
+    if (!saved || saved.validation && !saved.validation.valid) {
+      pushAssistantMessage(["assistant", "Config needs review", "The study config was saved but validation did not pass, so I did not launch it."]);
+      renderAssistant();
+      renderExperiments();
+      return;
+    }
+  }
+  const launched = await postJson("/api/studies/launch", { study_path: plan.draft.path, output_root: "runs" }, { tolerateError: true });
+  afterLaunch(launched);
+}
+
+async function afterLaunch(launched) {
+  if (launched.job) {
+    state.pendingJobId = launched.job.job_id;
+    state.selectedRunId = `job:${launched.job.job_id}`;
+    state.selectedRun = { job: launched.job, run: jobRunSummary(launched.job) };
+    await loadRunsAndJobs();
+    setView("runs");
+  } else {
+    renderExperiments();
+  }
+}
+
+function isEmbeddedCodeWorkspaceActive() {
+  return Boolean(state.embeddedCodeUrl || els.embeddedCodeWorkspace && els.embeddedCodeWorkspace.getAttribute("src"));
+}
+
+function codeFolderForSession(session) {
+  return session && (session.codeFolder || session.path);
+}
+
+function shouldAutoOpenCodeWorkspace(session = currentSession()) {
+  if (!session || state.view !== "workspace" || state.workbenchMode !== "code") return false;
+  if (state.codeWorkspacePaused || state.codeWorkspaceStatus === "opening" || state.codeWorkspaceStatus === "error") return false;
+  return state.embeddedCodeFolder !== codeFolderForSession(session) || !state.embeddedCodeUrl;
+}
+
+function maybeAutoOpenCodeWorkspace(session = currentSession()) {
+  if (shouldAutoOpenCodeWorkspace(session)) {
+    openCodeServerEmbedded();
+  }
+}
+
+async function startCodeWorkspaceFromUser() {
+  if (!currentSession()) {
+    createBlankSession();
+    return;
+  }
+  state.codeWorkspacePaused = false;
+  state.codeWorkspaceStatus = "idle";
+  state.codeWorkspaceMessage = "";
+  await openCodeServerEmbedded();
+}
+
+async function openCodeServerEmbedded() {
+  const session = currentSession();
+  if (!session) return;
+  const folder = codeFolderForSession(session);
+  state.workbenchMode = "code";
+  if (state.embeddedCodeUrl && state.embeddedCodeFolder === folder) {
+    state.codeWorkspaceStatus = "ready";
+    state.codeWorkspacePaused = false;
+    renderWorkspace();
+    return;
+  }
+  state.embeddedCodeUrl = "";
+  state.embeddedCodeFolder = "";
+  if (els.embeddedCodeWorkspace) els.embeddedCodeWorkspace.removeAttribute("src");
+  state.codeWorkspaceStatus = "opening";
+  state.codeWorkspaceMessage = `Opening ${shortPath(folder)}.`;
+  state.codeWorkspacePaused = false;
+  session.timeline.push(["tool", "code-server", `Embedding ${shortPath(folder)}.`]);
+  renderWorkspace();
+  const result = await postJson("/api/code-server/start", { folder }, { tolerateError: true });
+  state.codeServer = result;
+  if (result.open_url) {
+    state.embeddedCodeUrl = result.open_url;
+    state.embeddedCodeFolder = folder;
+    state.codeWorkspaceStatus = "ready";
+    state.codeWorkspaceMessage = "";
+    els.embeddedCodeWorkspace.src = result.open_url;
+    session.timeline.push(["tool", "code-server embedded", `Folder: ${shortPath(result.folder || folder)}.`]);
+  } else {
+    state.codeWorkspaceStatus = "error";
+    state.codeWorkspaceMessage = result.error || result.install_hint || "Install coder/code-server and refresh.";
+    session.timeline.push(["tool", "code-server unavailable", state.codeWorkspaceMessage]);
+  }
+  renderWorkspace();
+}
+
+async function openCodeServerFull() {
+  const session = currentSession();
+  if (!session) return;
+  const result = await postJson("/api/code-server/start", { folder: session.codeFolder || session.path }, { tolerateError: true });
+  state.codeServer = result;
+  if (result.open_url) window.open(result.open_url, "_blank", "noopener");
+  renderWorkspace();
+}
+
+function reloadEmbeddedCodeWorkspace() {
+  if (state.embeddedCodeUrl) {
+    els.embeddedCodeWorkspace.src = state.embeddedCodeUrl;
+  }
+}
+
+async function stopCodeServer() {
+  const result = await postJson("/api/code-server/stop", {}, { tolerateError: true });
+  state.codeServer = result;
+  state.embeddedCodeUrl = "";
+  state.embeddedCodeFolder = "";
+  state.codeWorkspaceStatus = "paused";
+  state.codeWorkspaceMessage = "";
+  state.codeWorkspacePaused = true;
+  els.embeddedCodeWorkspace.removeAttribute("src");
+  renderWorkspace();
+}
+
+async function primaryAction() {
+  if (state.view === "experiments") {
+    const plan = currentPlan();
+    if (plan) launchPlan(plan);
+    return;
+  }
+  await openRegistrationMenu();
+}
+
+function attachContext() {
+  const session = currentSession();
+  const message = ["user", "Context attached", `Current workspace: ${session ? session.title : "none"}. Attached workspace roots, catalog, studies, runs, and code context are available.`];
+  pushAssistantMessage(message);
+  persistAssistantMessage(message);
+  renderAssistant();
+}
+
+async function sendAgentMessage() {
+  const message = els.agentInput.value.trim();
+  if (!message) return;
+  const userMessage = ["user", "User", message];
+  pushAssistantMessage(userMessage);
+  els.agentInput.value = "";
+  delete els.agentInput.dataset.touched;
+  const persisted = await persistAssistantMessage(userMessage);
+  if (!persisted) {
+    pushAssistantMessage(["assistant", "Runtime unavailable", "This message is visible in the local transcript, but the backend assistant session could not store it."]);
+  }
+  renderAssistant();
+}
+
+function planPayload(plan) {
+  return {
+    environment_path: plan.environment.path,
+    method_path: plan.method.path,
+    name: `${plan.environment.id}-${plan.method.id}`,
+    metric: plan.metric || firstMetric(plan.environment) || "score",
+    direction: plan.direction || "maximize",
+    aggregation: plan.aggregation || "mean",
+    secondaryMetrics: plan.secondaryMetrics || [],
+    maxTrials: Number(plan.maxTrials || 8),
+    maxFailures: plan.maxFailures === "" || plan.maxFailures === null || plan.maxFailures === undefined ? null : Number(plan.maxFailures),
+    backend: plan.backend || "local",
+    parallelism: Number(plan.parallelism || 1),
+    timeoutSeconds: Number(plan.timeoutSeconds || 120),
+    evidenceLevel: plan.evidenceLevel || "standard",
+    evidenceStorage: plan.evidenceStorage || "reference",
+    seed: plan.seed === "" || plan.seed === null || plan.seed === undefined ? null : Number(plan.seed),
+  };
+}
+
+function upsertSession(session) {
+  state.sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)];
+  attachWorkspaceToCurrent(session.id);
+}
+
+function upsertPlan(plan) {
+  state.plans = [plan, ...state.plans.filter((item) => item.id !== plan.id)];
+}
+
+function currentSession() {
+  const attached = new Set(attachedWorkspaceIds());
+  return state.sessions.find((session) => session.id === state.selectedSessionId && attached.has(session.id)) || attachedWorkspaces()[0] || null;
+}
+
+function currentPlan() {
+  return state.plans.find((plan) => plan.id === state.selectedPlanId) || state.plans[0] || null;
+}
+
+function allComponents() {
+  return [
+    ...(state.catalog.environments || []).map((entry) => ({ key: `environment:${entry.uid}`, kind: "environment", entry })),
+    ...(state.catalog.methods || []).map((entry) => ({ key: `method:${entry.uid}`, kind: "method", entry })),
+  ];
+}
+
+function componentByKey(key) {
+  return allComponents().find((component) => component.key === key) || null;
+}
+
+function catalogEntryByUid(kind, uid) {
+  const entries = kind === "method" ? state.catalog.methods : state.catalog.environments;
+  return (entries || []).find((entry) => entry.uid === uid) || null;
+}
+
+function catalogEntryByPath(kind, path) {
+  if (!path) return null;
+  const entries = kind === "method" ? state.catalog.methods : state.catalog.environments;
+  return (entries || []).find((entry) => entry.path === path) || null;
+}
+
+function catalogReference(kind, path) {
+  if (!path) return null;
+  const label = shortPath(path).split("/").pop() || kind;
+  return { id: label.replace(/\.ya?ml$/, ""), label, path, summary: {} };
+}
+
+function firstCompatiblePair() {
+  return (state.compatibility.pairs || []).find((pair) => pair.compatible) || null;
+}
+
+function firstFileKey(session) {
+  return session && Object.keys(session.files)[0];
+}
+
+function firstMetric(environment) {
+  return (environment.summary && environment.summary.metrics || [])[0] || "";
+}
+
+function preferredMetric(environment) {
+  const metrics = environment.summary && environment.summary.metrics || [];
+  return metrics.find((metric) => metric === "normalized_makespan")
+    || metrics.find((metric) => /score|reward|accuracy|throughput|service/i.test(metric))
+    || metrics[0]
+    || "score";
+}
+
+function directionForMetric(metric) {
+  return /makespan|tardiness|loss|cost|error|latency|time/i.test(metric) ? "minimize" : "maximize";
+}
+
+function planFromPair(pair) {
+  const metric = preferredMetric(pair.environment);
+  const metrics = pair.environment.summary && pair.environment.summary.metrics || [];
+  const secondaryMetrics = metrics.filter((item) => item !== metric).slice(0, 4);
+  const timeoutSeconds = pair.environment.summary && pair.environment.summary.runtime && pair.environment.summary.runtime.timeoutSeconds || 120;
+  const plan = {
+    environment: pair.environment,
+    method: pair.method,
+    metric,
+    direction: directionForMetric(metric),
+    aggregation: "mean",
+    secondaryMetrics,
+    maxTrials: 8,
+    maxFailures: "",
+    backend: "local",
+    parallelism: 1,
+    timeoutSeconds,
+    evidenceLevel: "standard",
+    evidenceStorage: "reference",
+    seed: 0,
+  };
+  return {
+    ...plan,
+    id: `pair-${slug(pair.environment.id)}-${slug(pair.method.id)}`,
+    title: `${pair.environment.label} + ${pair.method.label}`,
+    source: "draft config",
+    status: "draft",
+    checks: compatibilityChecks(pair),
+    yaml: planYamlPreview(plan),
+    draft: null,
+  };
+}
+
+function planYamlPreview(plan) {
+  const lines = [
+    "apiVersion: optpilot.io/v1",
+    "config: study",
+    `name: ${plan.environment && plan.method ? `${plan.environment.id}-${plan.method.id}` : slug(plan.title || "study")}`,
+    "",
+  ];
+  if (plan.environment) lines.push(`environmentConfig: ${plan.environment.path}`);
+  if (plan.method) lines.push(`methodConfig: ${plan.method.path}`);
+  lines.push(
+    "",
+    "objective:",
+    `  metric: ${plan.metric || "score"}`,
+    `  direction: ${plan.direction || "maximize"}`,
+    `  aggregation: ${plan.aggregation || "mean"}`,
+  );
+  if ((plan.secondaryMetrics || []).length) {
+    lines.push(`  secondaryMetrics: [${plan.secondaryMetrics.join(", ")}]`);
+  }
+  lines.push(
+    "",
+    "budget:",
+    `  maxTrials: ${Number(plan.maxTrials || 1)}`,
+  );
+  if (plan.maxFailures !== "" && plan.maxFailures !== null && plan.maxFailures !== undefined) {
+    lines.push(`  maxFailures: ${Number(plan.maxFailures || 0)}`);
+  }
+  lines.push(
+    "",
+    "execution:",
+    `  backend: ${plan.backend || "local"}`,
+    `  parallelism: ${Number(plan.parallelism || 1)}`,
+  );
+  if (plan.timeoutSeconds !== "" && plan.timeoutSeconds !== null && plan.timeoutSeconds !== undefined) {
+    lines.push(`  timeoutSeconds: ${Number(plan.timeoutSeconds || 0)}`);
+  }
+  lines.push(
+    "",
+    "evidence:",
+    `  level: ${plan.evidenceLevel || "standard"}`,
+    `  outputFileStorage: ${plan.evidenceStorage || "reference"}`,
+  );
+  if (plan.seed !== "" && plan.seed !== null && plan.seed !== undefined) {
+    lines.push("", "reproducibility:", `  seed: ${Number(plan.seed || 0)}`);
+  }
+  return lines.join("\n");
+}
+
+function compatibilityChecks(pair) {
+  const checks = pair.checks && pair.checks.length ? pair.checks : (pair.reasons || []).map((message) => ({ ok: pair.compatible, message }));
+  return checks.map((check) => ["Compatibility", check.message, check.ok ? "compatible" : "review"]);
+}
+
+function studyReadinessPanel(plan) {
+  const rows = studyReadinessRows(plan);
+  if (!rows.length) return "";
+  return `
+    <div class="readiness-panel">
+      <h3>Readiness</h3>
+      <div class="readiness-list">${rows.map(readinessRow).join("")}</div>
+    </div>
+  `;
+}
+
+function studyReadinessRows(plan) {
+  const rows = [];
+  if (plan.environment && plan.method) {
+    rows.push(["Binding", "Environment and method references are resolved.", "ready"]);
+  }
+  if (plan.study && plan.study.path) {
+    rows.push(["Catalog config", "Loaded from Catalog. Editing saves a separate copy.", "ready"]);
+    return rows;
+  }
+  for (const check of plan.checks || []) rows.push(check);
+  if (plan.draft && plan.draft.validation) {
+    const valid = Boolean(plan.draft.validation.valid);
+    rows.push(["Study config", valid ? "Schema validation passed." : "Schema validation needs review.", valid ? "valid" : "review"]);
+  } else {
+    rows.push(["Study config", "Save the config to run schema validation before launch.", "review"]);
+  }
+  return rows;
+}
+
+function readinessRow([label, value, status]) {
+  return `
+    <div class="readiness-row">
+      <div>
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(value)}</span>
+      </div>
+      ${statusPill(status)}
+    </div>
+  `;
+}
+
+function compatibleMethodsForEnvironment(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.environment.uid === uid && pair.compatible);
+}
+
+function compatibleEnvironmentsForMethod(uid) {
+  return (state.compatibility.pairs || []).filter((pair) => pair.method.uid === uid && pair.compatible);
 }
 
 function trialRows(detail) {
@@ -654,184 +2346,197 @@ function trialRows(detail) {
 }
 
 function candidateRecord(record) {
-  return {
-    ...record,
-    candidate_id: record.candidate_id,
-    format: record.format,
-    generator: record.generator,
-  };
-}
-
-function backendSummary(worker) {
-  if (!worker || typeof worker !== "object") return "-";
-  const backend = worker.backend || worker.worker_pool || "-";
-  const details = [
-    worker.worker_pool && worker.worker_pool !== backend ? worker.worker_pool : "",
-    worker.pid ? `pid ${worker.pid}` : "",
-    worker.timeoutSeconds ? `${worker.timeoutSeconds}s limit` : "",
-  ].filter(Boolean);
-  return details.length ? `${backend} (${details.join(", ")})` : backend;
-}
-
-function budgetSummary(trial, observation) {
-  const requested = trial.resource_profile || observation.resource_usage && observation.resource_usage.requested || {};
-  const timeout = requested.timeoutSeconds ? `${requested.timeoutSeconds}s requested` : "";
-  const elapsed = observation.resource_usage && Number.isFinite(Number(observation.resource_usage.wallClockSeconds))
-    ? `${Number(observation.resource_usage.wallClockSeconds).toFixed(1)}s elapsed`
-    : "";
-  return [timeout, elapsed].filter(Boolean).join(", ") || "-";
-}
-
-function errorSummary(record) {
-  const summary = record && record.event_summary || {};
-  const error = summary.error || summary.errors && summary.errors[0] || record && record.error;
-  if (!error) return "-";
-  const phase = error.phase ? `${error.phase}: ` : "";
-  const kind = error.type || "Error";
-  const message = error.message ? ` - ${error.message}` : "";
-  return `${phase}${kind}${message}`;
+  return { ...record, candidate_id: record.candidate_id, format: record.format, generator: record.generator };
 }
 
 function filesTab(detail) {
   const files = detail.files || [];
   return `
     <div class="file-layout">
-      <div class="file-list">
-        ${files.map((file) => `<button class="file-button" type="button" data-file-path="${escapeHtml(file.relative_path)}">${escapeHtml(file.relative_path)}<span>${formatBytes(file.size)}</span></button>`).join("") || emptyInline("No files found.")}
-      </div>
+      <div class="file-list">${files.map((file) => `<button class="file-button" type="button" data-file-path="${escapeHtml(file.relative_path)}">${escapeHtml(file.relative_path)}<span>${formatBytes(file.size)}</span></button>`).join("") || emptyInline("No files found.")}</div>
       <div id="filePreview" class="file-preview"></div>
     </div>
   `;
 }
 
-function renderJobs() {
-  els.jobsList.innerHTML = state.jobs.map((job) => `
-    <div class="compact-card">
-      <div class="row-between">
-        <strong>${escapeHtml(job.study_name || job.job_id)}</strong>
-        ${statusPill(job.status)}
-      </div>
-      <p class="path-text">${escapeHtml(shortPath(job.study_path))}</p>
-      <div class="item-meta">
-        <span class="tag">pid ${escapeHtml(job.process_id || "-")}</span>
-        <span class="tag">exit ${escapeHtml(job.exit_code ?? "-")}</span>
-        ${job.run_dir ? `<span class="tag">${escapeHtml(shortPath(job.run_dir))}</span>` : ""}
-      </div>
-      ${job.status === "running" ? `<button class="ghost-button stop-job" data-job-id="${escapeHtml(job.job_id)}" type="button">Stop</button>` : ""}
-    </div>
-  `).join("") || emptyInline("No UI-launched jobs yet.");
-  document.querySelectorAll(".stop-job").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await postJson(`/api/jobs/${encodeURIComponent(button.dataset.jobId)}/stop`, {});
-      await loadRunsAndJobs();
-    });
-  });
-}
-
-function entityButton(item, kind) {
-  const selected = kind === "environment" ? item.uid === state.selectedEnvironmentUid : item.uid === state.selectedMethodUid;
-  const summary = item.summary || {};
-  const tags = [
-    summary.candidate_format,
-    summary.implementation_type,
-    summary.runtime && summary.runtime.type,
-  ].filter(Boolean);
-  return `
-    <button class="entity-button ${selected ? "selected" : ""}" data-${kind}-uid="${escapeHtml(item.uid)}" type="button">
-      <strong>${escapeHtml(item.label)}</strong>
-      <span class="path-text">${escapeHtml(shortPath(item.path))}</span>
-      <span class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
-    </button>
-  `;
-}
-
-function entityHeader(item) {
+function entityHeader(item, kind) {
   return `
     <div class="detail-heading">
-      <div>
-        <h2>${escapeHtml(item.label)}</h2>
+      <div class="detail-title-block">
+        <div class="detail-title-line">
+          <h2>${escapeHtml(item.label)}</h2>
+          <span class="catalog-kind-chip catalog-kind-${escapeHtml(kind)}">${escapeHtml(kind)}</span>
+        </div>
         <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
-      </div>
-      <div class="detail-actions">
-        <div class="item-meta">${(item.tags || []).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
-        <button class="ghost-button edit-config-button" data-config-path="${escapeHtml(item.path)}" type="button">Edit config</button>
       </div>
     </div>
     ${item.description ? `<p class="detail-description">${escapeHtml(item.description)}</p>` : ""}
   `;
 }
 
-function bindConfigEditButtons() {
-  document.querySelectorAll(".edit-config-button").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await openConfigPath(button.dataset.configPath);
-      setView("config");
-    });
-  });
+function sessionCard(session) {
+  const active = session.id === state.selectedSessionId;
+  const registrationLabel = (session.registeredEntries || []).length ? "Registration Details" : "Register to Catalog";
+  const canRegister = session.registrationEnabled !== false && session.mode !== "read-only";
+  return `
+    <div class="session-card ${active ? "active" : ""}">
+      <button class="session-main" data-session-id="${escapeHtml(session.id)}" type="button">
+        <strong>${escapeHtml(session.title)}</strong>
+        <span>${escapeHtml(workspaceSubtitle(session))}</span>
+        ${workspaceBadges(session)}
+        ${statusPill(session.status)}
+      </button>
+      <button class="workspace-close-button" data-close-workspace-id="${escapeHtml(session.id)}" type="button" title="Detach from this assistant session">Detach</button>
+      ${active ? `
+        <div class="session-card-actions">
+          ${canRegister ? `<button class="primary-button compact-action" data-workspace-action="register" type="button">${escapeHtml(registrationLabel)}</button>` : ""}
+          <button class="ghost-button compact-action" data-workspace-action="open-ide" type="button">Open Separate Window</button>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function workspaceSubtitle(session) {
+  const mode = session.mode || "editable";
+  if (session.kind === "workspace") return `${mode} project folder`;
+  if (session.kind === "experiment plan") return `${mode} study plan workspace`;
+  return `${mode} ${session.kind} workspace`;
+}
+
+function workspaceBadges(session) {
+  if (session.registrationEnabled === false || session.kind === "run") {
+    return `<span class="workspace-badges"><span class="tag">run evidence</span></span>`;
+  }
+  const entries = session.registeredEntries || [];
+  if (!entries.length) return `<span class="workspace-badges"><span class="tag">unregistered</span></span>`;
+  return `<span class="workspace-badges">${entries.map((entry) => `<span class="tag">${escapeHtml(entry.kind)}: ${escapeHtml(entry.id)}</span>`).join("")}</span>`;
+}
+
+function agentSessionCard(session) {
+  const attachedCount = attachedWorkspaceIds(session.id).length;
+  return `
+    <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button">
+      <strong>${escapeHtml(session.title)}</strong>
+      <span>${escapeHtml(session.description || "Conversation")}</span>
+      <span class="path-text">${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached</span>
+    </button>
+  `;
+}
+
+function componentButton(component) {
+  const item = component.entry;
+  const selected = component.key === state.selectedComponentKey;
+  return `
+    <button class="entity-button ${selected ? "selected" : ""}" data-component-key="${escapeHtml(component.key)}" type="button">
+      <span class="entity-button-header">
+        <strong>${escapeHtml(item.label)}</strong>
+        <span class="catalog-kind-chip catalog-kind-${escapeHtml(component.kind)}">${escapeHtml(component.kind)}</span>
+      </span>
+      <span class="tag-row">${(item.tags || []).slice(0, 3).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
+    </button>
+  `;
+}
+
+function planButton(plan) {
+  const selected = plan.id === state.selectedPlanId;
+  const showState = plan.status && plan.status !== "saved";
+  return `
+    <button class="plan-button ${selected ? "selected" : ""}" data-plan-id="${escapeHtml(plan.id)}" type="button">
+      <span class="entity-button-header">
+        <strong>${escapeHtml(plan.title)}</strong>
+        ${showState ? statusPill(plan.status) : ""}
+      </span>
+      <span class="tag-row">
+        ${plan.metric ? `<span class="tag">${escapeHtml(plan.metric)}</span>` : ""}
+        ${plan.direction ? `<span class="tag">${escapeHtml(plan.direction)}</span>` : ""}
+        ${plan.maxTrials ? `<span class="tag">${escapeHtml(plan.maxTrials)} trials</span>` : ""}
+      </span>
+    </button>
+  `;
+}
+
+function summaryCell([label, value]) {
+  return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "-")}</strong></div>`;
+}
+
+function timelineItem([kind, title, text]) {
+  return `
+    <div class="timeline-item ${escapeHtml(kind)}">
+      <span>${escapeHtml(kind)}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(text)}</p>
+    </div>
+  `;
+}
+
+function checkRow([label, value, status]) {
+  return `
+    <div class="check-row">
+      <div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>
+      ${statusPill(status === "ready" ? "passed" : "review")}
+    </div>
+  `;
+}
+
+function previewHtml(session) {
+  return `
+    <div class="preview-stage">
+      <div class="sim-node source">Context</div>
+      <div class="sim-link link-a"></div>
+      <div class="sim-node adapter">Adapter</div>
+      <div class="sim-link link-b"></div>
+      <div class="sim-node metric">Metric</div>
+    </div>
+    <div class="detail-stats compact-stats">
+      <div><span>Kind</span><strong>${escapeHtml(session.kind)}</strong></div>
+      <div><span>Mode</span><strong>${escapeHtml(session.mode)}</strong></div>
+      <div><span>Status</span><strong>${escapeHtml(session.status)}</strong></div>
+      <div><span>Tools</span><strong>${escapeHtml(session.tools.length)}</strong></div>
+    </div>
+  `;
 }
 
 function compatList(pairs, target) {
-  if (!pairs.length) return emptyInline("No entries.");
-  return `<div class="compat-list">${pairs.map((pair) => {
+  if (!pairs.length) return emptyInline("No compatible entries.");
+  return `<div class="compat-list">${pairs.map((pair, index) => {
     const item = target === "method" ? pair.method : pair.environment;
+    const catalogEntry = catalogEntryByUid(target, item.uid) || item;
+    const tags = (catalogEntry.tags || []).slice(0, 3);
     return `
-      <div class="compat-item ${pair.compatible ? "compatible" : "incompatible"}">
-        <div class="row-between">
+      <div class="compat-item compatible">
+        <div class="compat-item-header">
           <strong>${escapeHtml(item.label)}</strong>
-          ${statusPill(pair.compatible ? "compatible" : "incompatible")}
+          <button class="ghost-button compact-action" data-build-study-index="${index}" type="button">Build Study</button>
         </div>
-        <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
-        <ul>${pair.reasons.slice(0, 4).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>
+        <span class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
       </div>
     `;
   }).join("")}</div>`;
-}
-
-function compatibilityBox(pair) {
-  return `
-    <div class="${pair.compatible ? "compat-ok" : "compat-warning"}">
-      <strong>${pair.compatible ? "Compatible" : "Not compatible"}</strong>
-      <ul>${(pair.checks || []).map((check) => `<li>${check.ok ? "OK" : "Issue"}: ${escapeHtml(check.message)}</li>`).join("")}</ul>
-    </div>
-  `;
 }
 
 function kvPanel(title, rows) {
   return `
     <section class="kv-panel">
       <h3>${escapeHtml(title)}</h3>
-      <dl>
-        ${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value ?? "-")}</dd></div>`).join("")}
-      </dl>
+      <dl>${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value ?? "-")}</dd></div>`).join("")}</dl>
     </section>
   `;
 }
 
 function runRow(run) {
   return `
-    <tr class="run-row ${run.id === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}">
-      <td><strong>${escapeHtml(run.name)}</strong><div class="path-text">${escapeHtml(shortPath(run.path))}</div></td>
-      <td>${statusPill(run.status)}</td>
-      <td>${escapeHtml(run.method && run.method.id || "-")}</td>
-      <td>${escapeHtml(run.completed_trials ?? 0)}</td>
-      <td>${formatMetric(run.best_metric)}</td>
-      <td>${escapeHtml(run.environment_id || "-")}</td>
-    </tr>
-  `;
-}
-
-function renderRunCard(run) {
-  return `
-    <button class="compact-card home-run-card" data-run-id="${escapeHtml(run.id)}" type="button">
-      <div class="row-between">
-        <strong>${escapeHtml(run.name)}</strong>
-        ${statusPill(run.status)}
-      </div>
-      <p>${escapeHtml(run.environment_id || "-")} / ${escapeHtml(run.method && run.method.id || "-")}</p>
-      <div class="item-meta">
-        <span class="tag">best ${escapeHtml(formatMetric(run.best_metric))}</span>
-        <span class="tag">${escapeHtml(run.completed_trials || 0)} trials</span>
-      </div>
+    <button class="run-row ${run.id === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}" type="button">
+      <span class="run-row-main">
+        <strong title="${escapeHtml(run.name)}">${escapeHtml(run.name)}</strong>
+        <span class="path-text" title="${escapeHtml(shortPath(run.path))}">${escapeHtml(shortPath(run.path))}</span>
+      </span>
+      ${statusPill(run.status)}
+      <span class="run-row-meta">
+        <span title="${escapeHtml(run.method && run.method.id || "-")}">${escapeHtml(run.method && run.method.id || "-")}</span>
+        <span>${escapeHtml(run.completed_trials ?? 0)} trials</span>
+        <span>${formatMetric(run.best_metric)}</span>
+      </span>
     </button>
   `;
 }
@@ -840,9 +2545,7 @@ function metricChart(observations, metricName) {
   const points = observations
     .map((observation, index) => ({ index, value: Number(observation.metric_values && observation.metric_values[metricName]) }))
     .filter((point) => Number.isFinite(point.value));
-  if (!metricName || points.length === 0) {
-    return `<div class="chart empty-chart">No metric values to chart.</div>`;
-  }
+  if (!metricName || points.length === 0) return `<div class="chart empty-chart">No metric values to chart.</div>`;
   const width = 720;
   const height = 150;
   const pad = 20;
@@ -888,129 +2591,28 @@ function validationHtml(result) {
   `;
 }
 
-function runComparisonTable(first, second) {
-  const rows = [
-    ["Name", first.name, second.name],
-    ["Status", first.status, second.status],
-    ["Best metric", formatMetric(first.best_metric), formatMetric(second.best_metric)],
-    ["Trials", first.completed_trials ?? 0, second.completed_trials ?? 0],
-    ["Failures", first.failure_count ?? 0, second.failure_count ?? 0],
-    ["Method", first.method && first.method.id || "-", second.method && second.method.id || "-"],
-    ["Environment", first.environment_id || "-", second.environment_id || "-"],
-  ];
-  return `
-    <div class="table-wrap embedded">
-      <table>
-        <thead><tr><th>Field</th><th>${escapeHtml(first.name)}</th><th>${escapeHtml(second.name)}</th></tr></thead>
-        <tbody>${rows.map(([label, a, b]) => `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(a)}</td><td>${escapeHtml(b)}</td></tr>`).join("")}</tbody>
-      </table>
-    </div>
-  `;
+function backendSummary(worker) {
+  if (!worker || typeof worker !== "object") return "-";
+  const backend = worker.backend || worker.worker_pool || "-";
+  const details = [worker.pid ? `pid ${worker.pid}` : "", worker.timeoutSeconds ? `${worker.timeoutSeconds}s limit` : ""].filter(Boolean);
+  return details.length ? `${backend} (${details.join(", ")})` : backend;
 }
 
-async function openConfigPath(path) {
-  const cleanPath = String(path || "").trim();
-  if (!cleanPath) {
-    els.configEditorStatus.innerHTML = validationHtml({ valid: false, errors: ["Enter a file path."] });
-    return;
-  }
-  try {
-    const response = await getJson(`/api/config/file?path=${encodeURIComponent(cleanPath)}`);
-    state.configEditorPath = response.path;
-    els.configEditorPath.value = response.relative_path || response.path;
-    syncConfigEditorSelect(response.path);
-    els.configEditorContent.value = response.content || "";
-    els.configEditorStatus.innerHTML = validationHtml(response.validation || { valid: true, path: response.path });
-  } catch (error) {
-    els.configEditorStatus.innerHTML = validationHtml({ valid: false, errors: [String(error.message || error)] });
-  }
+function budgetSummary(trial, observation) {
+  const requested = trial.resource_profile || observation.resource_usage && observation.resource_usage.requested || {};
+  const timeout = requested.timeoutSeconds ? `${requested.timeoutSeconds}s requested` : "";
+  const elapsed = observation.resource_usage && Number.isFinite(Number(observation.resource_usage.wallClockSeconds)) ? `${Number(observation.resource_usage.wallClockSeconds).toFixed(1)}s elapsed` : "";
+  return [timeout, elapsed].filter(Boolean).join(", ") || "-";
 }
 
-async function saveConfigFile() {
-  const response = await postJson("/api/config/file", {
-    path: els.configEditorPath.value,
-    content: els.configEditorContent.value,
-  }, { tolerateError: true });
-  const result = response.validation || response;
-  els.configEditorStatus.innerHTML = validationHtml({
-    valid: Boolean(response.saved && result.valid),
-    errors: result.errors || [response.error || "Save failed."],
-    path: response.relative_path || response.path,
-  });
-  if (response.saved) {
-    await loadCatalogAndCompatibility();
-    renderAll();
-    syncConfigEditorSelect(response.path);
-  }
-}
-
-function renderConfigEditorOptions() {
-  const groups = [
-    ["Studies", state.catalog.studies || []],
-    ["Environments", state.catalog.environments || []],
-    ["Methods", state.catalog.methods || []],
-  ];
-  const selectedPath = state.configEditorPath || "";
-  els.configEditorSelect.innerHTML = [
-    `<option value="">Choose from catalog</option>`,
-    ...groups
-      .filter(([, items]) => items.length)
-      .map(([label, items]) => `
-        <optgroup label="${escapeHtml(label)}">
-          ${items
-            .slice()
-            .sort((a, b) => String(a.label).localeCompare(String(b.label)))
-            .map((item) => `<option value="${escapeHtml(item.path)}" ${item.path === selectedPath ? "selected" : ""}>${escapeHtml(item.label)} - ${escapeHtml(shortPath(item.path))}</option>`)
-            .join("")}
-        </optgroup>
-      `),
-  ].join("");
-}
-
-function syncConfigEditorSelect(path) {
-  const match = configEntryByPath(path);
-  els.configEditorSelect.value = match ? match.path : "";
-}
-
-function configEntryByPath(path) {
-  const normalized = String(path || "");
-  return [
-    ...(state.catalog.studies || []),
-    ...(state.catalog.environments || []),
-    ...(state.catalog.methods || []),
-  ].find((item) => item.path === normalized) || null;
-}
-
-function compatibleMethodsForEnvironment(uid) {
-  return (state.compatibility.pairs || []).filter((pair) => pair.environment.uid === uid && pair.compatible);
-}
-
-function incompatibleMethodsForEnvironment(uid) {
-  return (state.compatibility.pairs || []).filter((pair) => pair.environment.uid === uid && !pair.compatible);
-}
-
-function compatibleEnvironmentsForMethod(uid) {
-  return (state.compatibility.pairs || []).filter((pair) => pair.method.uid === uid && pair.compatible);
-}
-
-function incompatibleEnvironmentsForMethod(uid) {
-  return (state.compatibility.pairs || []).filter((pair) => pair.method.uid === uid && !pair.compatible);
-}
-
-function pairFor(environmentUid, methodUid) {
-  return (state.compatibility.pairs || []).find((pair) => pair.environment.uid === environmentUid && pair.method.uid === methodUid);
-}
-
-function environmentByUid(uid) {
-  return (state.catalog.environments || []).find((item) => item.uid === uid) || null;
-}
-
-function methodByUid(uid) {
-  return (state.catalog.methods || []).find((item) => item.uid === uid) || null;
-}
-
-function option(item, selectedUid) {
-  return `<option value="${escapeHtml(item.uid)}" ${item.uid === selectedUid ? "selected" : ""}>${escapeHtml(item.label)}</option>`;
+function errorSummary(record) {
+  const summary = record && record.event_summary || {};
+  const error = summary.error || summary.errors && summary.errors[0] || record && record.error;
+  if (!error) return "-";
+  const phase = error.phase ? `${error.phase}: ` : "";
+  const kind = error.type || "Error";
+  const message = error.message ? ` - ${error.message}` : "";
+  return `${phase}${kind}${message}`;
 }
 
 async function getJson(url) {
@@ -1020,32 +2622,47 @@ async function getJson(url) {
 }
 
 async function postJson(url, payload, options = {}) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const json = await response.json();
-  if (!response.ok && !options.tolerateError) {
-    throw new Error(json.error || `${response.status} ${response.statusText}`);
-  }
+  if (!response.ok && !options.tolerateError) throw new Error(json.error || `${response.status} ${response.statusText}`);
   return json;
 }
 
 function statusPill(status) {
-  return `<span class="status-pill status-${escapeHtml(status || "unknown")}">${escapeHtml(status || "unknown")}</span>`;
+  return `<span class="status-pill ${statusClass(status)}">${escapeHtml(status || "unknown")}</span>`;
+}
+
+function capabilityItem(capability) {
+  const label = typeof capability === "string" ? capability : capability && capability.label || "Capability";
+  const status = typeof capability === "object" && capability ? capability.status || "available" : "available";
+  return `
+    <div class="capability-item">
+      <span>${escapeHtml(label)}</span>
+      ${statusPill(status)}
+    </div>
+  `;
+}
+
+function statusClass(status) {
+  const value = String(status || "unknown");
+  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved"].includes(value)) return "status-ready";
+  if (["failed", "invalid", "incompatible", "unavailable"].includes(value)) return "status-failed";
+  if (["running", "validating", "opening"].includes(value)) return "status-running";
+  if (["review", "draft", "read-only", "idle", "optional"].includes(value)) return "status-review";
+  return `status-${escapeHtml(value)}`;
 }
 
 function formatCell(value) {
   if (value == null || value === "") return "-";
-  if (typeof value === "object") return `<pre class="path-text">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
-  if (String(value).length > 80) return `<span class="path-text">${escapeHtml(String(value))}</span>`;
+  if (typeof value === "object") return `<pre class="inline-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
   return escapeHtml(String(value));
 }
 
 function formatMetric(value) {
-  if (value == null || Number.isNaN(Number(value))) return "-";
-  return Number(value).toFixed(4).replace(/\.?0+$/, "");
+  if (value == null || value === "") return "-";
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric.toFixed(Math.abs(numeric) >= 100 ? 1 : 4).replace(/\.?0+$/, "");
+  return escapeHtml(String(value));
 }
 
 function formatBytes(value) {
@@ -1058,42 +2675,30 @@ function formatBytes(value) {
 function shortPath(path) {
   if (!path) return "";
   const cwd = state.workspace && state.workspace.cwd;
-  if (cwd && String(path).startsWith(`${cwd}/`)) return String(path).slice(cwd.length + 1);
-  const parts = String(path).split("/").filter(Boolean);
-  if (parts.length <= 4) return String(path);
-  return `.../${parts.slice(-4).join("/")}`;
-}
-
-function searchable(item) {
-  return `${item.label} ${item.id} ${item.path} ${JSON.stringify(item.summary || {})}`.toLowerCase();
-}
-
-function emptyState(message) {
-  return `<div class="empty-state"><p>${escapeHtml(message)}</p></div>`;
-}
-
-function emptyInline(message) {
-  return `<div class="empty-inline">${escapeHtml(message)}</div>`;
+  return cwd && String(path).startsWith(cwd) ? String(path).slice(cwd.length + 1) : String(path);
 }
 
 function sum(values) {
   return values.reduce((total, value) => total + value, 0);
 }
 
-function capitalize(value) {
-  return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+function slug(value) {
+  return String(value || "item").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "item";
 }
 
-function tabLabel(value) {
-  if (value === "candidates") return "Candidates";
-  return capitalize(value);
+function emptyInline(message) {
+  return `<div class="empty-inline">${escapeHtml(message)}</div>`;
+}
+
+function emptyState(message) {
+  return `<div class="empty-state">${escapeHtml(message)}</div>`;
 }
 
 function escapeHtml(value) {
   return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }

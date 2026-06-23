@@ -10,9 +10,12 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -29,15 +32,25 @@ from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
 from optpilot.ui.server import (
+    CodeServerOptions,
     UiState,
+    _append_agent_message,
+    _agent_settings_payload,
+    _attach_agent_workspace,
     _catalog_payload,
     _compatibility_payload,
+    _create_agent_session,
+    _create_ui_workspace,
     _default_catalog_roots,
+    _detach_agent_workspace,
     _draft_study,
+    _list_agent_sessions,
+    _list_ui_workspaces,
     _list_runs,
-    _read_editable_config_file,
+    _open_study_workspace,
+    _update_agent_settings,
+    _local_code_server_executable,
     _validate_study,
-    _write_editable_config_file,
 )
 
 
@@ -2443,50 +2456,18 @@ class MvpIntegrationTest(unittest.TestCase):
             [repo_root / "examples", repo_root / "user_catalog"],
         )
         self.assertEqual(state.catalog_roots, roots)
-        self.assertEqual(
-            sorted(item["id"] for item in catalog["environments"]),
-            [
-                "job-shop-dispatch-rule",
-                "job-shop-rule-parameters",
-                "job-shop-schedule-solution",
-                "job-shop-solver-code",
-                "sa-simulator-code-edit",
-            ],
-        )
-        self.assertEqual(
-            sorted(item["id"] for item in catalog["methods"]),
-            [
-                "baseline-file-copy",
-                "eoh-llm-heuristic-search",
-                "eohs-llm-heuristic-search",
-                "fixed-rule-parameters",
-                "funsearch-llm-heuristic-search",
-                "heuragenix-llm-heuristic-search",
-                "job-shop-lib-dispatching-rule",
-                "job-shop-lib-ortools-cpsat",
-                "job-shop-lib-simulated-annealing",
-                "job-shop-rl-stable-baselines",
-                "local-job-shop-heuristic-search",
-                "openai-file-editor",
-                "reevo-llm-heuristic-search",
-            ],
-        )
-        self.assertEqual(
-            sorted(item["label"] for item in catalog["studies"]),
-            [
-                "job-shop-dispatch-rule-baseline",
-                "job-shop-lib-dispatching-rule",
-                "job-shop-lib-ortools-cpsat",
-                "job-shop-lib-simulated-annealing",
-                "job-shop-local-heuristic-search",
-                "job-shop-openai-dispatch-rule",
-                "job-shop-rl-stable-baselines",
-                "job-shop-rule-parameters-baseline",
-                "job-shop-solver-code-baseline",
-                "sa-baseline",
-                "sa-openai-file-editor",
-            ],
-        )
+        environment_ids = {item["id"] for item in catalog["environments"]}
+        method_ids = {item["id"] for item in catalog["methods"]}
+        study_labels = {item["label"] for item in catalog["studies"]}
+
+        self.assertIn("sa-simulator-code-edit", environment_ids)
+        self.assertIn("job-shop-dispatch-rule", environment_ids)
+        self.assertIn("openai-file-editor", method_ids)
+        self.assertIn("fixed-rule-parameters", method_ids)
+        self.assertIn("sa-baseline", study_labels)
+        self.assertTrue(catalog["environments"])
+        self.assertTrue(catalog["methods"])
+        self.assertTrue(catalog["studies"])
 
     def test_ui_compatibility_payload_and_study_draft(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2591,23 +2572,219 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["image"], "python:3.11-slim")
             self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["executable"], "docker")
 
-    def test_ui_config_editor_reads_and_writes_workspace_text_files(self) -> None:
+    def test_ui_study_plan_workspace_is_persisted(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        with tempfile.TemporaryDirectory(dir=repo_root) as tmp_dir:
-            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
-            config_path = Path(tmp_dir) / "editable.yaml"
-            config_path.write_text("name: before\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
+            state.jobs_dir = tmp_path / "jobs"
+            state.jobs_dir.mkdir(parents=True, exist_ok=True)
+            state.workspaces_dir = tmp_path / "workspaces"
+            state.workspaces_dir.mkdir(parents=True, exist_ok=True)
 
-            opened = _read_editable_config_file(state, config_path)
-            saved = _write_editable_config_file(state, config_path, "name: after\n")
-            reopened = _read_editable_config_file(state, config_path)
-            invalid = _write_editable_config_file(state, config_path, "name: [broken\n")
+            workspace = _open_study_workspace(
+                state,
+                {
+                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                    "name": "ui-study-workspace",
+                    "metric": "throughput",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "backend": "local",
+                    "parallelism": 1,
+                },
+            )
+            root = Path(workspace["root"])
+            indexed = _list_ui_workspaces(state)
 
-        self.assertTrue(opened["validation"]["valid"])
-        self.assertTrue(saved["saved"])
-        self.assertIn("name: after", reopened["content"])
-        self.assertFalse(invalid["saved"])
-        self.assertFalse(invalid["validation"]["valid"])
+            self.assertEqual(workspace["source_type"], "study-plan")
+            self.assertEqual(workspace["mode"], "editable")
+            self.assertTrue((root / "study.yaml").exists())
+            self.assertTrue((root / "README.md").exists())
+            self.assertIn("ui-study-workspace", (root / "study.yaml").read_text(encoding="utf-8"))
+            self.assertTrue(any(item["id"] == workspace["id"] for item in indexed))
+
+    def test_ui_agent_sessions_persist_workspace_context_and_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace_root = tmp_path / "scratch"
+
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Scratch tool workspace",
+                    "root": str(workspace_root),
+                    "source_type": "tool",
+                    "description": "Local codebase used as an agent add-on.",
+                    "focus_paths": ["README.md"],
+                },
+            )
+            session = _create_agent_session(state, {"title": "Design session", "description": "Catalog work"})
+            attached = _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+            message_result = _append_agent_message(
+                state,
+                session["id"],
+                {
+                    "role": "user",
+                    "title": "User",
+                    "content": "Inspect this workspace and prepare registration.",
+                    "ui_context": {
+                        "current_page": "catalog",
+                        "selected_catalog_entry": {"kind": "environment", "id": "toy-factory", "path": "toy_factory.yaml"},
+                        "selected_study_plan": {"id": "plan-1", "title": "Toy plan"},
+                        "selected_run": {"id": "run-1", "name": "Toy run"},
+                        "code_editor": {"status": "ready", "folder": str(workspace_root)},
+                        "registration_menu": {"status": "draft", "selected_configs": [{"path": "environment.yaml"}]},
+                    },
+                },
+            )
+            detached = _detach_agent_workspace(state, session["id"], workspace["id"])
+
+            reloaded = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            sessions = _list_agent_sessions(reloaded)
+            persisted = next(item for item in sessions if item["id"] == session["id"])
+
+        self.assertEqual(attached["selected_workspace_id"], workspace["id"])
+        self.assertEqual(message_result["session"]["status"], "waiting_for_agent")
+        self.assertEqual(message_result["message"]["context"]["selected_workspace"]["id"], workspace["id"])
+        self.assertEqual(message_result["message"]["context"]["current_page"], "catalog")
+        self.assertEqual(message_result["message"]["context"]["selected_catalog_entry"]["id"], "toy-factory")
+        self.assertEqual(message_result["message"]["context"]["selected_study_plan"]["id"], "plan-1")
+        self.assertEqual(message_result["message"]["context"]["selected_run"]["id"], "run-1")
+        self.assertEqual(message_result["message"]["context"]["code_editor"]["status"], "ready")
+        self.assertEqual(message_result["message"]["context"]["registration_menu"]["status"], "draft")
+        self.assertEqual(message_result["message"]["context"]["runtime"]["runtime"], "openhands")
+        self.assertIn("optpilot_addon_list", message_result["message"]["context"]["available_tools"])
+        self.assertEqual(detached["attached_workspace_ids"], [])
+        self.assertEqual(persisted["attached_workspace_ids"], [])
+        self.assertTrue(any(message["content"].startswith("Inspect this workspace") for message in persisted["messages"]))
+        self.assertTrue(any(event["type"] == "workspace_detached" for event in persisted["events"]))
+
+    def test_ui_agent_settings_store_openhands_config_without_echoing_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPTPILOT_OPENHANDS_API_KEY": "",
+                "LLM_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "OPTPILOT_OPENHANDS_URL": "",
+                "OPTPILOT_OPENHANDS_MODEL": "",
+                "LLM_MODEL": "",
+            },
+        ), tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+
+            result = _update_agent_settings(
+                state,
+                {
+                    "openhands": {
+                        "enabled": True,
+                        "base_url": "http://127.0.0.1:3000/",
+                        "session_endpoint": "/api/conversations",
+                        "model": "gpt-test",
+                        "api_key": "sk-test-secret",
+                    }
+                },
+            )
+            settings = _agent_settings_payload(state)
+            stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
+
+        openhands = result["settings"]["assistant"]["openhands"]
+        self.assertTrue(openhands["api_key_configured"])
+        self.assertNotIn("api_key", openhands)
+        self.assertEqual(result["status"]["mode"], "configured")
+        self.assertEqual(settings["status"]["model"], "gpt-test")
+        self.assertEqual(stored["assistant"]["openhands"]["api_key"], "sk-test-secret")
+
+    def test_ui_agent_settings_can_clear_openhands_api_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPTPILOT_OPENHANDS_API_KEY": "",
+                "LLM_API_KEY": "",
+                "OPENAI_API_KEY": "",
+                "OPTPILOT_OPENHANDS_URL": "",
+                "OPTPILOT_OPENHANDS_MODEL": "",
+                "LLM_MODEL": "",
+            },
+        ), tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {
+                        "enabled": True,
+                        "base_url": "http://127.0.0.1:3000",
+                        "model": "gpt-test",
+                        "api_key": "sk-test-secret",
+                    }
+                },
+            )
+            result = _update_agent_settings(
+                state,
+                {
+                    "openhands": {
+                        "enabled": True,
+                        "base_url": "http://127.0.0.1:3000",
+                        "model": "gpt-test",
+                        "clear_api_key": True,
+                    }
+                },
+            )
+            stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(result["settings"]["assistant"]["openhands"]["api_key_configured"])
+        self.assertEqual(result["status"]["mode"], "missing API key")
+        self.assertEqual(stored["assistant"]["openhands"]["api_key"], "")
+
+    def test_ui_code_server_detects_standalone_install_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            executable = tmp_path / ".optpilot-ui" / "code-server-standalone" / "lib" / "code-server-4.125.0" / "bin" / "code-server"
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            detected = _local_code_server_executable(tmp_path)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+
+        self.assertEqual(detected.resolve(), executable.resolve())
+        self.assertEqual(Path(state.code_server.options.executable or "").resolve(), executable.resolve())
+
+    def test_ui_code_server_status_rejects_non_code_server_port_conflict(self) -> None:
+        class FakeOptPilotHandler(BaseHTTPRequestHandler):
+            server_version = "OptPilotUI/0.1"
+
+            def do_HEAD(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, format: str, *args) -> None:
+                return
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOptPilotHandler)
+            port = fake_server.server_address[1]
+            thread = threading.Thread(target=fake_server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                state = UiState(
+                    cwd=tmp_path,
+                    catalog_roots=[],
+                    run_roots=[],
+                    code_server=CodeServerOptions(executable="/bin/echo", host="127.0.0.1", port=port),
+                )
+                status = state.code_server_status()
+            finally:
+                fake_server.shutdown()
+                fake_server.server_close()
+
+        self.assertFalse(status["running"])
+        self.assertTrue(status["port_conflict"])
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

@@ -62,6 +62,11 @@ def main(argv=None) -> int:
             port=args.port,
             catalog_roots=args.catalog,
             run_roots=args.runs,
+            code_server_bin=args.code_server_bin,
+            code_server_host=args.code_server_host,
+            code_server_port=args.code_server_port,
+            code_server_auth=args.code_server_auth,
+            code_server_password=args.code_server_password,
             open_browser=args.open_browser,
         )
         return 0

@@ -83,7 +83,10 @@ nav:
   - Reference:
       - Configuration: configuration.md
       - User Catalog: user-catalog.md
-  - UI: ui.md
+  - UI:
+      - Current UI: ui.md
+      - Platform UI Design: platform-ui-design.md
+      - Platform UI Implementation Plan: platform-ui-implementation-plan.md
   - Development: development.md
 
 extra:
