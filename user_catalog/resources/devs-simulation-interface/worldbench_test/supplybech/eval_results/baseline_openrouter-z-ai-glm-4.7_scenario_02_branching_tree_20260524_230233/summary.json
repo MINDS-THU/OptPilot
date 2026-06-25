@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 0,
+  "success_rate": 0.0,
+  "avg_total_cost": -1.0,
+  "avg_total_holding_cost": -1.0,
+  "avg_total_stockout_cost": -1.0,
+  "runs": [
+    {
+      "run_success": false,
+      "total_cost": -1.0,
+      "total_holding_cost": -1.0,
+      "total_stockout_cost": -1.0,
+      "error": "Simulation failed: Traceback (most recent call last):\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 350, in <module>\n    runner = OracleRunner(args.blueprint, dyn_params, stdin_data)\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 188, in __init__\n    self.blueprint = self._load_blueprint(blueprint_path)\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 198, in _load_blueprint\n    spec.loader.exec_module(bp)\n  File \"<frozen importlib._bootstrap_external>\", line 883, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/scenarios/scenario_02_branching_tree/blueprint.py\", line 18, in <module>\n    from policy_cache.policy import POLICY_MOUNTS\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/scenarios/scenario_02_branching_tree/policy_cache/policy.py\", line 91\n    为了最小化总成本（仓储成本 + 缺货成本），我们需要在各级节点实施基于库存水平的补货策略。考虑到需求具有随机性和季节性，且缺货成本远高于仓储成本（Retailer 层缺货成本 120 vs 仓储 3.0，DC 层 40 vs 0.8），策略应倾向于**避免缺货**，即保持较高的安全库存。\n            ^\nSyntaxError: invalid character '（' (U+FF08)"
+    }
+  ],
+  "framework": "baseline",
+  "scenario": "scenario_02_branching_tree",
+  "model_id": "openrouter/z-ai/glm-4.7",
+  "result_dir": "eval_results/baseline_openrouter-z-ai-glm-4.7_scenario_02_branching_tree_20260524_230233"
+}

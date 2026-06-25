@@ -14,6 +14,7 @@ SCHEMA_PACKAGE = "optpilot.schemas"
 SCHEMA_BY_CONFIG = {
     "environment": "environment.schema.json",
     "method": "method.schema.json",
+    "resource": "resource.schema.json",
     "study": "study.schema.json",
 }
 
@@ -54,7 +55,7 @@ def validate_public_config_schema(raw: Dict[str, Any], *, config_path: str | Pat
             errors=[
                 ValidationIssue(
                     path="$",
-                    message="config must be one of: environment, method, study",
+                    message="config must be one of: environment, method, resource, study",
                 )
             ],
         )
@@ -119,6 +120,7 @@ def _load_schema_documents() -> Dict[str, Dict[str, Any]]:
 def _schema_relative_paths() -> Iterable[str]:
     yield "environment.schema.json"
     yield "method.schema.json"
+    yield "resource.schema.json"
     yield "study.schema.json"
     yield "defs/common.schema.json"
     yield "defs/runtime.schema.json"

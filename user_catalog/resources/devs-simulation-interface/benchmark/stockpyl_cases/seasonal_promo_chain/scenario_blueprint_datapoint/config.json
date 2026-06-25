@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Seasonal_Promo_Chain_Promo_Base",
+    "description": "Factory to hubs to stores network with seasonal demand and a short promotion window.",
+    "sim_timeout": 30.0,
+    "checker_args": {
+      "golden_data_path": "outputs/Promo_Base_golden.json",
+      "kpi_tolerance_margin": 0.05
+    },
+    "cases": [
+      {
+        "num": 8,
+        "sim_args": {
+          "--num_stores": "6",
+          "--base_demand": "18.0",
+          "--promo_start": "6",
+          "--promo_end": "8",
+          "--promo_lift": "10.0",
+          "--simulate_time": "120"
+        },
+        "sim_stdin": "",
+        "checker_config": {}
+      }
+    ]
+  }
+]

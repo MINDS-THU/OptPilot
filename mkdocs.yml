@@ -83,11 +83,7 @@ nav:
   - Reference:
       - Configuration: configuration.md
       - User Catalog: user-catalog.md
-  - UI:
-      - Current UI: ui.md
-      - OptPilot Assistant Design: optpilot-assistant-design.md
-      - Platform UI Design: platform-ui-design.md
-      - Platform UI Implementation Plan: platform-ui-implementation-plan.md
+  - UI: ui.md
   - Development: development.md
 
 extra:

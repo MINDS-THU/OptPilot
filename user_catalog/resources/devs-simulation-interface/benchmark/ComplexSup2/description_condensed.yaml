@@ -1,0 +1,79 @@
+root_model_name: MultiProductSupplyChain
+requirements:
+    general: |
+        ### General Requirements
+        - Python 3.10+, simpy + numpy. Entry: `python run.py --simulate_time <days> --seed <int>`.
+        - Set `numpy.random.seed(seed)` and `random.seed(seed)` at start.
+        - stdout: JSONL only. stderr: debug info.
+
+    scenario: |
+        ### Multi-Product Bakery Supply Chain
+
+        #### Topology (5 tiers, 14 nodes)
+        Suppliers (wheat_farm, sugar_mill, dairy_farm, infinite) → **Kitchen** (10 batches/day cap) → Warehouses (wh_north cap=2000, wh_south cap=1500) → Stores (A1,A2,B1,B2,C1,C2).
+
+        #### Products & BOM
+        | Product | Units/Batch | Flour | Sugar | Dairy | Prod Time | Shelf Life | Price/Unit |
+        |---------|------------|-------|-------|-------|-----------|------------|------------|
+        | Bread   | 100        | 20    | 5     | 0     | 0.5 day   | 3 days     | $2.00      |
+        | Cake    | 50         | 10    | 15    | 10    | 1.0 day   | 5 days     | $8.00      |
+        | Cookie  | 200        | 15    | 10    | 5     | 0.3 day   | 10 days    | $1.00      |
+
+        Raw material costs: Flour $1.00, Sugar $0.80, Dairy $1.50 per unit.
+        **Production cost per batch** = sum(raw_material_units × raw_material_cost). Bread=$24/batch, Cake=$37/batch, Cookie=$30.50/batch.
+
+        #### Node Config
+        **Kitchen**: Init {Bread:0, Cake:0, Cookie:0}. Max **10 batches/day** total across all products.
+        **Warehouses**: wh_north init {Bread:100, Cake:20, Cookie:200}; wh_south init {Bread:80, Cake:15, Cookie:150}.
+        **Stores**:
+
+        | Store | Source WH | Bread Cap/Init | Cake Cap/Init | Cookie Cap/Init |
+        |-------|-----------|---------------|---------------|-----------------|
+        | A1    | wh_north  | 60 / 20       | 30 / 5        | 100 / 30        |
+        | A2    | wh_north  | 80 / 30       | 40 / 8        | 120 / 40        |
+        | B1    | wh_south  | 50 / 15       | 25 / 3        | 80 / 20         |
+        | B2    | wh_south  | 70 / 25       | 35 / 6        | 100 / 30        |
+        | C1    | wh_north  | 40 / 10       | 20 / 2        | 60 / 15         |
+        | C2    | wh_south  | 60 / 20       | 30 / 5        | 90 / 25         |
+
+        #### Daily Timeline (execute in this exact order each day)
+        **(a) t = day + 0.0**: (1) Receive arrived shipments → add to inventory. (2) Check expired inventory → remove, record waste. (3) Store (s,S) replenishment: if on_hand ≤ s, order (S - on_hand) from source WH, capped by WH availability and store capacity. WH deducts immediately; shipment arrives after lead time.
+        **(b) t = day + 0.0 ~ 1.0**: (4) Customer demand: Poisson arrivals per store, random product/quantity, FIFO fulfill from on_hand, lost sales if insufficient.
+        **(c) t = day + 1.0**: (5) Kitchen production: check total WH on-hand per product; if below threshold, produce up to 10 batches/day proportionally to deficit. Ship to WHs (split equally) with lead time. (6) Holding cost: on_hand × $0.05 per product per node.
+
+        #### Policies
+        **Kitchen**: Thresholds {Bread:100, Cake:20, Cookie:150}. Targets {Bread:200, Cake:40, Cookie:300}. Allocate 10 daily batches by floor(proportional deficit), remainder to largest deficit.
+        **Store (s,S)**: A1{B:(15,40),C:(3,15),K:(10,50)} | A2{B:(20,50),C:(5,20),K:(15,60)} | B1{B:(10,30),C:(2,10),K:(8,40)} | B2{B:(15,40),C:(4,18),K:(12,50)} | C1{B:(8,25),C:(2,10),K:(6,30)} | C2{B:(12,35),C:(3,15),K:(10,45)}.
+
+        #### Logistics
+        Lead times: Kitchen→wh_north=0.5d, Kitchen→wh_south=0.8d, wh_north→A1/A2/C1=0.3d, wh_south→B1/B2/C2=0.4d.
+        Transport: $2.0 fixed + $0.01/unit per shipment.
+
+        #### Demand
+        Weekday (day%7 in 0..4): Poisson λ=3/store/day, qty Uniform[1,4]. Weekend (5..6): λ=6, qty Uniform[2,8].
+        Day 0 = Monday. Product mix: Bread 50%, Cake 20%, Cookie 30%. Within-day timing: uniform(0,1). Lost sales (no backorder).
+
+        #### Financial
+        Revenue = fulfilled × sell_price. Production cost = batches × cost_per_batch. Transport = $2 + $0.01×qty. Holding = on_hand × $0.05/node/product/day. Waste = expired_qty × sell_price × 0.5.
+        Profit = revenue - (production + transport + holding + waste).
+
+    args_input_output: |
+        ### I/O Specification
+        **CLI**: `--simulate_time` (int), `--seed` (int).
+        **Output**: JSONL to stdout. Must end with exactly one `sim_trace` event.
+
+        **Events** (all have `time:float`, `event:str`, `node_id:str`, `payload:dict`):
+        - `demand_arrival` (stores): payload{product, quantity_requested, quantity_fulfilled, revenue}
+        - `lost_sale` (stores): payload{product, quantity_lost}
+        - `replenishment_order` (stores): payload{product, quantity, source_id, order_cost}
+        - `shipment_received` (stores/WHs): payload{product, quantity, source_id}
+        - `production_start` (kitchen): payload{product, batch_size=units_produced, raw_materials{flour,sugar,dairy}}
+        - `inventory_expired`: payload{product, quantity, waste_cost, node_id}
+        - `snapshot` (stores, end of day): payload{on_hand{bread,cake,cookie}}
+        - `sim_trace` (node_id="System", once at end): payload{total_revenue, total_cost, total_profit, total_demand, total_fulfilled, total_lost_sales, service_level, total_waste, total_production_batches}
+
+        **Consistency**: demand == fulfilled + lost_sales; profit == revenue - cost; service_level == fulfilled/demand.
+
+base_folder: complex_sup2_model
+skip_simulation_check: false
+only_ensure_executable: false

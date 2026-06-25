@@ -10,6 +10,7 @@
     "id": {"$ref": "defs/common.schema.json#/definitions/identifier"},
     "description": {"$ref": "defs/common.schema.json#/definitions/description"},
     "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
+    "interface": {"$ref": "defs/common.schema.json#/definitions/interface"},
     "evaluator": {
       "type": "object",
       "additionalProperties": false,

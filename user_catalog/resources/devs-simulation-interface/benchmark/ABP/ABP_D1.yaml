@@ -1,0 +1,129 @@
+root_model_name: ABP_D1
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments & Stdin):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** If dynamic input is required, read from `sys.stdin` line-by-line.
+
+        3. Output Interface:
+        - Stream 1: KPI Data (sys.stdout)
+            - You MUST print ONLY the required event records to Standard Output.
+            - Format: JSONL. Each line is a valid, independent JSON object representing a key event.
+            - Schema: Each JSON object MUST follow this structure:
+            ```
+            {
+                "time": <float>,        # Absolute simulation time (milliseconds)
+                "entity": <str>,        # Entity name: "system", "sender", "receiver", "subnet"
+                "event": <str>,         # Event name (see Event Types below)
+                "payload": <dict>       # Event-specific data
+            }
+            ```
+            - Example: `print(json.dumps({"time": 10.5, "entity": "sender", "event": "packet_sent", "payload": {"seq_num": 1, "bit": 0, "is_retry": false}}))`, or use your customized logger. 
+        - Stream 2: Any other data (sys.stderr)
+            - Print any other information to Standard Error. 
+
+        4. Time Format & Units:
+        - Absolute Time: All time values in the output JSONL MUST be floats. The `"time"` field represents the absolute simulation time starting from `0.0`. 
+        - Precision: Keep at least 2 decimal places.
+
+    scenario: |
+        ### Scenario: Reliable Data Transfer with Deterministic Noise Interference
+        1. System Objective: Design a communication system consisting of a Sender, a Receiver, and two uni-directional transmission channels (Subnets). The goal is to transmit a sequence of packets reliably using an Alternating Bit Protocol (ABP) despite deterministic packet loss in the channels.
+        
+        2. Entity Behaviors:
+        The Sender:
+            - Accepts a single control input at the start of simulation: the total number of packets to send.
+            - Before sending each packet, the Sender must undergo a preparation delay (default 10ms, configurable via --sender_delay).
+            - The Receiver must maintain a buffer with capacity 1. During the busy period, it must buffer the only received packet, and process the packet immediately after the busy processing delay. When multiple packets arrive, only the first one is stored.
+            - Sends packets sequentially through Subnet1. Each packet contains a sequence number (1, 2, ...) and a control bit (alternating between 0 and 1). The first bit is 0.
+            - After sending a packet, it starts a timer (default 20ms, configurable via --timeout).
+            - Stop-and-Wait Logic: It must not send the next packet until it receives a correct Acknowledgment (ACK) for the current one.
+            - Retransmission: If the timer expires before a valid ACK is received, the Sender retransmits the same packet and restarts the timer.
+            - Validation: An ACK is valid only if its bit matches the control bit of the current packet.
+            - After sending the specified total number of packets, the Sender stops automatically.
+        
+        The Receiver:
+            - Upon receiving a packet, it undergoes a processing delay (default 10ms, configurable via --receiver_delay) before processing.
+            - The Receiver must maintain a buffer with capacity 1. During the busy period, it must buffer the only received packet, and process the packet immediately after the busy processing delay. When multiple packets arrive, only the first one is stored.
+            - After the processing delay, it extracts the control bit and immediately sends back an ACK packet containing that same bit through Subnet2.
+        
+        The Subnets (Channels):
+            - There are two independent channels: Subnet1 (Sender -> Receiver) and Subnet2 (Receiver -> Sender).
+            - Latency: Every packet takes exactly 3ms (configurable via --channel_delay) to traverse.
+            - Deterministic Noise & Loss Model: Each subnet independently simulates interference using a deterministic formula.
+                - Each Subnet maintains an internal "noise level" value x, initialized to exactly the seed value (provided via --seed).
+                - Packet Fate Determination: When a packet arrives at a subnet, calculate a new noise level: x_new = (17 * x_old + 11) mod 100.
+                - If x_new < 10, the interference is too high, and the packet is dropped (vanishes). Otherwise, it is transmitted normally after the channel delay.
+                - After determination, update the noise level for the next packet: x_old = x_new.
+                - Timing: The noise calculation and fate determination happen immediately when the packet arrives at the subnet.
+        
+        3. Scenario Constraints:
+            - Time Unit Mapping: 1.0 simulation time unit = 1 Millisecond (ms).
+            - System starts at time 0.0 with all components initialized to idle states.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        The script must accept the following named arguments:
+        * `--total_packets` (int): The total number of packets the Sender intends to send in one session triggered by a START_BATCH command. 
+        * `--seed` (int): The initialization seed for the noise generator of both sides (the `x` value in the LCG formula). Default: 42.
+        * `--timeout` (int): Sender's timeout duration in ms. Default: 20.
+        * `--sender_delay` (int): Sender preparation delay in ms. Default: 10.
+        * `--receiver_delay` (int): Receiver processing delay in ms. Default: 10.
+        * `--channel_delay` (int): Subnet transmission delay in ms. Default: 3.
+        * `--simulate_time` (int): The total simulation time to run in ms. Default: 1000.
+
+        2. stdin Format:
+        * No stdin input is required for this simulation. The system uses command line arguments for configuration.
+
+        3. **Standard Output (stdout)**:
+        * Format: JSONL, one independent JSON object per line
+        * Each record MUST follow the format: `{"time": <float>, "entity": <str>, "event": <str>, "payload": <dict>}`
+        * **Event Types and Formats**:
+            Sender Events:
+            - event: `delay_start` (Sender starts preparation delay)
+            - time: Sender's current time
+            - entity: `"sender"`
+            - payload: `{"type": "preparation", "duration": <float>}`
+            - Trigger: When Sender starts preparing a packet
+            
+            - event:  `packet_sent` (Packet sent)
+            - time: Sender's current time
+            - entity: `"sender"`
+            - payload: `{"seq_num": <int>, "bit": <0|1>, "is_retry": <bool>}`
+            - Trigger: When Sender completes preparation delay and hands packet to subnet
+            
+            - event: `ack_received` (ACK received)
+            - time: Sender's current time
+            - entity: `"sender"`
+            - payload: `{"ack_bit": <0|1>, "is_valid": <bool>}`
+            - Trigger: When Sender receives an ACK
+            
+            Receiver Events:
+            - event: `delay_start` (Receiver starts processing delay)
+            - time: Receiver's current time
+            - entity: `"receiver"`
+            - payload: `{"type": "processing", "duration": <float>}`
+            - Trigger: When Receiver starts processing a received packet
+            
+            - event: `packet_received` (Packet successfully received)
+            - time: Receiver's current time
+            - entity: `"receiver"`
+            - payload: `{"seq_num": <int>, "bit": <0|1>}`
+            - Trigger: When Receiver completes processing delay and successfully receives packet
+            
+            Subnet Events:
+            - event: `packet_get` (Packet fate determined)
+            - time: Subnet's current time
+            - entity: `"subnet"`
+            - payload: `{"behavior": <"drop"|"pass">, "channel": <"forward"|"backward">, "noise_value": <int>}`
+            - Trigger: When packet arrives at subnet, before transmission delay starts
+            - Note: "forward" for Sender->Receiver channel, "backward" for Receiver->Sender channel
+        
+base_folder: abp_model
+skip_simulation_check: false
+only_ensure_executable: false

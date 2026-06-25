@@ -1,0 +1,596 @@
+{"time": 1, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1500.0, "holding_cost": 1500.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 120.0, "holding_cost": 300.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 120.0, "holding_cost": 300.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 120.0, "holding_cost": 300.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1500.0, "holding_cost": 1500.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 90.0, "holding_cost": 225.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 90.0, "holding_cost": 225.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 90.0, "holding_cost": 225.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1500.0, "holding_cost": 1500.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 60.0, "holding_cost": 150.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 60.0, "holding_cost": 150.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 60.0, "holding_cost": 150.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1500.0, "holding_cost": 1500.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1440.0, "holding_cost": 1440.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 40.0, "holding_cost": 100.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 40.0, "holding_cost": 100.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 40.0, "holding_cost": 100.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1350.0, "holding_cost": 1350.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1350.0, "holding_cost": 1350.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1350.0, "holding_cost": 1350.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 9, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 9, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1320.0, "holding_cost": 1320.0, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 9, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 9, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 9, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 9, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 9, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 10, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 10, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1170.0, "holding_cost": 1170.0, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 10, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 10, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 10, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 10, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 10, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 11, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 11, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1080.0, "holding_cost": 1080.0, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 990.0, "holding_cost": 990.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 990.0, "holding_cost": 990.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 990.0, "holding_cost": 990.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 15, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 15, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 960.0, "holding_cost": 960.0, "stockout_cost": 0.0}
+{"time": 15, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 15, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 15, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 15, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 15, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 15, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 16, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 16, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 810.0, "holding_cost": 810.0, "stockout_cost": 0.0}
+{"time": 16, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 16, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 16, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 16, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 16, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 16, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 17, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 17, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 720.0, "holding_cost": 720.0, "stockout_cost": 0.0}
+{"time": 17, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 17, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 17, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 630.0, "holding_cost": 630.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 630.0, "holding_cost": 630.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 630.0, "holding_cost": 630.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 21, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 21, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 600.0, "holding_cost": 600.0, "stockout_cost": 0.0}
+{"time": 21, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 21, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 21, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 21, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 21, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 21, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 22, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 22, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 450.0, "holding_cost": 450.0, "stockout_cost": 0.0}
+{"time": 22, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 22, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 22, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 22, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 22, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 22, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 23, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 23, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 360.0, "holding_cost": 360.0, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 270.0, "holding_cost": 270.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1820.0, "holding_cost": 1820.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1820.0, "holding_cost": 1820.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 27, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 27, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1790.0, "holding_cost": 1790.0, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 27, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 27, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 27, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 27, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 27, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 28, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 28, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1640.0, "holding_cost": 1640.0, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 28, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 28, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 28, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 28, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 28, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 29, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 29, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1550.0, "holding_cost": 1550.0, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1460.0, "holding_cost": 1460.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1460.0, "holding_cost": 1460.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1460.0, "holding_cost": 1460.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 33, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 33, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1430.0, "holding_cost": 1430.0, "stockout_cost": 0.0}
+{"time": 33, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 33, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 33, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 33, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 33, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 33, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 34, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 34, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1280.0, "holding_cost": 1280.0, "stockout_cost": 0.0}
+{"time": 34, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 34, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 34, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 34, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 34, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 34, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 35, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 35, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1190.0, "holding_cost": 1190.0, "stockout_cost": 0.0}
+{"time": 35, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 35, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 35, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1100.0, "holding_cost": 1100.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1100.0, "holding_cost": 1100.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1100.0, "holding_cost": 1100.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 39, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 39, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1070.0, "holding_cost": 1070.0, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 39, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 39, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 39, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 39, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 39, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 40, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 40, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 920.0, "holding_cost": 920.0, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 40, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 40, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 40, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 40, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 40, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 41, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 41, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 830.0, "holding_cost": 830.0, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 740.0, "holding_cost": 740.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 740.0, "holding_cost": 740.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 740.0, "holding_cost": 740.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 45, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 45, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 710.0, "holding_cost": 710.0, "stockout_cost": 0.0}
+{"time": 45, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 45, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 45, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 45, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 45, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 45, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 46, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 46, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 560.0, "holding_cost": 560.0, "stockout_cost": 0.0}
+{"time": 46, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 46, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 46, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 46, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 46, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 46, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 47, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 47, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 470.0, "holding_cost": 470.0, "stockout_cost": 0.0}
+{"time": 47, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 47, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 47, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 380.0, "holding_cost": 380.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 380.0, "holding_cost": 380.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1910.0, "holding_cost": 1910.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 51, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 51, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1880.0, "holding_cost": 1880.0, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 51, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 51, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 51, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 51, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 51, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 52, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 52, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1730.0, "holding_cost": 1730.0, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 52, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 52, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 52, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 52, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 52, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 53, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 53, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1640.0, "holding_cost": 1640.0, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1550.0, "holding_cost": 1550.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1550.0, "holding_cost": 1550.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1550.0, "holding_cost": 1550.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 57, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 57, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1520.0, "holding_cost": 1520.0, "stockout_cost": 0.0}
+{"time": 57, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 57, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 57, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 57, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 57, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 57, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 58, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 58, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1370.0, "holding_cost": 1370.0, "stockout_cost": 0.0}
+{"time": 58, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 58, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 58, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 58, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 58, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 58, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 59, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 59, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1280.0, "holding_cost": 1280.0, "stockout_cost": 0.0}
+{"time": 59, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 59, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 59, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1190.0, "holding_cost": 1190.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1190.0, "holding_cost": 1190.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1190.0, "holding_cost": 1190.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 63, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 63, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1160.0, "holding_cost": 1160.0, "stockout_cost": 0.0}
+{"time": 63, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 63, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 63, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 63, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 63, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 63, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 64, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 64, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1010.0, "holding_cost": 1010.0, "stockout_cost": 0.0}
+{"time": 64, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 64, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 64, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 64, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 64, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 64, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 65, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 65, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 920.0, "holding_cost": 920.0, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 830.0, "holding_cost": 830.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 830.0, "holding_cost": 830.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 830.0, "holding_cost": 830.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 800.0, "holding_cost": 800.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 69, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 69, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 69, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 69, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 69, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 70, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 70, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 650.0, "holding_cost": 650.0, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 70, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 70, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 70, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 70, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 70, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 71, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 560.0, "holding_cost": 560.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 470.0, "holding_cost": 470.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 470.0, "holding_cost": 470.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 470.0, "holding_cost": 470.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 75, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 75, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1970.0, "holding_cost": 1970.0, "stockout_cost": 0.0}
+{"time": 75, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 75, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 75, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 75, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 75, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 75, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 76, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 76, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1820.0, "holding_cost": 1820.0, "stockout_cost": 0.0}
+{"time": 76, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 76, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 76, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 76, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 76, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 76, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 77, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 77, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1730.0, "holding_cost": 1730.0, "stockout_cost": 0.0}
+{"time": 77, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 77, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 77, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1640.0, "holding_cost": 1640.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1640.0, "holding_cost": 1640.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1640.0, "holding_cost": 1640.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 81, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 81, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1610.0, "holding_cost": 1610.0, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 81, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 81, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 81, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 81, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 81, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 82, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 82, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1460.0, "holding_cost": 1460.0, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 82, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 82, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 82, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 82, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 82, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 83, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 83, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1370.0, "holding_cost": 1370.0, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1280.0, "holding_cost": 1280.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1280.0, "holding_cost": 1280.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1280.0, "holding_cost": 1280.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 87, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 87, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1250.0, "holding_cost": 1250.0, "stockout_cost": 0.0}
+{"time": 87, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 87, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 87, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 87, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 87, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 87, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 88, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 88, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1100.0, "holding_cost": 1100.0, "stockout_cost": 0.0}
+{"time": 88, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 88, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 88, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 88, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 88, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 88, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 89, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 89, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1010.0, "holding_cost": 1010.0, "stockout_cost": 0.0}
+{"time": 89, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 89, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 89, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 920.0, "holding_cost": 920.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 920.0, "holding_cost": 920.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 920.0, "holding_cost": 920.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 93, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 93, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 890.0, "holding_cost": 890.0, "stockout_cost": 0.0}
+{"time": 93, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 93, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 93, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 93, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 93, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 93, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 94, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 94, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 740.0, "holding_cost": 740.0, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 94, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 94, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 94, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 94, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 94, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 95, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 650.0, "holding_cost": 650.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 75.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 560.0, "holding_cost": 560.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 560.0, "holding_cost": 560.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 50.0, "holding_cost": 125.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 560.0, "holding_cost": 560.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 50.0, "stockout_cost": 0.0}
+{"time": 99, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 99, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 530.0, "holding_cost": 530.0, "stockout_cost": 0.0}
+{"time": 99, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 99, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 99, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 99, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 99, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 99, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 100, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 100, "node": "Central_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 380.0, "holding_cost": 380.0, "stockout_cost": 0.0}
+{"time": 100, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 100, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 100, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 100, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}
+{"time": 100, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1000.0}
+{"time": 100, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.0}

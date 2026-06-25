@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 0,
+  "success_rate": 0.0,
+  "avg_total_cost": -1.0,
+  "avg_total_holding_cost": -1.0,
+  "avg_total_stockout_cost": -1.0,
+  "runs": [
+    {
+      "run_success": false,
+      "total_cost": -1.0,
+      "total_holding_cost": -1.0,
+      "total_stockout_cost": -1.0,
+      "error": "Runner failed: [Errno 36] File name too long: '/tmp/supplybech_devs_gen_ca_b6lmw43f/Let me run the simulation with v8 to see if it performs better than v7.\\n\\nCode:\\n```py\\nrun_python(\\n    filename=\"run.py\",\\n    cwd=\"supply_chain_model\",\\n    args=\"--policy test_policy_v8.py --outfile kpi_v8.json\",\\n    stdout_file=\"sim_v8_stdout.txt\",\\n    stderr_file=\"sim_v8_stderr.txt\",\\n    timeout=120\\n)\\n```<end_code>\\nCalling tools:\\n[{\\'id\\': \\'call_67\\', \\'type\\': \\'function\\', \\'function\\', \\'arguments\\': \\'run_python(\\\\n    filename=\"run.py\",\\\\n    cwd=\"supply_chain_model\",\\\\n    args=\"--policy test_policy_v8.py --outfile kpi_v8.json\",\\\\n    stdout_file=\"sim_v8_stdout.txt\",\\\\n    stderr_file=\"sim_v8_stderr.txt\",\\\\n    timeout=120\\\\n)\\'}}]'"
+    }
+  ],
+  "framework": "devs_gen",
+  "scenario": "scenario_02_branching_tree",
+  "model_id": "openrouter/z-ai/glm-4.7",
+  "result_dir": "eval_results/devs_gen_openrouter-z-ai-glm-4.7_scenario_02_branching_tree_20260524_115354"
+}

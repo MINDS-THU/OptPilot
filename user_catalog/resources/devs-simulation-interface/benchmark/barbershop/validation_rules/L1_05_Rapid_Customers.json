@@ -1,0 +1,25 @@
+{
+  "state_checks": [
+    {
+      "time": 28802.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 5,
+      "description": "2秒内快速积累到5个顾客 (1服务 + 4排队)"
+    }
+  ],
+  "message_checks": [
+    {
+      "model": "reception",
+      "port": "cust",
+      "content": "newcust",
+      "count_at_least": 1,
+      "description": "Ensure the first customer is eventually handed over (System is not deadlocked)"
+    }
+  ],
+  "summary_checks": {
+    "total_customers_received": 5,
+    "total_customers_processed_reception": 1,
+    "max_queue_size": 5
+  }
+}

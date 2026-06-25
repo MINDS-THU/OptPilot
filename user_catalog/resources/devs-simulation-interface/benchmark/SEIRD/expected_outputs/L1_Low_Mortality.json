@@ -1,0 +1,8 @@
+{
+  "time": 10.0,
+  "susceptible": 9500.00,
+  "exposed": 0.00,
+  "infective": 244.89,
+  "recovered": 252.57,
+  "deceased": 2.55
+}

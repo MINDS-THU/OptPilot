@@ -1,0 +1,198 @@
+root_model_name: IOBS_D1
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** If dynamic input is required, read from `sys.stdin` line-by-line.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+        
+        4. Entry point: executable via `python run.py`
+
+        Do not use real time, use simulation time, and guarantee the simulation ends in 10 seconds in real time. 
+
+        Use system time to set the seed for random number generation (e.g. `import random, time, numpy`, `random.seed(time.time_ns())`, `numpy.random.seed(time.time_ns() % (2**32 - 1))`).
+
+    scenario: |
+        ### Scenario: Internet Online Banking System (IOBS)
+
+        You are implementing a DES (Discrete Event Simulation) for an online banking authentication and transaction processing system.
+
+        Attention: There might be multiple requests with close timestamps. You need to handle them correctly.
+
+        System Architecture:
+        ```
+        Input → AAM → ANV → PV → BPM → TPM → Output
+                  ↓
+              (logout)
+        ```
+
+        ### Entities
+
+        **1. input_reader1**
+        - Reads input from stdin
+        - Parses timestamped requests
+        - Forwards messages to AAM
+
+        **2. AAM (AccountAccessManager)**
+        - Receives login requests. Response depends on the validity of the request input.
+        - If valid=1 and invalid=0: Forward to ANV
+        - If valid=1 and invalid=1: Trigger logout (end processing for this request)
+
+        **3. ANV (AccountNumberVerifier)**
+        - Receives account from AAM
+        - Performs random verification: 50% chance pass, 50% chance fail
+        - If pass: Forward to PV
+        - If fail: End processing for this request
+
+        **4. PV (PasswordVerifier)**
+        - Receives verification from ANV
+        - Performs random password check: 50% chance success per attempt. For simulation, the entity itself will try to log in until success. So eventually it will always succeed.
+        - When success: Forward to BPM
+
+        **5. BPM (BillPaymentManager)**
+        - Receives successful password verification
+        - Generates random bill amount between 0 and 40, and make sure it does not exceed the remaining account  balance. 
+        - Forwards bill amount to TPM
+
+        **6. TPM (TransactionProcessManager)**
+        - Receives bill amount from BPM
+        - Initial balance: 3000
+        - Calculates: remaining = balance - amount
+        - Tracks transaction count
+
+        ### Timing Model
+
+        Each entities has a processing delay of **10 seconds**.
+        Events are processed sequentially with cumulative timing.
+
+    args_input_output: |
+        ### Command Line Arguments:
+        The script must accept the following named arguments:
+        * `--simulation_time` (float): Total simulation time in seconds. Default: 1000000.0
+
+        ### Input Format
+        
+        Read from **stdin**. Each line represents one request:
+        ```
+        HH:MM:SS:mmm valid invalid
+        ```
+        
+        Fields:
+        - HH:MM:SS:mmm - Timestamp (hours:minutes:seconds:milliseconds)
+        - valid - Always 1 (It is always 1 for compatibility)
+        - invalid - 0 for valid login, 1 for invalid login
+
+        Examples:
+        ```
+        00:00:10:000 1 0    # Valid login at t=10s
+        00:00:25:500 1 1    # Invalid login at t=25.5s
+        ```
+
+        ### Output Format (JSONL)
+        
+        Print to **stdout**. Each line is a complete JSON object:
+        ```json
+        {"time": <float>, "model": <string>, "event": <string>, "data": <object>}
+        ```
+
+        Fields:
+        - `time`: Current simulation time. (float)
+        - `model`: Name of the model producing output. It should be the time when the event is triggered.
+        - `event`: Event type name
+        - `data`: Event-specific payload (dict)
+
+        ### Events by Model (and Data Schemas)
+        You must at least log all the following events through stdout. The `data` field must contain the specific keys described below. They should be outputted when the delay completes. 
+
+        **Model: input_reader1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "input_reader1", "event": "start", "data": {}}
+        {"time": xxx, "model": "input_reader1", "event": "input", "data": {"valid": 1, "invalid": 0}}
+        ```
+        * start: Triggered at t=0. `data` is empty.
+        * input: Triggered upon reading a request. `data` keys:
+            * `valid` (int): Echoes input (always 1).
+            * `invalid` (int): Echoes input (0=valid login, 1=invalid login).
+
+        **Model: AAM1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "AAM1", "event": "account_generated", "data": {}}
+        {"time": xxx, "model": "AAM1", "event": "logout", "data": {}}
+        ```
+        * account_generated: Triggered when valid logins emitted to next. `data` is empty.
+        * logout: Triggered when invalid logins processed. `data` is empty.
+
+        **Model: ANV1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "ANV1", "event": "verification", "data": {"pass": 1, "fail": 0}}
+        ```
+        * verification: Result of account check. `data` keys:
+            * `pass` (int): 1 if verification passed, 0 otherwise.
+            * `fail` (int): 1 if verification failed, 0 otherwise.
+            * triggered when ANV finishes verification.
+
+        **Model: PV1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "PV1", "event": "verification", "data": {"success": 1, "attempts": 2}}
+        ```
+        * verification: Result of password check. `data` has the keys:
+            - `success` (int): always 1 (because it will keep trying until success).
+            - `attempts` (int): Number of attempts made to verify the password.
+            - triggered when PV finishes verification.
+
+        **Model: BPM1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "BPM1", "event": "bill", "data": {"amount": 21}}
+        ```
+        * bill: Generated payment amount. `data` keys:
+            - `amount` (int): The bill amount (0-40), constrained by remaining balance.
+            - triggered when BPM finishes bill generation.
+
+        **Model: TPM1**
+        Follow the format: 
+        ```json
+        {"time": xxx, "model": "TPM1", "event": "transaction", "data": {"remaining": 2979, "count": 1}}
+        ```
+        * transaction: Final state update. `data` keys:
+            - `remaining` (int): The new account balance after deduction.
+            - `count` (int): The total number of completed transactions so far.
+            - triggered when TPM finishes transaction processing.
+
+        ### Example: Complete Transaction Flow
+ 
+        Input (stdin):
+        ```
+        00:00:10:000 1 0
+        ```
+
+        Possible Output (if ANV passes and PV succeeds):
+        ```jsonl
+        {"time": 0.0, "model": "input_reader1", "event": "start", "data": {}}
+        {"time": 10.0, "model": "input_reader1", "event": "input", "data": {"valid": 1, "invalid": 0}}
+        {"time": 20.0, "model": "AAM1", "event": "account_generated", "data": {}}
+        {"time": 30.0, "model": "ANV1", "event": "verification", "data": {"pass": 1, "fail": 0}}
+        {"time": 40.0, "model": "PV1", "event": "verification", "data": {"success": 1, "attempts": 2}}
+        {"time": 50.0, "model": "BPM1", "event": "bill", "data": {"amount": 21}}
+        {"time": 60.0, "model": "TPM1", "event": "transaction", "data": {"remaining": 2979, "count": 1}}
+        ```
+
+base_folder: iobs_model
+skip_simulation_check: false
+only_ensure_executable: false

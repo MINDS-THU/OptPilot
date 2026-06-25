@@ -1,0 +1,36 @@
+{
+  "state_checks": [
+    {
+      "time": 28800.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1
+    },
+    {
+      "time": 28860.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1
+    },
+    {
+      "time": 28920.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1
+    }
+  ],
+  "message_checks": [
+    {
+      "model": "reception",
+      "port": "cust",
+      "content": "newcust",
+      "count": 3,
+      "description": "输出3个顾客消息"
+    }
+  ],
+  "summary_checks": {
+    "total_customers_received": 3,
+    "total_customers_processed_reception": 3,
+    "max_queue_size": 3
+  }
+}

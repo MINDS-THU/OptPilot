@@ -33,6 +33,28 @@
         "type": "string"
       }
     },
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "port"],
+      "properties": {
+        "label": {"type": "string"},
+        "description": {"type": "string"},
+        "command": {"$ref": "#/definitions/command"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "cwd": {"type": "string"},
+        "env": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "extraPorts": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1, "maximum": 65535}
+        },
+        "readyPath": {"type": "string"},
+        "readyTimeoutSeconds": {"type": "integer", "minimum": 0, "maximum": 600}
+      }
+    },
     "stringList": {
       "type": "array",
       "items": {

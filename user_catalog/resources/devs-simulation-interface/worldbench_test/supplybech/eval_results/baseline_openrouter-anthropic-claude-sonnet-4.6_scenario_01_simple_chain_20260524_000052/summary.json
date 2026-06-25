@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 1,
+  "success_rate": 1.0,
+  "avg_total_cost": 141260.0,
+  "avg_total_holding_cost": 141260.0,
+  "avg_total_stockout_cost": 0.0,
+  "runs": [
+    {
+      "run_success": true,
+      "total_cost": 141260.0,
+      "total_holding_cost": 141260.0,
+      "total_stockout_cost": 0.0,
+      "error": null
+    }
+  ],
+  "framework": "baseline",
+  "scenario": "scenario_01_simple_chain",
+  "model_id": "openrouter/anthropic/claude-sonnet-4.6",
+  "result_dir": "eval_results/baseline_openrouter-anthropic-claude-sonnet-4.6_scenario_01_simple_chain_20260524_000052"
+}

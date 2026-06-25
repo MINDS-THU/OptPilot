@@ -1,0 +1,10 @@
+{
+  "state_checks": [
+  ],
+  "message_checks": [],
+  "summary_checks": {
+    "total_customers_processed_reception": 0,
+    "total_messages": 0,
+    "system_idle": true
+  }
+}

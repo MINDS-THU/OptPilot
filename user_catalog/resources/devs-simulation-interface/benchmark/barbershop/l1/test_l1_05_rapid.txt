@@ -1,0 +1,5 @@
+08:00:00:00 newcust
+08:00:00:50 newcust
+08:00:01:00 newcust
+08:00:01:50 newcust
+08:00:02:00 newcust

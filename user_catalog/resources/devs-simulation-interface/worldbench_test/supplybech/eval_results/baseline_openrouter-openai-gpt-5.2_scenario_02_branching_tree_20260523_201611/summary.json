@@ -1,0 +1,49 @@
+{
+  "num_runs": 5,
+  "num_success": 5,
+  "success_rate": 1.0,
+  "avg_total_cost": 4221606.2878,
+  "avg_total_holding_cost": 177875.1542,
+  "avg_total_stockout_cost": 4043731.1336,
+  "runs": [
+    {
+      "run_success": true,
+      "total_cost": 4087222.2425945993,
+      "total_holding_cost": 97569.12284859947,
+      "total_stockout_cost": 3989653.1197459996,
+      "error": null
+    },
+    {
+      "run_success": true,
+      "total_cost": 6003636.9938522335,
+      "total_holding_cost": 285255.0751708093,
+      "total_stockout_cost": 5718381.918681424,
+      "error": null
+    },
+    {
+      "run_success": true,
+      "total_cost": 6026243.690625975,
+      "total_holding_cost": 355157.265326306,
+      "total_stockout_cost": 5671086.425299669,
+      "error": null
+    },
+    {
+      "run_success": true,
+      "total_cost": 610298.9947512273,
+      "total_holding_cost": 60365.91756687783,
+      "total_stockout_cost": 549933.0771843495,
+      "error": null
+    },
+    {
+      "run_success": true,
+      "total_cost": 4380629.517017407,
+      "total_holding_cost": 91028.38984003152,
+      "total_stockout_cost": 4289601.127177375,
+      "error": null
+    }
+  ],
+  "framework": "baseline",
+  "scenario": "scenario_02_branching_tree",
+  "model_id": "openrouter/openai/gpt-5.2",
+  "result_dir": "/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/eval_results/baseline_openrouter-openai-gpt-5.2_scenario_02_branching_tree_20260523_201611"
+}

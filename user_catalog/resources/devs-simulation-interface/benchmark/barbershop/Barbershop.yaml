@@ -1,0 +1,124 @@
+root_model_name: Barbershop_D1
+requirements:
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** Read from `sys.stdin`. The simulation must consume ALL input lines from stdin to build an initial event schedule BEFORE starting the simulation loop.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+        
+        4. Entry point: executable via `python run.py`
+
+        Do not use real time, use simulation time, and guarantee the simulation ends in 10 seconds in real time. 
+
+    scenario: |
+        ### Scenario: Barbershop Business Logic & Workflow
+    
+        1. System Overview
+        The system simulates a barbershop workflow consisting of three main functional areas: Reception Desk , Hair Inspection and Hair Cutting.
+        The simulation must handle customer flow, queue management, and precise timing for each service stage.
+        
+        2. Functional Modules & Logic
+        
+        #### Reception Desk (Logic Name: `reception`)
+        * Role: Entry point for customers. Manages the waiting area.
+        * Queue: The waiting area has a strict capacity of 8 customers.
+        * Processing: 1 customer at a time, 5 seconds per customer (check-in time).
+        * Workflow:
+            1.  **Arrival**: When a customer arrives (from input source), check the queue size.
+                * If Queue < 8: Accept customer, increment queue count.
+                * If Queue = 8: Ignore the new customer, the internal queue remain unchanged.
+            2.  **Processing**: Hold the customer(first in the queue) for exactly 5 seconds. It is still in the queue.
+            3.  **Handoff**: After 5 seconds, if the checkhair phase is available, send the customer to the Hair Inspection Phase. Otherwise, keep waiting until the checkhair phase is available. After the customer is sent, start to process the next customer in the queue.
+
+        #### Hair Inspection Phase (Logic Name: `checkhair`)
+        * Role: The first step of the barber service. Acts as a coordinator between the reception and the cutting chair.
+        * Processing: 1 customer at a time, 7 seconds per customer (consultation time).
+        * Workflow:
+            0. Initially, the module is in "available" state, ready for a new customer.
+            1.  **Receive**: Accept customer from Reception Desk. It turns from available to busy. 
+            2.  **Process**: Hold customer for exactly 7 seconds.
+            3.  **Forward**: Send customer to the *Hair Cutting Phase*.
+            4.  **Coordination**: Wait for a "done" signal from the *Hair Cutting Phase*.
+            5.  **Completion**: Upon receiving the "done" signal from the cutter, send a notification back to the *Reception Desk* indicating the full service is complete. ONLY AFTER this step does the module become "available" again to accept a new customer.
+        
+        #### Hair Cutting Phase (Logic Name: `cuthair`)
+        * Role: The execution step of the barber service.
+        * Processing: 1 customer at a time, 20 seconds per customer (cutting time).
+        * Workflow:
+            1.  **Receive**: Accept customer from *Hair Inspection Phase*.
+            2.  **Process**: Hold customer for exactly 20 seconds.
+            3.  **Completion**: Signal back to the *Hair Inspection Phase* that cutting is finished.
+
+        3. Simulation Constraints
+        * Time Unit: Seconds (1.0 = 1 second). All internal calculations must be in seconds.
+        * Clock: Starts at `0.0`.
+        * Concurrency: 
+            * Reception processes customers independently of the Barber.
+            * The Barber (Inspection + Cutting) processes only one customer at a time.
+            * New customers can pile up in the Reception queue (up to 8) while the Barber is busy.
+
+    args_input_output: |
+        1. Command Line Interface
+        The script must accept the following named arguments:
+        * `--simulation_time` (float): Total simulation time in seconds. Default: 1000000.0 (to make sure all requests are processed)
+
+        2. Input Data Format (The Schedule)
+        * Structure: One event per line.
+        * Syntax: `HH:MM:SS:mm EventName`
+        * EventName: only `newcust`. 
+        * **Example Content**:
+            ```text
+            08:00:00:00 newcust
+            08:00:10:00 newcust
+            ```
+
+        3. Output Data Format (STDOUT)
+        The system must emit a JSON Lines (JSONL) stream to `sys.stdout`. Every significant state change or message passed between modules must be logged as a valid JSON object.
+
+        #### Record Types
+        
+        **Type A: State Change (`type: "state"`)**
+        Emitted whenever a tracked variable changes value within a module.
+        * `time` (float): Current simulation time.
+        * `type`: Literal string `"state"`.
+        * `model`: The instance name (specifically: "reception"`, `"checkhair"`, `"cuthair"`).
+        * `field`: The variable name being updated.
+            * For Reception: `total customers num`: The current total number of customers in the reception desk.
+            * For Inspection: `customer`: The current status of the customer being inspected. Value must be "newcust" (processing start) or "done" (customer finished cuthair).
+            * For Cutting: `total customer done`: A cumulative counter of customers who have finished hair cutting.
+        * `value`: The new value (string or number).
+
+        **Type B: Communication Event (`type: "message"`)**
+        Emitted whenever a module sends data/signals to another module.
+        * `time` (float): Current simulation time.
+        * `type`: Literal string `"message"`.
+        * `model`: The name of the sender.
+        * `port`: The specific communication channel name.
+            * Reception output: `"cust"`
+            * Inspection outputs: `"to_cut"`, `"to_reception"`
+            * Cutting output: `"out"`
+        * `content`: Brief message. Must among ["newcust", "done"]
+
+        Note: The output time must be the absolute simulation time in seconds (e.g., if the event occurs at 8:00:05, it should be `28805.0` seconds).
+
+        #### Example Output Lines
+        ```json
+        {"time": xxx, "type": "state", "model": "reception", "field": "total customers", "value": "1"}
+        {"time": xxx, "type": "message", "model": "reception", "port": "cust", "content": "newcust"}
+        ```
+
+base_folder: barbershop_model
+skip_simulation_check: false
+only_ensure_executable: false

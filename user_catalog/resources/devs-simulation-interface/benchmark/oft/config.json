@@ -1,0 +1,200 @@
+[
+    {
+        "name": "L0_Idle",
+        "level": "L0",
+        "description": "No activity - idle system",
+        "checker_args": {
+            "expected_downloads": 0,
+            "expected_uploads": 0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 0\n00:00:10 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L1_Single_Packet",
+        "level": "L1",
+        "description": "Single packet complete upload-download cycle",
+        "checker_args": {
+            "expected_downloads": 1,
+            "expected_uploads": 1
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 1\n00:01:00 request 1\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L1_No_Request",
+        "level": "L1",
+        "description": "Upload without download request - no ACKs",
+        "checker_args": {
+            "expected_downloads": 0,
+            "expected_uploads": 1
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 1\n00:00:10 request 0\n00:02:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L1_Request_Only",
+        "level": "L1",
+        "description": "Download requests without uploaded data",
+        "checker_args": {
+            "expected_downloads": 0,
+            "expected_uploads": 0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 0\n00:00:20 request 1\n00:00:40 request 1\n00:01:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L1_Sequential_Small",
+        "level": "L1",
+        "description": "Two packets transmitted sequentially",
+        "checker_args": {
+            "expected_downloads": 2,
+            "expected_uploads": 2
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 2\n00:00:40 request 1\n00:02:00 request 1\n00:04:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L1_Delayed_Start",
+        "level": "L1",
+        "description": "Transmission starts after delay",
+        "checker_args": {
+            "expected_downloads": 2,
+            "expected_uploads": 2
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:02:00 control 2\n00:03:00 request 1\n00:04:00 request 1\n00:06:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L2_Large_Transfer",
+        "level": "L2",
+        "description": "Large file transfer with 5 packets",
+        "checker_args": {
+            "expected_downloads": 5,
+            "expected_uploads": 5
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 5\n00:00:40 request 1\n00:02:20 request 1\n00:03:20 request 1\n00:04:20 request 1\n00:05:20 request 1\n00:12:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L2_Interleaved",
+        "level": "L2",
+        "description": "Interleaved upload and download operations",
+        "checker_args": {
+            "expected_downloads": 4,
+            "expected_uploads": 4
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 4\n00:00:40 request 1\n00:02:10 request 1\n00:03:10 request 1\n00:04:10 request 1\n00:10:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L2_Rapid_Requests",
+        "level": "L2",
+        "description": "Rapid succession of download requests",
+        "checker_args": {
+            "expected_downloads": 3,
+            "expected_uploads": 3
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 10000000
+                },
+                "sim_stdin": "00:00:10 control 3\n00:00:40 request 1\n00:02:10 request 1\n00:03:10 request 1\n00:08:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L2_Partial_Cutoff",
+        "level": "L2",
+        "description": "Uploads complete, but download is manually stopped early. Verifies partial completion states.",
+        "checker_args": {
+            "expected_downloads": 3,
+            "expected_uploads": 5
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 20000000
+                },
+                "sim_stdin": "00:00:10 control 5\n00:00:20 request 1\n00:01:00 request 0\n",
+                "checker_config": {}
+            }
+        ]
+    },
+    {
+        "name": "L3_Complex_Scenario",
+        "level": "L3",
+        "description": "Integration test: Pre-request -> Batch 1 -> Pause -> Batch 2 (Queueing) -> Resume. Verifies total system consistency.",
+        "checker_args": {
+            "expected_downloads": 6,
+            "expected_uploads": 6
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 40000000
+                },
+                "sim_stdin": "00:00:05 request 1\n00:00:10 control 2\n00:00:40 request 0\n00:00:50 control 4\n00:03:00 request 1\n",
+                "checker_config": {}
+            }
+        ]
+    }
+]

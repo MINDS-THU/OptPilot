@@ -1,0 +1,103 @@
+{
+  "description": "Flat decomposition example: M/M/1 Queue system decomposed in one pass",
+  "root_model": {
+    "class_name": "MM1Queue",
+    "file_path": "devs_project/MM1Queue.py",
+    "logic_path": "MM1Queue",
+    "type": "coupled",
+    "specification": {
+      "function": "M/M/1 queueing system. Generates arrivals with exponential inter-arrival times, processes them through a single server with exponential service times, and collects departure events. Time unit: 1.0 = 1 second.",
+      "logging": "Log arrival, service start, service completion, and departure events.",
+      "input_ports": [],
+      "output_ports": [
+        {
+          "name": "departure_out",
+          "type": "dict",
+          "structure": "{'customer_id': int, 'arrival_time': float, 'departure_time': float, 'wait_time': float}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends completed customer data to external observer"
+          }
+        }
+      ],
+      "model_init_args": [
+        {"name": "name", "type": "str"},
+        {"name": "arrival_rate", "type": "float", "description": "Lambda: average arrivals per time unit"},
+        {"name": "service_rate", "type": "float", "description": "Mu: average services per time unit"},
+        {"name": "max_customers", "type": "int", "description": "Total customers to generate"}
+      ]
+    },
+    "children": [
+      {
+        "class_name": "Generator",
+        "file_path": "devs_project/MM1Queue_libs/Generator.py",
+        "logic_path": "MM1Queue.Generator",
+        "type": "atomic",
+        "specification": {
+          "function": "Generates customer arrivals. Inter-arrival times follow exponential distribution with rate lambda. Sends customer to Server upon generation. Stops after max_customers.",
+          "logging": "Log each customer generation event.",
+          "input_ports": [],
+          "output_ports": [
+            {
+              "name": "customer_out",
+              "type": "dict",
+              "structure": "{'customer_id': int, 'arrival_time': float}",
+              "protocol": {
+                "initial_state": "empty",
+                "initial_signal": "Sends first customer at T=0 after hold_in('INIT', 0)",
+                "description": "Sends new customer to [Sibling-Server: customer_in]"
+              }
+            }
+          ],
+          "model_init_args": [
+            {"name": "name", "type": "str"},
+            {"name": "parent", "type": "Coupled | None"},
+            {"name": "arrival_rate", "type": "float"},
+            {"name": "max_customers", "type": "int"}
+          ]
+        }
+      },
+      {
+        "class_name": "Server",
+        "file_path": "devs_project/MM1Queue_libs/Server.py",
+        "logic_path": "MM1Queue.Server",
+        "type": "atomic",
+        "specification": {
+          "function": "Single server with FIFO queue. Service times follow exponential distribution with rate mu. Processes one customer at a time. Queues additional customers.",
+          "logging": "Log service start and completion for each customer.",
+          "input_ports": [
+            {
+              "name": "customer_in",
+              "type": "dict",
+              "structure": "{'customer_id': int, 'arrival_time': float}",
+              "protocol": {
+                "initial_state": "empty",
+                "initial_signal": "None",
+                "description": "Receives customer from [Sibling-Generator: customer_out]"
+              }
+            }
+          ],
+          "output_ports": [
+            {
+              "name": "departure_out",
+              "type": "dict",
+              "structure": "{'customer_id': int, 'arrival_time': float, 'departure_time': float, 'wait_time': float}",
+              "protocol": {
+                "initial_state": "empty",
+                "initial_signal": "None",
+                "description": "Sends completed customer to [Parent: departure_out]"
+              }
+            }
+          ],
+          "model_init_args": [
+            {"name": "name", "type": "str"},
+            {"name": "parent", "type": "Coupled | None"},
+            {"name": "service_rate", "type": "float"}
+          ]
+        }
+      }
+    ],
+    "coupling_specification": "EIC: none (no external inputs). IC: Generator.customer_out -> Server.customer_in. EOC: Server.departure_out -> Parent.departure_out. No cold-start deadlock: Generator self-activates at T=0."
+  }
+}

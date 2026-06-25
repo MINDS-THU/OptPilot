@@ -1,0 +1,18 @@
+{
+  "state_checks": [
+    {
+      "time": 28820.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 2,
+      "description": "第2个到达时，如果下级拥堵导致Reception阻塞，队列可能积压"
+    }
+  ],
+  "summary_checks": {
+    "total_customers_received": 3,
+    "total_customers_processed_reception": 3,
+    "queue_full_triggered": false,
+    "max_queue_size_at_least": 2
+  },
+  "message_checks": []
+}

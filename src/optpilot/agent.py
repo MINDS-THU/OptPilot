@@ -20,8 +20,13 @@ DEFAULT_OPENHANDS_SESSION_ENDPOINT = "/api/conversations"
 FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT = """You are OptPilot Assistant inside OptPilot Studio.
 Answer using the OptPilot context packet provided by the GUI. Keep public
 OptPilot explanations centered on environment-owned evaluator.settings and
-method-visible methodContext.references. Do not claim you modified files,
-launched studies, or registered catalog entries unless the runtime confirms it."""
+method-visible methodContext.references. On the Runs page, use
+optpilot_run_detail for status, metrics, failures, candidates, and evidence
+before reading raw run files; only open a run workspace when the user asks for a
+workspace. Do not claim you modified files, launched studies, or registered
+catalog entries unless the runtime confirms it. For frontend services, start
+them in the attached workspace runtime on 0.0.0.0 and use
+optpilot_workspace_preview_open with the service port to open Studio Preview."""
 
 
 OPTPILOT_AGENT_TOOLS = [
@@ -35,6 +40,7 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_file_write",
     "optpilot_file_diff",
     "optpilot_shell_run",
+    "optpilot_workspace_preview_open",
     "optpilot_catalog_list",
     "optpilot_catalog_detail",
     "optpilot_compatibility_check",
@@ -54,6 +60,8 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_run_compare",
     "optpilot_smoke_test_study",
     "optpilot_docs_search",
+    "optpilot_capability_list",
+    "optpilot_capability_detail",
 ]
 
 
@@ -95,7 +103,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_file_tree",
-        "description": "List files under an attached workspace root.",
+        "description": "List files under an attached workspace root. Use path='.' for the workspace root; omitted or null path also defaults to '.'.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "path": {"type": "string"}, "max_files": {"type": "integer"}}),
         "annotations": {"readOnlyHint": True},
     },
@@ -126,14 +134,22 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         }, ["command"]),
     },
     {
+        "name": "optpilot_workspace_preview_open",
+        "description": "Open the Studio Preview tab for a web service already running inside an attached workspace runtime. The service must listen on 0.0.0.0 inside the workspace container. Use optpilot_shell_run first if you need to start the service.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "port": {"type": "integer"},
+        }, ["port"]),
+    },
+    {
         "name": "optpilot_catalog_list",
-        "description": "List catalog environments, methods, studies, and builtins.",
+        "description": "List reusable catalog environments, methods, resources, plus saved study plans.",
         "parameters": _tool_schema({"config_kind": {"type": "string"}}),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_catalog_detail",
-        "description": "Inspect one catalog environment, method, or study by kind and uid/path.",
+        "description": "Inspect one reusable catalog entry or saved study plan by kind and uid/path.",
         "parameters": _tool_schema({"config_kind": {"type": "string"}, "uid": {"type": "string"}, "path": {"type": "string"}}, ["config_kind"]),
         "annotations": {"readOnlyHint": True},
     },
@@ -199,19 +215,19 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_run_detail",
-        "description": "Read structured run detail for a run id/path.",
+        "description": "Read a compact, assistant-ready run summary for a run id/path, including status, trials, failures, best metric/candidate, observation previews, and available evidence files. Prefer this before reading raw run files.",
         "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_run_file_read",
-        "description": "Read one text file from a run directory.",
+        "description": "Read one text file from a run directory. The path must be one of the relative paths advertised by optpilot_run_detail evidence_files; call optpilot_run_detail first if unsure.",
         "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}, ["path"]),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_run_open_workspace",
-        "description": "Attach a run directory as an analysis workspace.",
+        "description": "Open and auto-attach a run directory as a read-only analysis workspace. Use only when the user wants to browse the run files as a workspace; run summaries should use optpilot_run_detail.",
         "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}),
     },
     {
@@ -229,6 +245,18 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "name": "optpilot_docs_search",
         "description": "Search curated OptPilot docs and schema files for compact excerpts.",
         "parameters": _tool_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "optpilot_capability_list",
+        "description": "List configured assistant skills, MCP servers, custom tools, and permission defaults.",
+        "parameters": _tool_schema({"capability_kind": {"type": "string"}}),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "optpilot_capability_detail",
+        "description": "Inspect one configured assistant capability by kind and id.",
+        "parameters": _tool_schema({"capability_kind": {"type": "string"}, "id": {"type": "string"}}, ["capability_kind", "id"]),
         "annotations": {"readOnlyHint": True},
     },
 ]
@@ -270,9 +298,8 @@ class OpenHandsRuntimeConfig:
 class OpenHandsAdapter:
     """Small boundary between OptPilot Studio and an OpenHands runtime.
 
-    The first UI implementation stores sessions, context packets, and messages
-    in OptPilot. A real OpenHands connection can be plugged in here without
-    changing the browser-side workflow.
+    OptPilot owns Studio sessions, context packets, and tool permission checks.
+    OpenHands receives bounded HTTP dispatches through this adapter.
     """
 
     def __init__(self, config: Optional[OpenHandsRuntimeConfig] = None) -> None:
@@ -354,6 +381,27 @@ class OpenHandsAdapter:
                 return self._dispatch_openhands_agent_server(prompt, context, conversation_id, tool_executor, ignored_response_texts)
             return self._dispatch_openrouter_chat(prompt, context)
         except Exception as exc:
+            if self._is_client_tool_schema_conflict(exc):
+                return {
+                    "status": "failed",
+                    "mode": status.get("mode"),
+                    "dispatch": status.get("dispatch"),
+                    "conversation_id": conversation_id,
+                    "assistant_message": {
+                        "role": "assistant",
+                        "title": "OpenHands tool schema changed",
+                        "content": (
+                            "OpenHands has an older OptPilot tool schema cached in its running process. "
+                            "Restart the OpenHands agent server, then retry this message."
+                        ),
+                    },
+                    "events": [
+                        {
+                            "type": "openhands_tool_schema_conflict",
+                            "payload": {"error": str(exc), "dispatch": status.get("dispatch")},
+                        }
+                    ],
+                }
             return {
                 "status": "failed",
                 "mode": status.get("mode"),
@@ -372,6 +420,14 @@ class OpenHandsAdapter:
                 ],
             }
 
+    def _is_client_tool_schema_conflict(self, error: Exception) -> bool:
+        text = str(error)
+        return (
+            "HTTP 422" in text
+            and "Client tool" in text
+            and "different parameters schema" in text
+        )
+
     def context_packet(
         self,
         *,
@@ -380,13 +436,16 @@ class OpenHandsAdapter:
         attached_workspaces: List[JsonDict],
         catalog_counts: JsonDict,
         run_count: int,
+        study_plan_count: int = 0,
         current_page: str = "editor",
         registration_menu: Optional[JsonDict] = None,
         selected_catalog_entry: Optional[JsonDict] = None,
         selected_study_plan: Optional[JsonDict] = None,
         selected_run: Optional[JsonDict] = None,
         code_editor: Optional[JsonDict] = None,
+        workspace_preview: Optional[JsonDict] = None,
         visible_state: Optional[JsonDict] = None,
+        assistant_capabilities: Optional[JsonDict] = None,
     ) -> JsonDict:
         return {
             "session_id": session_id,
@@ -394,13 +453,16 @@ class OpenHandsAdapter:
             "selected_workspace": selected_workspace,
             "attached_workspaces": attached_workspaces,
             "catalog_counts": catalog_counts,
+            "study_plan_count": study_plan_count,
             "run_count": run_count,
             "registration_menu": registration_menu,
             "selected_catalog_entry": selected_catalog_entry,
             "selected_study_plan": selected_study_plan,
             "selected_run": selected_run,
             "code_editor": code_editor,
+            "workspace_preview": workspace_preview,
             "visible_state": visible_state or {},
+            "assistant_capabilities": assistant_capabilities or {},
             "available_tools": OPTPILOT_AGENT_TOOLS,
             "runtime": self.status(),
         }
@@ -610,6 +672,41 @@ class OpenHandsAdapter:
             },
         }
 
+    def cancel_conversation(self, conversation_id: str) -> JsonDict:
+        status = self.status()
+        if not conversation_id:
+            return {"cancelled": False, "reason": "missing conversation id"}
+        if status.get("dispatch") != "openhands_http" or not self.config.base_url:
+            return {
+                "cancelled": False,
+                "reason": "OpenHands HTTP bridge is not active",
+                "dispatch": status.get("dispatch"),
+            }
+        conversations_url = self._join_url(self.config.base_url, self.session_endpoint)
+        errors: List[str] = []
+        for action in ("interrupt", "pause"):
+            try:
+                self._request_json(
+                    "POST",
+                    f"{conversations_url}/{conversation_id}/{action}",
+                    payload=None,
+                    timeout=3.0,
+                )
+                return {
+                    "cancelled": True,
+                    "action": action,
+                    "conversation_id": conversation_id,
+                    "dispatch": "openhands_http",
+                }
+            except Exception as exc:
+                errors.append(f"{action}: {exc}")
+        return {
+            "cancelled": False,
+            "conversation_id": conversation_id,
+            "dispatch": "openhands_http",
+            "error": "; ".join(errors),
+        }
+
     def _start_conversation_payload(self, context: JsonDict) -> JsonDict:
         workspace = context.get("selected_workspace") if isinstance(context.get("selected_workspace"), dict) else None
         working_dir = str((workspace or {}).get("root") or ".")
@@ -684,17 +781,15 @@ class OpenHandsAdapter:
                 tool_events.extend(new_tool_events)
                 if new_tool_events:
                     continue
-            for event in events:
-                event_id = self._openhands_event_id(event)
-                if event_id and event_id in ignored_events:
-                    continue
-                text = self._event_assistant_text(event)
-                if text and self._normalize_response_text(text) not in ignored_texts:
-                    return text, tool_events
+            text = self._best_user_facing_answer(events, ignored_events, ignored_texts)
+            if text:
+                return text, tool_events
             if allow_final_response_fallback:
                 try:
                     data, _headers = self._request_json("GET", final_response_url, payload=None, timeout=15.0)
-                    text = str(data.get("response") or data.get("content") or data.get("text") or "").strip()
+                    text = self._user_facing_assistant_text(
+                        str(data.get("response") or data.get("content") or data.get("text") or "")
+                    )
                     if text and self._normalize_response_text(text) not in ignored_texts:
                         return text, tool_events
                 except Exception:
@@ -782,6 +877,24 @@ class OpenHandsAdapter:
                 return f"Action fields: {', '.join(keys[:8])}"
         return str(event.get("kind") or event.get("type") or "OpenHands event")
 
+    def _best_user_facing_answer(
+        self,
+        events: Any,
+        ignored_events: set[str],
+        ignored_texts: set[str],
+    ) -> str:
+        source_events = events if isinstance(events, list) else []
+        for extractor in (self._event_finish_text, self._event_assistant_text):
+            for event in source_events:
+                event_id = self._openhands_event_id(event)
+                if event_id and event_id in ignored_events:
+                    continue
+                text = extractor(event)
+                normalized = self._normalize_response_text(text)
+                if text and normalized and normalized not in ignored_texts:
+                    return text
+        return ""
+
     def _openhands_event_category(
         self,
         event: JsonDict,
@@ -855,7 +968,7 @@ class OpenHandsAdapter:
                 continue
             handled_tool_calls.add(call_id)
             try:
-                result = tool_executor(name, arguments)
+                result = tool_executor(name, {**arguments, "_openhands_tool_call_id": call_id})
             except Exception as exc:
                 result = {
                     "ok": False,
@@ -900,6 +1013,21 @@ class OpenHandsAdapter:
             "run": True,
         }
         self._request_json("POST", f"{conversations_url}/{conversation_id}/events", payload=payload, timeout=15.0)
+
+    def submit_tool_result(self, conversation_id: str, name: str, call_id: str, result: JsonDict) -> JsonDict:
+        if not conversation_id:
+            return {"sent": False, "reason": "missing conversation id"}
+        if not call_id:
+            return {"sent": False, "reason": "missing OpenHands tool call id"}
+        status = self.status()
+        if status.get("dispatch") != "openhands_http" or not self.config.base_url:
+            return {"sent": False, "reason": "OpenHands HTTP bridge is not active", "dispatch": status.get("dispatch")}
+        conversations_url = self._join_url(self.config.base_url, self.session_endpoint)
+        try:
+            self._send_tool_result_message(conversations_url, conversation_id, name, call_id, self._redact_tool_result(result))
+        except Exception as exc:
+            return {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": call_id}
+        return {"sent": True, "conversation_id": conversation_id, "tool_call_id": call_id}
 
     def _openhands_tool_call(self, event: Any) -> tuple[str, JsonDict, str]:
         if not isinstance(event, dict):
@@ -1035,7 +1163,26 @@ class OpenHandsAdapter:
                 continue
             if role not in {"assistant", "agent"} and source not in {"agent", "assistant"}:
                 continue
-            text = self._content_text(candidate.get("content") or candidate.get("text") or candidate.get("message"))
+            text = self._user_facing_assistant_text(candidate.get("content") or candidate.get("text") or candidate.get("message"))
+            if text:
+                return text
+        return ""
+
+    def _event_finish_text(self, event: JsonDict) -> str:
+        if not isinstance(event, dict):
+            return ""
+        action = event.get("action") if isinstance(event.get("action"), dict) else {}
+        action_kind = str(action.get("kind") or "")
+        if action_kind == "FinishAction":
+            text = self._user_facing_assistant_text(action.get("message") or action.get("content") or action.get("text"))
+            if text:
+                return text
+        observation = event.get("observation") if isinstance(event.get("observation"), dict) else {}
+        observation_kind = str(observation.get("kind") or "")
+        if observation_kind == "FinishObservation":
+            text = self._user_facing_assistant_text(
+                observation.get("message") or observation.get("content") or observation.get("text")
+            )
             if text:
                 return text
         return ""
@@ -1090,6 +1237,41 @@ class OpenHandsAdapter:
             parts = [self._content_text(item) for item in content]
             return "\n".join(part for part in parts if part).strip()
         return str(content).strip()
+
+    def _user_facing_assistant_text(self, content: Any) -> str:
+        text = self._content_text(content)
+        if not text:
+            return ""
+        if "</think>" in text:
+            text = text.rsplit("</think>", 1)[1].strip()
+        text = text.strip()
+        if not text:
+            return ""
+        normalized = self._normalize_response_text(text).lower()
+        if not normalized:
+            return ""
+        if "(waiting for your next message" in normalized or normalized == "waiting for your next message.":
+            return ""
+        if normalized.startswith((
+            "the user hasn't replied",
+            "the user still hasn't sent a new message",
+            "the task is complete on my side",
+        )):
+            return ""
+        if "delayed tool result" in normalized and "prior" in normalized:
+            return ""
+        planning_markers = (
+            " i should ",
+            " i need ",
+            " let me ",
+            " the user ",
+            " now i have ",
+            "there's nothing more to do except wait",
+        )
+        marker_count = sum(1 for marker in planning_markers if marker in f" {normalized} ")
+        if marker_count >= 2:
+            return ""
+        return text
 
     def _request_json(
         self,
@@ -1161,4 +1343,6 @@ def _assistant_prompt_candidates() -> List[Path]:
     source_root = Path(__file__).resolve().parents[2]
     for name in names:
         candidates.append(source_root / name)
+    package_root = Path(__file__).resolve().parent
+    candidates.append(package_root / "assistant_assets" / "prompts" / "system.md")
     return candidates

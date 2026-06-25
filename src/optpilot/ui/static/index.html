@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260623j" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260625g" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -51,35 +51,41 @@
 
         <nav class="nav" aria-label="Main navigation">
           <button class="nav-button" data-view="catalog" type="button">
+            <span class="nav-icon nav-icon-catalog" aria-hidden="true"></span>
             <span class="nav-label">
               <strong>Catalog</strong>
-              <small aria-hidden="true">Available Environments and Methods</small>
+              <small aria-hidden="true">Environments, Methods, Resources</small>
             </span>
           </button>
           <button class="nav-button" data-view="experiments" type="button">
+            <span class="nav-icon nav-icon-studies" aria-hidden="true"></span>
             <span class="nav-label">
               <strong>Studies</strong>
               <small aria-hidden="true">Experiment Configurations</small>
             </span>
           </button>
           <button class="nav-button" data-view="runs" type="button">
+            <span class="nav-icon nav-icon-runs" aria-hidden="true"></span>
             <span class="nav-label">
               <strong>Runs</strong>
-              <small aria-hidden="true">Experiment Runs</small>
+              <small aria-hidden="true">Running and Completed Experiments</small>
             </span>
           </button>
         </nav>
 
-        <button id="assistantToggleButton" class="assistant-launcher" type="button">
-          <strong>Assistant</strong>
-          <small id="assistantLauncherSubtitle">global project agent</small>
-        </button>
+          <button id="assistantToggleButton" class="assistant-launcher" type="button">
+            <span class="nav-icon nav-icon-assistant" aria-hidden="true"></span>
+            <span class="assistant-launcher-label">
+              <strong>Assistant</strong>
+              <small id="assistantLauncherSubtitle">Context-aware project agent</small>
+            </span>
+          </button>
 
         <section class="sidebar-workspaces">
           <div class="sidebar-workspaces-header">
             <div>
               <h2>Workspaces</h2>
-              <span class="path-text">open in editor</span>
+              <span class="path-text">Click Attach to Give Assistant Access</span>
             </div>
             <div class="header-actions">
               <span id="sessionCount" class="status-pill">0</span>
@@ -92,15 +98,14 @@
 
         <div class="sidebar-foot">
           <div class="platform-status-head">
-            <div>
-              <div class="muted">Platform status</div>
+            <div class="status-row">
+              <div class="muted">Platform status:</div>
               <strong id="healthStatus">Checking</strong>
             </div>
           </div>
           <div id="sidebarServiceStatus" class="sidebar-service-list">
-            <div id="sidebarCodeServer" class="sidebar-status">Code editor unavailable</div>
+            <div id="sidebarCodeServer" class="sidebar-status">Code Server unavailable</div>
           </div>
-          <button id="settingsButton" class="settings-button" type="button">Settings</button>
         </div>
       </aside>
 
@@ -109,7 +114,7 @@
           <div>
             <div class="eyebrow">OptPilot Studio</div>
             <h1 id="pageTitle">Editor</h1>
-            <p id="pageSubtitle">Attached workspaces, one embedded code editor, and catalog registration.</p>
+            <p id="pageSubtitle">Open, preview, and register the selected workspace.</p>
           </div>
         </header>
 
@@ -117,12 +122,15 @@
           <div id="assistantResizeHandle" class="assistant-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize assistant"></div>
           <div class="panel-header">
             <button id="assistantBackButton" class="ghost-button assistant-back-button" type="button" aria-label="Back to sessions">&larr;</button>
-            <div class="assistant-heading">
-              <h2 id="assistantTitle">OptPilot Assistant</h2>
-              <span id="assistantSubtitle" class="path-text">Project assistant</span>
-            </div>
-            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
-          </div>
+	            <div class="assistant-heading">
+	              <h2 id="assistantTitle">OptPilot Assistant</h2>
+	              <span id="assistantSubtitle" class="path-text">Project assistant</span>
+	            </div>
+		            <button id="assistantSettingsButton" class="ghost-button assistant-icon-button" type="button" aria-label="Assistant settings" title="Assistant settings">
+		              <img src="/static/settings-icon.svg" alt="" aria-hidden="true" class="assistant-settings-icon" />
+		            </button>
+	            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
+	          </div>
           <div id="assistantSessionList" class="assistant-session-list">
             <div class="assistant-session-actions">
               <button id="newSessionButton" class="primary-button" type="button">New Session</button>
@@ -131,16 +139,18 @@
           </div>
           <div id="agentTimeline" class="agent-timeline"></div>
           <div class="composer">
-            <div id="assistantContextHint" class="assistant-context-hint" aria-label="Assistant context"></div>
             <textarea id="agentInput" spellcheck="false"></textarea>
-            <div class="form-actions">
-              <button id="sendAgentButton" class="primary-button" type="button">Send</button>
+            <div class="composer-footer">
+              <div id="assistantContextHint" class="assistant-context-hint" aria-label="Assistant context"></div>
+              <button id="sendAgentButton" class="primary-button agent-action-button" type="button" aria-label="Send message" title="Send message">
+                <span aria-hidden="true">&uarr;</span>
+              </button>
             </div>
           </div>
         </aside>
 
         <section id="workspaceView" class="view active-view">
-          <div class="workspace-grid code-focused">
+          <div class="workspace-grid workbench-focused code-focused">
             <section class="panel workspace-surface">
               <div class="panel-header">
                 <div>
@@ -172,38 +182,62 @@
                 <section class="editor-panel">
                   <div class="editor-toolbar">
                     <div class="workspace-crumb">
-                      <strong>Code Editor</strong>
+                      <strong>Code Server</strong>
                       <span id="embeddedCodeWorkspacePath" class="path-text">-</span>
                     </div>
                     <div class="code-workbench-actions">
-                      <button id="primaryActionButton" class="primary-button" type="button">Register to Catalog</button>
                       <button id="reloadEmbeddedCodeButton" class="ghost-button" type="button">Reload</button>
                       <button id="pauseCodeWorkspaceButton" class="ghost-button" type="button">Pause</button>
-                      <button id="openCodeServerButton" class="ghost-button" type="button">Open Separate Window</button>
                     </div>
                   </div>
-                  <div id="fileTabs" class="tab-strip file-tab-strip"></div>
                   <div class="workbench-mode-bar">
-                    <button class="workbench-mode" data-workbench-mode="contract" type="button">Contract</button>
-                    <button class="workbench-mode" data-workbench-mode="code" type="button">Code</button>
-                    <button class="workbench-mode" data-workbench-mode="evidence" type="button">Evidence</button>
-                    <span id="fileState" class="status-pill">draft</span>
-                  </div>
-                  <div id="contractWorkbench" class="workbench-pane contract-workbench">
-                    <div id="sessionLenses" class="contract-lens"></div>
-                    <pre id="sessionEditor" class="code-box editor-code"></pre>
+                    <div class="workbench-mode-tabs">
+                      <button class="workbench-mode" data-workbench-mode="code" type="button">Code</button>
+                      <button class="workbench-mode" data-workbench-mode="preview" type="button">Preview</button>
+                    </div>
+                    <div class="workbench-title-control">
+                      <input id="workspaceTitleInput" class="workspace-title-input" type="text" value="" aria-label="Workspace name" />
+                    </div>
+                    <div class="workbench-toolbar-actions">
+                      <button id="primaryActionButton" class="primary-button" type="button">Register to Catalog</button>
+                      <button id="openWorkspaceExternalButton" class="ghost-button" type="button">Open Separate Window</button>
+                    </div>
                   </div>
                   <div id="codeWorkbench" class="workbench-pane code-workbench active-workbench">
                     <iframe id="embeddedCodeWorkspace" class="code-workspace-frame" title="Embedded code workspace"></iframe>
                     <div id="embeddedCodeWorkspaceEmpty" class="embedded-empty">
                       <div>
-                        <h2 id="codeWorkspaceEmptyTitle">Start the code editor</h2>
-                        <p id="codeWorkspaceEmptyBody">Inspect or edit this component without leaving OptPilot.</p>
-                        <button id="startEmbeddedCodeButton" class="primary-button" type="button">Start Code Editor</button>
+                        <h2 id="codeWorkspaceEmptyTitle">Start Code Server</h2>
+                        <p id="codeWorkspaceEmptyBody">Inspect or edit this workspace without leaving OptPilot.</p>
+                        <button id="startEmbeddedCodeButton" class="primary-button" type="button">Start Code Server</button>
                       </div>
                     </div>
                   </div>
-                  <div id="evidenceWorkbench" class="workbench-pane evidence-workbench"></div>
+                  <div id="previewWorkbench" class="workbench-pane preview-workbench">
+                    <div class="preview-toolbar">
+                      <div class="workspace-crumb">
+                        <strong>Workspace Preview</strong>
+                        <span id="workspacePreviewStatus" class="path-text">Run your app in the workspace runtime, then open its port here.</span>
+                      </div>
+                      <div class="preview-actions">
+                        <label class="preview-port-control">
+                          <span>Port</span>
+                          <input id="workspacePreviewPort" type="number" min="1" max="65535" inputmode="numeric" value="5173" />
+                        </label>
+                        <button id="openWorkspacePreviewButton" class="primary-button" type="button">Open Preview</button>
+                        <button id="reloadWorkspacePreviewButton" class="ghost-button" type="button">Reload</button>
+                      </div>
+                    </div>
+                    <div class="preview-stage live-preview-stage">
+                      <iframe id="workspacePreviewFrame" class="workspace-preview-frame" title="Workspace preview"></iframe>
+                      <div id="workspacePreviewEmpty" class="embedded-empty preview-empty">
+                        <div>
+                          <h2 id="workspacePreviewTitle">Open a workspace preview</h2>
+                          <p id="workspacePreviewBody">Start a frontend server in the workspace terminal, make it listen on 0.0.0.0, then enter the port here.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </section>
               </div>
             </section>
@@ -212,7 +246,6 @@
               <div class="tabs">
                 <button class="tab active" data-session-tab="terminal" type="button">Terminal</button>
                 <button class="tab" data-session-tab="checks" type="button">Checks</button>
-                <button class="tab" data-session-tab="preview" type="button">Preview</button>
                 <button class="tab" data-session-tab="diff" type="button">Diff</button>
               </div>
               <div id="sessionBottom" class="tab-content"></div>
@@ -227,10 +260,11 @@
                 <input id="componentSearch" class="search-input panel-search-input" type="search" placeholder="Search catalog" aria-label="Search catalog" />
               </div>
               <div class="tabs">
-                <button class="tab active" data-component-filter="all" type="button">All</button>
-                <button class="tab" data-component-filter="environment" type="button">Environments</button>
-                <button class="tab" data-component-filter="method" type="button">Methods</button>
-              </div>
+	                <button class="tab active" data-component-filter="all" type="button">All</button>
+	                <button class="tab" data-component-filter="environment" type="button">Environments</button>
+	                <button class="tab" data-component-filter="method" type="button">Methods</button>
+	                <button class="tab" data-component-filter="resource" type="button">Resources</button>
+	              </div>
               <div id="componentList" class="entity-list"></div>
             </section>
             <section class="panel detail-panel">
@@ -275,13 +309,13 @@
       </main>
     </div>
 
-    <div id="settingsModal" class="modal-backdrop" hidden>
-      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-        <header class="modal-header">
-          <div>
-            <h2 id="settingsTitle">Settings</h2>
-            <p>Configure the project assistant runtime.</p>
-          </div>
+	    <div id="settingsModal" class="modal-backdrop" hidden>
+	      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+	        <header class="modal-header">
+	          <div>
+	            <h2 id="settingsTitle">Assistant Settings</h2>
+	            <p>Configure the assistant runtime, capabilities, and approval defaults.</p>
+	          </div>
           <button id="settingsCloseButton" class="ghost-button" type="button" aria-label="Close settings">Close</button>
         </header>
         <div class="settings-body">
@@ -300,7 +334,7 @@
             <div class="settings-grid">
               <label class="control-field">
                 <span>OpenHands server URL</span>
-                <input id="openHandsBaseUrl" type="url" placeholder="http://127.0.0.1:3000" autocomplete="off" />
+                <input id="openHandsBaseUrl" type="url" placeholder="http://127.0.0.1:8781" autocomplete="off" />
               </label>
               <label class="control-field">
                 <span>Session endpoint</span>
@@ -319,15 +353,110 @@
               <input id="openHandsClearApiKey" type="checkbox" />
               <span>Clear stored API key on save</span>
             </label>
-          </section>
-        </div>
+	          </section>
+	          <section class="settings-section">
+	            <div class="settings-section-heading">
+	              <div>
+	                <h3>Capabilities</h3>
+	                <p>Core OptPilot tools are always available. Configure OpenHands AgentSkills, MCP servers, and SDK custom tools here.</p>
+	              </div>
+	            </div>
+	            <div class="settings-grid">
+	              <label class="control-field settings-field-wide">
+	                <span>AgentSkills (JSON array)</span>
+	                <textarea id="assistantSkillsInput" rows="5" spellcheck="false" placeholder='[{"name":"connect-github-integration","source":".agents/skills/connect-github-integration","enabled":true}]'></textarea>
+	              </label>
+	              <label class="control-field settings-field-wide">
+	                <span>MCP servers (OpenHands mcpServers JSON)</span>
+	                <textarea id="assistantMcpServersInput" rows="5" spellcheck="false" placeholder='{"Notion":{"url":"https://mcp.notion.com/mcp","auth":"oauth"}}'></textarea>
+	              </label>
+	              <label class="control-field">
+	                <span>MCP tool filter regex</span>
+	                <input id="assistantMcpFilterRegex" type="text" placeholder="Optional OpenHands filter_tools_regex" autocomplete="off" />
+	              </label>
+	              <label class="control-field settings-field-wide">
+	                <span>Custom tools (JSON array)</span>
+	                <textarea id="assistantCustomToolsInput" rows="5" spellcheck="false" placeholder='[{"name":"grep","module":"optpilot.tools.grep","factory":"GrepTool","enabled":true}]'></textarea>
+	              </label>
+	            </div>
+	            <div class="capability-list">
+	              <div><strong>Core OptPilot tools</strong><span>Always on</span></div>
+	              <div><strong>Skills</strong><span>SKILL.md progressive disclosure</span></div>
+	              <div><strong>MCP servers</strong><span>OpenHands mcp_config</span></div>
+	              <div><strong>Custom tools</strong><span>SDK ToolDefinition records</span></div>
+	            </div>
+	          </section>
+	          <section class="settings-section">
+	            <div class="settings-section-heading">
+	              <div>
+	                <h3>Permissions</h3>
+	                <p>Potentially destructive actions remain approval-gated.</p>
+	              </div>
+	            </div>
+	            <div class="settings-grid">
+	              <label class="control-field">
+	                <span>File writes</span>
+	                <select id="assistantPermissionFileWrite">
+	                  <option value="attached_editable">Attached editable workspaces only</option>
+	                  <option value="approval_required">Always request approval</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Shell commands</span>
+	                <select id="assistantPermissionShellRun">
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="safe_without_approval">Safe commands may run directly</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Catalog registration</span>
+	                <select id="assistantPermissionCatalogRegistration">
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Study launch</span>
+	                <select id="assistantPermissionStudyLaunch">
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Job stop</span>
+	                <select id="assistantPermissionJobStop">
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	            </div>
+	          </section>
+	        </div>
         <footer class="modal-actions">
           <button id="settingsCancelButton" class="ghost-button" type="button">Cancel</button>
           <button id="settingsSaveButton" class="primary-button" type="button">Save Settings</button>
         </footer>
       </section>
-    </div>
+	    </div>
 
-    <script src="/static/app.js?v=studio-20260623j"></script>
+	    <div id="workspaceCleanupModal" class="modal-backdrop" hidden>
+	      <section class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="workspaceCleanupTitle">
+	        <header class="modal-header">
+	          <div>
+	            <h2 id="workspaceCleanupTitle">Detach Workspace</h2>
+	            <p id="workspaceCleanupBody">This workspace is no longer attached to any assistant session.</p>
+	          </div>
+	        </header>
+	        <footer class="modal-actions">
+	          <button id="workspaceCleanupKeepButton" class="ghost-button" type="button">Keep Workspace</button>
+	          <button id="workspaceCleanupRegisterButton" class="ghost-button" type="button">Register...</button>
+	          <button id="workspaceCleanupDeleteButton" class="danger-button" type="button">Delete Draft</button>
+	        </footer>
+	      </section>
+	    </div>
+
+	    <script src="/static/app.js?v=studio-20260625g"></script>
   </body>
 </html>

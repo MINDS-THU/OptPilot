@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+PyYAML
+requests
+rich
+smolagents==1.16.1
+litellm==1.77.0
+pandas
+pillow
+networkx
+numpy
+scipy

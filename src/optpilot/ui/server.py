@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import calendar
 import difflib
 import fnmatch
+import hashlib
 import json
 import mimetypes
 import os
@@ -25,12 +27,14 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import yaml
 
 from ..agent import OpenHandsAdapter, OpenHandsRuntimeConfig
+from ..container_utils import network_args
 from ..config import (
     AUTHORING_API_VERSION,
     candidate_contract_mismatch,
@@ -49,7 +53,10 @@ RUN_SENTINEL_FILES = {
     "candidates.jsonl",
 }
 
-CATALOG_CONFIGS = {"environment", "method", "study"}
+# Study YAMLs are indexed for the Studies page, but only environments and
+# methods are reusable catalog configs that can be registered through Studio.
+INDEXED_CONFIGS = {"environment", "method", "study"}
+REGISTERABLE_CONFIGS = {"environment", "method"}
 EXCLUDED_SCAN_DIRS = {
     ".git",
     ".mypy_cache",
@@ -60,6 +67,36 @@ EXCLUDED_SCAN_DIRS = {
     "node_modules",
     "resource",
     "runs",
+}
+
+DERIVED_WORKSPACE_FIELDS = {
+    "delete_action",
+    "delete_label",
+    "managed_by_studio",
+    "runtime",
+}
+
+DEFAULT_WORKSPACE_RUNTIME_IMAGE = "optpilot/workspace-dev:latest"
+DEFAULT_WORKSPACE_RUNTIME_BASE_IMAGE = "ghcr.io/coder/code-server:latest"
+READ_ONLY_WORKSPACE_PRUNE_GRACE_SECONDS = 30
+CODE_SERVER_DEFAULT_USER_SETTINGS: JsonDict = {
+    "chat.agent.enabled": False,
+    "chat.commandCenter.enabled": False,
+    "chat.disableAIFeatures": True,
+    "extensions.ignoreRecommendations": True,
+    "git.openRepositoryInParentFolders": "never",
+    "telemetry.telemetryLevel": "off",
+    "terminal.integrated.defaultLocation": "view",
+    "update.mode": "none",
+    "window.commandCenter": False,
+    "window.menuBarVisibility": "classic",
+    "workbench.activityBar.location": "hidden",
+    "workbench.panel.defaultLocation": "bottom",
+    "workbench.panel.opensMaximized": "never",
+    "workbench.startupEditor": "welcomePage",
+    "workbench.statusBar.visible": False,
+    "workbench.tips.enabled": False,
+    "workbench.welcomePage.walkthroughs.openOnInstall": False,
 }
 
 
@@ -108,6 +145,43 @@ class UiJob:
 
 
 @dataclass
+class UiLaunchJob:
+    launch_id: str
+    kind: str
+    uid: str
+    label: str
+    port: int
+    status: str = "queued"
+    started_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
+    steps: List[JsonDict] = field(default_factory=list)
+    log_paths: JsonDict = field(default_factory=dict)
+    result: JsonDict = field(default_factory=dict)
+    error: str = ""
+
+    def to_dict(self) -> JsonDict:
+        payload: JsonDict = {
+            "launch_id": self.launch_id,
+            "kind": self.kind,
+            "uid": self.uid,
+            "label": self.label,
+            "port": self.port,
+            "status": self.status,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "finished_at": self.finished_at,
+            "steps": list(self.steps),
+            "result": dict(self.result),
+            "error": self.error,
+        }
+        logs = _launch_log_tail(self.log_paths)
+        if logs:
+            payload["logs"] = logs
+        return payload
+
+
+@dataclass
 class CodeServerOptions:
     executable: Optional[str] = None
     host: str = "127.0.0.1"
@@ -134,6 +208,877 @@ class CodeServerState:
         return self.process is not None and self.process.poll() is None
 
 
+@dataclass
+class WorkspacePreviewProxy:
+    key: str
+    host: str
+    port: int
+    target_base_url: str
+    token: str
+    allowed_ports: List[int]
+    server: ThreadingHTTPServer
+    thread: threading.Thread
+    started_at: float = field(default_factory=time.time)
+
+    @property
+    def url(self) -> str:
+        return f"http://{self.host}:{self.port}/"
+
+    @property
+    def preview_url(self) -> str:
+        return f"{self.url}?__optpilot_preview_token={quote(self.token)}"
+
+    @property
+    def running(self) -> bool:
+        return self.thread.is_alive()
+
+
+@dataclass
+class WorkspaceRuntimeOptions:
+    executable: Optional[str] = None
+    image: str = DEFAULT_WORKSPACE_RUNTIME_IMAGE
+    base_image: str = DEFAULT_WORKSPACE_RUNTIME_BASE_IMAGE
+    build_image: bool = True
+    dockerfile: Optional[str] = None
+    host: str = "127.0.0.1"
+    port_start: int = 18766
+    container_port: int = 8766
+    auth: str = "none"
+    password: Optional[str] = None
+    network: str = "bridge"
+    idle_timeout_seconds: int = 3600
+    image_pull_timeout_seconds: int = 600
+    image_build_timeout_seconds: int = 1200
+    start_timeout_seconds: int = 90
+    image_allowlist_patterns: List[str] = field(default_factory=list)
+    cpu_limit: str = "2"
+    memory_limit: str = "4g"
+    pids_limit: int = 1024
+    no_new_privileges: bool = True
+
+    @classmethod
+    def from_env(cls) -> "WorkspaceRuntimeOptions":
+        image = os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_IMAGE") or cls.image
+        return cls(
+            executable=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_EXECUTABLE") or os.environ.get("OPTPILOT_CONTAINER_EXECUTABLE"),
+            image=image,
+            base_image=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_BASE_IMAGE") or cls.base_image,
+            build_image=_ui_env_flag("OPTPILOT_WORKSPACE_RUNTIME_BUILD", image == DEFAULT_WORKSPACE_RUNTIME_IMAGE),
+            dockerfile=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_DOCKERFILE") or None,
+            host=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_HOST") or cls.host,
+            port_start=_int_env("OPTPILOT_WORKSPACE_RUNTIME_PORT_START", cls.port_start),
+            container_port=_int_env("OPTPILOT_WORKSPACE_RUNTIME_CONTAINER_PORT", cls.container_port),
+            auth=os.environ.get("OPTPILOT_WORKSPACE_CODE_SERVER_AUTH") or cls.auth,
+            password=os.environ.get("OPTPILOT_WORKSPACE_CODE_SERVER_PASSWORD"),
+            network=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_NETWORK") or cls.network,
+            idle_timeout_seconds=_int_env("OPTPILOT_WORKSPACE_RUNTIME_IDLE_TIMEOUT_SECONDS", cls.idle_timeout_seconds),
+            image_pull_timeout_seconds=_int_env("OPTPILOT_WORKSPACE_RUNTIME_IMAGE_PULL_TIMEOUT_SECONDS", cls.image_pull_timeout_seconds),
+            image_build_timeout_seconds=_int_env("OPTPILOT_WORKSPACE_RUNTIME_IMAGE_BUILD_TIMEOUT_SECONDS", cls.image_build_timeout_seconds),
+            start_timeout_seconds=_int_env("OPTPILOT_WORKSPACE_RUNTIME_START_TIMEOUT_SECONDS", cls.start_timeout_seconds),
+            image_allowlist_patterns=_split_env_patterns("OPTPILOT_WORKSPACE_RUNTIME_IMAGE_ALLOWLIST"),
+            cpu_limit=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_CPUS") or cls.cpu_limit,
+            memory_limit=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_MEMORY") or cls.memory_limit,
+            pids_limit=_int_env("OPTPILOT_WORKSPACE_RUNTIME_PIDS_LIMIT", cls.pids_limit),
+            no_new_privileges=_ui_env_flag("OPTPILOT_WORKSPACE_RUNTIME_NO_NEW_PRIVILEGES", cls.no_new_privileges),
+        )
+
+
+def _prepare_code_server_profile(user_data_dir: Path, extensions_dir: Path) -> None:
+    settings_path = user_data_dir / "User" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    extensions_dir.mkdir(parents=True, exist_ok=True)
+    settings: JsonDict = {}
+    if settings_path.exists():
+        try:
+            existing = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                settings.update(existing)
+        except json.JSONDecodeError:
+            settings = {}
+    settings.update(CODE_SERVER_DEFAULT_USER_SETTINGS)
+    settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+class WorkspaceRuntimeManager:
+    """Owns one long-lived container runtime per Studio workspace."""
+
+    def __init__(self, *, studio_root: Path, runtime_root: Path, options: WorkspaceRuntimeOptions):
+        self.studio_root = studio_root.resolve()
+        self.runtime_root = runtime_root.resolve()
+        self.options = options
+        self._health_cache: tuple[float, JsonDict] = (0.0, {})
+        self.runtime_root.mkdir(parents=True, exist_ok=True)
+
+    def health(self) -> JsonDict:
+        cached_at, cached = self._health_cache
+        if cached and time.monotonic() - cached_at < 2:
+            return dict(cached)
+        executable = self._container_executable()
+        configured = bool(self.options.executable)
+        if not executable:
+            payload = {
+                "ok": False,
+                "available": False,
+                "configured": configured,
+                "executable": self.options.executable or "",
+                "engine": "",
+                "image": self.options.image,
+                "base_image": self.options.base_image,
+                "build_image": self.options.build_image,
+                "dockerfile": str(self._image_dockerfile()),
+                "error": "No Docker/Podman-compatible executable found. Install Docker or Podman, or set OPTPILOT_WORKSPACE_RUNTIME_EXECUTABLE.",
+            }
+            self._health_cache = (time.monotonic(), payload)
+            return dict(payload)
+        allowlist_error = self._image_policy_error()
+        if allowlist_error:
+            payload = {
+                "ok": False,
+                "available": True,
+                "configured": configured,
+                "executable": executable,
+                "engine": Path(executable).name,
+                "image": self.options.image,
+                "base_image": self.options.base_image,
+                "build_image": self.options.build_image,
+                "dockerfile": str(self._image_dockerfile()),
+                "image_allowlist": list(self.options.image_allowlist_patterns),
+                "error": allowlist_error,
+            }
+            self._health_cache = (time.monotonic(), payload)
+            return dict(payload)
+        try:
+            version_completed = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=3, check=False)
+            info_completed = subprocess.run([executable, "info"], capture_output=True, text=True, timeout=3, check=False)
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "available": True,
+                "configured": configured,
+                "executable": executable,
+                "engine": Path(executable).name,
+                "image": self.options.image,
+                "base_image": self.options.base_image,
+                "build_image": self.options.build_image,
+                "dockerfile": str(self._image_dockerfile()),
+                "error": str(exc),
+            }
+            self._health_cache = (time.monotonic(), payload)
+            return dict(payload)
+        text = (version_completed.stdout or version_completed.stderr).strip().splitlines()
+        ok = version_completed.returncode == 0 and info_completed.returncode == 0
+        error = ""
+        if version_completed.returncode:
+            error = version_completed.stderr.strip() or version_completed.stdout.strip()
+        elif info_completed.returncode:
+            error = info_completed.stderr.strip() or info_completed.stdout.strip()
+        payload = {
+            "ok": ok,
+            "available": True,
+            "configured": configured,
+            "executable": executable,
+            "engine": Path(executable).name,
+            "image": self.options.image,
+            "base_image": self.options.base_image,
+            "build_image": self.options.build_image,
+            "dockerfile": str(self._image_dockerfile()),
+            "image_allowlist": list(self.options.image_allowlist_patterns),
+            "version": text[0] if text else "",
+            "error": error,
+        }
+        self._health_cache = (time.monotonic(), payload)
+        return dict(payload)
+
+    def status(self, workspace: JsonDict) -> JsonDict:
+        workspace_id = str(workspace.get("id") or "")
+        root = Path(str(workspace.get("root") or self.studio_root)).resolve()
+        record = self._read_record(workspace_id)
+        container_name = str(record.get("container_name") or self._container_name(workspace_id))
+        health = self.health()
+        executable = str(health.get("executable") or "") or self._container_executable()
+        engine_available = bool(health.get("ok"))
+        has_runtime_record = bool(record.get("container_name") or record.get("status"))
+        running = self._container_running(container_name) if engine_available and executable and workspace_id and has_runtime_record else False
+        current_image = str(record.get("image") or "")
+        image_matches = (not current_image) or current_image == self.options.image
+        host_port = int(record.get("host_port") or 0) or None
+        code_url = self._code_server_base_url(host_port) if host_port else ""
+        code_reachable = bool(code_url and _code_server_reachable(code_url))
+        mount_mode = self._mount_mode(workspace)
+        active_references = {
+            "attached_sessions": len(list(workspace.get("attached_sessions", []) or [])),
+            "code_server_open": code_reachable,
+            "active_processes": 1 if running else 0,
+        }
+        status = "running" if running else "stopped"
+        message = ""
+        if not engine_available:
+            status = "unavailable"
+            message = str(health.get("error") or "Workspace containers require Docker or Podman.")
+        elif running and not image_matches:
+            status = "stale"
+            message = f"Workspace container uses {current_image}; restart it to use {self.options.image}."
+        return {
+            "target": "per-workspace-container",
+            "status": status,
+            "containerized": running,
+            "executor": "container" if running else "container-manager",
+            "engine": health.get("engine") or Path(executable).name if executable else "",
+            "engine_available": engine_available,
+            "executable": executable,
+            "image": self.options.image,
+            "current_image": current_image or self.options.image,
+            "image_matches": image_matches,
+            "base_image": self.options.base_image,
+            "build_image": self.options.build_image,
+            "dockerfile": str(self._image_dockerfile()),
+            "image_allowlist": list(self.options.image_allowlist_patterns),
+            "cpu_limit": self.options.cpu_limit,
+            "memory_limit": self.options.memory_limit,
+            "pids_limit": self.options.pids_limit,
+            "no_new_privileges": self.options.no_new_privileges,
+            "container_name": container_name,
+            "container_running": running,
+            "code_server_running": code_reachable,
+            "active": running or code_reachable or any(active_references.values()),
+            "active_references": active_references,
+            "mount_mode": mount_mode,
+            "workspace_root": str(root),
+            "runtime_dir": str(self._workspace_runtime_dir(workspace_id)),
+            "host": self.options.host,
+            "port": host_port,
+            "url": code_url,
+            "started_at": record.get("started_at"),
+            "stdout_log": record.get("stdout_log") or "",
+            "stderr_log": record.get("stderr_log") or "",
+            "message": message,
+        }
+
+    def global_status(self, *, active_workspace: Optional[JsonDict] = None, port: Optional[int] = None) -> JsonDict:
+        health = self.health()
+        active_status = self.status(active_workspace) if active_workspace else {}
+        host_port = int(active_status.get("port") or port or self.options.port_start)
+        url = str(active_status.get("url") or self._code_server_base_url(host_port))
+        running = bool(active_status.get("code_server_running")) and bool(active_status.get("image_matches", True))
+        port_conflict = _port_listening(self.options.host, host_port) and not bool(active_status.get("container_running"))
+        return {
+            "available": bool(health.get("ok")),
+            "installed": bool(health.get("ok")),
+            "running": running,
+            "managed": bool(active_status.get("container_running")),
+            "containerized": bool(active_status.get("container_running")),
+            "port_conflict": port_conflict,
+            "pid": None,
+            "url": url,
+            "host": self.options.host,
+            "port": host_port,
+            "auth": self.options.auth,
+            "started_at": active_status.get("started_at"),
+            "workspace_root": str(active_status.get("workspace_root") or ""),
+            "stdout_log": str(active_status.get("stdout_log") or ""),
+            "stderr_log": str(active_status.get("stderr_log") or ""),
+            "runtime": active_status or {
+                "target": "per-workspace-container",
+                "status": "ready" if health.get("ok") else "unavailable",
+                "containerized": False,
+                "engine_available": bool(health.get("ok")),
+                "engine": health.get("engine") or "",
+                "image": self.options.image,
+                "base_image": self.options.base_image,
+                "build_image": self.options.build_image,
+                "dockerfile": str(self._image_dockerfile()),
+                "image_allowlist": list(self.options.image_allowlist_patterns),
+                "cpu_limit": self.options.cpu_limit,
+                "memory_limit": self.options.memory_limit,
+                "pids_limit": self.options.pids_limit,
+                "no_new_privileges": self.options.no_new_privileges,
+                "runtime_dir": str(self.runtime_root),
+            },
+            "engine": health.get("engine") or "",
+            "engine_available": bool(health.get("ok")),
+            "image": self.options.image,
+            "base_image": self.options.base_image,
+            "build_image": self.options.build_image,
+            "dockerfile": str(self._image_dockerfile()),
+            "image_allowlist": list(self.options.image_allowlist_patterns),
+            "error": health.get("error") or "",
+            "install_hint": "Install Docker or Podman, or configure OPTPILOT_WORKSPACE_RUNTIME_EXECUTABLE. The workspace image must include code-server.",
+        }
+
+    def start(self, workspace: JsonDict) -> JsonDict:
+        workspace_id = str(workspace.get("id") or "")
+        if not workspace_id:
+            raise ValueError("Workspace id is required to start a runtime container.")
+        root = Path(str(workspace.get("root") or "")).resolve()
+        if not root.exists() or not root.is_dir():
+            raise FileNotFoundError(f"Workspace root not found: {root}")
+        executable = self._require_container_executable()
+        self._enforce_image_policy()
+        container_name = self._container_name(workspace_id)
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        record = self._read_record(workspace_id)
+        running = self._container_running(container_name)
+        if running and record.get("image") and str(record.get("image")) != self.options.image:
+            self._remove_container(container_name)
+            running = False
+        if not running:
+            self._remove_container(container_name)
+            self._ensure_image_available(executable)
+            host_port = self._host_port(workspace_id)
+            command = self._container_run_command(executable, workspace, container_name, host_port)
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=int(self.options.start_timeout_seconds),
+                check=False,
+            )
+            if completed.returncode != 0:
+                self._write_record(
+                    workspace_id,
+                    {
+                        "container_name": container_name,
+                        "host_port": host_port,
+                        "status": "failed",
+                        "updated_at": _now_iso(),
+                        "stderr": completed.stderr.strip(),
+                    },
+                )
+                raise RuntimeError(f"Workspace container failed to start: {completed.stderr.strip() or completed.stdout.strip()}")
+            self._write_record(
+                workspace_id,
+                {
+                    "container_name": container_name,
+                    "host_port": host_port,
+                    "status": "running",
+                    "started_at": time.time(),
+                    "updated_at": _now_iso(),
+                    "last_used_at": _now_iso(),
+                    "image": self.options.image,
+                    "base_image": self.options.base_image,
+                    "dockerfile": str(self._image_dockerfile()),
+                    "cpu_limit": self.options.cpu_limit,
+                    "memory_limit": self.options.memory_limit,
+                    "pids_limit": self.options.pids_limit,
+                    "no_new_privileges": self.options.no_new_privileges,
+                    "workspace_root": str(root),
+                },
+            )
+        else:
+            record["last_used_at"] = _now_iso()
+            record["updated_at"] = _now_iso()
+            self._write_record(workspace_id, record)
+        return self.status(workspace)
+
+    def start_code_server(self, workspace: JsonDict) -> JsonDict:
+        normalized_network = str(self.options.network or "bridge").lower()
+        if normalized_network in {"disabled", "none", "off"}:
+            raise RuntimeError("Code Server requires workspace runtime network access; configure the workspace runtime network as bridge/default.")
+        runtime_status = self.start(workspace)
+        executable = self._require_container_executable()
+        workspace_id = str(workspace["id"])
+        record = self._read_record(workspace_id)
+        container_name = str(record.get("container_name") or self._container_name(workspace_id))
+        host_port = int(record.get("host_port") or runtime_status.get("port") or self.options.port_start)
+        root = Path(str(workspace["root"])).resolve()
+        log_dir = self._workspace_runtime_dir(workspace_id) / "logs"
+        user_data_dir = self._workspace_runtime_dir(workspace_id) / "code-server" / "user-data"
+        extensions_dir = self._workspace_runtime_dir(workspace_id) / "code-server" / "extensions"
+        for path in (log_dir, user_data_dir, extensions_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        _prepare_code_server_profile(user_data_dir, extensions_dir)
+        stdout_path = log_dir / "code-server.stdout.log"
+        stderr_path = log_dir / "code-server.stderr.log"
+        url = self._code_server_base_url(host_port)
+        if _code_server_reachable(url):
+            record.update(
+                {
+                    "container_name": container_name,
+                    "host_port": host_port,
+                    "stdout_log": str(stdout_path),
+                    "stderr_log": str(stderr_path),
+                    "updated_at": _now_iso(),
+                    "last_used_at": _now_iso(),
+                }
+            )
+            self._write_record(workspace_id, record)
+            status = self.status(workspace)
+            return {
+                **self.global_status(active_workspace=workspace, port=host_port),
+                "open_url": f"{url}?folder={quote(str(root), safe='')}",
+                "folder": str(root),
+                "workspace_id": workspace_id,
+                "workspace_root": str(root),
+                "stdout_log": str(stdout_path),
+                "stderr_log": str(stderr_path),
+                "user_data_dir": str(user_data_dir),
+                "extensions_dir": str(extensions_dir),
+                "layout_persistent": True,
+                "runtime": status,
+                "managed": True,
+                "containerized": True,
+            }
+        runtime_env = self._runtime_env(workspace)
+        command = (
+            "set -e; "
+            f"mkdir -p {shlex.quote(str(user_data_dir))} {shlex.quote(str(extensions_dir))} {shlex.quote(str(log_dir))}; "
+            "command -v code-server >/dev/null 2>&1; "
+            "nohup code-server "
+            f"--bind-addr 0.0.0.0:{int(self.options.container_port)} "
+            f"--auth {shlex.quote(str(self.options.auth or 'none'))} "
+            f"--user-data-dir {shlex.quote(str(user_data_dir))} "
+            f"--extensions-dir {shlex.quote(str(extensions_dir))} "
+            "--disable-telemetry --disable-update-check --disable-workspace-trust "
+            "--disable-getting-started-override "
+            f"{shlex.quote(str(root))} "
+            f"> {shlex.quote(str(stdout_path))} 2> {shlex.quote(str(stderr_path))} &"
+        )
+        exec_command = [executable, "exec"]
+        if self.options.password:
+            exec_command.extend(["-e", f"PASSWORD={self.options.password}"])
+        for key, value in sorted(runtime_env.items()):
+            exec_command.extend(["-e", f"{key}={value}"])
+        exec_command.extend([container_name, "sh", "-lc", command])
+        completed = subprocess.run(exec_command, capture_output=True, text=True, timeout=15, check=False)
+        if completed.returncode != 0:
+            raise RuntimeError(f"Code Server failed to start in workspace container: {completed.stderr.strip() or completed.stdout.strip()}")
+        for _ in range(20):
+            if _code_server_reachable(url):
+                break
+            time.sleep(0.25)
+        record.update(
+            {
+                "container_name": container_name,
+                "host_port": host_port,
+                "code_server_started_at": time.time(),
+                "stdout_log": str(stdout_path),
+                "stderr_log": str(stderr_path),
+                "updated_at": _now_iso(),
+                "last_used_at": _now_iso(),
+            }
+        )
+        self._write_record(workspace_id, record)
+        status = self.status(workspace)
+        open_url = f"{url}?folder={quote(str(root), safe='')}"
+        return {
+            **self.global_status(active_workspace=workspace, port=host_port),
+            "open_url": open_url,
+            "folder": str(root),
+            "workspace_id": workspace_id,
+            "workspace_root": str(root),
+            "stdout_log": str(stdout_path),
+            "stderr_log": str(stderr_path),
+            "user_data_dir": str(user_data_dir),
+            "extensions_dir": str(extensions_dir),
+            "layout_persistent": True,
+            "runtime": status,
+            "managed": True,
+            "containerized": True,
+        }
+
+    def exec(
+        self,
+        workspace: JsonDict,
+        command: List[str],
+        *,
+        cwd: Path,
+        env: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+    ) -> tuple[subprocess.CompletedProcess[str], JsonDict]:
+        runtime_status = self.start(workspace)
+        executable = self._require_container_executable()
+        container_name = str(runtime_status.get("container_name") or self._container_name(str(workspace["id"])))
+        exec_command = [executable, "exec", "-w", str(cwd)]
+        runtime_env = self._runtime_env(workspace)
+        runtime_env.update(env or {})
+        for key, value in sorted(runtime_env.items()):
+            exec_command.extend(["-e", f"{key}={value}"])
+        exec_command.extend([container_name, *command])
+        completed = subprocess.run(
+            exec_command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        record = self._read_record(str(workspace["id"]))
+        record["last_used_at"] = _now_iso()
+        record["updated_at"] = _now_iso()
+        self._write_record(str(workspace["id"]), record)
+        return completed, self.status(workspace)
+
+    def exec_detached(
+        self,
+        workspace: JsonDict,
+        command: List[str],
+        *,
+        cwd: Path,
+        env: Optional[Dict[str, str]] = None,
+        name: str = "process",
+        timeout: int = 15,
+    ) -> JsonDict:
+        if not command:
+            raise ValueError("command is required.")
+        runtime_status = self.start(workspace)
+        executable = self._require_container_executable()
+        workspace_id = str(workspace["id"])
+        container_name = str(runtime_status.get("container_name") or self._container_name(workspace_id))
+        safe_name = _slug_text(name or "process") or "process"
+        log_dir = self._workspace_runtime_dir(workspace_id) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / f"{safe_name}.stdout.log"
+        stderr_path = log_dir / f"{safe_name}.stderr.log"
+        exec_command = [executable, "exec", "-d", "-w", str(cwd)]
+        runtime_env = self._runtime_env(workspace)
+        runtime_env.update(env or {})
+        runtime_env["OPTPILOT_PROCESS_STDOUT"] = str(stdout_path)
+        runtime_env["OPTPILOT_PROCESS_STDERR"] = str(stderr_path)
+        for key, value in sorted(runtime_env.items()):
+            exec_command.extend(["-e", f"{key}={value}"])
+        script = 'exec "$@" > "$OPTPILOT_PROCESS_STDOUT" 2> "$OPTPILOT_PROCESS_STDERR"'
+        exec_command.extend([container_name, "sh", "-lc", script, safe_name, *command])
+        completed = subprocess.run(
+            exec_command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"Workspace command failed to start: {completed.stderr.strip() or completed.stdout.strip()}")
+        record = self._read_record(workspace_id)
+        launches = [item for item in record.get("launched_processes", []) or [] if isinstance(item, dict)]
+        launch = {
+            "name": safe_name,
+            "command": list(command),
+            "cwd": str(cwd),
+            "stdout_log": str(stdout_path),
+            "stderr_log": str(stderr_path),
+            "started_at": _now_iso(),
+        }
+        launches.append(launch)
+        record["launched_processes"] = launches[-20:]
+        record["last_used_at"] = _now_iso()
+        record["updated_at"] = _now_iso()
+        self._write_record(workspace_id, record)
+        return {
+            **launch,
+            "runtime": self.status(workspace),
+            "returncode": completed.returncode,
+        }
+
+    def garbage_collect(self, workspaces: Iterable[JsonDict], *, active_workspace_id: str = "") -> JsonDict:
+        now = time.time()
+        stopped: List[JsonDict] = []
+        skipped: List[JsonDict] = []
+        for workspace in workspaces:
+            workspace_id = str(workspace.get("id") or "")
+            if not workspace_id:
+                continue
+            record = self._read_record(workspace_id)
+            container_name = str(record.get("container_name") or self._container_name(workspace_id))
+            if not record or not self._container_running(container_name):
+                continue
+            if self._workspace_has_active_reference(workspace, record, active_workspace_id=active_workspace_id):
+                skipped.append({"workspace_id": workspace_id, "reason": "active_reference"})
+                continue
+            idle_for = now - _parse_time_or_iso(record.get("last_used_at") or record.get("updated_at") or record.get("started_at") or now)
+            if idle_for < int(self.options.idle_timeout_seconds):
+                skipped.append({"workspace_id": workspace_id, "reason": "idle_timeout", "idle_for_seconds": int(idle_for)})
+                continue
+            self._remove_container(container_name)
+            record.update(
+                {
+                    "status": "stopped",
+                    "stopped_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                    "idle_stopped": True,
+                    "idle_for_seconds": int(idle_for),
+                }
+            )
+            self._write_record(workspace_id, record)
+            stopped.append({"workspace_id": workspace_id, "container_name": container_name, "idle_for_seconds": int(idle_for)})
+        return {
+            "stopped": stopped,
+            "skipped": skipped,
+            "idle_timeout_seconds": int(self.options.idle_timeout_seconds),
+        }
+
+    def stop(self, workspace: JsonDict) -> JsonDict:
+        workspace_id = str(workspace.get("id") or "")
+        if not workspace_id:
+            raise ValueError("Workspace id is required to stop a runtime container.")
+        container_name = self._container_name(workspace_id)
+        self._remove_container(container_name)
+        record = self._read_record(workspace_id)
+        record.update({"status": "stopped", "updated_at": _now_iso()})
+        self._write_record(workspace_id, record)
+        return self.status(workspace)
+
+    def delete(self, workspace_id: str) -> bool:
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        container_name = self._container_name(workspace_id)
+        self._remove_container(container_name)
+        existed = runtime_dir.exists()
+        if existed:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+        return existed
+
+    def _container_run_command(self, executable: str, workspace: JsonDict, container_name: str, host_port: int) -> List[str]:
+        workspace_id = str(workspace["id"])
+        root = Path(str(workspace["root"])).resolve()
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        self._ensure_runtime_dirs(workspace_id)
+        command = [
+            executable,
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "--label",
+            "optpilot.runtime=workspace",
+            "--label",
+            f"optpilot.workspace_id={workspace_id}",
+            "--entrypoint",
+            "sh",
+        ]
+        command.extend(network_args(self.options.network))
+        normalized_network = str(self.options.network or "bridge").lower()
+        if normalized_network not in {"disabled", "none", "off", "host"}:
+            command.extend(["-p", f"{self.options.host}:{int(host_port)}:{int(self.options.container_port)}"])
+        if self.options.cpu_limit:
+            command.extend(["--cpus", str(self.options.cpu_limit)])
+        if self.options.memory_limit:
+            command.extend(["--memory", str(self.options.memory_limit)])
+        if int(self.options.pids_limit or 0) > 0:
+            command.extend(["--pids-limit", str(int(self.options.pids_limit))])
+        if self.options.no_new_privileges:
+            command.extend(["--security-opt", "no-new-privileges"])
+        command.extend(
+            [
+                "-v",
+                f"{root}:{root}:{self._mount_mode(workspace)}",
+                "-v",
+                f"{runtime_dir}:{runtime_dir}:rw",
+                self.options.image,
+                "-lc",
+                "trap 'exit 0' TERM INT; while true; do sleep 3600; done",
+            ]
+        )
+        return command
+
+    def _host_port(self, workspace_id: str) -> int:
+        record = self._read_record(workspace_id)
+        existing = int(record.get("host_port") or 0)
+        reserved = self._reserved_host_ports(exclude_workspace_id=workspace_id)
+        if existing and existing not in reserved and not _port_listening(self.options.host, existing):
+            return existing
+        start = max(int(self.options.port_start), int(existing or 0) + 1)
+        for port in range(start, start + 200):
+            if port in reserved:
+                continue
+            if not _port_listening(self.options.host, port):
+                return port
+        raise OSError(f"No available workspace runtime port found near {start}.")
+
+    def _reserved_host_ports(self, *, exclude_workspace_id: str = "") -> set[int]:
+        reserved: set[int] = set()
+        if not self.runtime_root.exists():
+            return reserved
+        for path in self.runtime_root.glob("*/runtime.json"):
+            workspace_id = path.parent.name
+            if exclude_workspace_id and workspace_id == exclude_workspace_id:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            try:
+                port = int(payload.get("host_port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if port:
+                reserved.add(port)
+        return reserved
+
+    def _ensure_image_available(self, executable: str) -> None:
+        self._enforce_image_policy()
+        inspect = subprocess.run(
+            [executable, "image", "inspect", self.options.image],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if inspect.returncode == 0:
+            return
+        if self._should_build_image():
+            dockerfile = self._image_dockerfile()
+            if not dockerfile.exists():
+                raise RuntimeError(f"Workspace runtime Dockerfile is missing: {dockerfile}")
+            build = subprocess.run(
+                [
+                    executable,
+                    "build",
+                    "--build-arg",
+                    f"BASE_IMAGE={self.options.base_image}",
+                    "-t",
+                    self.options.image,
+                    "-f",
+                    str(dockerfile),
+                    str(dockerfile.parent),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=int(self.options.image_build_timeout_seconds),
+                check=False,
+            )
+            if build.returncode != 0:
+                raise RuntimeError(f"Workspace runtime image build failed: {build.stderr.strip() or build.stdout.strip()}")
+            return
+        pull = subprocess.run(
+            [executable, "pull", self.options.image],
+            capture_output=True,
+            text=True,
+            timeout=int(self.options.image_pull_timeout_seconds),
+            check=False,
+        )
+        if pull.returncode != 0:
+            raise RuntimeError(f"Workspace runtime image pull failed: {pull.stderr.strip() or pull.stdout.strip()}")
+
+    def _should_build_image(self) -> bool:
+        return bool(self.options.build_image) and self.options.image == DEFAULT_WORKSPACE_RUNTIME_IMAGE
+
+    def _image_policy_error(self) -> str:
+        patterns = list(self.options.image_allowlist_patterns or [])
+        if not patterns:
+            return ""
+        images = [self.options.image]
+        if self._should_build_image():
+            images.append(self.options.base_image)
+        for image in images:
+            if not any(fnmatch.fnmatchcase(image, pattern) for pattern in patterns):
+                return f"Workspace runtime image is not allowed by OPTPILOT_WORKSPACE_RUNTIME_IMAGE_ALLOWLIST: {image}"
+        return ""
+
+    def _enforce_image_policy(self) -> None:
+        error = self._image_policy_error()
+        if error:
+            raise RuntimeError(error)
+
+    def _workspace_has_active_reference(self, workspace: JsonDict, record: JsonDict, *, active_workspace_id: str) -> bool:
+        workspace_id = str(workspace.get("id") or "")
+        if active_workspace_id and workspace_id == active_workspace_id:
+            return True
+        if workspace.get("attached_sessions"):
+            return True
+        host_port = int(record.get("host_port") or 0)
+        if host_port and _code_server_reachable(self._code_server_base_url(host_port)):
+            return True
+        return False
+
+    def _image_dockerfile(self) -> Path:
+        if self.options.dockerfile:
+            return Path(self.options.dockerfile).expanduser().resolve()
+        return Path(__file__).resolve().parent / "workspace_runtime" / "Dockerfile"
+
+    def _ensure_runtime_dirs(self, workspace_id: str) -> None:
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        for child in (
+            runtime_dir / "home",
+            runtime_dir / "cache" / "pip",
+            runtime_dir / "cache" / "uv",
+            runtime_dir / "cache" / "npm",
+            runtime_dir / "code-server" / "user-data",
+            runtime_dir / "code-server" / "extensions",
+            runtime_dir / "logs",
+        ):
+            child.mkdir(parents=True, exist_ok=True)
+
+    def _runtime_env(self, workspace: JsonDict) -> Dict[str, str]:
+        workspace_id = str(workspace.get("id") or "")
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        self._ensure_runtime_dirs(workspace_id)
+        home = runtime_dir / "home"
+        return {
+            "HOME": str(home),
+            "PIP_CACHE_DIR": str(runtime_dir / "cache" / "pip"),
+            "UV_CACHE_DIR": str(runtime_dir / "cache" / "uv"),
+            "NPM_CONFIG_CACHE": str(runtime_dir / "cache" / "npm"),
+            "OPTPILOT_WORKSPACE_ROOT": str(Path(str(workspace.get("root") or self.studio_root)).resolve()),
+            "OPTPILOT_WORKSPACE_RUNTIME_DIR": str(runtime_dir),
+        }
+
+    def _mount_mode(self, workspace: JsonDict) -> str:
+        mode = str(workspace.get("mode") or "editable")
+        source_type = str(workspace.get("source_type") or "workspace")
+        return "ro" if mode in {"read-only", "analysis"} or source_type in {"catalog", "run"} else "rw"
+
+    def _code_server_base_url(self, port: Optional[int]) -> str:
+        return f"http://{self.options.host}:{int(port or self.options.port_start)}/"
+
+    def _workspace_runtime_dir(self, workspace_id: str) -> Path:
+        return self.runtime_root / workspace_id
+
+    def _record_path(self, workspace_id: str) -> Path:
+        return self._workspace_runtime_dir(workspace_id) / "runtime.json"
+
+    def _read_record(self, workspace_id: str) -> JsonDict:
+        path = self._record_path(workspace_id)
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _write_record(self, workspace_id: str, record: JsonDict) -> None:
+        path = self._record_path(workspace_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _container_name(self, workspace_id: str) -> str:
+        suffix = "".join(ch.lower() if ch.isalnum() else "-" for ch in workspace_id).strip("-")
+        if not suffix:
+            suffix = uuid.uuid4().hex[:12]
+        return f"optpilot-ws-{suffix[:48]}"
+
+    def _container_executable(self) -> Optional[str]:
+        if self.options.executable:
+            path = Path(self.options.executable).expanduser()
+            if path.exists() and path.is_file():
+                return str(path.resolve())
+            return shutil.which(self.options.executable)
+        return shutil.which("docker") or shutil.which("podman")
+
+    def _require_container_executable(self) -> str:
+        executable = self._container_executable()
+        if not executable:
+            raise RuntimeError("No Docker/Podman-compatible executable found for workspace runtime.")
+        return executable
+
+    def _container_running(self, container_name: str) -> bool:
+        executable = self._container_executable()
+        if not executable or not container_name:
+            return False
+        completed = subprocess.run(
+            [executable, "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return completed.returncode == 0 and completed.stdout.strip().lower() == "true"
+
+    def _remove_container(self, container_name: str) -> None:
+        executable = self._container_executable()
+        if not executable or not container_name:
+            return
+        subprocess.run([executable, "rm", "-f", container_name], capture_output=True, text=True, timeout=15, check=False)
+
+
 class UiState:
     def __init__(
         self,
@@ -142,17 +1087,21 @@ class UiState:
         catalog_roots: List[Path],
         run_roots: List[Path],
         code_server: Optional[CodeServerOptions] = None,
+        workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
     ):
         self.cwd = cwd.resolve()
         self.catalog_roots = _dedupe_paths(catalog_roots or _default_catalog_roots(self.cwd))
         self.run_roots = _dedupe_paths(run_roots or _default_run_roots(self.cwd))
         self.jobs: Dict[str, UiJob] = {}
+        self.interface_launches: Dict[str, UiLaunchJob] = {}
         self.jobs_dir = self.cwd / ".optpilot-ui" / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir = self.cwd / ".optpilot-ui" / "sessions"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.workspaces_dir = self.cwd / ".optpilot-ui" / "workspaces"
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir = self.cwd / ".optpilot-ui" / "runtime"
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.agent_sessions_dir = self.cwd / ".optpilot-ui" / "agent_sessions"
         self.agent_sessions_dir.mkdir(parents=True, exist_ok=True)
         self.code_server_dir = self.cwd / ".optpilot-ui" / "code-server"
@@ -165,6 +1114,21 @@ class UiState:
             if local_code_server.exists():
                 code_server_options.executable = str(local_code_server)
         self.code_server = CodeServerState(code_server_options)
+        runtime_options = workspace_runtime or WorkspaceRuntimeOptions.from_env()
+        runtime_options.host = runtime_options.host or code_server_options.host
+        if runtime_options.port_start == WorkspaceRuntimeOptions.port_start and code_server_options.port != CodeServerOptions.port:
+            runtime_options.port_start = code_server_options.port
+        runtime_options.auth = runtime_options.auth or code_server_options.auth
+        runtime_options.password = runtime_options.password or code_server_options.password
+        self.workspace_runtime = WorkspaceRuntimeManager(
+            studio_root=self.cwd,
+            runtime_root=self.runtime_dir,
+            options=runtime_options,
+        )
+        self.preview_proxies: Dict[str, WorkspacePreviewProxy] = {}
+        self.active_code_workspace_id = ""
+        self.agent_session_locks: Dict[str, threading.Lock] = {}
+        self._agent_session_locks_lock = threading.Lock()
         self._lock = threading.Lock()
 
     def launch_study(
@@ -237,135 +1201,133 @@ class UiState:
         return job.to_dict()
 
     def code_server_status(self) -> JsonDict:
-        executable = _code_server_executable(self.code_server.options)
-        process_running = self.code_server.running
-        reachable = _code_server_reachable(self.code_server.url)
-        port_conflict = _port_listening(self.code_server.options.host, self.code_server.options.port) and not reachable and not process_running
-        return {
-            "available": bool(executable),
-            "executable": executable,
-            "installed": bool(executable),
-            "running": process_running or reachable,
-            "managed": process_running,
-            "port_conflict": port_conflict,
-            "pid": self.code_server.process.pid if process_running and self.code_server.process else None,
-            "url": self.code_server.url,
-            "host": self.code_server.options.host,
-            "port": self.code_server.options.port,
-            "auth": self.code_server.options.auth,
-            "started_at": self.code_server.started_at,
-            "workspace_root": str(self.code_server.workspace_root or self.cwd),
-            "stdout_log": str(self.code_server.stdout_path) if self.code_server.stdout_path else None,
-            "stderr_log": str(self.code_server.stderr_path) if self.code_server.stderr_path else None,
-            "install_hint": "Install coder/code-server and ensure the code-server binary is on PATH, or pass --code-server-bin.",
-        }
+        workspace = self._active_code_workspace()
+        return self.workspace_runtime.global_status(active_workspace=workspace)
 
     def start_code_server(self, folder: Optional[Path] = None) -> JsonDict:
-        executable = _code_server_executable(self.code_server.options)
-        if not executable:
-            raise FileNotFoundError("code-server executable not found. Install coder/code-server or pass --code-server-bin.")
         workspace_root = _safe_code_server_folder(self, folder or self.cwd)
-        if self.code_server.running:
-            self.code_server.workspace_root = workspace_root
-            return self.code_server_open_url(workspace_root)
-        if _code_server_reachable(self.code_server.url):
-            self.code_server.workspace_root = workspace_root
-            return self.code_server_open_url(workspace_root)
-        if _port_listening(self.code_server.options.host, self.code_server.options.port):
-            self.code_server.options.port = _find_available_port(self.code_server.options.host, self.code_server.options.port + 1)
-        stdout_path = self.code_server_dir / "stdout.log"
-        stderr_path = self.code_server_dir / "stderr.log"
-        user_data_dir, extensions_dir = self._prepare_code_server_profile()
-        stdout_handle = stdout_path.open("a", encoding="utf-8")
-        stderr_handle = stderr_path.open("a", encoding="utf-8")
-        command = [
-            executable,
-            "--bind-addr",
-            f"{self.code_server.options.host}:{self.code_server.options.port}",
-            "--auth",
-            self.code_server.options.auth,
-            "--user-data-dir",
-            str(user_data_dir),
-            "--extensions-dir",
-            str(extensions_dir),
-            "--disable-telemetry",
-            "--disable-update-check",
-            "--disable-workspace-trust",
-            "--disable-getting-started-override",
-            str(workspace_root),
-        ]
-        env = os.environ.copy()
-        if self.code_server.options.password:
-            env["PASSWORD"] = self.code_server.options.password
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=str(self.cwd),
-                stdout=stdout_handle,
-                stderr=stderr_handle,
-                text=True,
-                env=env,
-            )
-        finally:
-            stdout_handle.close()
-            stderr_handle.close()
-        self.code_server.process = process
+        workspace = self._ensure_code_workspace(workspace_root)
+        status = self.workspace_runtime.start_code_server(workspace)
+        self.active_code_workspace_id = str(workspace["id"])
         self.code_server.started_at = time.time()
-        self.code_server.stdout_path = stdout_path
-        self.code_server.stderr_path = stderr_path
         self.code_server.workspace_root = workspace_root
-        return self.code_server_open_url(workspace_root)
+        self.code_server.stdout_path = Path(str(status.get("stdout_log") or "")) if status.get("stdout_log") else None
+        self.code_server.stderr_path = Path(str(status.get("stderr_log") or "")) if status.get("stderr_log") else None
+        return status
 
     def _prepare_code_server_profile(self) -> tuple[Path, Path]:
         user_data_dir = self.code_server_dir / "user-data"
         extensions_dir = self.code_server_dir / "extensions"
-        settings_path = user_data_dir / "User" / "settings.json"
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        extensions_dir.mkdir(parents=True, exist_ok=True)
-        settings: JsonDict = {}
-        if settings_path.exists():
-            try:
-                existing = json.loads(settings_path.read_text(encoding="utf-8"))
-                if isinstance(existing, dict):
-                    settings.update(existing)
-            except json.JSONDecodeError:
-                settings = {}
-        settings.update(
-            {
-                "chat.agent.enabled": False,
-                "chat.commandCenter.enabled": False,
-                "chat.disableAIFeatures": True,
-                "extensions.ignoreRecommendations": True,
-                "git.openRepositoryInParentFolders": "never",
-                "telemetry.telemetryLevel": "off",
-                "update.mode": "none",
-                "window.commandCenter": False,
-                "workbench.startupEditor": "none",
-                "workbench.tips.enabled": False,
-                "workbench.welcomePage.walkthroughs.openOnInstall": False,
-            }
-        )
-        settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _prepare_code_server_profile(user_data_dir, extensions_dir)
         return user_data_dir, extensions_dir
 
     def stop_code_server(self) -> JsonDict:
-        if self.code_server.process and self.code_server.process.poll() is None:
-            self.code_server.process.terminate()
-            try:
-                self.code_server.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.code_server.process.kill()
-                self.code_server.process.wait(timeout=5)
+        self.active_code_workspace_id = ""
+        self.code_server.workspace_root = None
         return self.code_server_status()
 
     def code_server_open_url(self, folder: Optional[Path] = None) -> JsonDict:
-        workspace_root = _safe_code_server_folder(self, folder or self.code_server.workspace_root or self.cwd)
-        workspace_root.mkdir(parents=True, exist_ok=True)
-        self.code_server.workspace_root = workspace_root
-        url = f"{self.code_server.url}?folder={quote(str(workspace_root), safe='')}"
-        status = self.code_server_status()
-        status.update({"open_url": url, "folder": str(workspace_root)})
-        return status
+        return self.start_code_server(folder or self.code_server.workspace_root or self.cwd)
+
+    def workspace_preview_open(self, folder: Optional[Path], port: int, *, extra_ports: Optional[Iterable[int]] = None) -> JsonDict:
+        if port < 1 or port > 65535:
+            raise ValueError("Preview port must be between 1 and 65535.")
+        code_server = self.start_code_server(folder or self.code_server.workspace_root or self.cwd)
+        workspace_id = str(code_server.get("workspace_id") or "")
+        base_url = str(code_server.get("url") or "")
+        if not base_url:
+            parsed = urlparse(str(code_server.get("open_url") or ""))
+            if parsed.scheme and parsed.netloc:
+                base_url = f"{parsed.scheme}://{parsed.netloc}/"
+        if not base_url:
+            raise RuntimeError("Code Server did not return a base URL for workspace preview.")
+        target_base_url = f"{base_url.rstrip('/')}/proxy/{int(port)}"
+        allowed_ports = _preview_allowed_ports(int(port), extra_ports or [])
+        preview_proxy = self._workspace_preview_proxy(workspace_id, int(port), target_base_url, allowed_ports=allowed_ports)
+        return {
+            "workspace_id": workspace_id,
+            "folder": code_server.get("folder") or str(folder or self.cwd),
+            "port": int(port),
+            "preview_url": preview_proxy.preview_url,
+            "proxy": "studio",
+            "proxy_target": target_base_url + "/",
+            "allowed_ports": list(preview_proxy.allowed_ports),
+            "code_server": code_server,
+        }
+
+    def _workspace_preview_proxy(self, workspace_id: str, port: int, target_base_url: str, *, allowed_ports: List[int]) -> WorkspacePreviewProxy:
+        key = f"{workspace_id}:{int(port)}"
+        existing = self.preview_proxies.get(key)
+        if existing and existing.running and existing.target_base_url == target_base_url and existing.allowed_ports == allowed_ports:
+            return existing
+        if existing:
+            self._stop_workspace_preview_proxy(key)
+        host = self.workspace_runtime.options.host or "127.0.0.1"
+        start_port = max(19000, int(self.workspace_runtime.options.port_start) + 1000)
+        reserved = {proxy.port for proxy in self.preview_proxies.values() if proxy.running}
+        preview_port = _find_available_port(host, start_port, reserved=reserved)
+        token = uuid.uuid4().hex
+        handler = _preview_proxy_handler_factory(target_base_url, token=token, allowed_ports=allowed_ports)
+        server = ThreadingHTTPServer((host, preview_port), handler)
+        thread = threading.Thread(target=server.serve_forever, name=f"optpilot-preview-{workspace_id}-{port}", daemon=True)
+        proxy = WorkspacePreviewProxy(
+            key=key,
+            host=host,
+            port=server.server_port,
+            target_base_url=target_base_url,
+            token=token,
+            allowed_ports=allowed_ports,
+            server=server,
+            thread=thread,
+        )
+        self.preview_proxies[key] = proxy
+        thread.start()
+        return proxy
+
+    def _stop_workspace_preview_proxy(self, key: str) -> None:
+        proxy = self.preview_proxies.pop(key, None)
+        if not proxy:
+            return
+        try:
+            proxy.server.shutdown()
+        except Exception:
+            pass
+        proxy.server.server_close()
+
+    def stop_workspace_preview_proxies(self) -> None:
+        for key in list(self.preview_proxies):
+            self._stop_workspace_preview_proxy(key)
+
+    def _active_code_workspace(self) -> Optional[JsonDict]:
+        if not self.active_code_workspace_id:
+            return None
+        return _workspace_by_id(self, self.active_code_workspace_id)
+
+    def _ensure_code_workspace(self, workspace_root: Path) -> JsonDict:
+        workspace_root = workspace_root.resolve()
+        for workspace in _list_ui_workspaces(self):
+            if Path(str(workspace.get("root") or "")).resolve() == workspace_root:
+                return workspace
+        source_type = "external"
+        mode = "editable"
+        if any(_is_relative_to(workspace_root, root.resolve()) for root in self.catalog_roots):
+            source_type = "catalog"
+            mode = "read-only"
+        elif any(_is_relative_to(workspace_root, root.resolve()) for root in self.run_roots):
+            source_type = "run"
+            mode = "analysis"
+        return _create_ui_workspace(
+            self,
+            {
+                "id": f"ws_{slug_path(workspace_root)}",
+                "title": workspace_root.name or "Workspace",
+                "root": str(workspace_root),
+                "source_type": source_type,
+                "mode": mode,
+                "description": "Workspace opened in Code Server",
+                "registration_enabled": mode == "editable",
+            },
+        )
 
     def _watch_job(self, job: UiJob, known_before: set[Path]) -> None:
         while job.process.poll() is None:
@@ -390,9 +1352,26 @@ def run_ui(
     code_server_port: int = 8766,
     code_server_auth: str = "none",
     code_server_password: Optional[str] = None,
+    workspace_runtime_executable: Optional[str] = None,
+    workspace_runtime_image: Optional[str] = None,
+    workspace_runtime_network: Optional[str] = None,
+    workspace_runtime_port_start: Optional[int] = None,
     open_browser: bool = False,
 ) -> None:
     cwd = Path.cwd().resolve()
+    runtime_options = WorkspaceRuntimeOptions.from_env()
+    if workspace_runtime_executable:
+        runtime_options.executable = workspace_runtime_executable
+    if workspace_runtime_image:
+        runtime_options.image = workspace_runtime_image
+        runtime_options.build_image = workspace_runtime_image == DEFAULT_WORKSPACE_RUNTIME_IMAGE
+    if workspace_runtime_network:
+        runtime_options.network = workspace_runtime_network
+    if workspace_runtime_port_start:
+        runtime_options.port_start = workspace_runtime_port_start
+    runtime_options.host = code_server_host
+    runtime_options.auth = code_server_auth
+    runtime_options.password = code_server_password or runtime_options.password
     state = UiState(
         cwd=cwd,
         catalog_roots=[Path(path).resolve() for path in catalog_roots or []],
@@ -404,6 +1383,7 @@ def run_ui(
             auth=code_server_auth,
             password=code_server_password,
         ),
+        workspace_runtime=runtime_options,
     )
     handler_cls = _handler_factory(state)
     server = ThreadingHTTPServer((host, port), handler_cls)
@@ -416,8 +1396,170 @@ def run_ui(
     except KeyboardInterrupt:
         pass
     finally:
-        state.stop_code_server()
+        state.stop_workspace_preview_proxies()
         server.server_close()
+
+
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+
+
+def _preview_proxy_handler_factory(target_base_url: str, *, token: str, allowed_ports: Iterable[int]):
+    target_base_url = target_base_url.rstrip("/")
+    code_server_base_url = target_base_url.split("/proxy/", 1)[0].rstrip("/") if "/proxy/" in target_base_url else ""
+    preview_token = str(token)
+    allowed_port_set = {int(port) for port in allowed_ports}
+    token_param = "__optpilot_preview_token"
+    token_cookie = "optpilot_preview_token"
+
+    class WorkspacePreviewProxyHandler(BaseHTTPRequestHandler):
+        server_version = "OptPilotPreviewProxy/0.1"
+
+        def do_GET(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._proxy_request(head_only=True)
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def do_PUT(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self._proxy_request()
+
+        def _proxy_request(self, *, head_only: bool = False) -> None:
+            parsed = urlparse(self.path)
+            token_from_query = self._query_token(parsed)
+            if not self._token_is_valid(parsed):
+                self._send_text(HTTPStatus.FORBIDDEN, "Workspace preview token is missing or invalid.", head_only=head_only)
+                return
+            upstream_url = self._upstream_url(parsed)
+            if not upstream_url:
+                self._send_text(HTTPStatus.BAD_REQUEST, "Invalid workspace preview proxy path.", head_only=head_only)
+                return
+            body = self._read_body()
+            headers = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower() not in _HOP_BY_HOP_HEADERS and key.lower() != "host"
+            }
+            headers["Accept-Encoding"] = "identity"
+            request = Request(upstream_url, data=body, headers=headers, method=self.command)
+            try:
+                with urlopen(request, timeout=30) as response:
+                    data = response.read()
+                    self._send_proxy_response(
+                        response.status,
+                        response.headers,
+                        data,
+                        head_only=head_only,
+                        set_token_cookie=token_from_query == preview_token,
+                    )
+            except HTTPError as exc:
+                data = exc.read()
+                self._send_proxy_response(
+                    exc.code,
+                    exc.headers,
+                    data,
+                    head_only=head_only,
+                    set_token_cookie=token_from_query == preview_token,
+                )
+            except URLError as exc:
+                self._send_text(
+                    HTTPStatus.BAD_GATEWAY,
+                    f"Workspace preview proxy could not reach {upstream_url}: {exc.reason}",
+                    head_only=head_only,
+                )
+
+        def _upstream_url(self, parsed: Any) -> str:
+            prefix = "/__optpilot_workspace_port/"
+            if parsed.path.startswith(prefix):
+                if not code_server_base_url:
+                    return ""
+                remainder = parsed.path.removeprefix(prefix)
+                port_text, separator, tail = remainder.partition("/")
+                try:
+                    port = int(port_text)
+                except ValueError:
+                    return ""
+                if port not in allowed_port_set:
+                    return ""
+                suffix = f"/{tail}" if separator else "/"
+                query = self._proxy_query(parsed)
+                return f"{code_server_base_url}/proxy/{port}{suffix}{query}"
+            query = self._proxy_query(parsed)
+            return f"{target_base_url}/{parsed.path.lstrip('/')}{query}"
+
+        def _query_token(self, parsed: Any) -> str:
+            values = parse_qs(parsed.query, keep_blank_values=True).get(token_param, [])
+            return str(values[0]) if values else ""
+
+        def _token_is_valid(self, parsed: Any) -> bool:
+            if self._query_token(parsed) == preview_token:
+                return True
+            cookie_header = self.headers.get("Cookie", "")
+            for chunk in cookie_header.split(";"):
+                name, separator, value = chunk.strip().partition("=")
+                if separator and name == token_cookie and value == preview_token:
+                    return True
+            return False
+
+        def _proxy_query(self, parsed: Any) -> str:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            params.pop(token_param, None)
+            query = urlencode(params, doseq=True)
+            return f"?{query}" if query else ""
+
+        def _read_body(self) -> Optional[bytes]:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length <= 0:
+                return None
+            return self.rfile.read(length)
+
+        def _send_proxy_response(self, status: int, headers: Any, data: bytes, *, head_only: bool, set_token_cookie: bool) -> None:
+            self.send_response(status)
+            for key, value in headers.items():
+                lowered = key.lower()
+                if lowered in _HOP_BY_HOP_HEADERS or lowered in {"content-length", "content-encoding"}:
+                    continue
+                self.send_header(key, value)
+            if set_token_cookie:
+                self.send_header("Set-Cookie", f"{token_cookie}={preview_token}; Path=/; HttpOnly; SameSite=Strict")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(data)
+
+        def _send_text(self, status: HTTPStatus, message: str, *, head_only: bool) -> None:
+            data = message.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if not head_only:
+                self.wfile.write(data)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            return
+
+    return WorkspacePreviewProxyHandler
 
 
 def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -440,6 +1582,27 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
         help="Authentication mode passed to coder/code-server",
     )
     parser.add_argument("--code-server-password", default=None, help="PASSWORD value when --code-server-auth=password")
+    parser.add_argument(
+        "--workspace-runtime-bin",
+        default=None,
+        help="Docker/Podman-compatible executable for per-workspace containers. Defaults to docker or podman on PATH.",
+    )
+    parser.add_argument(
+        "--workspace-runtime-image",
+        default=None,
+        help="Container image used for workspace shells and Code Server. It must include code-server.",
+    )
+    parser.add_argument(
+        "--workspace-runtime-network",
+        default=None,
+        help="Container network policy for workspace containers. Use bridge/default for embedded Code Server.",
+    )
+    parser.add_argument(
+        "--workspace-runtime-port-start",
+        type=int,
+        default=None,
+        help="First host port to try when publishing per-workspace Code Server.",
+    )
     parser.add_argument("--open-browser", action="store_true", help="Open the UI in a browser")
     return parser
 
@@ -461,6 +1624,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         code_server_port=args.code_server_port,
         code_server_auth=args.code_server_auth,
         code_server_password=args.code_server_password,
+        workspace_runtime_executable=args.workspace_runtime_bin,
+        workspace_runtime_image=args.workspace_runtime_image,
+        workspace_runtime_network=args.workspace_runtime_network,
+        workspace_runtime_port_start=args.workspace_runtime_port_start,
         open_browser=args.open_browser,
     )
     return 0
@@ -501,6 +1668,16 @@ def _handler_factory(state: UiState):
                 if path == "/api/agent/settings":
                     self._send_json(_agent_settings_payload(state))
                     return
+                if path == "/api/agent/capabilities":
+                    self._send_json(_assistant_capability_list(state))
+                    return
+                if path.startswith("/api/agent/capabilities/"):
+                    parts = path.split("/")
+                    if len(parts) >= 6:
+                        self._send_json(_assistant_capability_detail(state, parts[4], unquote(parts[5])))
+                    else:
+                        self._send_json({"error": "Missing capability kind or id"}, status=HTTPStatus.BAD_REQUEST)
+                    return
                 if path == "/api/agent/runtime/status":
                     self._send_json(state.agent_adapter.status())
                     return
@@ -508,7 +1685,7 @@ def _handler_factory(state: UiState):
                     self._handle_agent_session_get(path)
                     return
                 if path == "/api/runtime/health":
-                    self._send_json(_runtime_health())
+                    self._send_json(_runtime_health(state))
                     return
                 if path == "/api/code-server/status":
                     self._send_json(state.code_server_status())
@@ -542,6 +1719,14 @@ def _handler_factory(state: UiState):
                         jobs = [job.to_dict() for job in state.jobs.values()]
                     self._send_json({"jobs": sorted(jobs, key=lambda item: item["started_at"], reverse=True)})
                     return
+                if path.startswith("/api/interface-launches/"):
+                    parts = path.split("/")
+                    if len(parts) == 4:
+                        try:
+                            self._send_json({"launch": _interface_launch_by_id(state, parts[3])})
+                        except KeyError:
+                            self._send_json({"error": f"Unknown id: {parts[3]}"}, status=HTTPStatus.NOT_FOUND)
+                        return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
             except Exception as exc:  # pragma: no cover - defensive HTTP boundary
                 self._send_json({"error": str(exc), "type": type(exc).__name__}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -612,6 +1797,13 @@ def _handler_factory(state: UiState):
                     folder = _optional_user_path(payload.get("folder"), state.cwd)
                     self._send_json(state.code_server_open_url(folder))
                     return
+                if parsed.path == "/api/workspace-preview/open":
+                    payload = self._read_json_body()
+                    folder = _optional_user_path(payload.get("folder"), state.cwd)
+                    port = int(payload.get("port") or 5173)
+                    extra_ports = payload.get("extra_ports") if isinstance(payload.get("extra_ports"), list) else []
+                    self._send_json(state.workspace_preview_open(folder, port, extra_ports=extra_ports), status=HTTPStatus.CREATED)
+                    return
                 if parsed.path == "/api/code-server/stop":
                     self._send_json(state.stop_code_server())
                     return
@@ -619,6 +1811,22 @@ def _handler_factory(state: UiState):
                     job_id = parsed.path.split("/")[3]
                     self._send_json({"job": state.stop_job(job_id)})
                     return
+                self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except KeyError as exc:
+                self._send_json({"error": f"Unknown id: {exc.args[0]}"}, status=HTTPStatus.NOT_FOUND)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # pragma: no cover - defensive HTTP boundary
+                self._send_json({"error": str(exc), "type": type(exc).__name__}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            try:
+                if parsed.path.startswith("/api/workspaces/"):
+                    parts = parsed.path.split("/")
+                    if len(parts) == 4:
+                        self._send_json({"workspace": _delete_ui_workspace(state, parts[3])})
+                        return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
             except KeyError as exc:
                 self._send_json({"error": f"Unknown id: {exc.args[0]}"}, status=HTTPStatus.NOT_FOUND)
@@ -658,6 +1866,10 @@ def _handler_factory(state: UiState):
             if len(parts) == 5 and parts[4] == "detach":
                 payload = self._read_json_body()
                 self._send_json({"workspace": _detach_workspace(state, workspace_id, str(payload.get("session_id", "")))})
+                return
+            if len(parts) == 5 and parts[4] == "rename":
+                payload = self._read_json_body()
+                self._send_json({"workspace": _rename_ui_workspace(state, workspace_id, str(payload.get("title") or ""))})
                 return
             if len(parts) == 5 and parts[4] == "registrations":
                 payload = self._read_json_body()
@@ -700,7 +1912,8 @@ def _handler_factory(state: UiState):
             session_id = parts[3]
             if len(parts) == 5 and parts[4] == "message":
                 payload = self._read_json_body()
-                self._send_json(_append_agent_message(state, session_id, payload))
+                with _agent_session_operation_lock(state, session_id):
+                    self._send_json(_append_agent_message(state, session_id, payload))
                 return
             if len(parts) == 5 and parts[4] == "attach-workspace":
                 payload = self._read_json_body()
@@ -717,7 +1930,7 @@ def _handler_factory(state: UiState):
                 self._send_json({"session": _select_agent_workspace(state, session_id, str(payload.get("workspace_id") or ""))})
                 return
             if len(parts) == 5 and parts[4] == "cancel":
-                self._send_json({"session": _mark_agent_session_idle(state, session_id)})
+                self._send_json({"session": _cancel_agent_session(state, session_id)})
                 return
             if len(parts) == 5 and parts[4] == "sync":
                 self._send_json({"session": _sync_agent_session(state, session_id)})
@@ -737,15 +1950,27 @@ def _handler_factory(state: UiState):
 
         def _handle_catalog_workspace_post(self, path: str) -> None:
             parts = path.split("/")
-            if len(parts) != 6 or parts[5] not in {"open-workspace", "edit-copy"}:
+            if len(parts) != 6 or parts[5] not in {"open-workspace", "edit-copy", "launch-interface", "launch-interface-job"}:
                 self._send_json({"error": "Unknown catalog workspace action"}, status=HTTPStatus.NOT_FOUND)
                 return
             _, _, _, kind, uid, action = parts
-            if kind not in {"environment", "method", "study"}:
+            if kind not in {"environment", "method", "study", "resource"}:
                 self._send_json({"error": "Unknown catalog kind"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            if action == "launch-interface":
+                self._send_json(_launch_catalog_interface(state, kind, uid), status=HTTPStatus.CREATED)
+                return
+            if action == "launch-interface-job":
+                self._send_json(_start_catalog_interface_launch(state, kind, uid), status=HTTPStatus.ACCEPTED)
+                return
+            payload = self._read_json_body()
+            workspace = _open_catalog_workspace(state, kind, uid, editable=action == "edit-copy")
+            session_id = str(payload.get("session_id") or "")
+            if session_id:
+                _attach_agent_workspace(state, session_id, str(workspace["id"]), select=True)
+                workspace = _require_ui_workspace(state, str(workspace["id"]))
             self._send_json(
-                {"workspace": _open_catalog_workspace(state, kind, uid, editable=action == "edit-copy")},
+                {"workspace": workspace},
                 status=HTTPStatus.CREATED,
             )
 
@@ -758,7 +1983,13 @@ def _handler_factory(state: UiState):
             if not _is_run_dir(run_dir):
                 self._send_json({"error": "Run not found"}, status=HTTPStatus.NOT_FOUND)
                 return
-            self._send_json({"workspace": _open_run_workspace(state, run_dir)}, status=HTTPStatus.CREATED)
+            payload = self._read_json_body()
+            workspace = _open_run_workspace(state, run_dir)
+            session_id = str(payload.get("session_id") or "")
+            if session_id:
+                _attach_agent_workspace(state, session_id, str(workspace["id"]), select=True)
+                workspace = _require_ui_workspace(state, str(workspace["id"]))
+            self._send_json({"workspace": workspace}, status=HTTPStatus.CREATED)
 
         def _handle_run_get(self, path: str, query: Dict[str, List[str]]) -> None:
             parts = path.split("/")
@@ -842,7 +2073,7 @@ def _handler_factory(state: UiState):
 
 def _catalog_payload(state: UiState) -> JsonDict:
     entries = _scan_catalog(state.catalog_roots)
-    grouped = {config: [] for config in CATALOG_CONFIGS}
+    grouped = {config: [] for config in INDEXED_CONFIGS}
     for entry in entries:
         grouped.setdefault(entry["config"], []).append(entry)
     return {
@@ -850,6 +2081,7 @@ def _catalog_payload(state: UiState) -> JsonDict:
         "environments": grouped.get("environment", []),
         "methods": grouped.get("method", []),
         "studies": grouped.get("study", []),
+        "resources": _scan_catalog_resources(state),
         "builtins": {
             category: sorted(implementations)
             for category, implementations in BUILTIN_COMPONENTS.items()
@@ -869,7 +2101,7 @@ def _scan_catalog(roots: Iterable[Path]) -> List[JsonDict]:
             seen.add(path)
             raw = _read_yaml(path)
             config = raw.get("config")
-            if config not in CATALOG_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
+            if config not in INDEXED_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
                 continue
             entries.append(_catalog_entry(path, raw))
     return sorted(entries, key=lambda item: (item["config"], item["label"], item["path"]))
@@ -878,6 +2110,7 @@ def _scan_catalog(roots: Iterable[Path]) -> List[JsonDict]:
 def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
     config = raw["config"]
     label = raw.get("name") or raw.get("id") or path.stem
+    interface = _normalize_interface_config(raw.get("interface"))
     entry: JsonDict = {
         "uid": _encode_id(path),
         "id": str(raw.get("id") or raw.get("name") or path.stem),
@@ -889,6 +2122,8 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
         "tags": list(raw.get("tags", []) or []),
         "summary": {},
     }
+    if interface:
+        entry["interface"] = interface
     if config == "environment":
         candidate = raw.get("candidate", {})
         candidate_format = candidate.get("format")
@@ -907,6 +2142,7 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
                 for capability in raw.get("capabilities", []) or []
                 if isinstance(capability, dict) and capability.get("id")
             ],
+            "interface": _interface_summary(interface),
             "metrics": list(raw.get("metrics", {}).get("keys", []) or []),
         }
     elif config == "method":
@@ -923,6 +2159,7 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
             "candidate_formats": list(accepts.get("formats", []) or []),
             "required_context": list(requires.get("context", []) or []),
             "required_capabilities": list(requires.get("capabilities", []) or []),
+            "interface": _interface_summary(interface),
         }
     elif config == "study":
         environment_ref = raw.get("environmentConfig")
@@ -940,6 +2177,208 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
             "reproducibility": raw.get("reproducibility", {}),
         }
     return entry
+
+
+def _scan_catalog_resources(state: UiState) -> List[JsonDict]:
+    resources: List[JsonDict] = []
+    seen: set[Path] = set()
+    for catalog_root in state.catalog_roots:
+        resources_root = catalog_root / "resources"
+        if not resources_root.exists() or not resources_root.is_dir():
+            continue
+        for resource_dir in sorted(item for item in resources_root.iterdir() if item.is_dir()):
+            resolved = resource_dir.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            resources.append(_resource_catalog_entry(resolved))
+    return sorted(resources, key=lambda item: (item["label"], item["path"]))
+
+
+def _resource_catalog_entry(path: Path) -> JsonDict:
+    manifest_path, manifest = _resource_manifest(path)
+    readme = _first_existing_file(path, ["README.md", "readme.md", "README.txt"])
+    manifest_label = str(manifest.get("name") or manifest.get("id") or "").strip()
+    label = manifest_label or path.name
+    description = ""
+    tags: List[str] = []
+    if readme:
+        try:
+            text = readme.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        label = manifest_label or _readme_title(text) or label
+        description = str(manifest.get("description") or "").strip() or _readme_description(text)
+        tags = _resource_tags(path, text)
+    else:
+        description = str(manifest.get("description") or "").strip()
+        tags = ["resource"]
+    if isinstance(manifest.get("tags"), list):
+        tags = ["resource", *[str(tag) for tag in manifest.get("tags", []) if str(tag)]]
+    tags = list(dict.fromkeys(tags))[:4]
+    interface = _normalize_interface_config(manifest.get("interface"))
+    resource_id = str(manifest.get("id") or _slug_text(path.name))
+    summary: JsonDict = {
+        "readme": _relative_path(readme, path) if readme else "",
+        "file_count": _count_resource_files(path),
+        "editable": False,
+        "interface": _interface_summary(interface),
+    }
+    if manifest_path:
+        summary["manifest"] = _relative_path(manifest_path, path)
+    entry: JsonDict = {
+        "uid": _encode_id(path),
+        "id": resource_id,
+        "label": label,
+        "kind": "resource",
+        "config": "resource",
+        "path": str(path),
+        "description": description,
+        "tags": tags,
+        "summary": summary,
+    }
+    if interface:
+        entry["interface"] = interface
+    return entry
+
+
+def _resource_manifest(path: Path) -> tuple[Optional[Path], JsonDict]:
+    for name in ["optpilot.resource.yaml", "optpilot-resource.yaml", ".optpilot/resource.yaml", ".optpilot/interface.yaml"]:
+        manifest_path = path / name
+        if not manifest_path.exists() or not manifest_path.is_file():
+            continue
+        raw = _read_yaml(manifest_path)
+        if raw.get("apiVersion") == AUTHORING_API_VERSION and raw.get("config") == "resource":
+            return manifest_path, raw
+        if isinstance(raw.get("interface"), dict):
+            return manifest_path, {"interface": raw.get("interface")}
+    return None, {}
+
+
+def _first_existing_file(root: Path, names: List[str]) -> Optional[Path]:
+    for name in names:
+        path = root / name
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def _readme_title(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            return stripped.lstrip("#").strip()
+    return ""
+
+
+def _readme_description(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return _cap_text(stripped, 220)
+    return ""
+
+
+def _resource_tags(path: Path, readme_text: str) -> List[str]:
+    tags = ["resource"]
+    suffixes = {item.suffix.lower() for item in path.rglob("*") if item.is_file()}
+    if ".py" in suffixes:
+        tags.append("python")
+    if ".md" in suffixes:
+        tags.append("docs")
+    if any(suffix in suffixes for suffix in {".csv", ".json", ".yaml", ".yml"}):
+        tags.append("data")
+    if "simulation" in readme_text.lower() or "simulator" in readme_text.lower():
+        tags.append("simulation")
+    return tags[:4]
+
+
+def _count_resource_files(path: Path) -> int:
+    count = 0
+    for item in path.rglob("*"):
+        if item.is_file() and not any(part in EXCLUDED_SCAN_DIRS for part in item.parts):
+            count += 1
+            if count >= 999:
+                break
+    return count
+
+
+def _normalize_interface_config(raw: Any) -> JsonDict:
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        command = _normalize_shell_command(raw.get("command"))
+    except Exception:
+        return {}
+    if not command:
+        return {}
+    try:
+        port = int(raw.get("port") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if port < 1 or port > 65535:
+        return {}
+    extra_ports: List[int] = []
+    for item in raw.get("extraPorts") or raw.get("extra_ports") or []:
+        try:
+            extra_port = int(item)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= extra_port <= 65535 and extra_port != port:
+            extra_ports.append(extra_port)
+    env = {
+        str(key): str(value)
+        for key, value in (raw.get("env") or {}).items()
+        if str(key)
+    } if isinstance(raw.get("env"), dict) else {}
+    interface: JsonDict = {
+        "command": command,
+        "port": port,
+        "cwd": str(raw.get("cwd") or "."),
+        "env": env,
+        "extraPorts": sorted(set(extra_ports)),
+        "readyPath": _normalize_interface_ready_path(raw.get("readyPath") or raw.get("ready_path") or "/"),
+        "readyTimeoutSeconds": _normalize_interface_ready_timeout(
+            raw.get("readyTimeoutSeconds", raw.get("ready_timeout_seconds", 90))
+        ),
+    }
+    if raw.get("label"):
+        interface["label"] = str(raw.get("label"))
+    if raw.get("description"):
+        interface["description"] = str(raw.get("description"))
+    return interface
+
+
+def _interface_summary(interface: JsonDict) -> JsonDict:
+    if not interface:
+        return {}
+    return {
+        "label": interface.get("label") or "Interface",
+        "description": interface.get("description") or "",
+        "port": interface.get("port"),
+        "cwd": interface.get("cwd") or ".",
+        "command": list(interface.get("command") or []),
+        "extraPorts": list(interface.get("extraPorts") or []),
+        "readyPath": interface.get("readyPath") or "/",
+        "readyTimeoutSeconds": int(interface.get("readyTimeoutSeconds") or 0),
+    }
+
+
+def _normalize_interface_ready_path(raw: Any) -> str:
+    path = str(raw or "/").strip() or "/"
+    if "://" in path or path.startswith("//"):
+        return "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path
+
+
+def _normalize_interface_ready_timeout(raw: Any) -> int:
+    try:
+        timeout = int(raw)
+    except (TypeError, ValueError):
+        timeout = 90
+    return max(0, min(timeout, 600))
 
 
 def _workspace_payload(state: UiState) -> JsonDict:
@@ -965,7 +2404,22 @@ def _read_ui_settings(state: UiState) -> JsonDict:
             openhands = assistant.get("openhands")
             if isinstance(openhands, dict):
                 current.setdefault("openhands", {}).update(openhands)
+            capabilities = assistant.get("capabilities")
+            if isinstance(capabilities, dict):
+                current["capabilities"] = _normalize_assistant_capabilities(capabilities)
+            permissions = assistant.get("permissions")
+            if isinstance(permissions, dict):
+                current["permissions"] = _normalize_assistant_permissions(permissions)
     return settings
+
+
+DEFAULT_ASSISTANT_PERMISSIONS = {
+    "file_write": "attached_editable",
+    "shell_run": "approval_required",
+    "catalog_registration": "approval_required",
+    "study_launch": "approval_required",
+    "job_stop": "approval_required",
+}
 
 
 def _default_ui_settings() -> JsonDict:
@@ -980,8 +2434,185 @@ def _default_ui_settings() -> JsonDict:
                 "model": env_config.model,
                 "api_key": "",
             },
+            "capabilities": {
+                "skills": [],
+                "mcp_servers": [],
+                "custom_tools": [],
+            },
+            "permissions": dict(DEFAULT_ASSISTANT_PERMISSIONS),
         }
     }
+
+
+def _normalize_assistant_permissions(raw: Optional[JsonDict]) -> JsonDict:
+    permissions = dict(DEFAULT_ASSISTANT_PERMISSIONS)
+    if not isinstance(raw, dict):
+        return permissions
+    for key in permissions:
+        value = str(raw.get(key) or permissions[key]).strip()
+        permissions[key] = value or permissions[key]
+    return permissions
+
+
+def _normalize_capability_id(value: Any, fallback: str) -> str:
+    text = str(value or fallback or "").strip().lower()
+    normalized = "".join(char if char.isalnum() or char in {"-", "_", "."} else "-" for char in text)
+    normalized = "-".join(part for part in normalized.split("-") if part)
+    return normalized or fallback
+
+
+def _normalize_capability_record(raw: Any, *, kind: str, index: int) -> JsonDict:
+    item = raw if isinstance(raw, dict) else {}
+    fallback = f"{kind}-{index + 1}"
+    name = str(item.get("name") or item.get("id") or fallback).strip() or fallback
+    record: JsonDict = {
+        "id": _normalize_capability_id(item.get("id") or name, fallback),
+        "name": name,
+        "description": str(item.get("description") or "").strip(),
+        "enabled": bool(item.get("enabled", True)),
+        "kind": kind,
+    }
+    if kind == "skill":
+        record["source"] = str(item.get("source") or item.get("path") or "").strip()
+        triggers = item.get("triggers", [])
+        record["triggers"] = [str(trigger).strip() for trigger in triggers if str(trigger).strip()] if isinstance(triggers, list) else []
+    elif kind == "mcp_server":
+        record["command"] = str(item.get("command") or "").strip()
+        record["args"] = [str(arg) for arg in item.get("args", [])] if isinstance(item.get("args"), list) else []
+        record["url"] = str(item.get("url") or "").strip()
+        record["auth"] = str(item.get("auth") or "").strip()
+        record["transport"] = str(item.get("transport") or "stdio").strip() or "stdio"
+    elif kind == "custom_tool":
+        record["module"] = str(item.get("module") or "").strip()
+        record["factory"] = str(item.get("factory") or item.get("class") or "").strip()
+        record["tool_name"] = str(item.get("tool_name") or item.get("registered_name") or record["name"]).strip()
+        record["approval_required"] = bool(item.get("approval_required", True))
+    return record
+
+
+def _normalize_assistant_capabilities(raw: Optional[JsonDict]) -> JsonDict:
+    raw = raw if isinstance(raw, dict) else {}
+    skills = [
+        _normalize_capability_record(item, kind="skill", index=index)
+        for index, item in enumerate(raw.get("skills", []) if isinstance(raw.get("skills"), list) else [])
+    ]
+    mcp_servers = [
+        _normalize_capability_record(item, kind="mcp_server", index=index)
+        for index, item in enumerate(raw.get("mcp_servers", []) if isinstance(raw.get("mcp_servers"), list) else [])
+    ]
+    local_tools = [
+        _normalize_capability_record(item, kind="custom_tool", index=index)
+        for index, item in enumerate(raw.get("local_tools", []) if isinstance(raw.get("local_tools"), list) else [])
+    ]
+    custom_tool_inputs = raw.get("custom_tools", []) if isinstance(raw.get("custom_tools"), list) else []
+    custom_tools = [
+        _normalize_capability_record(item, kind="custom_tool", index=index)
+        for index, item in enumerate(custom_tool_inputs)
+    ]
+    return {
+        "skills": skills,
+        "mcp_servers": mcp_servers,
+        "mcp_filter_regex": str(raw.get("mcp_filter_regex") or raw.get("filter_tools_regex") or "").strip(),
+        # `local_tools` is kept as a migration alias for older settings files.
+        "custom_tools": custom_tools + local_tools,
+    }
+
+
+def _assistant_capabilities_from_settings(settings: JsonDict) -> JsonDict:
+    assistant = settings.get("assistant", {}) if isinstance(settings.get("assistant"), dict) else {}
+    return _normalize_assistant_capabilities(assistant.get("capabilities") if isinstance(assistant.get("capabilities"), dict) else {})
+
+
+def _assistant_permissions_from_settings(settings: JsonDict) -> JsonDict:
+    assistant = settings.get("assistant", {}) if isinstance(settings.get("assistant"), dict) else {}
+    return _normalize_assistant_permissions(assistant.get("permissions") if isinstance(assistant.get("permissions"), dict) else {})
+
+
+def _capability_summary(record: JsonDict) -> JsonDict:
+    summary = {
+        "id": record.get("id"),
+        "name": record.get("name"),
+        "kind": record.get("kind"),
+        "description": record.get("description"),
+        "enabled": bool(record.get("enabled")),
+    }
+    if record.get("kind") == "custom_tool":
+        summary["approval_required"] = bool(record.get("approval_required", True))
+    return summary
+
+
+def _assistant_capability_summary(state: UiState) -> JsonDict:
+    settings = _read_ui_settings(state)
+    capabilities = _assistant_capabilities_from_settings(settings)
+    permissions = _assistant_permissions_from_settings(settings)
+    buckets = {
+        "skills": capabilities["skills"],
+        "mcp_servers": capabilities["mcp_servers"],
+        "custom_tools": capabilities["custom_tools"],
+    }
+    return {
+        "counts": {
+            key: {"total": len(records), "enabled": sum(1 for record in records if record.get("enabled"))}
+            for key, records in buckets.items()
+        },
+        "enabled": {
+            key: [_capability_summary(record) for record in records if record.get("enabled")]
+            for key, records in buckets.items()
+        },
+        "permissions": permissions,
+    }
+
+
+def _capability_bucket(kind: str) -> str:
+    value = str(kind or "").strip().lower().replace("-", "_")
+    return {
+        "skill": "skills",
+        "skills": "skills",
+        "mcp": "mcp_servers",
+        "mcp_server": "mcp_servers",
+        "mcp_servers": "mcp_servers",
+        "local": "custom_tools",
+        "local_tool": "custom_tools",
+        "local_tools": "custom_tools",
+        "custom": "custom_tools",
+        "custom_tool": "custom_tools",
+        "custom_tools": "custom_tools",
+    }.get(value, value)
+
+
+def _assistant_capability_list(state: UiState, kind: str = "") -> JsonDict:
+    settings = _read_ui_settings(state)
+    capabilities = _assistant_capabilities_from_settings(settings)
+    permissions = _assistant_permissions_from_settings(settings)
+    bucket = _capability_bucket(kind)
+    if bucket:
+        records = capabilities.get(bucket, [])
+        return {"capabilities": {bucket: [_capability_summary(record) for record in records]}, "permissions": permissions}
+    capability_buckets = {
+        "skills": capabilities.get("skills", []),
+        "mcp_servers": capabilities.get("mcp_servers", []),
+        "custom_tools": capabilities.get("custom_tools", []),
+    }
+    return {
+        "capabilities": {
+            key: [_capability_summary(record) for record in records]
+            for key, records in capability_buckets.items()
+        },
+        "mcp_filter_regex": capabilities.get("mcp_filter_regex", ""),
+        "permissions": permissions,
+    }
+
+
+def _assistant_capability_detail(state: UiState, kind: str, capability_id: str) -> JsonDict:
+    bucket = _capability_bucket(kind)
+    if not bucket:
+        raise ValueError("Capability kind is required.")
+    settings = _read_ui_settings(state)
+    capabilities = _assistant_capabilities_from_settings(settings)
+    for record in capabilities.get(bucket, []):
+        if record.get("id") == capability_id:
+            return {"capability": record, "permissions": _assistant_permissions_from_settings(settings)}
+    raise KeyError(capability_id)
 
 
 def _write_ui_settings(state: UiState, settings: JsonDict) -> None:
@@ -1018,6 +2649,8 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
     settings = _read_ui_settings(state)
     assistant = settings.get("assistant", {}) if isinstance(settings.get("assistant"), dict) else {}
     openhands = assistant.get("openhands", {}) if isinstance(assistant.get("openhands"), dict) else {}
+    capabilities = _assistant_capabilities_from_settings(settings)
+    permissions = _assistant_permissions_from_settings(settings)
     safe_openhands = {
         "enabled": bool(openhands.get("enabled")),
         "base_url": str(openhands.get("base_url") or ""),
@@ -1030,6 +2663,8 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
             "assistant": {
                 "runtime": "openhands",
                 "openhands": safe_openhands,
+                "capabilities": capabilities,
+                "permissions": permissions,
             }
         },
         "status": state.agent_adapter.status(),
@@ -1051,15 +2686,26 @@ def _update_agent_settings(state: UiState, payload: JsonDict) -> JsonDict:
         openhands["api_key"] = ""
     elif "api_key" in incoming and str(incoming.get("api_key") or "").strip():
         openhands["api_key"] = str(incoming.get("api_key") or "").strip()
+    if isinstance(payload.get("capabilities"), dict):
+        assistant["capabilities"] = _normalize_assistant_capabilities(payload.get("capabilities"))
+    if isinstance(payload.get("permissions"), dict):
+        assistant["permissions"] = _normalize_assistant_permissions(payload.get("permissions"))
     _write_ui_settings(state, settings)
     _refresh_agent_adapter(state)
     return _agent_settings_payload(state)
 
 
-def _runtime_health() -> JsonDict:
+def _runtime_health(state: Optional[UiState] = None) -> JsonDict:
     docker = _executable_health("docker", ["docker", "--version"])
     podman = _executable_health("podman", ["podman", "--version"])
     code_server = _executable_health("code-server", ["code-server", "--version"])
+    runtime_gc: JsonDict = {}
+    if state:
+        runtime_gc = state.workspace_runtime.garbage_collect(
+            _workspace_records_for_runtime_gc(state),
+            active_workspace_id=state.active_code_workspace_id,
+        )
+    workspace_runtime = state.workspace_runtime.global_status(active_workspace=state._active_code_workspace()) if state else {}
     return {
         "python": {
             "ok": True,
@@ -1069,7 +2715,27 @@ def _runtime_health() -> JsonDict:
         "docker": docker,
         "podman": podman,
         "code_server": code_server,
+        "workspace_runtime": workspace_runtime.get("runtime")
+        or {
+            "target": "per-workspace-container",
+            "status": "unconfigured",
+            "containerized": False,
+            "engine_available": False,
+            "runtime_root": "",
+            "message": "Workspace runtime status is available after Studio starts.",
+        },
+        "workspace_runtime_gc": runtime_gc,
     }
+
+
+def _workspace_records_for_runtime_gc(state: UiState) -> List[JsonDict]:
+    attachment_map = _workspace_attachment_map(state)
+    records = []
+    for workspace in _read_workspace_index(state):
+        item = dict(workspace)
+        item["attached_sessions"] = attachment_map.get(str(item.get("id") or ""), [])
+        records.append(item)
+    return records
 
 
 def _code_server_executable(options: CodeServerOptions) -> Optional[str]:
@@ -1111,11 +2777,118 @@ def _port_listening(host: str, port: int) -> bool:
         return sock.connect_ex((host, int(port))) == 0
 
 
-def _find_available_port(host: str, start_port: int) -> int:
+def _find_available_port(host: str, start_port: int, *, reserved: Optional[set[int]] = None) -> int:
+    reserved = reserved or set()
     for port in range(int(start_port), int(start_port) + 100):
+        if port in reserved:
+            continue
         if not _port_listening(host, port):
             return port
     raise OSError(f"No available port found near {start_port}.")
+
+
+def _preview_allowed_ports(port: int, extra_ports: Iterable[int]) -> List[int]:
+    ports = {int(port)}
+    for raw in extra_ports:
+        try:
+            candidate = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"Preview extra port must be an integer: {raw!r}") from None
+        if candidate < 1 or candidate > 65535:
+            raise ValueError("Preview ports must be between 1 and 65535.")
+        ports.add(candidate)
+    return sorted(ports)
+
+
+def _preview_ready_url(proxy_target: str, ready_path: str) -> str:
+    path = _normalize_interface_ready_path(ready_path)
+    return f"{str(proxy_target).rstrip('/')}{path}"
+
+
+def _wait_for_preview_ready(proxy_target: str, ready_path: str, timeout_seconds: int) -> JsonDict:
+    timeout = max(0, int(timeout_seconds or 0))
+    ready_url = _preview_ready_url(proxy_target, ready_path)
+    if timeout <= 0:
+        return {
+            "ready": False,
+            "skipped": True,
+            "url": ready_url,
+            "timeoutSeconds": 0,
+        }
+    deadline = time.monotonic() + timeout
+    last_error = ""
+    while time.monotonic() <= deadline:
+        remaining = max(0.1, deadline - time.monotonic())
+        request = Request(ready_url, method="GET", headers={"Accept": "text/html,application/json,*/*"})
+        try:
+            with urlopen(request, timeout=min(1.5, remaining)) as response:
+                if response.status < 500:
+                    return {
+                        "ready": True,
+                        "status": response.status,
+                        "url": ready_url,
+                        "timeoutSeconds": timeout,
+                    }
+                last_error = f"HTTP {response.status}"
+        except HTTPError as exc:
+            if exc.code < 500:
+                return {
+                    "ready": True,
+                    "status": exc.code,
+                    "url": ready_url,
+                    "timeoutSeconds": timeout,
+                }
+            last_error = f"HTTP {exc.code}"
+        except URLError as exc:
+            last_error = str(exc.reason)
+        except Exception as exc:
+            last_error = str(exc)
+        time.sleep(0.5)
+    return {
+        "ready": False,
+        "skipped": False,
+        "url": ready_url,
+        "timeoutSeconds": timeout,
+        "error": last_error or "preview target did not respond",
+    }
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _split_env_patterns(name: str) -> List[str]:
+    value = os.environ.get(name, "")
+    return [part.strip() for part in value.replace("\n", ",").split(",") if part.strip()]
+
+
+def _parse_time_or_iso(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return time.time()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    try:
+        return float(calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ")))
+    except ValueError:
+        return time.time()
+
+
+def _ui_env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _safe_code_server_folder(state: UiState, folder: Path) -> Path:
@@ -1145,11 +2918,43 @@ def _executable_health(name: str, command: List[str]) -> JsonDict:
 
 
 def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
+    expected_config = {
+        "environments": "environment",
+        "methods": "method",
+        "studies": "study",
+        "study_plan": "study",
+        "study_plans": "study",
+        "resources": "resource",
+    }.get(str(expected_config or ""), str(expected_config or ""))
+    if expected_config == "resource":
+        path = _decode_id(uid)
+        if not path.exists() or not path.is_dir():
+            raise FileNotFoundError(f"resource not found: {path}")
+        entry = _resource_catalog_entry(path)
+        return {
+            "entry": entry,
+            "config": {
+                "kind": "resource",
+                "id": entry["id"],
+                "name": entry["label"],
+                "path": str(path),
+                "summary": entry.get("summary", {}),
+                "interface": entry.get("interface") or {},
+            },
+            "compatibility": {"compatible": [], "incompatible": []},
+        }
     path = _decode_id(uid)
     raw = _read_yaml(path)
     if raw.get("config") != expected_config or raw.get("apiVersion") != AUTHORING_API_VERSION:
         raise FileNotFoundError(f"{expected_config} config not found: {path}")
     entry = _catalog_entry(path, raw)
+    if expected_config == "study":
+        return {
+            "entry": entry,
+            "config": raw,
+            "validation": _validate_study(path),
+            "compatibility": {"compatible": [], "incompatible": []},
+        }
     compatibility = _compatibility_payload(state)
     if expected_config == "environment":
         related = [
@@ -1369,7 +3174,7 @@ def _open_study_workspace(state: UiState, payload: JsonDict) -> JsonDict:
     root.mkdir(parents=True, exist_ok=False)
     (root / "study.yaml").write_text(study_yaml, encoding="utf-8")
     (root / "README.md").write_text(
-        f"# {title}\n\nThis workspace contains an editable OptPilot study plan. Review `study.yaml`, then launch it from Studies or register it to the catalog.\n",
+        f"# {title}\n\nThis workspace contains an editable OptPilot study plan. Review `study.yaml`, then launch it from Studies.\n",
         encoding="utf-8",
     )
     return _create_ui_workspace(
@@ -1384,7 +3189,7 @@ def _open_study_workspace(state: UiState, payload: JsonDict) -> JsonDict:
             "description": "Editable study plan workspace",
             "source_path": str(source_path) if source_path else "",
             "focus_paths": ["study.yaml", "README.md"],
-            "registration_enabled": True,
+            "registration_enabled": False,
         },
     )
 
@@ -1542,6 +3347,208 @@ def _run_detail(run_dir: Path) -> JsonDict:
     }
 
 
+def _assistant_run_detail(run_dir: Path) -> JsonDict:
+    summary = _read_json(run_dir / "summary.json")
+    study_spec = _read_json(run_dir / "study_spec.json")
+    observations = _read_jsonl(run_dir / "observations.jsonl")
+    trials = _read_jsonl(run_dir / "trials.jsonl")
+    candidates = _read_jsonl(run_dir / "candidates.jsonl")
+    run = _run_summary(run_dir)
+    evidence_files = _run_evidence_files(run_dir, observations)
+    best_candidate_id = run.get("best_candidate_id") or summary.get("best_candidate_id")
+    best_trial_id = run.get("best_trial_id") or summary.get("best_trial_id")
+    best_observation = next(
+        (
+            observation
+            for observation in observations
+            if observation.get("trial_id") == best_trial_id or observation.get("candidate_id") == best_candidate_id
+        ),
+        observations[0] if observations else {},
+    )
+    best_candidate = next(
+        (candidate for candidate in candidates if candidate.get("candidate_id") == best_candidate_id),
+        candidates[0] if candidates else {},
+    )
+    return {
+        "run": run,
+        "summary": {
+            "status": run.get("status"),
+            "completed_trials": run.get("completed_trials"),
+            "failure_count": run.get("failure_count"),
+            "best_metric": run.get("best_metric"),
+            "best_trial_id": best_trial_id,
+            "best_candidate_id": best_candidate_id,
+            "started_at": summary.get("started_at") or run.get("started_at"),
+            "finished_at": summary.get("finished_at") or run.get("finished_at"),
+        },
+        "study": {
+            "name": study_spec.get("metadata", {}).get("name") or run.get("name"),
+            "environment_id": run.get("environment_id"),
+            "method": run.get("method"),
+            "objective": run.get("objective"),
+        },
+        "observations": {
+            "total": len(observations),
+            "status_counts": _status_counts(observations),
+            "metric_keys": _observation_metric_keys(observations),
+            "preview": [_compact_observation(observation, run_dir) for observation in observations[:10]],
+        },
+        "trials": {
+            "total": len(trials),
+            "preview": [_compact_trial(trial) for trial in trials[:10]],
+        },
+        "best": {
+            "metric": run.get("best_metric"),
+            "trial_id": best_trial_id,
+            "candidate_id": best_candidate_id,
+            "observation": _compact_observation(best_observation, run_dir) if best_observation else {},
+            "candidate": _compact_candidate(best_candidate, run_dir) if best_candidate else {},
+        },
+        "evidence_files": evidence_files,
+        "tool_guidance": [
+            "For raw evidence, call optpilot_run_file_read with one of the relative_path values in evidence_files.",
+            "Do not use workspace file tools for run evidence unless the user explicitly asks to open the run as a workspace.",
+        ],
+    }
+
+
+def _observation_metric_keys(observations: List[JsonDict]) -> List[str]:
+    keys: set[str] = set()
+    for observation in observations:
+        metrics = observation.get("metric_values", {}) if isinstance(observation.get("metric_values"), dict) else {}
+        keys.update(str(key) for key in metrics.keys())
+    return sorted(keys)
+
+
+def _compact_observation(observation: JsonDict, run_dir: Path) -> JsonDict:
+    if not observation:
+        return {}
+    output_files = observation.get("output_files", []) if isinstance(observation.get("output_files"), list) else []
+    return {
+        "trial_id": observation.get("trial_id"),
+        "candidate_id": observation.get("candidate_id"),
+        "status": observation.get("status"),
+        "metric_values": observation.get("metric_values", {}),
+        "constraint_results": observation.get("constraint_results", {}),
+        "event_summary": observation.get("event_summary", {}),
+        "resource_usage": observation.get("resource_usage", {}),
+        "output_files": [_compact_run_output_file(item, run_dir) for item in output_files[:20] if isinstance(item, dict)],
+        "error": observation.get("error") or observation.get("failure_reason"),
+    }
+
+
+def _compact_trial(trial: JsonDict) -> JsonDict:
+    if not trial:
+        return {}
+    return {
+        "trial_id": trial.get("trial_id"),
+        "candidate_id": trial.get("candidate_id"),
+        "status": trial.get("status"),
+        "method_id": trial.get("method_id"),
+        "created_at": trial.get("created_at"),
+        "error": trial.get("error") or trial.get("failure_reason"),
+    }
+
+
+def _compact_candidate(candidate: JsonDict, run_dir: Path) -> JsonDict:
+    if not candidate:
+        return {}
+    output_files = []
+    generator = candidate.get("generator", {}) if isinstance(candidate.get("generator"), dict) else {}
+    materialization = candidate.get("materialization", {}) if isinstance(candidate.get("materialization"), dict) else {}
+    if isinstance(materialization.get("output_files"), list):
+        output_files = [_compact_run_output_file(item, run_dir) for item in materialization["output_files"][:20] if isinstance(item, dict)]
+    return {
+        "candidate_id": candidate.get("candidate_id"),
+        "method_id": candidate.get("method_id") or generator.get("method_id"),
+        "format": candidate.get("format"),
+        "created_at": candidate.get("created_at"),
+        "status": candidate.get("status"),
+        "output_files": output_files,
+    }
+
+
+def _compact_run_output_file(item: JsonDict, run_dir: Path) -> JsonDict:
+    path = str(item.get("path") or item.get("relative_path") or "")
+    relative = _run_relative_path(path, run_dir) if path else ""
+    return {
+        "name": item.get("name") or Path(relative or path).name,
+        "type": item.get("type") or Path(relative or path).suffix.lstrip("."),
+        "relative_path": relative,
+    }
+
+
+def _run_evidence_files(run_dir: Path, observations: Optional[List[JsonDict]] = None) -> List[JsonDict]:
+    observations = observations if observations is not None else _read_jsonl(run_dir / "observations.jsonl")
+    files_by_path = {item["relative_path"]: item for item in _list_run_files(run_dir)}
+    evidence: Dict[str, JsonDict] = {}
+    canonical = [
+        ("summary.json", "run summary: status, trial counts, best metric, and best candidate"),
+        ("observations.jsonl", "per-trial evaluation results, metric values, output files, and failures"),
+        ("trials.jsonl", "trial scheduler records and candidate assignments"),
+        ("candidates.jsonl", "candidate metadata and materialization details"),
+        ("method_calls.jsonl", "method invocation trace"),
+        ("method_events.jsonl", "method-side events and logs"),
+        ("scheduler_events.jsonl", "scheduler and execution events"),
+        ("run_policy.json", "execution, evidence, sandbox, and reproducibility policy"),
+        ("study_spec.json", "compiled study configuration used for this run"),
+        ("environment_snapshot.json", "environment configuration snapshot"),
+        ("run_lineage.json", "run lineage and reproducibility metadata"),
+    ]
+    for relative_path, purpose in canonical:
+        file_info = files_by_path.get(relative_path)
+        if file_info:
+            evidence[relative_path] = {**file_info, "purpose": purpose, "recommended": True}
+    for observation in observations:
+        output_files = observation.get("output_files", []) if isinstance(observation.get("output_files"), list) else []
+        for output in output_files:
+            if not isinstance(output, dict):
+                continue
+            relative_path = _run_relative_path(str(output.get("path") or output.get("relative_path") or ""), run_dir)
+            if not relative_path or relative_path not in files_by_path:
+                continue
+            evidence.setdefault(
+                relative_path,
+                {
+                    **files_by_path[relative_path],
+                    "purpose": f"trial output: {output.get('name') or Path(relative_path).name}",
+                    "recommended": False,
+                },
+            )
+    return sorted(evidence.values(), key=lambda item: (not item.get("recommended"), item.get("relative_path", "")))[:120]
+
+
+def _run_relative_path(path_value: str, run_dir: Path) -> str:
+    if not path_value:
+        return ""
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = run_dir / path
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return path_value
+    if not _is_relative_to(resolved, run_dir.resolve()):
+        return path_value
+    return str(resolved.relative_to(run_dir.resolve()))
+
+
+def _run_file_not_found_result(tool: str, run_dir: Path, relative: str) -> JsonDict:
+    available = _run_evidence_files(run_dir)
+    available_paths = [str(item.get("relative_path") or "") for item in available if item.get("relative_path")]
+    matches = difflib.get_close_matches(relative, available_paths, n=5, cutoff=0.25) if relative else []
+    return _tool_result(
+        tool,
+        False,
+        f"Run file not found: {relative or '(empty path)'}. Use optpilot_run_detail evidence_files to choose a valid relative path.",
+        data={
+            "requested_path": relative,
+            "suggested_paths": matches,
+            "available_files": available[:40],
+        },
+    )
+
+
 def _validate_study(study_path: Path) -> JsonDict:
     try:
         validation = validate_authoring_config(study_path)
@@ -1604,8 +3611,10 @@ def _default_agent_message() -> JsonDict:
         "id": f"msg_{uuid.uuid4().hex[:10]}",
         "role": "assistant",
         "title": "Ready",
-        "content": "I can use the selected session, attached workspace roots, catalog, study plans, runs, and code editor context.",
+        "content": "I can use the current page, attached workspace roots, catalog, study plans, runs, and Code Server context.",
         "created_at": _now_iso(),
+        "source": "studio_system",
+        "memory_scope": "ui_history",
     }
 
 
@@ -1613,11 +3622,21 @@ def _read_agent_messages(state: UiState, session_id: str) -> List[JsonDict]:
     path = _agent_messages_path(state, session_id)
     if not path.exists():
         return []
-    return [
-        message for message in _read_jsonl(path)
-        if not _is_legacy_openhands_placeholder(message)
-        and not _is_malformed_openhands_context_echo(message)
-    ]
+    messages: List[JsonDict] = []
+    seen: set[tuple[str, str]] = set()
+    for message in _read_jsonl(path):
+        if (
+            _is_legacy_openhands_placeholder(message)
+            or _is_malformed_openhands_context_echo(message)
+            or _is_non_user_facing_openhands_message(message)
+        ):
+            continue
+        key = (str(message.get("role") or ""), _normalize_agent_text(str(message.get("content") or "")))
+        if key[1] and key in seen:
+            continue
+        seen.add(key)
+        messages.append(message)
+    return messages
 
 
 def _is_legacy_openhands_placeholder(message: JsonDict) -> bool:
@@ -1631,6 +3650,154 @@ def _is_malformed_openhands_context_echo(message: JsonDict) -> bool:
         and content.startswith("User request:")
         and "Visible OptPilot Studio context packet:" in content
     )
+
+
+def _is_non_user_facing_openhands_message(message: JsonDict) -> bool:
+    if message.get("role") != "assistant":
+        return False
+    content = str(message.get("content") or "").strip()
+    normalized = _normalize_agent_text(content).lower()
+    return (
+        normalized.startswith(("the user hasn't replied", "the user still hasn't sent a new message"))
+        or normalized.startswith("the task is complete on my side:")
+        or "(waiting for your next message" in normalized
+        or "</think>" in content
+    )
+
+
+def _recover_agent_assistant_messages_from_events(state: UiState, session_id: str) -> None:
+    path = _agent_messages_path(state, session_id)
+    raw_messages = _read_jsonl(path) if path.exists() else []
+    existing_ids = {str(message.get("id") or "") for message in raw_messages}
+    existing_texts = {
+        _normalize_agent_text(str(message.get("content") or ""))
+        for message in raw_messages
+        if str(message.get("content") or "").strip()
+    }
+    for event in _read_agent_events(state, session_id):
+        text = _openhands_user_facing_message_from_event(event)
+        normalized = _normalize_agent_text(text)
+        if not text or not normalized or normalized in existing_texts:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        event_id = str(event.get("id") or payload.get("event_id") or uuid.uuid4().hex[:10])
+        message_id = f"msg_{_slug_text(event_id)[:32]}"
+        if message_id in existing_ids:
+            continue
+        _append_jsonl(
+            path,
+            {
+                "id": message_id,
+                "role": "assistant",
+                "title": "OpenHands",
+                "content": text,
+                "created_at": event.get("created_at") or _now_iso(),
+                "source": "openhands",
+                "memory_scope": "openhands_conversation",
+                "dispatch": {"status": "answered", "transport": "openhands_http"},
+            },
+        )
+        existing_ids.add(message_id)
+        existing_texts.add(normalized)
+
+
+def _openhands_user_facing_message_from_event(event: JsonDict) -> str:
+    if not isinstance(event, dict) or event.get("type") != "openhands_event":
+        return ""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if str(payload.get("tool") or "") == "finish":
+        text = _openhands_finish_message_from_payload(payload)
+        if text:
+            return text
+    return ""
+
+
+def _openhands_finish_message_from_payload(payload: JsonDict) -> str:
+    arguments_preview = str(payload.get("arguments_preview") or "").strip()
+    if arguments_preview:
+        try:
+            arguments = json.loads(arguments_preview)
+        except json.JSONDecodeError:
+            arguments = {}
+        if isinstance(arguments, dict):
+            text = _user_facing_openhands_text(arguments.get("message") or arguments.get("content") or arguments.get("text"))
+            if text:
+                return text
+    raw_preview = str(payload.get("raw_preview") or "").strip()
+    if raw_preview:
+        try:
+            raw = json.loads(raw_preview)
+        except json.JSONDecodeError:
+            raw = {}
+        if isinstance(raw, dict):
+            action = raw.get("action") if isinstance(raw.get("action"), dict) else {}
+            observation = raw.get("observation") if isinstance(raw.get("observation"), dict) else {}
+            text = _user_facing_openhands_text(
+                action.get("message")
+                or action.get("content")
+                or observation.get("message")
+                or observation.get("content")
+            )
+            if text:
+                return text
+    return ""
+
+
+def _user_facing_openhands_text(content: Any) -> str:
+    text = _content_text(content)
+    if "</think>" in text:
+        text = text.rsplit("</think>", 1)[1].strip()
+    text = text.strip()
+    if not text:
+        return ""
+    normalized = _normalize_agent_text(text).lower()
+    if not normalized:
+        return ""
+    if "(waiting for your next message" in normalized or normalized == "waiting for your next message.":
+        return ""
+    if normalized.startswith((
+        "the user hasn't replied",
+        "the user still hasn't sent a new message",
+        "the task is complete on my side",
+    )):
+        return ""
+    if "delayed tool result" in normalized and "prior" in normalized:
+        return ""
+    planning_markers = (
+        " i should ",
+        " i need ",
+        " let me ",
+        " the user ",
+        " now i have ",
+        "there's nothing more to do except wait",
+    )
+    marker_count = sum(1 for marker in planning_markers if marker in f" {normalized} ")
+    if marker_count >= 2:
+        return ""
+    return text
+
+
+def _content_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):
+        if "text" in content:
+            return _content_text(content.get("text"))
+        if "content" in content:
+            return _content_text(content.get("content"))
+        if "message" in content:
+            return _content_text(content.get("message"))
+        return ""
+    if isinstance(content, list):
+        parts = [_content_text(item) for item in content]
+        return "\n".join(part for part in parts if part).strip()
+    return str(content).strip()
+
+
+def _normalize_agent_text(text: str) -> str:
+    return " ".join(str(text or "").strip().split())
 
 
 def _read_agent_events(state: UiState, session_id: str) -> List[JsonDict]:
@@ -1706,6 +3873,39 @@ def _tool_result(tool: str, ok: bool, summary: str, *, data: Optional[JsonDict] 
     }
 
 
+def _approval_request_key(tool: str, kind: str, arguments: JsonDict) -> str:
+    stable_arguments = {
+        str(key): value
+        for key, value in (arguments or {}).items()
+        if key not in {"_openhands_tool_call_id", "approved"}
+    }
+    payload = {"tool": tool, "kind": kind, "arguments": stable_arguments}
+    return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _approval_record_key(approval: JsonDict) -> str:
+    arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
+    return str(approval.get("request_key") or _approval_request_key(str(approval.get("tool") or ""), str(approval.get("kind") or ""), arguments))
+
+
+def _supersede_duplicate_pending_approvals(state: UiState, session_id: str, approval: JsonDict, *, action: str) -> None:
+    approval_id = str(approval.get("id") or "")
+    request_key = _approval_record_key(approval)
+    changed = False
+    approvals = []
+    for item in _read_agent_approvals(state, session_id):
+        item = dict(item)
+        if item.get("status") == "pending" and str(item.get("id") or "") != approval_id and _approval_record_key(item) == request_key:
+            item["status"] = "superseded"
+            item["superseded_by"] = approval_id
+            item["superseded_action"] = action
+            item["superseded_at"] = _now_iso()
+            changed = True
+        approvals.append(item)
+    if changed:
+        _write_agent_approvals(state, session_id, approvals)
+
+
 def _request_agent_approval(
     state: UiState,
     session_id: str,
@@ -1717,6 +3917,17 @@ def _request_agent_approval(
     summary: str,
     targets: Optional[List[str]] = None,
 ) -> JsonDict:
+    request_key = _approval_request_key(tool, kind, arguments)
+    for existing in _read_agent_approvals(state, session_id):
+        if existing.get("status") == "pending" and _approval_record_key(existing) == request_key:
+            return _tool_result(
+                tool,
+                False,
+                f"Approval required: {summary}",
+                data={"approval": existing, "approval_required": True},
+                events=[{"level": "warning", "message": summary}],
+            )
+    tool_call_id = str(arguments.get("_openhands_tool_call_id") or "")
     approval = {
         "id": f"approval_{uuid.uuid4().hex[:10]}",
         "session_id": session_id,
@@ -1727,6 +3938,8 @@ def _request_agent_approval(
         "targets": targets or [],
         "arguments": arguments,
         "status": "pending",
+        "request_key": request_key,
+        "openhands_tool_call_id": tool_call_id,
         "created_at": _now_iso(),
     }
     _upsert_agent_approval(state, session_id, approval)
@@ -1754,13 +3967,16 @@ def _approve_agent_action(state: UiState, session_id: str, approval_id: str) -> 
     if not approval:
         raise KeyError(approval_id)
     if approval.get("status") != "pending":
-        return {"approval": approval, "result": approval.get("result")}
+        return {"approval": approval, "result": approval.get("result"), "session": _agent_session_by_id(state, session_id)}
     arguments = dict(approval.get("arguments", {}) if isinstance(approval.get("arguments"), dict) else {})
     arguments["approved"] = True
     result = _execute_agent_tool(state, session_id, str(approval["tool"]), arguments)
+    feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
+    _supersede_duplicate_pending_approvals(state, session_id, approval, action="approved")
     approval["status"] = "approved"
     approval["approved_at"] = _now_iso()
     approval["result"] = result
+    approval["openhands_feedback"] = feedback
     _upsert_agent_approval(state, session_id, approval)
     _append_jsonl(
         _agent_events_path(state, session_id),
@@ -1768,10 +3984,10 @@ def _approve_agent_action(state: UiState, session_id: str, approval_id: str) -> 
             "id": f"evt_{uuid.uuid4().hex[:10]}",
             "type": "approval_approved",
             "created_at": approval["approved_at"],
-            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "ok": result.get("ok")},
+            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "ok": result.get("ok"), "openhands_feedback": feedback},
         },
     )
-    return {"approval": approval, "result": result}
+    return {"approval": approval, "result": result, "session": _agent_session_by_id(state, session_id)}
 
 
 def _reject_agent_action(state: UiState, session_id: str, approval_id: str, reason: str = "") -> JsonDict:
@@ -1779,9 +3995,16 @@ def _reject_agent_action(state: UiState, session_id: str, approval_id: str, reas
     approval = next((item for item in approvals if item.get("id") == approval_id), None)
     if not approval:
         raise KeyError(approval_id)
+    if approval.get("status") != "pending":
+        return {"approval": approval, "session": _agent_session_by_id(state, session_id)}
     approval["status"] = "rejected"
     approval["rejected_at"] = _now_iso()
     approval["rejection_reason"] = reason or "Rejected by user."
+    result = _tool_result(str(approval.get("tool") or "approval"), False, f"Approval rejected: {approval['rejection_reason']}")
+    feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
+    _supersede_duplicate_pending_approvals(state, session_id, approval, action="rejected")
+    approval["result"] = result
+    approval["openhands_feedback"] = feedback
     _upsert_agent_approval(state, session_id, approval)
     _append_jsonl(
         _agent_events_path(state, session_id),
@@ -1789,10 +4012,50 @@ def _reject_agent_action(state: UiState, session_id: str, approval_id: str, reas
             "id": f"evt_{uuid.uuid4().hex[:10]}",
             "type": "approval_rejected",
             "created_at": approval["rejected_at"],
-            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "reason": approval["rejection_reason"]},
+            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "reason": approval["rejection_reason"], "openhands_feedback": feedback},
         },
     )
-    return {"approval": approval}
+    return {"approval": approval, "session": _agent_session_by_id(state, session_id)}
+
+
+def _forward_approved_tool_result_to_openhands(
+    state: UiState,
+    session_id: str,
+    approval: JsonDict,
+    result: JsonDict,
+) -> JsonDict:
+    session = _require_agent_session(state, session_id)
+    conversation_id = str(session.get("openhands_conversation_id") or "")
+    arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
+    tool_call_id = str(approval.get("openhands_tool_call_id") or arguments.get("_openhands_tool_call_id") or "")
+    tool_name = str(approval.get("tool") or result.get("tool") or "")
+    feedback: JsonDict = {"sent": False, "reason": "No active OpenHands tool call to continue."}
+    submit_tool_result = getattr(state.agent_adapter, "submit_tool_result", None)
+    if conversation_id and tool_call_id and callable(submit_tool_result):
+        try:
+            feedback = submit_tool_result(conversation_id, tool_name, tool_call_id, result)
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            feedback = {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": tool_call_id}
+    _append_agent_event_record(
+        state,
+        session_id,
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "openhands_tool_result_forwarded" if feedback.get("sent") else "openhands_tool_result_forward_skipped",
+            "created_at": _now_iso(),
+            "payload": {
+                "tool": tool_name,
+                "tool_call_id": tool_call_id,
+                "conversation_id": conversation_id,
+                "sent": bool(feedback.get("sent")),
+                "reason": feedback.get("reason") or "",
+            },
+        },
+    )
+    if feedback.get("sent"):
+        session["status"] = "waiting_for_agent"
+        _upsert_agent_session(state, session)
+    return feedback
 
 
 def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: Optional[JsonDict] = None) -> JsonDict:
@@ -1850,12 +4113,23 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         return _tool_result(tool, True, f"Prepared diff for {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "diff": diff})
     if tool == "optpilot_shell_run":
         return _agent_tool_shell_run(state, session_id, tool, arguments)
+    if tool == "optpilot_workspace_preview_open":
+        return _agent_tool_workspace_preview_open(state, session_id, tool, arguments)
     if tool == "optpilot_catalog_list":
         catalog = _catalog_payload(state)
         kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
-        kind_keys = {"environment": "environments", "method": "methods", "study": "studies", "environments": "environments", "methods": "methods", "studies": "studies"}
+        kind_keys = {
+            "environment": "environments",
+            "method": "methods",
+            "study": "studies",
+            "resource": "resources",
+            "environments": "environments",
+            "methods": "methods",
+            "studies": "studies",
+            "resources": "resources",
+        }
         data = catalog if not kind else {kind_keys.get(kind, kind): catalog.get(kind_keys.get(kind, kind), [])}
-        return _tool_result(tool, True, "Catalog listed.", data=data)
+        return _tool_result(tool, True, "Catalog entries and saved study plans listed.", data=data)
     if tool == "optpilot_catalog_detail":
         kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
         uid = str(arguments.get("uid") or "")
@@ -1863,7 +4137,8 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         if path and not uid:
             uid = _encode_id(_resolve_user_path(path, state.cwd))
         detail = _catalog_detail(state, kind, uid)
-        return _tool_result(tool, True, f"Loaded {kind} catalog detail.", data=detail)
+        detail_label = "saved study plan" if kind in {"study", "studies"} else "catalog entry"
+        return _tool_result(tool, True, f"Loaded {kind} {detail_label}.", data=detail)
     if tool == "optpilot_compatibility_check":
         env_path = arguments.get("environment_path")
         method_path = arguments.get("method_path")
@@ -1922,21 +4197,30 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         return _tool_result(tool, True, f"Found {len(runs)} run(s).", data={"runs": runs})
     if tool == "optpilot_run_detail":
         run_dir = _resolve_run_tool_path(arguments)
-        return _tool_result(tool, True, "Run detail loaded.", data=_run_detail(run_dir))
+        return _tool_result(tool, True, "Run detail loaded.", data=_assistant_run_detail(run_dir))
     if tool == "optpilot_run_file_read":
         run_dir = _resolve_run_tool_path(arguments)
         relative = str(arguments.get("path") or "")
         path = (run_dir / relative).resolve()
         if not _is_relative_to(path, run_dir.resolve()) or not path.is_file():
-            raise FileNotFoundError(relative)
+            return _run_file_not_found_result(tool, run_dir, relative)
         if path.stat().st_size > 1_000_000:
             raise ValueError("Run file is too large to read through the assistant tool.")
-        return _tool_result(tool, True, f"Read run file {relative}.", data={"path": relative, "content": path.read_text(encoding="utf-8", errors="replace")})
+        return _tool_result(
+            tool,
+            True,
+            f"Read run file {relative}.",
+            data={
+                "path": relative,
+                "content": path.read_text(encoding="utf-8", errors="replace"),
+                "available_files": _run_evidence_files(run_dir)[:40],
+            },
+        )
     if tool == "optpilot_run_open_workspace":
         run_dir = _resolve_run_tool_path(arguments)
         workspace = _open_run_workspace(state, run_dir)
-        _attach_agent_workspace(state, session_id, workspace["id"], select=True)
-        return _tool_result(tool, True, "Run opened as analysis workspace.", data={"workspace": workspace})
+        session = _attach_agent_workspace(state, session_id, workspace["id"], select=True)
+        return _tool_result(tool, True, "Run opened as analysis workspace and attached to this assistant session.", data={"workspace": workspace, "session": session})
     if tool == "optpilot_run_compare":
         runs = [_run_detail(_resolve_run_tool_path({"run_id": item})) for item in arguments.get("runs", []) or []]
         return _tool_result(tool, True, f"Compared {len(runs)} run(s).", data={"runs": [_run_compare_summary(run) for run in runs], "comparable": _runs_comparable(runs)})
@@ -1945,6 +4229,13 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
     if tool == "optpilot_docs_search":
         results = _docs_search(state, str(arguments.get("query") or ""), limit=int(arguments.get("limit") or 5))
         return _tool_result(tool, True, f"Found {len(results)} doc result(s).", data={"results": results})
+    if tool == "optpilot_capability_list":
+        data = _assistant_capability_list(state, str(arguments.get("capability_kind") or arguments.get("kind") or ""))
+        total = sum(len(records) for records in data.get("capabilities", {}).values())
+        return _tool_result(tool, True, f"Found {total} configured assistant capability record(s).", data=data)
+    if tool == "optpilot_capability_detail":
+        data = _assistant_capability_detail(state, str(arguments.get("capability_kind") or arguments.get("kind") or ""), str(arguments.get("id") or ""))
+        return _tool_result(tool, True, "Assistant capability loaded.", data=data)
     return _tool_result(tool, False, f"Unknown OptPilot assistant tool: {tool}", data={"known_tools": state.agent_adapter.status().get("available_tools", [])})
 
 
@@ -1955,7 +4246,7 @@ def _selected_agent_workspace_id(state: UiState, session_id: str) -> str:
     if selected and selected in attached:
         return selected
     if attached:
-        return attached[0]
+        raise ValueError("No workspace is selected for this assistant session. Pass workspace_id explicitly or focus a workspace first.")
     raise ValueError("No workspace is attached to this assistant session.")
 
 
@@ -1972,7 +4263,9 @@ def _resolve_agent_workspace_path(
         raise PermissionError("Workspace is not attached to this assistant session.")
     workspace = _require_ui_workspace(state, workspace_id)
     root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
-    raw_path = arguments.get("path", default_path)
+    raw_path = arguments.get("path")
+    if raw_path in (None, "") and default_path is not None:
+        raw_path = default_path
     if raw_path in (None, ""):
         raise ValueError("path is required.")
     requested = Path(str(raw_path)).expanduser()
@@ -2055,6 +4348,27 @@ def _resolve_run_tool_path(arguments: JsonDict) -> Path:
     raise FileNotFoundError(f"Run not found: {raw}")
 
 
+def _agent_tool_workspace_preview_open(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
+    workspace, root, _ = _resolve_agent_workspace_path(
+        state,
+        session_id,
+        {**arguments, "path": "."},
+        default_path=".",
+    )
+    port = int(arguments.get("port") or 0)
+    extra_ports = arguments.get("extra_ports") if isinstance(arguments.get("extra_ports"), list) else []
+    result = state.workspace_preview_open(root, port, extra_ports=extra_ports)
+    return _tool_result(
+        tool,
+        True,
+        f"Workspace preview opened on port {port}.",
+        data={
+            **result,
+            "workspace": workspace,
+        },
+    )
+
+
 def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
     workspace, root, cwd = _resolve_agent_workspace_path(
         state,
@@ -2085,20 +4399,16 @@ def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments:
     env = {
         key: value
         for key, value in os.environ.items()
-        if key in {"HOME", "PATH", "SHELL", "LANG", "LC_ALL", "VIRTUAL_ENV", "UV_CACHE_DIR"}
+        if key in {"LANG", "LC_ALL", "UV_CACHE_DIR"}
     }
-    python_path = str(state.cwd)
-    if env.get("PYTHONPATH"):
-        python_path = f"{python_path}{os.pathsep}{env['PYTHONPATH']}"
-    env["PYTHONPATH"] = python_path
-    completed = subprocess.run(
+    env["OPTPILOT_WORKSPACE_ROOT"] = str(root)
+    env["OPTPILOT_STUDIO_ROOT"] = str(state.cwd)
+    completed, runtime_status = state.workspace_runtime.exec(
+        workspace,
         command,
-        cwd=str(cwd),
+        cwd=cwd,
         env=env,
-        capture_output=True,
-        text=True,
         timeout=timeout_seconds,
-        check=False,
     )
     return _tool_result(
         tool,
@@ -2106,6 +4416,7 @@ def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments:
         f"Command exited with {completed.returncode}.",
         data={
             "workspace": workspace,
+            "runtime": runtime_status,
             "cwd": _relative_path(cwd, root),
             "command": command,
             "returncode": completed.returncode,
@@ -2234,10 +4545,14 @@ def _docs_search(state: UiState, query: str, *, limit: int = 5) -> List[JsonDict
     terms = [term.lower() for term in query.split() if term.strip()]
     if not terms:
         return []
+    package_root = Path(__file__).resolve().parents[1]
     roots = [
         state.cwd / "docs",
         state.cwd / ".agents" / "optpilot-assistant",
         state.cwd / "src" / "optpilot" / "schemas",
+        package_root / "docs_assets",
+        package_root / "assistant_assets",
+        package_root / "schemas",
     ]
     matches: List[JsonDict] = []
     suffixes = {".md", ".yaml", ".yml", ".json", ".py"}
@@ -2294,6 +4609,15 @@ def _append_jsonl(path: Path, record: JsonDict) -> None:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def _agent_session_operation_lock(state: UiState, session_id: str) -> threading.Lock:
+    with state._agent_session_locks_lock:
+        lock = state.agent_session_locks.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            state.agent_session_locks[session_id] = lock
+        return lock
+
+
 def _append_agent_event_record(state: UiState, session_id: str, event: JsonDict) -> None:
     event_id = str(event.get("id") or "")
     path = _agent_events_path(state, session_id)
@@ -2312,13 +4636,22 @@ def _append_agent_event_record(state: UiState, session_id: str, event: JsonDict)
 
 def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
     payload = dict(session)
-    messages = _read_agent_messages(state, str(session["id"]))
+    session_id = str(session["id"])
+    lock = _agent_session_operation_lock(state, session_id)
+    lock_acquired = lock.acquire(blocking=False)
+    try:
+        if lock_acquired:
+            _recover_agent_assistant_messages_from_events(state, session_id)
+        messages = _read_agent_messages(state, session_id)
+    finally:
+        if lock_acquired:
+            lock.release()
     if not messages:
         messages = [_default_agent_message()]
-        _append_jsonl(_agent_messages_path(state, str(session["id"])), messages[0])
+        _append_jsonl(_agent_messages_path(state, session_id), messages[0])
     payload["messages"] = messages
-    payload["events"] = _read_agent_events(state, str(session["id"]))
-    payload["approvals"] = _read_agent_approvals(state, str(session["id"]))
+    payload["events"] = _read_agent_events(state, session_id)
+    payload["approvals"] = _read_agent_approvals(state, session_id)
     return payload
 
 
@@ -2326,7 +4659,7 @@ def _list_agent_sessions(state: UiState) -> List[JsonDict]:
     sessions = _read_agent_session_index(state)
     if not sessions:
         sessions = [_create_agent_session(state, {"title": "Main Session", "description": "General OptPilot work"})]
-    known_workspaces = {workspace["id"] for workspace in _list_ui_workspaces(state)}
+    known_workspaces = {str(workspace["id"]) for workspace in _read_workspace_index(state)}
     changed = False
     normalized = []
     for session in sessions:
@@ -2335,7 +4668,7 @@ def _list_agent_sessions(state: UiState) -> List[JsonDict]:
         if attached != session.get("attached_workspace_ids", []):
             session["attached_workspace_ids"] = attached
             if session.get("selected_workspace_id") not in attached:
-                session["selected_workspace_id"] = attached[0] if attached else ""
+                session["selected_workspace_id"] = ""
             session["updated_at"] = _now_iso()
             changed = True
         normalized.append(session)
@@ -2379,7 +4712,7 @@ def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:
         "created_at": now,
         "updated_at": now,
         "attached_workspace_ids": attached,
-        "selected_workspace_id": str(payload.get("selected_workspace_id") or (attached[0] if attached else "")),
+        "selected_workspace_id": str(payload.get("selected_workspace_id") or ""),
         "openhands_conversation_id": str(payload.get("openhands_conversation_id") or ""),
     }
     _agent_session_dir(state, session_id).mkdir(parents=True, exist_ok=True)
@@ -2411,6 +4744,9 @@ def _detach_workspace_from_session_record(state: UiState, workspace_id: str, ses
         return
     workspace = _require_ui_workspace(state, workspace_id)
     workspace["attached_sessions"] = [item for item in workspace.get("attached_sessions", []) if item != session_id]
+    if _workspace_should_remove_after_last_detach(state, workspace):
+        _remove_ui_workspace_reference(state, workspace_id)
+        return
     _upsert_ui_workspace(state, workspace)
 
 
@@ -2445,7 +4781,7 @@ def _detach_agent_workspace(state: UiState, session_id: str, workspace_id: str) 
     attached = [item for item in session.get("attached_workspace_ids", []) if item != workspace_id]
     session["attached_workspace_ids"] = attached
     if session.get("selected_workspace_id") == workspace_id:
-        session["selected_workspace_id"] = attached[0] if attached else ""
+        session["selected_workspace_id"] = ""
     _detach_workspace_from_session_record(state, workspace_id, session_id)
     _append_jsonl(
         _agent_events_path(state, session_id),
@@ -2472,7 +4808,165 @@ def _select_agent_workspace(state: UiState, session_id: str, workspace_id: str) 
 def _mark_agent_session_idle(state: UiState, session_id: str) -> JsonDict:
     session = _require_agent_session(state, session_id)
     session["status"] = "idle"
+    session.pop("active_turn_id", None)
+    session.pop("active_turn_started_at", None)
     return _upsert_agent_session(state, session)
+
+
+def _cancel_agent_session(state: UiState, session_id: str) -> JsonDict:
+    remote_cancel_scheduled = False
+    with _agent_session_operation_lock(state, session_id):
+        session = _require_agent_session(state, session_id)
+        conversation_id = str(session.get("openhands_conversation_id") or "")
+        turn_id = str(session.get("active_turn_id") or "")
+        cancelled_at = _now_iso()
+        cancel_conversation = getattr(state.agent_adapter, "cancel_conversation", None)
+        remote_cancel_scheduled = bool(conversation_id and callable(cancel_conversation))
+        session["status"] = "idle"
+        session["cancelled_at"] = cancelled_at
+        if turn_id:
+            session["cancelled_turn_id"] = turn_id
+        if conversation_id:
+            session["cancelled_openhands_conversation_id"] = conversation_id
+        session.pop("active_turn_id", None)
+        session.pop("active_turn_started_at", None)
+        session.pop("openhands_pending_sync", None)
+        _append_agent_event_record(
+            state,
+            session_id,
+            {
+                "id": f"evt_{uuid.uuid4().hex[:10]}",
+                "type": "openhands_dispatch_cancelled",
+                "created_at": cancelled_at,
+                "payload": {
+                    "conversation_id": conversation_id,
+                    "turn_id": turn_id,
+                    "remote_cancel_scheduled": remote_cancel_scheduled,
+                    "remote_cancelled": False,
+                    "remote_action": "",
+                    "remote_error": "" if remote_cancel_scheduled else "No active OpenHands conversation.",
+                },
+            },
+        )
+        updated = _upsert_agent_session(state, session)
+    if remote_cancel_scheduled:
+        _schedule_openhands_cancel(state, session_id, conversation_id, turn_id)
+    return updated
+
+
+def _schedule_openhands_cancel(state: UiState, session_id: str, conversation_id: str, turn_id: str) -> None:
+    def worker() -> None:
+        cancel_conversation = getattr(state.agent_adapter, "cancel_conversation", None)
+        if not callable(cancel_conversation):
+            return
+        event_type = "openhands_cancel_acknowledged"
+        try:
+            cancel_result = cancel_conversation(conversation_id)
+            if not cancel_result.get("cancelled"):
+                event_type = "openhands_cancel_failed"
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            cancel_result = {"cancelled": False, "conversation_id": conversation_id, "error": str(exc)}
+            event_type = "openhands_cancel_failed"
+        with _agent_session_operation_lock(state, session_id):
+            _append_agent_event_record(
+                state,
+                session_id,
+                {
+                    "id": f"evt_{uuid.uuid4().hex[:10]}",
+                    "type": event_type,
+                    "created_at": _now_iso(),
+                    "payload": {
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "remote_cancelled": bool(cancel_result.get("cancelled")),
+                        "remote_action": cancel_result.get("action") or "",
+                        "remote_error": cancel_result.get("error") or cancel_result.get("reason") or "",
+                    },
+                },
+            )
+
+    threading.Thread(
+        target=worker,
+        name=f"optpilot-openhands-cancel-{session_id}",
+        daemon=True,
+    ).start()
+
+
+def _cancelled_agent_turn_session(
+    state: UiState,
+    session_id: str,
+    *,
+    turn_id: str,
+    conversation_id: str,
+    turn_started_at: str,
+) -> Optional[JsonDict]:
+    latest = _require_agent_session(state, session_id)
+    cancelled_turn_id = str(latest.get("cancelled_turn_id") or "")
+    if turn_id and cancelled_turn_id == turn_id:
+        return latest
+    cancelled_conversation_id = str(latest.get("cancelled_openhands_conversation_id") or "")
+    cancelled_at = str(latest.get("cancelled_at") or "")
+    if (
+        conversation_id
+        and cancelled_conversation_id == conversation_id
+        and cancelled_at
+        and turn_started_at
+        and cancelled_at >= turn_started_at
+    ):
+        return latest
+    return None
+
+
+def _append_agent_assistant_message_if_new(
+    state: UiState,
+    session_id: str,
+    *,
+    content: Any,
+    title: str = "Assistant",
+    context: Optional[JsonDict] = None,
+    dispatch: Optional[JsonDict] = None,
+) -> bool:
+    assistant_content = _user_facing_openhands_text(content)
+    normalized = _normalize_agent_text(assistant_content)
+    if not assistant_content or not normalized:
+        return False
+    existing_texts = {
+        _normalize_agent_text(str(message.get("content") or ""))
+        for message in _read_agent_messages(state, session_id)
+        if message.get("role") == "assistant" and str(message.get("content") or "").strip()
+    }
+    if normalized in existing_texts:
+        return False
+    source, memory_scope = _agent_assistant_message_origin(dispatch)
+    message: JsonDict = {
+        "id": f"msg_{uuid.uuid4().hex[:10]}",
+        "role": "assistant",
+        "title": title or "Assistant",
+        "content": assistant_content,
+        "created_at": _now_iso(),
+        "source": source,
+        "memory_scope": memory_scope,
+    }
+    if context is not None:
+        message["context"] = context
+    if dispatch is not None:
+        message["dispatch"] = dispatch
+    _append_jsonl(_agent_messages_path(state, session_id), message)
+    return True
+
+
+def _agent_assistant_message_origin(dispatch: Optional[JsonDict]) -> tuple[str, str]:
+    dispatch = dispatch if isinstance(dispatch, dict) else {}
+    status = str(dispatch.get("status") or "")
+    transport = str(dispatch.get("transport") or dispatch.get("dispatch") or "")
+    conversation_id = str(dispatch.get("conversation_id") or "")
+    if status in {"queued", "failed"}:
+        return "studio_system", "ui_history"
+    if conversation_id and "openhands" in transport:
+        return "openhands", "openhands_conversation"
+    if transport:
+        return "model_chat", "stateless_model"
+    return "assistant", "ui_history"
 
 
 def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) -> JsonDict:
@@ -2480,6 +4974,11 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
     role = str(payload.get("role") or "user")
     content = str(payload.get("content") or payload.get("message") or "")
     title = str(payload.get("title") or ("User" if role == "user" else "Assistant"))
+    source = str(payload.get("source") or ("user" if role == "user" else "studio_ui"))
+    memory_scope = str(
+        payload.get("memory_scope")
+        or ("openhands_conversation" if role == "user" or source == "openhands" else "ui_history")
+    )
     ui_context = payload.get("ui_context") if isinstance(payload.get("ui_context"), dict) else {}
     if not content:
         raise ValueError("Message content is required.")
@@ -2490,6 +4989,8 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
         "title": title,
         "content": content,
         "created_at": _now_iso(),
+        "source": source,
+        "memory_scope": memory_scope,
         "context": context,
     }
     _append_jsonl(_agent_messages_path(state, session_id), message)
@@ -2503,7 +5004,13 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
         },
     )
     if role == "user":
+        turn_id = f"turn_{uuid.uuid4().hex[:10]}"
+        turn_started_at = str(message["created_at"])
         session["status"] = "running"
+        session["active_turn_id"] = turn_id
+        session["active_turn_started_at"] = turn_started_at
+        session.pop("openhands_pending_sync", None)
+        _upsert_agent_session(state, session)
         _append_agent_event_record(
             state,
             session_id,
@@ -2514,6 +5021,7 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
                 "payload": {
                     "dispatch": state.agent_adapter.status().get("dispatch"),
                     "conversation_id": str(session.get("openhands_conversation_id") or ""),
+                    "turn_id": turn_id,
                 },
             },
         )
@@ -2527,6 +5035,15 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
         conversation_id = str(dispatch.get("conversation_id") or "")
         if conversation_id:
             session["openhands_conversation_id"] = conversation_id
+        cancelled_session = _cancelled_agent_turn_session(
+            state,
+            session_id,
+            turn_id=turn_id,
+            conversation_id=conversation_id,
+            turn_started_at=turn_started_at,
+        )
+        if cancelled_session:
+            return {"session": _agent_session_payload(state, cancelled_session), "message": message}
         sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
         if sync_state:
             session["openhands_pending_sync"] = sync_state
@@ -2535,29 +5052,29 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
                 continue
             _append_agent_event_record(state, session_id, event)
         raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
-        assistant_content = str(raw_assistant.get("content") or "").strip()
-        if assistant_content:
-            assistant_message = {
-                "id": f"msg_{uuid.uuid4().hex[:10]}",
-                "role": "assistant",
-                "title": str(raw_assistant.get("title") or "Assistant"),
-                "content": assistant_content,
-                "created_at": _now_iso(),
-                "context": context,
-                "dispatch": {
-                    "status": dispatch.get("status"),
-                    "mode": dispatch.get("mode"),
-                    "transport": dispatch.get("dispatch"),
-                    "conversation_id": conversation_id,
-                },
-            }
-            _append_jsonl(_agent_messages_path(state, session_id), assistant_message)
+        _append_agent_assistant_message_if_new(
+            state,
+            session_id,
+            content=raw_assistant.get("content"),
+            title=str(raw_assistant.get("title") or "Assistant"),
+            context=context,
+            dispatch={
+                "status": dispatch.get("status"),
+                "mode": dispatch.get("mode"),
+                "transport": dispatch.get("dispatch"),
+                "conversation_id": conversation_id,
+            },
+        )
         dispatch_status = str(dispatch.get("status") or "")
         if dispatch_status in {"answered", "dispatched"}:
             session["status"] = "idle"
+            session.pop("active_turn_id", None)
+            session.pop("active_turn_started_at", None)
             session.pop("openhands_pending_sync", None)
         elif dispatch_status == "failed":
             session["status"] = "error"
+            session.pop("active_turn_id", None)
+            session.pop("active_turn_started_at", None)
             session.pop("openhands_pending_sync", None)
         else:
             session["status"] = "waiting_for_agent"
@@ -2568,8 +5085,11 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
 
 
 def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
+    sync_started_at = _now_iso()
     session = _require_agent_session(state, session_id)
     conversation_id = str(session.get("openhands_conversation_id") or "")
+    turn_id = str(session.get("active_turn_id") or "")
+    turn_started_at = str(session.get("active_turn_started_at") or sync_started_at)
     if not conversation_id or session.get("status") not in {"waiting_for_agent", "running"}:
         return _agent_session_payload(state, session)
     handled_tool_calls = _handled_optpilot_tool_call_ids(state, session_id)
@@ -2594,47 +5114,85 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
         allow_final_response_fallback=bool(pending_sync.get("allow_final_response_fallback")),
         poll_seconds=3.0,
     )
-    for event in dispatch.get("events", []) or []:
-        if not isinstance(event, dict):
-            continue
-        _append_agent_event_record(state, session_id, event)
-    raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
-    assistant_content = str(raw_assistant.get("content") or "").strip()
-    if assistant_content:
-        _append_jsonl(
-            _agent_messages_path(state, session_id),
-            {
-                "id": f"msg_{uuid.uuid4().hex[:10]}",
-                "role": "assistant",
-                "title": str(raw_assistant.get("title") or "Assistant"),
-                "content": assistant_content,
-                "created_at": _now_iso(),
-                "dispatch": {
-                    "status": dispatch.get("status"),
-                    "transport": "openhands_http",
-                    "conversation_id": conversation_id,
-                },
-            },
+    with _agent_session_operation_lock(state, session_id):
+        cancelled_session = _cancelled_agent_turn_session(
+            state,
+            session_id,
+            turn_id=turn_id,
+            conversation_id=conversation_id,
+            turn_started_at=turn_started_at,
         )
-        session["status"] = "idle"
-        session.pop("openhands_pending_sync", None)
-    elif dispatch.get("status") == "failed":
-        session["status"] = "error"
-        session.pop("openhands_pending_sync", None)
-    else:
-        session["status"] = "waiting_for_agent"
-        sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
-        if sync_state:
-            session["openhands_pending_sync"] = sync_state
-    return _upsert_agent_session(state, session)
+        if cancelled_session:
+            return _agent_session_payload(state, cancelled_session)
+        latest_session = _require_agent_session(state, session_id)
+        latest_turn_id = str(latest_session.get("active_turn_id") or "")
+        latest_conversation_id = str(latest_session.get("openhands_conversation_id") or "")
+        if (
+            latest_session.get("status") not in {"waiting_for_agent", "running"}
+            or latest_turn_id != turn_id
+            or latest_conversation_id != conversation_id
+        ):
+            return _agent_session_payload(state, latest_session)
+        session = latest_session
+        for event in dispatch.get("events", []) or []:
+            if not isinstance(event, dict):
+                continue
+            _append_agent_event_record(state, session_id, event)
+        raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
+        if _append_agent_assistant_message_if_new(
+            state,
+            session_id,
+            content=raw_assistant.get("content"),
+            title=str(raw_assistant.get("title") or "Assistant"),
+            dispatch={
+                "status": dispatch.get("status"),
+                "transport": "openhands_http",
+                "conversation_id": conversation_id,
+            },
+        ):
+            session["status"] = "idle"
+            session.pop("active_turn_id", None)
+            session.pop("active_turn_started_at", None)
+            session.pop("openhands_pending_sync", None)
+        elif dispatch.get("status") == "failed":
+            session["status"] = "error"
+            session.pop("active_turn_id", None)
+            session.pop("active_turn_started_at", None)
+            session.pop("openhands_pending_sync", None)
+        else:
+            session["status"] = "waiting_for_agent"
+            sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
+            if sync_state:
+                session["openhands_pending_sync"] = sync_state
+        return _upsert_agent_session(state, session)
 
 
 def _assistant_response_texts(state: UiState, session_id: str) -> set[str]:
     return {
         str(message.get("content") or "").strip()
         for message in _read_agent_messages(state, session_id)
-        if message.get("role") == "assistant" and str(message.get("content") or "").strip()
+        if (
+            message.get("role") == "assistant"
+            and _agent_message_source(message) == "openhands"
+            and str(message.get("content") or "").strip()
+        )
     }
+
+
+def _agent_message_source(message: JsonDict) -> str:
+    source = str(message.get("source") or "")
+    if source:
+        return source
+    role = str(message.get("role") or "user")
+    if role == "user":
+        return "user"
+    title = str(message.get("title") or "")
+    dispatch = message.get("dispatch") if isinstance(message.get("dispatch"), dict) else {}
+    if role == "assistant" and (title == "OpenHands" or dispatch.get("conversation_id")):
+        return "openhands"
+    if role == "assistant" and title == "Assistant" and dispatch.get("transport"):
+        return "model_chat"
+    return "studio_ui"
 
 
 def _handled_optpilot_tool_call_ids(state: UiState, session_id: str) -> set[str]:
@@ -2666,17 +5224,20 @@ def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optiona
                     "focus_paths": workspace.get("focus_paths", []),
                 }
             )
-    selected_workspace = None
-    if session.get("selected_workspace_id"):
-        selected_workspace = next((item for item in attached if item["id"] == session.get("selected_workspace_id")), None)
     catalog = _catalog_payload(state)
     current_page = _assistant_page_name(ui_context.get("current_page"))
     assistant_mode = str(ui_context.get("assistant_mode") or "chat")
+    selected_workspace = None
+    ui_selected_workspace = ui_context.get("selected_workspace") if isinstance(ui_context.get("selected_workspace"), dict) else None
+    ui_selected_workspace_id = str((ui_selected_workspace or {}).get("id") or "")
+    if current_page == "editor" and ui_selected_workspace_id:
+        selected_workspace = next((item for item in attached if item["id"] == ui_selected_workspace_id), None)
     selected_catalog_entry = ui_context.get("selected_catalog_entry") if current_page == "catalog" and isinstance(ui_context.get("selected_catalog_entry"), dict) else None
     selected_study_plan = ui_context.get("selected_study_plan") if current_page == "studies" and isinstance(ui_context.get("selected_study_plan"), dict) else None
     selected_run = ui_context.get("selected_run") if current_page == "runs" and isinstance(ui_context.get("selected_run"), dict) else None
     registration_menu = ui_context.get("registration_menu") if assistant_mode == "registration" and isinstance(ui_context.get("registration_menu"), dict) else None
     code_editor = ui_context.get("code_editor") if current_page == "editor" and isinstance(ui_context.get("code_editor"), dict) else None
+    workspace_preview = ui_context.get("workspace_preview") if current_page == "editor" and isinstance(ui_context.get("workspace_preview"), dict) else None
     return state.agent_adapter.context_packet(
         session_id=str(session.get("id") or ""),
         selected_workspace=selected_workspace,
@@ -2684,8 +5245,9 @@ def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optiona
         catalog_counts={
             "environments": len(catalog["environments"]),
             "methods": len(catalog["methods"]),
-            "studies": len(catalog["studies"]),
+            "resources": len(catalog.get("resources", [])),
         },
+        study_plan_count=len(catalog["studies"]),
         run_count=len(_list_runs(state)),
         current_page=current_page,
         registration_menu=registration_menu,
@@ -2693,11 +5255,13 @@ def _agent_context_packet(state: UiState, session: JsonDict, ui_context: Optiona
         selected_study_plan=selected_study_plan,
         selected_run=selected_run,
         code_editor=code_editor,
+        workspace_preview=workspace_preview,
         visible_state={
             key: value
             for key, value in ui_context.items()
-            if key not in {"current_page", "registration_menu", "selected_catalog_entry", "selected_study_plan", "selected_run", "code_editor"}
+            if key not in {"current_page", "registration_menu", "selected_workspace", "selected_catalog_entry", "selected_study_plan", "selected_run", "code_editor", "workspace_preview"}
         },
+        assistant_capabilities=_assistant_capability_summary(state),
     )
 
 
@@ -2723,23 +5287,94 @@ def _read_workspace_index(state: UiState) -> List[JsonDict]:
 def _write_workspace_index(state: UiState, workspaces: List[JsonDict]) -> None:
     path = _workspace_index_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"workspaces": sorted(workspaces, key=lambda item: item.get("updated_at", ""), reverse=True)}
+    cleaned = [_stored_workspace_record(item) for item in workspaces]
+    payload = {"workspaces": sorted(cleaned, key=lambda item: item.get("updated_at", ""), reverse=True)}
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _stored_workspace_record(workspace: JsonDict) -> JsonDict:
+    return {key: value for key, value in dict(workspace).items() if key not in DERIVED_WORKSPACE_FIELDS}
+
+
+def _workspace_attachment_map(state: UiState) -> Dict[str, List[str]]:
+    attachments: Dict[str, List[str]] = {}
+    for session in _read_agent_session_index(state):
+        session_id = str(session.get("id") or "")
+        if not session_id:
+            continue
+        for workspace_id in session.get("attached_workspace_ids", []) or []:
+            workspace_key = str(workspace_id)
+            if workspace_key:
+                attachments.setdefault(workspace_key, []).append(session_id)
+    return {key: sorted(set(value)) for key, value in attachments.items()}
+
+
+def _decorate_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
+    item = dict(workspace)
+    item["ownership"] = str(item.get("ownership") or _workspace_ownership(state, item))
+    item["managed_by_studio"] = item["ownership"] == "studio-owned"
+    item["delete_action"] = _workspace_delete_action(state, item)
+    item["delete_label"] = _workspace_delete_label(item, item["delete_action"])
+    item["runtime"] = _workspace_runtime_status(state, item)
+    return item
+
+
+def _workspace_ownership(state: UiState, workspace: JsonDict) -> str:
+    root = Path(str(workspace.get("root") or "")).resolve()
+    workspace_id = str(workspace.get("id") or "")
+    source_type = str(workspace.get("source_type") or "")
+    mode = str(workspace.get("mode") or "editable")
+    if workspace_id and _is_managed_draft_root(state, workspace_id, root):
+        return "studio-owned"
+    if source_type == "run" or mode == "analysis":
+        return "run-artifact"
+    if source_type == "catalog" or mode == "read-only":
+        return "catalog-asset"
+    return "external-reference"
+
+
+def _workspace_delete_action(state: UiState, workspace: JsonDict) -> str:
+    if _workspace_ownership(state, workspace) == "studio-owned":
+        return "delete_draft"
+    return "remove_reference"
+
+
+def _workspace_delete_label(workspace: JsonDict, action: str) -> str:
+    if action != "delete_draft":
+        return "Remove From Studio"
+    if str(workspace.get("source_type") or "") == "catalog-copy":
+        return "Delete Copy"
+    return "Delete Draft"
+
+
+def _workspace_runtime_status(state: UiState, workspace: JsonDict) -> JsonDict:
+    return state.workspace_runtime.status(workspace)
 
 
 def _list_ui_workspaces(state: UiState) -> List[JsonDict]:
     workspaces = []
+    returned = []
     changed = False
+    attachment_map = _workspace_attachment_map(state)
     for workspace in _read_workspace_index(state):
+        workspace = dict(workspace)
         root = Path(str(workspace["root"]))
         if not root.exists():
-            workspace = dict(workspace)
             workspace["status"] = "missing"
             changed = True
+        attached_sessions = attachment_map.get(str(workspace.get("id") or ""), [])
+        if workspace.get("attached_sessions", []) != attached_sessions:
+            workspace["attached_sessions"] = attached_sessions
+            changed = True
+        if _workspace_should_remove_after_last_detach(state, workspace, keep_recent=True):
+            state.workspace_runtime.delete(str(workspace.get("id") or ""))
+            changed = True
+            continue
         workspaces.append(workspace)
+        returned.append(_decorate_ui_workspace(state, workspace))
     if changed:
         _write_workspace_index(state, workspaces)
-    return workspaces
+    return returned
 
 
 def _workspace_by_id(state: UiState, workspace_id: str) -> Optional[JsonDict]:
@@ -2758,11 +5393,11 @@ def _require_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
 
 def _upsert_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
     workspaces = [item for item in _read_workspace_index(state) if item.get("id") != workspace.get("id")]
-    workspace = dict(workspace)
+    workspace = _stored_workspace_record(workspace)
     workspace["updated_at"] = _now_iso()
     workspaces.append(workspace)
     _write_workspace_index(state, workspaces)
-    return workspace
+    return _decorate_ui_workspace(state, workspace)
 
 
 def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
@@ -2794,19 +5429,174 @@ def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
         "focus_paths": list(payload.get("focus_paths", []) or []),
         "registration_enabled": bool(payload.get("registration_enabled", True)),
         "source_path": str(payload.get("source_path") or ""),
-        "created_at": _now_iso(),
+        "created_at": str(payload.get("created_at") or _now_iso()),
     }
+    workspace["ownership"] = str(payload.get("ownership") or _workspace_ownership(state, workspace))
     return _upsert_ui_workspace(state, workspace)
 
 
 def _detach_workspace(state: UiState, workspace_id: str, session_id: str) -> JsonDict:
     workspace = _require_ui_workspace(state, workspace_id)
-    attached = [item for item in workspace.get("attached_sessions", []) if item != session_id]
-    workspace["attached_sessions"] = attached
+    if session_id:
+        sessions = []
+        for session in _read_agent_session_index(state):
+            if session.get("id") == session_id:
+                session = dict(session)
+                attached = [item for item in session.get("attached_workspace_ids", []) if item != workspace_id]
+                session["attached_workspace_ids"] = attached
+                if session.get("selected_workspace_id") == workspace_id:
+                    session["selected_workspace_id"] = ""
+                session["updated_at"] = _now_iso()
+            sessions.append(session)
+        _write_agent_session_index(state, sessions)
+    workspace["attached_sessions"] = _workspace_attachment_map(state).get(workspace_id, [])
+    if _workspace_should_remove_after_last_detach(state, workspace):
+        return _remove_ui_workspace_reference(state, workspace_id)
     return _upsert_ui_workspace(state, workspace)
 
 
-def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bool) -> JsonDict:
+def _workspace_should_remove_after_last_detach(state: UiState, workspace: JsonDict, *, keep_recent: bool = False) -> bool:
+    if workspace.get("attached_sessions"):
+        return False
+    if str(workspace.get("mode") or "") not in {"read-only", "analysis"}:
+        return False
+    if keep_recent and _workspace_created_within(workspace, READ_ONLY_WORKSPACE_PRUNE_GRACE_SECONDS):
+        return False
+    return _workspace_ownership(state, workspace) in {"catalog-asset", "run-artifact"}
+
+
+def _workspace_created_within(workspace: JsonDict, seconds: int) -> bool:
+    created_at = str(workspace.get("created_at") or "")
+    if not created_at:
+        return False
+    try:
+        created_epoch = calendar.timegm(time.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return False
+    return time.time() - created_epoch < seconds
+
+
+def _remove_ui_workspace_reference(state: UiState, workspace_id: str) -> JsonDict:
+    workspace = _require_ui_workspace(state, workspace_id)
+    sessions = _read_agent_session_index(state)
+    changed_sessions = []
+    for session in sessions:
+        attached = [item for item in session.get("attached_workspace_ids", []) if item != workspace_id]
+        if attached != session.get("attached_workspace_ids", []):
+            session = dict(session)
+            session["attached_workspace_ids"] = attached
+            if session.get("selected_workspace_id") == workspace_id:
+                session["selected_workspace_id"] = ""
+            session["updated_at"] = _now_iso()
+        changed_sessions.append(session)
+    _write_agent_session_index(state, changed_sessions)
+    _write_workspace_index(state, [item for item in _read_workspace_index(state) if item.get("id") != workspace_id])
+    runtime_deleted = state.workspace_runtime.delete(workspace_id)
+    workspace = dict(workspace)
+    workspace["deleted"] = True
+    workspace["files_deleted"] = False
+    workspace["runtime_deleted"] = runtime_deleted
+    workspace["delete_action"] = "remove_reference"
+    workspace["delete_label"] = _workspace_delete_label(workspace, workspace["delete_action"])
+    return workspace
+
+
+def _rename_ui_workspace(state: UiState, workspace_id: str, title: str) -> JsonDict:
+    cleaned = " ".join(str(title or "").strip().split())
+    if not cleaned:
+        raise ValueError("Workspace name cannot be empty.")
+    if len(cleaned) > 120:
+        raise ValueError("Workspace name must be 120 characters or fewer.")
+    workspace = _require_ui_workspace(state, workspace_id)
+    workspace["title"] = cleaned
+    return _upsert_ui_workspace(state, workspace)
+
+
+def _delete_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
+    workspace = _require_ui_workspace(state, workspace_id)
+    if str(workspace.get("mode") or "editable") not in {"editable"}:
+        raise ValueError("Only editable workspaces can be removed from Studio.")
+    sessions = _read_agent_session_index(state)
+    changed_sessions = []
+    for session in sessions:
+        attached = [item for item in session.get("attached_workspace_ids", []) if item != workspace_id]
+        if attached != session.get("attached_workspace_ids", []):
+            session = dict(session)
+            session["attached_workspace_ids"] = attached
+            if session.get("selected_workspace_id") == workspace_id:
+                session["selected_workspace_id"] = ""
+            session["updated_at"] = _now_iso()
+        changed_sessions.append(session)
+    _write_agent_session_index(state, changed_sessions)
+    workspaces = [item for item in _read_workspace_index(state) if item.get("id") != workspace_id]
+    _write_workspace_index(state, workspaces)
+    root = Path(str(workspace["root"])).resolve()
+    files_deleted = False
+    delete_error = ""
+    if _is_managed_draft_root(state, workspace_id, root):
+        try:
+            shutil.rmtree(root.parent)
+        except Exception as exc:
+            delete_error = str(exc)
+        files_deleted = not root.parent.exists()
+    runtime_deleted = state.workspace_runtime.delete(workspace_id)
+    workspace = dict(workspace)
+    workspace["deleted"] = True
+    workspace["files_deleted"] = files_deleted
+    workspace["runtime_deleted"] = runtime_deleted
+    if delete_error:
+        workspace["delete_error"] = delete_error
+    workspace["delete_action"] = "delete_draft" if files_deleted else "remove_reference"
+    workspace["delete_label"] = _workspace_delete_label(workspace, workspace["delete_action"])
+    return workspace
+
+
+def _is_managed_draft_root(state: UiState, workspace_id: str, root: Path) -> bool:
+    expected = (state.workspaces_dir / workspace_id / "workspace").resolve()
+    return root == expected and _is_relative_to(root, state.workspaces_dir.resolve())
+
+
+def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bool, title_prefix: str = "Edit") -> JsonDict:
+    if kind == "resource":
+        resource_root = _decode_id(uid).resolve()
+        if not resource_root.exists() or not resource_root.is_dir():
+            raise FileNotFoundError(f"resource not found: {resource_root}")
+        entry = _resource_catalog_entry(resource_root)
+        label = str(entry.get("label") or resource_root.name)
+        if editable:
+            workspace_id = f"ws_{uuid.uuid4().hex[:10]}"
+            root = state.workspaces_dir / workspace_id / "workspace"
+            shutil.copytree(resource_root, root, ignore=_copy_ignore)
+            mode = "editable"
+            source_type = "catalog-copy"
+            title = f"{title_prefix} {label}"
+        else:
+            workspace_id = f"ws_{slug_path(resource_root)}_resource"
+            root = resource_root
+            mode = "read-only"
+            source_type = "catalog"
+            title = f"Inspect {label}"
+        readme = entry.get("summary", {}).get("readme") or "README.md"
+        return _create_ui_workspace(
+            state,
+            {
+                "id": workspace_id,
+                "title": title,
+                "root": str(root),
+                "source_type": source_type,
+                "mode": mode,
+                "description": "resource catalog entry",
+                "source_path": str(resource_root),
+                "registered_entries": [{
+                    "kind": "resource",
+                    "id": str(entry.get("id") or resource_root.name),
+                    "config_path": "",
+                    "source_config_path": str(resource_root),
+                }],
+                "focus_paths": [readme] if (root / readme).exists() else ["README.md"],
+                "registration_enabled": editable,
+            },
+        )
     config_path = _decode_id(uid)
     raw = _read_yaml(config_path)
     if raw.get("config") != kind or raw.get("apiVersion") != AUTHORING_API_VERSION:
@@ -2819,12 +5609,12 @@ def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bo
         shutil.copytree(source_root, root, ignore=_copy_ignore)
         mode = "editable"
         source_type = "catalog-copy"
-        title = f"Edit {label}"
+        title = f"{title_prefix} {label}"
     else:
         root = source_root
-        mode = "editable" if _is_user_catalog_path(state, config_path) else "read-only"
+        mode = "read-only"
         source_type = "catalog"
-        title = f"Inspect {label}" if mode == "read-only" else label
+        title = f"Inspect {label}"
     focus_paths = _focus_paths_for_config(root, root / config_path.name if editable else config_path, raw)
     registered_entry = {
         "kind": kind,
@@ -2849,12 +5639,231 @@ def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bo
     )
 
 
+def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
+    with state._lock:
+        job = state.interface_launches.get(launch_id)
+    if job is None:
+        raise KeyError(launch_id)
+    return job.to_dict()
+
+
+def _start_catalog_interface_launch(state: UiState, kind: str, uid: str) -> JsonDict:
+    if kind == "study":
+        raise ValueError("Study configs do not declare launchable interfaces.")
+    interface = _catalog_interface_for_uid(kind, uid)
+    if not interface:
+        raise ValueError("This catalog entry does not declare an interface.")
+    launch_id = f"launch-{uuid.uuid4().hex[:12]}"
+    job = UiLaunchJob(
+        launch_id=launch_id,
+        kind=kind,
+        uid=uid,
+        label=str(interface.get("label") or "interface"),
+        port=int(interface.get("port") or 0),
+    )
+    job.steps.append(
+        {
+            "time": _now_iso(),
+            "status": "queued",
+            "title": "Queued launch",
+            "detail": "Preparing to create an editable workspace and start the declared interface.",
+        }
+    )
+    with state._lock:
+        state.interface_launches[launch_id] = job
+    threading.Thread(target=_run_catalog_interface_launch, args=(state, launch_id, kind, uid), daemon=True).start()
+    return {"launch": job.to_dict()}
+
+
+def _run_catalog_interface_launch(state: UiState, launch_id: str, kind: str, uid: str) -> None:
+    try:
+        result = _launch_catalog_interface(
+            state,
+            kind,
+            uid,
+            progress=lambda title, detail="", status="running", data=None: _record_interface_launch_step(
+                state,
+                launch_id,
+                title,
+                detail,
+                status=status,
+                data=data,
+            ),
+        )
+    except Exception as exc:  # pragma: no cover - defensive background boundary
+        with state._lock:
+            job = state.interface_launches.get(launch_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = str(exc)
+                job.updated_at = time.time()
+                job.finished_at = time.time()
+                job.steps.append(
+                    {
+                        "time": _now_iso(),
+                        "status": "failed",
+                        "title": "Launch failed",
+                        "detail": str(exc),
+                    }
+                )
+                job.steps = job.steps[-80:]
+        return
+    with state._lock:
+        job = state.interface_launches.get(launch_id)
+        if job is not None:
+            job.status = "ready"
+            job.result = result
+            job.updated_at = time.time()
+            job.finished_at = time.time()
+            job.steps.append(
+                {
+                    "time": _now_iso(),
+                    "status": "ready",
+                    "title": "Preview ready",
+                    "detail": f"Interface is reachable on port {job.port}.",
+                }
+            )
+            job.steps = job.steps[-80:]
+
+
+def _record_interface_launch_step(
+    state: UiState,
+    launch_id: str,
+    title: str,
+    detail: str = "",
+    *,
+    status: str = "running",
+    data: Optional[JsonDict] = None,
+) -> None:
+    with state._lock:
+        job = state.interface_launches.get(launch_id)
+        if job is None:
+            return
+        if job.status in {"queued", "running"}:
+            job.status = "running" if status != "failed" else "failed"
+        if data:
+            stdout_log = str(data.get("stdout_log") or "")
+            stderr_log = str(data.get("stderr_log") or "")
+            if stdout_log:
+                job.log_paths["stdout"] = stdout_log
+            if stderr_log:
+                job.log_paths["stderr"] = stderr_log
+        job.updated_at = time.time()
+        step: JsonDict = {
+            "time": _now_iso(),
+            "status": status,
+            "title": title,
+        }
+        if detail:
+            step["detail"] = detail
+        job.steps.append(step)
+        job.steps = job.steps[-80:]
+
+
+def _launch_log_tail(log_paths: JsonDict, *, max_chars: int = 4000) -> JsonDict:
+    logs: JsonDict = {}
+    for name in ("stdout", "stderr"):
+        path = str(log_paths.get(name) or "")
+        if not path:
+            continue
+        log_path = Path(path)
+        if not log_path.exists() or not log_path.is_file():
+            continue
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if text:
+            logs[name] = text[-max_chars:]
+    return logs
+
+
+def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Optional[Any] = None) -> JsonDict:
+    def report(title: str, detail: str = "", status: str = "running", data: Optional[JsonDict] = None) -> None:
+        if progress:
+            progress(title, detail, status, data)
+
+    if kind == "study":
+        raise ValueError("Study configs do not declare launchable interfaces.")
+    report("Reading interface config", f"Loading {kind} interface declaration.")
+    interface = _catalog_interface_for_uid(kind, uid)
+    if not interface:
+        raise ValueError("This catalog entry does not declare an interface.")
+    report("Creating editable workspace", "Copying the catalog entry into a draft workspace.")
+    workspace = _open_catalog_workspace(state, kind, uid, editable=True, title_prefix="Launch")
+    root = Path(str(workspace["root"])).resolve()
+    cwd = (root / str(interface.get("cwd") or ".")).resolve()
+    if not _is_relative_to(cwd, root):
+        raise ValueError("Interface cwd must stay inside the launched workspace copy.")
+    port = int(interface.get("port") or 0)
+    command = list(interface.get("command") or [])
+    env = {
+        str(key): str(value)
+        for key, value in (interface.get("env") or {}).items()
+        if str(key)
+    }
+    env.setdefault("HOST", "0.0.0.0")
+    env.setdefault("PORT", str(port))
+    env["OPTPILOT_INTERFACE_PORT"] = str(port)
+    env["OPTPILOT_WORKSPACE_ROOT"] = str(root)
+    report(
+        "Starting workspace runtime",
+        "Ensuring the per-workspace container is running, then starting the interface command.",
+    )
+    launch = state.workspace_runtime.exec_detached(
+        workspace,
+        command,
+        cwd=cwd,
+        env=env,
+        name="interface",
+    )
+    report("Launch command started", "Interface stdout and stderr are being captured.", data=launch)
+    preview = state.workspace_preview_open(root, port, extra_ports=interface.get("extraPorts") or [])
+    report("Opening preview proxy", f"Routing workspace port {port} through Studio Preview.")
+    report(
+        "Waiting for preview port",
+        f"Checking {interface.get('readyPath') or '/'} until the interface becomes reachable.",
+    )
+    readiness = _wait_for_preview_ready(
+        str(preview.get("proxy_target") or ""),
+        str(interface.get("readyPath") or "/"),
+        int(interface.get("readyTimeoutSeconds") or 0),
+    )
+    preview["readiness"] = readiness
+    if not readiness.get("ready") and not readiness.get("skipped"):
+        raise ValueError(
+            "Interface started but did not become reachable "
+            f"on port {port} within {readiness.get('timeoutSeconds')}s: "
+            f"{readiness.get('error') or readiness.get('url')}"
+        )
+    return {
+        "workspace": workspace,
+        "interface": _interface_summary(interface),
+        "launch": launch,
+        "preview": preview,
+    }
+
+
+def _catalog_interface_for_uid(kind: str, uid: str) -> JsonDict:
+    if kind == "resource":
+        resource_root = _decode_id(uid).resolve()
+        if not resource_root.exists() or not resource_root.is_dir():
+            raise FileNotFoundError(f"resource not found: {resource_root}")
+        return dict(_resource_catalog_entry(resource_root).get("interface") or {})
+    config_path = _decode_id(uid)
+    raw = _read_yaml(config_path)
+    if raw.get("config") != kind or raw.get("apiVersion") != AUTHORING_API_VERSION:
+        raise FileNotFoundError(f"{kind} config not found: {config_path}")
+    return _normalize_interface_config(raw.get("interface"))
+
+
 def _open_run_workspace(state: UiState, run_dir: Path) -> JsonDict:
     summary = _run_summary(run_dir, state)
+    workspace_id = f"ws_run_{slug_path(run_dir)}_{_path_hash(run_dir)}"
     return _create_ui_workspace(
         state,
         {
-            "id": f"ws_run_{slug_path(run_dir)}",
+            "id": workspace_id,
             "title": f"Run: {summary.get('name') or run_dir.name}",
             "root": str(run_dir),
             "source_type": "run",
@@ -2877,7 +5886,7 @@ def _discover_workspace_configs(state: UiState, workspace_id: str) -> JsonDict:
     for path in _iter_yaml_files(root):
         raw = _read_yaml(path)
         config = raw.get("config")
-        if config not in CATALOG_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
+        if config not in REGISTERABLE_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
             continue
         validation = validate_authoring_config(path)
         configs.append(
@@ -2900,11 +5909,13 @@ def _create_registration_manifest(state: UiState, workspace_id: str, payload: Js
     if not workspace.get("registration_enabled", True):
         raise ValueError("This workspace cannot be registered to the catalog.")
     root = Path(str(workspace["root"])).resolve()
+    if str(payload.get("kind") or payload.get("registration_kind") or "") == "resource" or payload.get("resource_id"):
+        return _create_resource_registration_manifest(state, workspace, root, payload)
     discovered = _discover_workspace_configs(state, workspace_id)["configs"]
     requested_paths = {str(item) for item in payload.get("config_paths", []) or []}
     selected = [item for item in discovered if not requested_paths or item["relative_path"] in requested_paths or item["path"] in requested_paths]
     if not selected:
-        raise ValueError("No OptPilot config files selected for registration.")
+        raise ValueError("No environment or method config files selected for registration.")
     registration_id = str(payload.get("id") or f"reg_{uuid.uuid4().hex[:10]}")
     targets = []
     for item in selected:
@@ -2941,13 +5952,68 @@ def _create_registration_manifest(state: UiState, workspace_id: str, payload: Js
     return {"registration": manifest}
 
 
+def _create_resource_registration_manifest(state: UiState, workspace: JsonDict, root: Path, payload: JsonDict) -> JsonDict:
+    registration_id = str(payload.get("id") or f"reg_{uuid.uuid4().hex[:10]}")
+    resource_id = _slug_text(str(payload.get("resource_id") or workspace.get("title") or workspace["id"]))
+    include = [str(item) for item in payload.get("include", []) or [] if str(item).strip()]
+    if not include:
+        include = _default_resource_registration_include(root)
+    target = {
+        "target_id": f"target_{uuid.uuid4().hex[:8]}",
+        "kind": "resource",
+        "config_path": "",
+        "catalog_id": resource_id,
+        "destination": str(state.cwd / "user_catalog" / "resources" / resource_id),
+        "focus_paths": [item for item in ("README.md", "readme.md") if (root / item).exists()],
+        "include": include,
+        "exclude": [".git/**", ".venv/**", "runs/**", "__pycache__/**", "node_modules/**"],
+        "validation": {
+            "valid": True,
+            "warnings": [],
+            "errors": [],
+            "description": str(payload.get("description") or workspace.get("description") or ""),
+        },
+    }
+    manifest = {
+        "id": registration_id,
+        "workspace_id": workspace["id"],
+        "status": "draft",
+        "root": str(root),
+        "targets": [target],
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    _write_registration_manifest(state, str(workspace["id"]), manifest)
+    return {"registration": manifest}
+
+
+def _default_resource_registration_include(root: Path) -> List[str]:
+    include: List[str] = []
+    for item in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+        if item.name in EXCLUDED_SCAN_DIRS or item.name in {".DS_Store"}:
+            continue
+        include.append(f"{item.name}/**" if item.is_dir() else item.name)
+    return include or ["README.md"]
+
+
 def _validate_registration_manifest(state: UiState, workspace_id: str, registration_id: str) -> JsonDict:
     manifest = _read_registration_manifest(state, workspace_id, registration_id)
     root = Path(str(manifest["root"])).resolve()
     all_valid = True
     for target in manifest.get("targets", []):
-        config_path = (root / target["config_path"]).resolve()
-        validation = validate_authoring_config(config_path)
+        if target.get("kind") == "resource":
+            matched = []
+            for pattern in target.get("include", []):
+                matched.extend(_match_workspace_pattern(root, pattern))
+            validation = {
+                "valid": bool(matched),
+                "errors": [] if matched else ["No files matched the resource registration manifest."],
+                "warnings": [],
+                "file_count": len({str(path) for path in matched}),
+            }
+        else:
+            config_path = (root / target["config_path"]).resolve()
+            validation = validate_authoring_config(config_path)
         target["validation"] = validation
         if not validation.get("valid"):
             all_valid = False
@@ -2979,7 +6045,7 @@ def _apply_registration_manifest(state: UiState, workspace_id: str, registration
             {
                 "kind": target["kind"],
                 "id": target["catalog_id"],
-                "config_path": str(destination / Path(target["config_path"]).name),
+                "config_path": str(destination / Path(target["config_path"]).name) if target.get("config_path") else "",
                 "registered_at": _now_iso(),
             }
         )
@@ -2999,6 +6065,10 @@ def _now_iso() -> str:
 def slug_path(path: Path) -> str:
     encoded = base64.urlsafe_b64encode(str(path.resolve()).encode("utf-8")).decode("ascii").rstrip("=")
     return encoded[:24]
+
+
+def _path_hash(path: Path) -> str:
+    return hashlib.sha1(str(path.resolve()).encode("utf-8", errors="replace")).hexdigest()[:10]
 
 
 def _safe_workspace_root(state: UiState, root: Path) -> Path:
@@ -3092,7 +6162,7 @@ def _default_registration_destination(state: UiState, kind: str, catalog_id: str
         return state.cwd / "user_catalog" / "environments" / safe_id
     if kind == "method":
         return state.cwd / "user_catalog" / "methods" / safe_id
-    return state.cwd / "user_catalog" / "studies" / safe_id
+    raise ValueError(f"{kind} configs are not catalog registration targets.")
 
 
 def _default_registration_include(root: Path, config_path: Path, raw: JsonDict) -> List[str]:

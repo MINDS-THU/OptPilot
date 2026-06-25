@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 1,
+  "success_rate": 1.0,
+  "avg_total_cost": 6469454.9241,
+  "avg_total_holding_cost": 69531.3033,
+  "avg_total_stockout_cost": 6399923.6208,
+  "runs": [
+    {
+      "run_success": true,
+      "total_cost": 6469454.924058969,
+      "total_holding_cost": 69531.30325801742,
+      "total_stockout_cost": 6399923.6208009515,
+      "error": null
+    }
+  ],
+  "framework": "code_gen",
+  "scenario": "scenario_02_branching_tree",
+  "model_id": "openrouter/openai/gpt-5.2",
+  "result_dir": "eval_results/code_gen_openrouter-openai-gpt-5.2_scenario_02_branching_tree_20260523_204859"
+}

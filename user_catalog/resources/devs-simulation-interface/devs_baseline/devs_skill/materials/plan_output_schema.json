@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DEVS Decomposition Plan",
+  "description": "Output schema for the task decomposition skill",
+  "type": "object",
+  "properties": {
+    "root_model": {
+      "$ref": "#/definitions/ModelNode"
+    }
+  },
+  "required": ["root_model"],
+  "definitions": {
+    "ModelNode": {
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "type": "string",
+          "pattern": "^[A-Z][a-zA-Z0-9_]*$",
+          "description": "Valid Python class name (PascalCase)"
+        },
+        "file_path": {
+          "type": "string",
+          "pattern": ".*\\.py$",
+          "description": "Path to the model file, ending in .py"
+        },
+        "logic_path": {
+          "type": "string",
+          "description": "Dot-separated path in the hierarchy, e.g., 'RootModel.SubModel'"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["atomic", "coupled"],
+          "description": "Model type: atomic (state machine) or coupled (container)"
+        },
+        "specification": {
+          "$ref": "#/definitions/Specification"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelNode"
+          },
+          "description": "Direct child sub-models (only for coupled models)"
+        },
+        "coupling_specification": {
+          "type": "string",
+          "description": "Description of how children connect: EIC, IC, EOC couplings"
+        }
+      },
+      "required": ["class_name", "file_path", "logic_path", "type", "specification"]
+    },
+    "Specification": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "type": "string",
+          "description": "Responsibility, workflow, logic, math rules, delays, state machine"
+        },
+        "logging": {
+          "type": "string",
+          "description": "Logging requirements: events, keys, format"
+        },
+        "input_ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntity"
+          }
+        },
+        "output_ports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PortEntity"
+          }
+        },
+        "model_init_args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TypedEntity"
+          }
+        }
+      },
+      "required": ["function", "logging", "input_ports", "output_ports", "model_init_args"]
+    },
+    "PortEntity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Valid Python identifier (snake_case)"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["int", "float", "str", "bool", "dict", "list"],
+          "description": "Python type"
+        },
+        "structure": {
+          "type": "string",
+          "description": "For dict/list: detail all keys, types, descriptions"
+        },
+        "protocol": {
+          "type": "object",
+          "properties": {
+            "initial_state": {
+              "type": "string",
+              "description": "Port state at T=0"
+            },
+            "initial_signal": {
+              "type": "string",
+              "description": "Signal sent at startup, or 'None'"
+            },
+            "description": {
+              "type": "string",
+              "description": "Interaction description with partner component"
+            }
+          },
+          "required": ["initial_state", "initial_signal", "description"]
+        }
+      },
+      "required": ["name", "type", "structure", "protocol"]
+    },
+    "TypedEntity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "type": {
+          "type": "string",
+          "description": "Python type hint"
+        },
+        "structure": {
+          "type": "string",
+          "description": "For dict/list: detail structure"
+        }
+      },
+      "required": ["name", "type"]
+    }
+  }
+}

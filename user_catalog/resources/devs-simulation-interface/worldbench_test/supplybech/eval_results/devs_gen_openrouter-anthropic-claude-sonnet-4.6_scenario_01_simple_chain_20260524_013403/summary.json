@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 0,
+  "success_rate": 0.0,
+  "avg_total_cost": -1.0,
+  "avg_total_holding_cost": -1.0,
+  "avg_total_stockout_cost": -1.0,
+  "runs": [
+    {
+      "run_success": false,
+      "total_cost": -1.0,
+      "total_holding_cost": -1.0,
+      "total_stockout_cost": -1.0,
+      "error": "Runner failed: [Errno 36] File name too long: '/tmp/supplybech_devs_gen_ca_3jbkbspg/Thought: Now I need to update the SupplyNetwork.py to pass the Central_DC policy function to the CentralDC_Node. Let me update it.\\n\\nCode:\\n```py\\n# Update SupplyNetwork.py to pass Central_DC policy to CentralDC_Node\\nsmart_replace(\\n    filename=\"supply_chain_model/devs_project/SupplyChain_Simulator_libs/SupplyNetwork.py\",\\n    target_text=\"\"\"        central_dc = CentralDC_Node(\\n            name=\"CentralDC_Node\",\\n            parent=self,\\n            initial_inventory=1500,\\n            holding_cost_rate=1.0,\\n            stockout_cost_rate=50.0,\\n            lead_time=1,\\n            product_id=1\\n        )\"\"\",\\n    replacement_text=\"\"\"        central_dc = CentralDC_Node(\\n            name=\"CentralDC_Node\",\\n            parent=self,\\n            initial_inventory=1500,\\n            holding_cost_rate=1.0,\\n            stockout_cost_rate=50.0,\\n            lead_time=1,\\n            product_id=1,\\n            policy_func=policy_mounts.get(\"Central_DC\", None),\\n        )\"\"\",\\n    begin_line=34,\\n    context_above=\"        # Step 4: Instantiate Components\"\\n)\\nprint(\"SupplyNetwork updated to pass Central_DC policy\")\\n```<end_code>\\nCalling tools:\\n[{\\'id\\': \\'call_67\\', \\'type\\': \\'function\\', \\'function\\': {\\'name\\': \\'python_interpreter\\', \\'arguments\\': \\'# Update SupplyNetwork.py to pass Central_DC policy to CentralDC_Node\\\\nsmart_replace(\\\\n    filename=\"supply_chain_model/devs_project/SupplyChain_Simulator_libs/SupplyNetwork.py\",\\\\n    target_text=\"\"\"        central_dc = CentralDC_Node(\\\\n            name=\"CentralDC_Node\",\\\\n            parent=self,\\\\n            initial_inventory=1500,\\\\n            holding_cost_rate=1.0,\\\\n            stockout_cost_rate=50.0,\\\\n            lead_time=1,\\\\n            product_id=1\\\\n        )\"\"\",\\\\n    replacement_text=\"\"\"        central_dc = CentralDC_Node(\\\\n            name=\"CentralDC_Node\",\\\\n            parent=self,\\\\n            initial_inventory=1500,\\\\n            holding_cost_rate=1.0,\\\\n            stockout_cost_rate=50.0,\\\\n            lead_time=1,\\\\n            product_id=1,\\\\n            policy_func=policy_mounts.get(\"Central_DC\", None),\\\\n        )\"\"\",\\\\n    begin_line=34,\\\\n    context_above=\"        # Step 4: Instantiate Components\"\\\\n)\\\\nprint(\"SupplyNetwork updated to pass Central_DC policy\")\\'}}]'"
+    }
+  ],
+  "framework": "devs_gen",
+  "scenario": "scenario_01_simple_chain",
+  "model_id": "openrouter/anthropic/claude-sonnet-4.6",
+  "result_dir": "eval_results/devs_gen_openrouter-anthropic-claude-sonnet-4.6_scenario_01_simple_chain_20260524_013403"
+}

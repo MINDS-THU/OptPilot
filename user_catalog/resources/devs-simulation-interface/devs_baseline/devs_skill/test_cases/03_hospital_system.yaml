@@ -1,0 +1,76 @@
+root_model_name: HospitalSystem
+requirements:
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Libraries: `argparse`, `sys`, `json`, `random`, `math`, `simpy`.
+
+        2. Input Interface:
+        - **CLI Arguments:** Use `argparse` for configuration.
+        - No stdin input required.
+
+        3. Output Interface:
+        - Stream 1: Event Data (sys.stdout)
+            - Format: JSONL, one JSON object per line.
+            - Schema: `{"time": <float>, "entity": <str>, "event": <str>, "payload": <dict>}`
+        - Stream 2: Debug/Log (sys.stderr)
+
+        4. Entry point: executable via `python run.py`
+
+    scenario: |
+        ### Scenario: Hospital Patient Flow System
+
+        1. System Overview
+        A hospital with three departments: Triage, Treatment, and Pharmacy.
+        Patients arrive, get triaged, receive treatment, then collect medication.
+
+        2. Entity Behaviors:
+
+        Patient Generator:
+            - Generates patients with exponential inter-arrival times (rate: 0.1 per second).
+            - Each patient has: unique ID, severity level (1-5, uniform random).
+            - Sends patient to Triage department.
+
+        Triage Department:
+            - Single triage nurse, processes one patient at a time.
+            - Triage time: 30 seconds per patient.
+            - After triage, assigns patient to Treatment based on severity.
+            - Higher severity patients get priority in Treatment queue.
+
+        Treatment Department:
+            - Two treatment rooms (capacity: 2).
+            - Treatment time: Uniform(60, 180) seconds depending on severity.
+            - Priority queue: severity 1 (highest) processed first.
+            - After treatment, sends patient to Pharmacy.
+
+        Pharmacy:
+            - Single pharmacist, processes one patient at a time.
+            - Pharmacy time: Uniform(20, 60) seconds.
+            - After pharmacy, patient leaves the system.
+
+        3. Constraints:
+            - Time Unit: Seconds (1.0 = 1 second).
+            - System starts at time 0.0.
+            - Simulation runs for a fixed number of patients.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        * `--num_patients` (int): Total patients to generate. Default: 50.
+        * `--arrival_rate` (float): Patient arrival rate per second. Default: 0.1.
+        * `--seed` (int): Random seed. Default: 42.
+        * `--simulation_time` (float): Max simulation time. Default: 100000.0.
+
+        2. Output Format (STDOUT):
+        JSONL events:
+        - event: `patient_arrival` — payload: `{"patient_id": <int>, "severity": <int>}`
+        - event: `triage_start` — payload: `{"patient_id": <int>}`
+        - event: `triage_complete` — payload: `{"patient_id": <int>, "triage_time": <float>}`
+        - event: `treatment_start` — payload: `{"patient_id": <int>, "room": <int>}`
+        - event: `treatment_complete` — payload: `{"patient_id": <int>, "treatment_time": <float>}`
+        - event: `pharmacy_start` — payload: `{"patient_id": <int>}`
+        - event: `pharmacy_complete` — payload: `{"patient_id": <int>, "pharmacy_time": <float>, "total_time": <float>}`
+
+base_folder: hospital_model
+skip_simulation_check: false
+only_ensure_executable: false

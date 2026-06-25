@@ -1,0 +1,222 @@
+[
+    {
+        "name": "L0_Smoke_Test",
+        "description": "Minimal smoke test - verify system starts and generates initial events (10 seconds)",
+        "checker_args": {
+            "--min_passengers": 0,
+            "--min_arrivals": 0,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 1,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:00:10:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L1_First_Station_Test",
+        "description": "Test first station arrival and initial passenger generation (4 minutes)",
+        "checker_args": {
+            "--min_passengers": 5,
+            "--min_arrivals": 1,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 2,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:04:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L1_Single_Route_Test",
+        "description": "Test one complete route southbound (Bayview to Greenboro - 15 minutes)",
+        "checker_args": {
+            "--min_passengers": 15,
+            "--min_arrivals": 8,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 5,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:15:30:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L1_Round_Trip_Test",
+        "description": "Test one complete round trip (Bayview -> Greenboro -> Bayview - 30 minutes)",
+        "checker_args": {
+            "--min_passengers": 30,
+            "--min_arrivals": 20,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 9,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:30:30:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L1_Random_Short_Test_A",
+        "description": "Test with high passenger generation rate (seed designed for many passengers - 10 minutes)",
+        "checker_args": {
+            "--min_passengers": 10,
+            "--min_arrivals": 5,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 3,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:10:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L1_Random_Short_Test_B",
+        "description": "Test with low passenger generation rate (seed designed for few passengers - 15 minutes)",
+        "checker_args": {
+            "--min_passengers": 5,
+            "--min_arrivals": 3,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 4,
+            "--allow_partial_completion": true
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "00:15:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L2_Standard_Hour_Test",
+        "description": "Standard one hour simulation - comprehensive system test",
+        "checker_args": {
+            "--min_passengers": 50,
+            "--min_arrivals": 35,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 16,
+            "--allow_partial_completion": false
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "01:00:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L2_Extended_Stress_Test",
+        "description": "Extended 90 minute stress test - system stability and performance",
+        "checker_args": {
+            "--min_passengers": 80,
+            "--min_arrivals": 55,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 24,
+            "--allow_partial_completion": false
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "01:30:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L2_Full_Day_Simulation",
+        "description": "Full 2 hour simulation - long-term correctness validation",
+        "checker_args": {
+            "--min_passengers": 100,
+            "--min_arrivals": 70,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 32,
+            "--allow_partial_completion": false
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "02:00:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 10
+            }
+        ]
+    },
+    {
+        "name": "L2_Marathon_24H_Test",
+        "description": "24 Hour Simulation. Tests float precision stability over long duration and ID uniqueness scale.",
+        "checker_args": {
+            "--min_passengers": 1200, 
+            "--min_arrivals": 1000,
+            "--train_interval": 225.0,
+            "--train_interval_tolerance": 0.1,
+            "--min_train_arrivals": 380,
+            "--allow_partial_completion": false
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "24:00:00:000"
+                },
+                "sim_stdin": "",
+                "checker_config": {},
+                "num": 1
+            }
+        ]
+    }
+]

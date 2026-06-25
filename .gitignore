@@ -10,7 +10,8 @@ htmlcov/
 build/
 dist/
 site/
-resource/
+resource/*
+!resource/*.md
 examples/runs/
 examples/**/runs/
 frontier_pid_study.yaml

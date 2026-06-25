@@ -1,0 +1,43 @@
+{
+  "logic_path": "root_model.child_model",
+  "original_project_requirements": "Full requirement text here...",
+  "ancestors": [
+    {
+      "class_name": "RootModel",
+      "file_path": "devs_project/RootModel.py",
+      "logic_path": "RootModel",
+      "specification": {
+        "function": "Root model responsibility...",
+        "logging": "Events to log...",
+        "input_ports": [],
+        "output_ports": [],
+        "model_init_args": []
+      }
+    }
+  ],
+  "siblings": [
+    {
+      "class_name": "SiblingModel",
+      "file_path": "devs_project/RootModel_libs/SiblingModel.py",
+      "logic_path": "RootModel.SiblingModel",
+      "specification": {
+        "function": "Sibling responsibility...",
+        "logging": "",
+        "input_ports": [
+          {
+            "name": "data_in",
+            "type": "dict",
+            "structure": "{'id': int, 'payload': str}",
+            "protocol": {
+              "initial_state": "empty",
+              "initial_signal": "None",
+              "description": "Receives data from parent"
+            }
+          }
+        ],
+        "output_ports": [],
+        "model_init_args": []
+      }
+    }
+  ]
+}

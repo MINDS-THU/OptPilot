@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Custom_Hooks_Demo_Hook_Base",
+    "description": "Three-stage network emphasizing custom policy and cost hooks.",
+    "sim_timeout": 30.0,
+    "checker_args": {
+      "golden_data_path": "outputs/Hook_Base_golden.json",
+      "kpi_tolerance_margin": 0.05
+    },
+    "cases": [
+      {
+        "num": 8,
+        "sim_args": {
+          "--num_stores": "5",
+          "--base_demand": "22.0",
+          "--simulate_time": "100"
+        },
+        "sim_stdin": "",
+        "checker_config": {}
+      }
+    ]
+  }
+]

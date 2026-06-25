@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 0,
+  "success_rate": 0.0,
+  "avg_total_cost": -1.0,
+  "avg_total_holding_cost": -1.0,
+  "avg_total_stockout_cost": -1.0,
+  "runs": [
+    {
+      "run_success": false,
+      "total_cost": -1.0,
+      "total_holding_cost": -1.0,
+      "total_stockout_cost": -1.0,
+      "error": "Simulation failed: Traceback (most recent call last):\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 350, in <module>\n    runner = OracleRunner(args.blueprint, dyn_params, stdin_data)\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 188, in __init__\n    self.blueprint = self._load_blueprint(blueprint_path)\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/engine/oracle_runner.py\", line 198, in _load_blueprint\n    spec.loader.exec_module(bp)\n  File \"<frozen importlib._bootstrap_external>\", line 883, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/scenarios/scenario_01_simple_chain/blueprint.py\", line 15, in <module>\n    from policy_cache.policy import POLICY_MOUNTS\nImportError: cannot import name 'POLICY_MOUNTS' from 'policy_cache.policy' (/home/czy/ML/DEVS/smolagents/HAMLET/HAMLET_core/worldbench_test/supplybech/scenarios/scenario_01_simple_chain/policy_cache/policy.py)"
+    }
+  ],
+  "framework": "baseline",
+  "scenario": "scenario_01_simple_chain",
+  "model_id": "openrouter/z-ai/glm-4.7",
+  "result_dir": "eval_results/baseline_openrouter-z-ai-glm-4.7_scenario_01_simple_chain_20260524_121828"
+}

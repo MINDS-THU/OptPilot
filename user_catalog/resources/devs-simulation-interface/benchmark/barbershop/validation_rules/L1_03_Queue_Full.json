@@ -1,0 +1,43 @@
+{
+  "state_checks": [
+    {
+      "time": 28800.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1,
+      "description": "第1个顾客到达，进入服务"
+    },
+    {
+      "time": 28807.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 7,
+      "description": "队列达到最大容量8"
+    },
+    {
+      "time": 28808.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 8,
+      "description": "队列达到最大容量8"
+    }
+  ],
+  "queue_checks": {
+    "max_capacity": 8,
+    "reached_capacity": true
+  },
+  "summary_checks": {
+    "total_customers_received": 10,
+    "max_queue_size": 9,
+    "total_customers_processed_reception": 9
+  },
+  "message_checks": [
+    {
+      "model": "reception",
+      "port": "cust",
+      "content": "newcust",
+      "count_at_least": 1,
+      "description": "Ensure reception is processing customers"
+    }
+  ]
+}

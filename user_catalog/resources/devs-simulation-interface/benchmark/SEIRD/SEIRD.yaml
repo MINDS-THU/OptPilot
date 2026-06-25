@@ -1,0 +1,104 @@
+root_model_name: SEIRD_D1
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** If dynamic input is required, read from `sys.stdin` line-by-line.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+
+        4. Time Format & Units:
+        - Absolute Time: All time values in the output JSONL MUST be floats. The `"time"` field represents the absolute simulation time starting from `0.0`. 
+        - Precision: Keep at least 2 decimal places.
+
+    scenario: |
+        ### Scenario: SEIRD Epidemic Compartmental Model
+        
+        1. System Objective: 
+        Simulate infectious disease spread in a closed population using the SEIRD compartmental model. It is for teaching demonstration purpose to show the ODEs. 
+        The population is divided into five compartments:
+        - Susceptible (S): Individuals who can be infected.
+        - Exposed (E): Individuals who are infected but not yet infectious. 
+        - Infective (I): Individuals who are infected and can transmit the disease. 
+        - Recovered (R): Individuals who have recovered and are immune. 
+        - Deceased (D): Individuals who have died from the disease. 
+        
+        2. Model Characteristics:
+        - Homogeneous Mixing: All individuals have equal contact probability
+        - Closed Population: No births, deaths (other than disease), or migration
+        - Discrete-Time: State updates occur at fixed time intervals (dt)
+        
+        3. Compartment Transitions:
+        - S → E: Susceptible individuals become exposed through contact with infectives. Rate: β * S * I / N per day (where β is transmission rate, N is total population)
+        - E → I: Exposed individuals become infectious after incubation period. Rate: E / incubation_period per day
+        - I → R: Infective individuals recover. Rate: I / infectivity_period * (1 - mortality/100) per day
+        - I → D: Infective individuals die. Rate: I / infectivity_period * (mortality/100) per day
+        
+        4. Calculation Details:
+        
+        - susceptible:
+            - Calculate new_exposed = (β * S_old * I_old / N) * dt. 
+            - Cut the value: new_exposed = min(new_exposed, S_old)
+            - then S_new = S_old - new_exposed
+        - exposed:
+            - Calculate new_infective = (E_old / incubation_period) * dt
+            - Cut the value: new_infective = min(new_infective, E_old)
+            - then E_new = E_old + new_exposed - new_infective
+        - infective:
+            - Calculate new_deceased = (I_old / infectivity_period) * (mortality/100) * dt
+            - Calculate new_recovered = (I_old / infectivity_period) * (1 - mortality/100) * dt
+            - Then I = I + new_infective - new_deceased - new_recovered
+        - recovered: R_new = R_old + new_recovered
+        - deceased: D_new = D_old + new_deceased
+        
+        5. Scenario Constraints:
+        - Time Unit: 1.0 = 1 day
+        - Population Conservation: S + E + I + R + D = total_population (within floating-point precision)
+        - Initial State: S = N - I_0, E = 0, I = I_0, R = 0, D = 0
+        - System starts immediately at time 0.0
+
+    args_input_output: |
+        1. Command Line Arguments:
+        The script must accept the following named arguments:
+        * `--test_name` (str): Name of the test case being run. Required.
+        * `--mortality` (float): Mortality rate as percentage (0-100). Default: 10.0
+        * `--infectivity_period` (float): Average days a person stays infectious. Default: 14.0
+        * `--dt` (float): Time step for numerical integration in days. Default: 0.1
+        * `--incubation_period` (float): Average days from exposure to becoming infectious. Default: 5.0
+        * `--total_population` (int): Total population size. An interger >= 0. Default: 1000
+        * `--initial_infective` (int): Initial number of infected individuals. Default: 10
+        * `--transmission_rate` (float): Transmission rate (β) per day. Default: 2.5
+        * `--simulation_time` (float): Total simulation time in days. Default: 10.0
+
+        2. stdin Format:
+        * No stdin input is required. The system uses command line arguments for configuration.
+
+        3. **Standard Output (stdout)**:
+        * Format: JSONL
+        * Output at the END of simulation, other outputs are also allowed.
+        * Schema:
+        ```json
+        {
+            "time": <float>,          // Final simulation time
+            "susceptible": <float>,   // Final count (2 decimal places)
+            "exposed": <float>,       // Final count (2 decimal places)
+            "infective": <float>,     // Final count (2 decimal places)
+            "recovered": <float>,     // Final count (2 decimal places)
+            "deceased": <float>       // Final count (2 decimal places)
+        }
+        ```
+
+base_folder: seird_model
+skip_simulation_check: false
+only_ensure_executable: false

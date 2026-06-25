@@ -1,0 +1,218 @@
+[
+  {
+    "name": "L0_Smoke_Test",
+    "description": "Basic connectivity test with minimal packets",
+    "checker_args": {
+      "total": 2,
+      "seed": 42,
+      "expect_retry": 0,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 2,
+          "seed": 42,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L1_Noise_Trap",
+    "description": "Test LCG noise generation and retransmission logic",
+    "checker_args": {
+      "total": 5,
+      "seed": 42,
+      "expect_retry": 1,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 5,
+          "seed": 42,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L1_Single_Packet",
+    "description": "Single packet transmission test",
+    "checker_args": {
+      "total": 1,
+      "seed": 42,
+      "expect_retry": 0,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 1,
+          "seed": 42,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 500
+        }
+      }
+    ]
+  },
+  {
+    "name": "L1_Different_Seed",
+    "description": "Test with different seed value",
+    "checker_args": {
+      "total": 3,
+      "seed": 100,
+      "expect_retry": 0,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 3,
+          "seed": 100,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L1_Custom_Delays",
+    "description": "Test with custom delay parameters",
+    "checker_args": {
+      "total": 3,
+      "seed": 42,
+      "expect_retry": 0,
+      "sender_delay": 15,
+      "receiver_delay": 15
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 3,
+          "seed": 42,
+          "timeout": 30,
+          "sender_delay": 15,
+          "receiver_delay": 15,
+          "channel_delay": 5,
+          "simulate_time": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L1_Tight_Timeout",
+    "description": "Test with tight timeout that may cause retransmission",
+    "checker_args": {
+      "total": 3,
+      "seed": 42,
+      "expect_retry": 0,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 3,
+          "seed": 42,
+          "timeout": 15,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 1000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L2_Stress_Test",
+    "description": "Longer running test to check state stability",
+    "checker_args": {
+      "total": 50,
+      "seed": 12345,
+      "expect_retry": 1,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 50,
+          "seed": 12345,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 10000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L2_High_Loss",
+    "description": "Test with seed that causes high packet loss",
+    "checker_args": {
+      "total": 20,
+      "seed": 7,
+      "expect_retry": 1,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 20,
+          "seed": 7,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 5000
+        }
+      }
+    ]
+  },
+  {
+    "name": "L2_Long_Simulation",
+    "description": "Extended simulation time test",
+    "checker_args": {
+      "total": 100,
+      "seed": 42,
+      "expect_retry": 1,
+      "sender_delay": 10,
+      "receiver_delay": 10
+    },
+    "cases": [
+      {
+        "sim_args": {
+          "total_packets": 100,
+          "seed": 42,
+          "timeout": 20,
+          "sender_delay": 10,
+          "receiver_delay": 10,
+          "channel_delay": 3,
+          "simulate_time": 20000
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" color="#1E2228">
+  <title>Runs</title>
+  <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M8 1.55a6.45 6.45 0 1 0 0 12.9A6.45 6.45 0 0 0 8 1.55Zm0 1.72A4.73 4.73 0 1 0 8 12.73 4.73 4.73 0 0 0 8 3.27Z"/>
+  <path fill="currentColor" d="M6.65 5.53c0-.38.42-.61.74-.4l3.2 2.08c.29.19.29.61 0 .8l-3.2 2.08a.48.48 0 0 1-.74-.4V5.53Z"/>
+  <circle cx="12.87" cy="12.74" r="1.58" fill="currentColor"/>
+  <path d="m12.12 12.75.5.52 1.03-1.12" fill="none" stroke="#FFFFFF" stroke-width=".62" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

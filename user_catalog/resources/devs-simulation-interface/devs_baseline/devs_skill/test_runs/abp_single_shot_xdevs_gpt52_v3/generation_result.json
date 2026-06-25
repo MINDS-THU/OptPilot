@@ -1,0 +1,21 @@
+{
+  "status": "success",
+  "sim_cwd": "/home/czy/ML/DEVS/smolagents/HAMLET/devs_baseline/devs_skill/test_runs/abp_single_shot_xdevs_gpt52_v3",
+  "sim_entry": "run.py",
+  "duration": 130.57,
+  "error": "",
+  "agent": "single_shot_xdevs",
+  "mode": "single_shot_xdevs",
+  "api_duration": 130.56,
+  "syntax_ok": true,
+  "raw_response_length": 16510,
+  "code_length": 16481,
+  "token_usage": {
+    "openrouter/openai/gpt-5.2": {
+      "input": 3018,
+      "output": 4127,
+      "thinking": 0,
+      "calls": 1
+    }
+  }
+}

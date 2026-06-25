@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" color="#1E2228">
+  <title>Studies</title>
+  <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M5.15 1.55a.8.8 0 0 0 0 1.6h.58v3.1L2.32 11.7c-.78 1.25.12 2.75 1.6 2.75h8.16c1.48 0 2.38-1.5 1.6-2.75l-3.41-5.45v-3.1h.58a.8.8 0 0 0 0-1.6h-5.7Zm2.18 1.6v3.56c0 .15-.04.3-.12.43L5.78 9.42h4.44L8.79 7.14a.83.83 0 0 1-.12-.43V3.15H7.33Zm-2.5 7.92-1.15 1.84c-.13.21.02.46.27.46h8.1c.25 0 .4-.25.27-.46l-1.15-1.84H4.83Z"/>
+  <circle cx="6.15" cy="12.08" r=".62" fill="currentColor"/>
+  <circle cx="9.8" cy="11.85" r=".42" fill="currentColor"/>
+</svg>

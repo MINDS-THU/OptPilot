@@ -1,0 +1,150 @@
+root_model_name: Offline_File_Transfer
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** If dynamic input is required, read from `sys.stdin` line-by-line.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+        
+        4. Entry point: executable via `python run.py`
+
+        Do not use real time, use simulation time, and guarantee the simulation ends in 10 seconds in real time. 
+
+    scenario: |
+        1. System Objective: 
+        Simulate a "Dropbox-like" synchronization flow using two independent Alternating Bit Protocol (ABP) loops.
+        - **Loop 1 (Upload):** Sender -> SubnetA -> Server.
+        - **Loop 2 (Download):** Server -> SubnetB -> Receiver.
+        - The Server acts as a buffer, decoupling the Sender from the Receiver.
+        2. Input Command Logic (Crucial):
+        
+        **Command A: "control" (The Upload Job)**
+        - **Target:** The **Sender** entity.
+        - **Semantics:** "Add packets to the upload queue."
+        - **Behavior:** - When `control <N>` is received: Update `total_packets_to_send += N`.
+            - If Sender was idle, it wakes up and starts uploading.
+            - If Sender was already busy, it just extends the current job.
+        - **Frequency:** Can occur multiple times.
+
+        **Command B: "request" (The Download Valve)**
+        - **Target:** The **FileServerSender** (The component inside Server that talks to Receiver).
+        - **Semantics:** "Permission to download."
+        - **Behavior:** Updates an internal boolean flag `download_allowed`.
+            - `request 1` -> Set `download_allowed = True`.
+            - `request 0` -> Set `download_allowed = False`.
+        - **Frequency:** Can occur multiple times (toggle ON/OFF/ON).
+        
+        
+        3. Functional Entity Behaviors:
+
+        **The Sender (Uploader):**
+        - **Behavior:** 
+            - When `control` input > 0, sets(or adds) `packets_remaining`. When `packets_remaining` > 0, starts sending packets.
+            - When decides to send, first spends 10s preparing.
+            - ABP Logic: Sends Packet(seq=1, bit=0). Waits for ACK(bit=0).
+            - Timeout: If ACK not received in 20s, retransmits.
+            - Success: On correct ACK, flips bit, increments seq, update `packets_remaining`.
+            - Done: When all packets acknowledged, goes back to idle.
+
+        **ServerReceiver (Ingress Logic):**
+        - Receives Data from Sender.
+        - **Processing:** 3s delay.
+        - **Logic:** 
+            - Wait for 3s, then check and send ACK:
+            - If Data packet bit matches expected bit:
+                1. Send ACK(bit) back to Sender **immediately**.
+                2. Push Data into the **Storage Queue**.
+                3. Flip expected bit.
+            - If mismatch (duplicate): Resend ACK(previous_bit) (standard ABP).
+
+        **ServerSender (Egress Logic):**
+        - **Processing:** No processing delay. 
+        - **Logic:** It attempts to send data to Receiver ONLY IF:
+            1. `request` input is 1 (Download Enabled).
+            2. **Storage Queue** is not empty.
+            3. Currently not waiting for an ACK.
+        - **ABP Logic:** Pops packet from Queue -> Sends to Receiver -> Waits for ACK.
+        - **Graceful Stop:** If `request` becomes 0 *during* a transfer, finish the current packet-ACK cycle, then stop sending.
+
+        **The Receiver (Downloader):**
+        - Receives Data from Server.
+        - **Processing:** 10s delay (simulating slow download/write).
+        - **Logic:** After processing, sends ACK(bit) back to Server.
+
+        **The Subnets (A1, A2, B1, B2):**
+        - Reliable, FIFO, fixed 3s delay. 
+        - A1: Sender -> Server. A2: Server -> Sender.
+        - B1: Server -> Receiver. B2: Receiver -> Server.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        The script MUST accept the following arguments using `argparse`:
+        * `--simulation_time` (float, optional): Simulation duration in milliseconds (simulation time). Default: 10000_000.0
+
+        2. Input Format (stdin):
+        Input is read from standard input (stdin) with the following format:
+        * Each line: `HH:MM:SS type value` or `HH:MM:SS:mmm type value`
+        * type:
+            - `control`: Sets the number of packets for the Sender to upload.
+            - `request`: Toggles the download permission for the Server (1 = Start/Resume Download, 0 = Pause/Stop).
+        * Example stdin content:
+            ```
+            00:00:10:000 control 1
+            00:01:00:000 request 1
+            00:02:00:000 request 0
+            ```
+        * The first line means: at 10 seconds, send 1 packet (control event)
+        * The second line means: at 60 seconds, request download (request event)
+        * The third line means: at 120 seconds, stop requesting (request event)
+
+        3. Stdout JSON Schema (Event-Stream):
+        The automated checker validates the logic timing and sequence based on this stream.
+        Each line is a single JSON object.
+        
+        Structure:
+        ```json
+        {
+            "timestamp_ms": <float>,
+            "model": "<model_name>",
+            "type": "<EVENT_TYPE>",
+            "val": <dict>
+        }
+        ```
+        
+        **Required Event Types:**
+        
+        **A. Inputs (Triggering Changes)**
+        * `{"model": "sender", "type": "control_cmd", "val": {"added": <int>, "total_remaining": <int>}}`
+        * `{"model": "server_sender", "type": "download_valve_change", "val": {"allowed": <bool>}}`
+        
+        **B. Sender Lifecycle (Upload)**
+        * `{"model": "sender", "type": "preparation_started", "val": {"duration": 10000}}`: Log when the 10s wait begins
+        * `{"model": "sender", "type": "packet_sent", "val": {"seq": <int>, "bit": <0|1>, "is_retry": <bool>}}`
+        * `{"model": "sender", "type": "ack_received", "val": {"bit": <0|1>}}`
+        * `{"model": "sender", "type": "timeout", "val": {"seq": <int>}}`
+        
+        **C. Server Lifecycle (Storage & Forwarding)**
+        * `{"model": "server_receiver", "type": "packet_received", "val": {"seq": <int>, "bit": <0|1>}}`: Log arrival before processing
+        * `{"model": "server_receiver", "type": "ack_sent_to_sender", "val": {"bit": <0|1>}}`
+        * `{"model": "server_sender", "type": "packet_forwarded", "val": {"seq": <int>, "bit": <0|1>}}`
+        * `{"model": "server_sender", "type": "ack_received_from_receiver", "val": {"bit": <0|1>}}`
+        
+        **D. Receiver Lifecycle (Download)**
+        * `{"model": "receiver", "type": "processing_started", "val": {"seq": <int>, "duration": 10000}}` # Marks start of the 10s delay
+        * `{"model": "receiver", "type": "ack_sent", "val": {"bit": <0|1>}}` # marks end of processing, and ack sent
+
+base_folder: offline_file_transfer
+skip_simulation_check: false
+only_ensure_executable: false

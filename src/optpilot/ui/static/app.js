@@ -1,21 +1,27 @@
+const STORAGE_KEYS = {
+  selectedAgentSessionId: "optpilot.studio.selectedAgentSessionId",
+};
+
 const state = {
   view: "workspace",
   workspace: null,
   runtime: null,
   codeServer: null,
   uiWorkspaces: [],
-  catalog: { environments: [], methods: [], studies: [] },
+  catalog: { environments: [], methods: [], studies: [], resources: [] },
   compatibility: { pairs: [] },
   runs: [],
   jobs: [],
   sessions: [],
   agentSessions: [],
-  selectedAgentSessionId: null,
+  selectedAgentSessionId: loadStoredValue(STORAGE_KEYS.selectedAgentSessionId),
   agentWorkspaceAttachments: {},
   selectedWorkspaceByAgentSession: {},
   assistantMessagesBySession: {},
   agentApprovalsBySession: {},
   agentEventsBySession: {},
+  handledPreviewEventIds: new Set(),
+  cancellingAgentSessionIds: new Set(),
   agentSessionSeq: 1,
   plans: [],
   selectedSessionId: null,
@@ -37,6 +43,8 @@ const state = {
   registrationDraft: null,
   embeddedCodeUrl: "",
   embeddedCodeFolder: "",
+  workspacePreviews: {},
+  interfaceLaunch: null,
   platformReady: false,
   codeWorkspaceStatus: "idle",
   codeWorkspaceMessage: "",
@@ -45,9 +53,30 @@ const state = {
   agentSettings: null,
   agentRuntimeStatus: null,
   settingsOpen: false,
+  pendingWorkspaceCleanup: null,
 };
 
 const els = {};
+
+function loadStoredValue(key) {
+  try {
+    return window.localStorage.getItem(key) || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function storeValue(key, value) {
+  try {
+    if (value) {
+      window.localStorage.setItem(key, value);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch (error) {
+    // Local storage can be unavailable in restricted browser contexts.
+  }
+}
 
 document.addEventListener("DOMContentLoaded", () => {
   cacheElements();
@@ -63,7 +92,7 @@ function cacheElements() {
     "healthStatus",
     "sidebarCodeServer",
     "sidebarServiceStatus",
-    "settingsButton",
+    "assistantSettingsButton",
     "pageTitle",
     "pageSubtitle",
     "refreshButton",
@@ -77,7 +106,8 @@ function cacheElements() {
     "assistantContextHint",
     "assistantResizeHandle",
     "closeAssistantButton",
-    "openCodeServerButton",
+    "workspaceTitleInput",
+    "openWorkspaceExternalButton",
     "primaryActionButton",
     "sessionCount",
     "sessionList",
@@ -90,13 +120,8 @@ function cacheElements() {
     "sessionContext",
     "sessionTools",
     "sessionWorkspaceActions",
-    "fileTabs",
-    "fileState",
-    "sessionEditor",
-    "sessionLenses",
-    "contractWorkbench",
     "codeWorkbench",
-    "evidenceWorkbench",
+    "previewWorkbench",
     "embeddedCodeWorkspace",
     "embeddedCodeWorkspaceEmpty",
     "embeddedCodeWorkspacePath",
@@ -105,6 +130,14 @@ function cacheElements() {
     "startEmbeddedCodeButton",
     "reloadEmbeddedCodeButton",
     "pauseCodeWorkspaceButton",
+    "workspacePreviewFrame",
+    "workspacePreviewEmpty",
+    "workspacePreviewPort",
+    "workspacePreviewStatus",
+    "workspacePreviewTitle",
+    "workspacePreviewBody",
+    "openWorkspacePreviewButton",
+    "reloadWorkspacePreviewButton",
     "agentTimeline",
     "agentInput",
     "sendAgentButton",
@@ -134,6 +167,21 @@ function cacheElements() {
     "openHandsApiKey",
     "openHandsClearApiKey",
     "openHandsStatus",
+    "assistantSkillsInput",
+    "assistantMcpServersInput",
+    "assistantMcpFilterRegex",
+    "assistantCustomToolsInput",
+    "assistantPermissionFileWrite",
+    "assistantPermissionShellRun",
+    "assistantPermissionCatalogRegistration",
+    "assistantPermissionStudyLaunch",
+    "assistantPermissionJobStop",
+    "workspaceCleanupModal",
+    "workspaceCleanupTitle",
+    "workspaceCleanupBody",
+    "workspaceCleanupKeepButton",
+    "workspaceCleanupRegisterButton",
+    "workspaceCleanupDeleteButton",
   ]) {
     els[id] = document.getElementById(id);
   }
@@ -174,12 +222,18 @@ function bindEvents() {
     });
   });
   on(els.refreshButton, "click", loadAll);
-  on(els.settingsButton, "click", openSettings);
+  on(els.assistantSettingsButton, "click", openSettings);
   on(els.settingsCloseButton, "click", closeSettings);
   on(els.settingsCancelButton, "click", closeSettings);
   on(els.settingsSaveButton, "click", saveSettings);
   on(els.settingsModal, "click", (event) => {
     if (event.target === els.settingsModal) closeSettings();
+  });
+  on(els.workspaceCleanupKeepButton, "click", keepPendingWorkspaceDraft);
+  on(els.workspaceCleanupRegisterButton, "click", registerPendingWorkspaceDraft);
+  on(els.workspaceCleanupDeleteButton, "click", deletePendingWorkspaceDraft);
+  on(els.workspaceCleanupModal, "click", (event) => {
+    if (event.target === els.workspaceCleanupModal) keepPendingWorkspaceDraft();
   });
   on(els.newSessionButton, "click", createAgentSession);
   on(els.newWorkspaceButton, "click", createBlankSession);
@@ -194,12 +248,17 @@ function bindEvents() {
     state.assistantMode = "chat";
     setAssistantOpen(false);
   });
-  on(els.openCodeServerButton, "click", startCodeWorkspaceFromUser);
+  on(els.workspaceTitleInput, "keydown", handleWorkspaceTitleKeydown);
+  on(els.workspaceTitleInput, "blur", saveWorkspaceTitleFromInput);
+  on(els.openWorkspaceExternalButton, "click", openActiveWorkspaceExternal);
   on(els.startEmbeddedCodeButton, "click", startCodeWorkspaceFromUser);
   on(els.reloadEmbeddedCodeButton, "click", reloadEmbeddedCodeWorkspace);
   on(els.pauseCodeWorkspaceButton, "click", stopCodeServer);
+  on(els.workspacePreviewPort, "input", updateWorkspacePreviewPort);
+  on(els.openWorkspacePreviewButton, "click", openWorkspacePreview);
+  on(els.reloadWorkspacePreviewButton, "click", reloadWorkspacePreview);
   on(els.primaryActionButton, "click", primaryAction);
-  on(els.sendAgentButton, "click", sendAgentMessage);
+  on(els.sendAgentButton, "click", handleAgentActionButton);
   on(els.agentInput, "keydown", handleAgentInputKeydown);
   on(els.agentInput, "input", () => {
     els.agentInput.dataset.touched = els.agentInput.value ? "true" : "";
@@ -299,18 +358,17 @@ async function loadAgentSessions() {
     state.agentEventsBySession = {};
     sessions.forEach((session) => {
       state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
-      state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || (session.attached_workspace_ids || [])[0] || null;
+      state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || null;
       state.assistantMessagesBySession[session.id] = (session.messages || []).map(agentMessageFromPayload);
       state.agentApprovalsBySession[session.id] = session.approvals || [];
       state.agentEventsBySession[session.id] = session.events || [];
     });
-    if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
-      state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
-    }
+    ensureSelectedAgentSession();
   } catch (error) {
     state.agentSessions = [];
     state.agentApprovalsBySession = {};
     state.agentEventsBySession = {};
+    ensureSelectedAgentSession();
   }
 }
 
@@ -350,11 +408,13 @@ function rebuildDerivedState() {
   ensureAgentSessions();
   const attachedIds = attachedWorkspaceIds();
   const agentSelectedWorkspace = state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId];
-  state.selectedSessionId = attachedIds.includes(agentSelectedWorkspace)
-    ? agentSelectedWorkspace
-    : attachedIds.includes(previousSessionId)
-    ? previousSessionId
-    : attachedIds[0] || null;
+  state.selectedSessionId = state.view === "workspace"
+    ? attachedIds.includes(agentSelectedWorkspace)
+      ? agentSelectedWorkspace
+      : attachedIds.includes(previousSessionId)
+      ? previousSessionId
+      : attachedIds[0] || null
+    : null;
   if (currentAgentSession()) state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = state.selectedSessionId;
   const session = currentSession();
   state.selectedFileKey = session && session.files[state.selectedFileKey] ? state.selectedFileKey : firstFileKey(session);
@@ -378,8 +438,9 @@ function ensureAgentSessions() {
     };
     state.agentSessions = [session];
     state.selectedAgentSessionId = session.id;
-    state.agentWorkspaceAttachments[session.id] = workspaceIds.slice();
-    state.selectedWorkspaceByAgentSession[session.id] = workspaceIds[0] || null;
+    storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+    state.agentWorkspaceAttachments[session.id] = [];
+    state.selectedWorkspaceByAgentSession[session.id] = null;
     state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
     state.agentEventsBySession[session.id] = [];
     return;
@@ -395,26 +456,54 @@ function ensureAgentSessions() {
       state.agentEventsBySession[session.id] = [];
     }
   });
-  if (!state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
-    state.selectedAgentSessionId = state.agentSessions[0] && state.agentSessions[0].id;
+  ensureSelectedAgentSession();
+}
+
+function ensureSelectedAgentSession() {
+  if (state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
+    storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+    return;
   }
+  const withWorkspaces = state.agentSessions.find((session) => (state.agentWorkspaceAttachments[session.id] || []).length);
+  state.selectedAgentSessionId = (withWorkspaces || state.agentSessions[0] || {}).id || null;
+  storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
 }
 
 function defaultAssistantMessages() {
-  return [["assistant", "Ready", "I can use the selected session, attached workspace roots, catalog, study plans, runs, and code editor context.", { id: "default-ready", createdAt: "" }]];
+  return [["assistant", "Ready", "I can use the current page, attached workspace roots, catalog, study plans, runs, and Code Server context.", {
+    id: "default-ready",
+    createdAt: new Date().toISOString(),
+    source: "studio_system",
+    memoryScope: "ui_history",
+  }]];
 }
 
 function agentMessageFromPayload(message) {
+  const source = messageSourceFromPayload(message || {});
   return [
     message.role === "assistant" ? "assistant" : message.role || "user",
-    "",
+    message.title || "",
     message.content || "",
     {
       id: message.id || "",
       title: message.title || "",
       createdAt: message.created_at || message.createdAt || "",
+      source,
+      memoryScope: message.memory_scope || message.memoryScope || defaultMessageMemoryScope(message.role || "user", source),
+      persisted: true,
     },
   ];
+}
+
+function messageSourceFromPayload(message) {
+  if (message.source) return message.source;
+  const role = message.role || "user";
+  if (role === "user") return "user";
+  const title = message.title || "";
+  const dispatch = message.dispatch && typeof message.dispatch === "object" ? message.dispatch : {};
+  if (role === "assistant" && (title === "OpenHands" || dispatch.conversation_id)) return "openhands";
+  if (role === "assistant" && title === "Assistant" && dispatch.transport) return "model_chat";
+  return defaultMessageSource(role);
 }
 
 function currentAgentSession() {
@@ -431,7 +520,38 @@ function currentAssistantMessages() {
 function currentAssistantApprovals() {
   const session = currentAgentSession();
   if (!session) return [];
-  return (state.agentApprovalsBySession[session.id] || []).filter((approval) => approval.status === "pending");
+  const seen = new Set();
+  return (state.agentApprovalsBySession[session.id] || []).filter((approval) => {
+    if (approval.status !== "pending") return false;
+    const key = approvalDisplayKey(approval);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function approvalDisplayKey(approval) {
+  if (!approval || typeof approval !== "object") return "";
+  if (approval.request_key) return String(approval.request_key);
+  const args = approval.arguments && typeof approval.arguments === "object" ? { ...approval.arguments } : {};
+  delete args._openhands_tool_call_id;
+  delete args.approved;
+  return stableJsonStringify({
+    tool: approval.tool || "",
+    kind: approval.kind || "",
+    title: approval.title || "",
+    summary: approval.summary || "",
+    targets: approval.targets || [],
+    arguments: args,
+  });
+}
+
+function stableJsonStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJsonStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function currentAssistantEvents() {
@@ -455,25 +575,55 @@ async function syncActiveAgentSession() {
   }
 }
 
-function pushAssistantMessage(message) {
+function pushAssistantMessage(message, options = {}) {
   const session = currentAgentSession();
   if (!session) return;
   if (!state.assistantMessagesBySession[session.id]) state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
-  state.assistantMessagesBySession[session.id].push(localAssistantMessage(message));
+  const localMessage = localAssistantMessage(message);
+  state.assistantMessagesBySession[session.id].push(localMessage);
+  if (options.persist !== false && shouldPersistLocalAssistantMessage(localMessage, session)) {
+    persistAssistantMessage(localMessage, { keepalive: true, refreshSession: false, sessionId: session.id });
+  }
 }
 
 function localAssistantMessage(message) {
   if (message && message[3] && message[3].createdAt) return message;
+  const role = message && message[0] || "assistant";
+  const metadata = message && message[3] && typeof message[3] === "object" ? message[3] : {};
   return [
-    message && message[0] || "assistant",
+    role,
     message && message[1] || "",
     message && message[2] || "",
-    { id: `local-${Date.now().toString(36)}`, createdAt: new Date().toISOString() },
+    {
+      id: `local-${Date.now().toString(36)}`,
+      createdAt: new Date().toISOString(),
+      source: metadata.source || defaultMessageSource(role),
+      memoryScope: metadata.memoryScope || metadata.memory_scope || defaultMessageMemoryScope(role, metadata.source || ""),
+    },
   ];
+}
+
+function defaultMessageSource(role) {
+  return role === "user" ? "user" : "studio_ui";
+}
+
+function defaultMessageMemoryScope(role, source = "") {
+  if (role === "user" || source === "openhands") return "openhands_conversation";
+  return "ui_history";
+}
+
+function shouldPersistLocalAssistantMessage(message, session) {
+  if (!session || !session.id || session.id.startsWith("agent-session-")) return false;
+  const role = message && message[0] || "";
+  const content = String(message && message[2] || "").trim();
+  const metadata = message && message[3] || {};
+  if (!content || metadata.persisted) return false;
+  return role !== "user";
 }
 
 function assistantVisibleContext() {
   const workspace = currentSession();
+  const workspacePreview = workspace ? currentWorkspacePreview(workspace) : null;
   const isCatalogPage = state.view === "catalog";
   const isStudiesPage = state.view === "experiments";
   const isRunsPage = state.view === "runs";
@@ -487,7 +637,7 @@ function assistantVisibleContext() {
   return {
     current_page: state.view,
     assistant_mode: state.assistantMode,
-    selected_workspace: workspace ? {
+    selected_workspace: isEditorPage && workspace ? {
       id: workspace.backendWorkspaceId || workspace.id,
       title: workspace.title,
       root: workspace.codeFolder || workspace.path,
@@ -530,22 +680,35 @@ function assistantVisibleContext() {
       folder: state.embeddedCodeFolder,
       status: state.codeWorkspaceStatus,
     } : null,
+    workspace_preview: isEditorPage && workspace ? {
+      workspace_id: workspace.backendWorkspaceId || workspace.id,
+      port: workspacePreview && workspacePreview.port || 5173,
+      url: workspacePreview && workspacePreview.url || "",
+      status: workspacePreview && workspacePreview.status || "idle",
+      message: workspacePreview && workspacePreview.message || "",
+      active: state.workbenchMode === "preview",
+    } : null,
     assistant_runtime: state.agentRuntimeStatus || null,
   };
 }
 
-async function persistAssistantMessage(message) {
-  const session = currentAgentSession();
+async function persistAssistantMessage(message, options = {}) {
+  const session = options.sessionId
+    ? state.agentSessions.find((item) => item.id === options.sessionId)
+    : currentAgentSession();
   if (!session || !session.id || session.id.startsWith("agent-session-")) return null;
   const [role, title, content] = message;
+  const metadata = message && message[3] || {};
   try {
     const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/message`, {
-      role: role === "agent" || role === "tool" ? "assistant" : role,
+      role: role === "agent" ? "assistant" : role,
       title,
       content,
+      source: metadata.source || defaultMessageSource(role),
+      memory_scope: metadata.memoryScope || metadata.memory_scope || defaultMessageMemoryScope(role, metadata.source || ""),
       ui_context: assistantVisibleContext(),
-    });
-    if (payload.session) await updateAgentSessionFromPayload(payload.session);
+    }, { keepalive: Boolean(options.keepalive) });
+    if (payload.session && options.refreshSession !== false) await updateAgentSessionFromPayload(payload.session);
     return payload;
   } catch (error) {
     // Keep the local transcript usable if the backend is unavailable.
@@ -570,7 +733,7 @@ function mergeAgentSessionPayload(session) {
     ? state.agentSessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
     : [summary, ...state.agentSessions];
   state.agentWorkspaceAttachments[session.id] = nextAttachments;
-  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || nextAttachments[0] || null;
+  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || null;
   state.agentApprovalsBySession[session.id] = session.approvals || state.agentApprovalsBySession[session.id] || [];
   state.agentEventsBySession[session.id] = session.events || state.agentEventsBySession[session.id] || [];
   if (session.messages) {
@@ -579,13 +742,71 @@ function mergeAgentSessionPayload(session) {
   return workspacesChanged;
 }
 
+function adoptWorkspacePreviewToolResults(session, options = {}) {
+  if (!session || !Array.isArray(session.events)) return false;
+  let activated = false;
+  session.events.forEach((event) => {
+    if (!event || event.type !== "optpilot_tool_result" || !event.id) return;
+    if (state.handledPreviewEventIds.has(event.id)) return;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    if (payload.tool !== "optpilot_workspace_preview_open" || payload.ok === false) return;
+    const result = parseJsonPreview(payload.result_preview);
+    const data = result && result.data && typeof result.data === "object" ? result.data : {};
+    if (!data.preview_url) return;
+    state.handledPreviewEventIds.add(event.id);
+    const workspaceId = String(data.workspace_id || data.workspace && data.workspace.id || "");
+    const sessionWorkspace = state.sessions.find((item) => item.id === workspaceId || item.backendWorkspaceId === workspaceId);
+    if (!sessionWorkspace) return;
+    const preview = currentWorkspacePreview(sessionWorkspace);
+    preview.port = Number(data.port || preview.port || 5173);
+    preview.url = String(data.preview_url || "");
+    preview.status = "ready";
+    preview.message = `Previewing port ${preview.port} through ${sessionWorkspace.title}.`;
+    if (data.code_server && typeof data.code_server === "object") {
+      state.codeServer = data.code_server;
+      if (data.code_server.open_url) {
+        state.embeddedCodeUrl = data.code_server.open_url;
+        state.embeddedCodeFolder = data.folder || sessionWorkspace.codeFolder || "";
+        state.codeWorkspaceStatus = "ready";
+        state.codeWorkspaceMessage = "";
+      }
+    }
+    if (options.activate) {
+      setSelectedWorkspace(sessionWorkspace.id);
+      state.workbenchMode = "preview";
+      activated = true;
+    }
+  });
+  return activated;
+}
+
+function parseJsonPreview(value) {
+  if (!value || typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return null;
+  }
+}
+
 async function updateAgentSessionFromPayload(session) {
   const workspacesChanged = mergeAgentSessionPayload(session);
   if (workspacesChanged) {
     await refreshAgentWorkspaceState();
-  } else {
-    renderAssistant();
   }
+  const previewActivated = adoptWorkspacePreviewToolResults(session, {
+    activate: ["waiting_for_agent", "running"].includes(session && session.status || ""),
+  });
+  if (previewActivated) {
+    if (state.view !== "workspace") {
+      state.view = "workspace";
+      renderNavigation();
+    }
+    renderWorkspace();
+    renderAssistant();
+    return;
+  }
+  if (!workspacesChanged) renderAssistant();
 }
 
 function sameStringList(left, right) {
@@ -612,7 +833,22 @@ function attachedWorkspaces() {
   return state.sessions.filter((session) => attached.has(session.id));
 }
 
-function attachWorkspaceToCurrent(workspaceId) {
+function orderedWorkspaceSessions() {
+  const attached = new Set(attachedWorkspaceIds());
+  return state.sessions
+    .map((session) => ({ ...session, attachedToCurrent: attached.has(session.id) }))
+    .sort((left, right) => {
+      if (left.attachedToCurrent !== right.attachedToCurrent) return left.attachedToCurrent ? -1 : 1;
+      return workspaceSortMs(right.updatedAt || right.createdAt) - workspaceSortMs(left.updatedAt || left.createdAt);
+    });
+}
+
+function workspaceSortMs(value) {
+  const parsed = timestampMs(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function attachWorkspaceToCurrent(workspaceId) {
   const agentSession = currentAgentSession();
   if (!agentSession || !workspaceId) return;
   const workspace = state.sessions.find((item) => item.id === workspaceId);
@@ -621,9 +857,12 @@ function attachWorkspaceToCurrent(workspaceId) {
   state.agentWorkspaceAttachments[agentSession.id] = attached;
   setSelectedWorkspace(workspaceId);
   if (workspace && workspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
-    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`, { workspace_id: workspace.backendWorkspaceId })
-      .then((payload) => updateAgentSessionFromPayload(payload.session))
-      .catch(() => {});
+    try {
+      const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`, { workspace_id: workspace.backendWorkspaceId });
+      if (payload.session) mergeAgentSessionPayload(payload.session);
+    } catch (error) {
+      // Keep the optimistic attachment; refresh can reconcile if needed.
+    }
   }
 }
 
@@ -636,17 +875,35 @@ function keepWorkspaceSelected(workspaceId) {
   }
 }
 
-function setSelectedWorkspace(workspaceId) {
+function syncSelectedWorkspaceToBackend(workspaceId) {
+  const agentSession = currentAgentSession();
+  if (!agentSession || agentSession.id.startsWith("agent-session-")) return;
+  postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`, { workspace_id: workspaceId || "" })
+    .then((payload) => updateAgentSessionFromPayload(payload.session))
+    .catch(() => {});
+}
+
+function setSelectedWorkspace(workspaceId, options = {}) {
   state.selectedSessionId = workspaceId || null;
   if (state.selectedAgentSessionId) {
     state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = workspaceId || null;
   }
+  if (options.sync) syncSelectedWorkspaceToBackend(workspaceId || "");
   if (state.registrationDraft && state.registrationDraft.workspaceId !== workspaceId) {
     state.registrationDraft = null;
     if (state.assistantMode === "registration") {
       state.assistantMode = "chat";
     }
   }
+}
+
+function clearSelectedWorkspaceForPage() {
+  if (!state.selectedSessionId) return;
+  state.selectedSessionId = null;
+  if (state.selectedAgentSessionId) {
+    state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = null;
+  }
+  syncSelectedWorkspaceToBackend("");
 }
 
 function renderAll() {
@@ -658,6 +915,7 @@ function renderAll() {
   renderRuns();
   renderAssistant();
   renderSettingsModal();
+  renderWorkspaceCleanupModal();
   if (state.selectedRunId && state.view === "runs") {
     loadRunDetail(state.selectedRunId, { keepTab: true });
   }
@@ -684,6 +942,8 @@ function renderSettingsModal() {
 
 function fillSettingsForm() {
   const openhands = currentOpenHandsSettings();
+  const capabilities = currentAssistantCapabilities();
+  const permissions = currentAssistantPermissions();
   if (els.openHandsEnabled) els.openHandsEnabled.checked = Boolean(openhands.enabled);
   if (els.openHandsBaseUrl) els.openHandsBaseUrl.value = openhands.base_url || "";
   if (els.openHandsSessionEndpoint) els.openHandsSessionEndpoint.value = openhands.session_endpoint || "";
@@ -693,11 +953,78 @@ function fillSettingsForm() {
     els.openHandsApiKey.placeholder = openhands.api_key_configured ? "Configured; leave blank to keep" : "Paste API key";
   }
   if (els.openHandsClearApiKey) els.openHandsClearApiKey.checked = false;
+  if (els.assistantSkillsInput) els.assistantSkillsInput.value = settingsJson(capabilities.skills || []);
+  if (els.assistantMcpServersInput) els.assistantMcpServersInput.value = settingsJson(mcpServersObject(capabilities.mcp_servers || []));
+  if (els.assistantMcpFilterRegex) els.assistantMcpFilterRegex.value = capabilities.mcp_filter_regex || "";
+  if (els.assistantCustomToolsInput) els.assistantCustomToolsInput.value = settingsJson(capabilities.custom_tools || []);
+  setSelectValue(els.assistantPermissionFileWrite, permissions.file_write || "attached_editable");
+  setSelectValue(els.assistantPermissionShellRun, permissions.shell_run || "approval_required");
+  setSelectValue(els.assistantPermissionCatalogRegistration, permissions.catalog_registration || "approval_required");
+  setSelectValue(els.assistantPermissionStudyLaunch, permissions.study_launch || "approval_required");
+  setSelectValue(els.assistantPermissionJobStop, permissions.job_stop || "approval_required");
 }
 
 function currentOpenHandsSettings() {
   const assistant = state.agentSettings && state.agentSettings.assistant || {};
   return assistant.openhands || {};
+}
+
+function currentAssistantCapabilities() {
+  const assistant = state.agentSettings && state.agentSettings.assistant || {};
+  return assistant.capabilities || { skills: [], mcp_servers: [], custom_tools: [] };
+}
+
+function currentAssistantPermissions() {
+  const assistant = state.agentSettings && state.agentSettings.assistant || {};
+  return assistant.permissions || {};
+}
+
+function settingsJson(value) {
+  return JSON.stringify(value || [], null, 2);
+}
+
+function setSelectValue(element, value) {
+  if (!element) return;
+  element.value = value;
+  if (element.value !== value && element.options.length) element.selectedIndex = 0;
+}
+
+function parseJsonInput(element, fallback, label) {
+  if (!element) return fallback;
+  element.classList.remove("invalid-input");
+  const raw = element.value.trim();
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    element.classList.add("invalid-input");
+    throw new Error(`${label} must be valid JSON.`);
+  }
+}
+
+function mcpServersObject(records) {
+  const servers = {};
+  (records || []).forEach((record) => {
+    const key = record.name || record.id;
+    if (!key) return;
+    const server = {};
+    if (record.url) server.url = record.url;
+    if (record.command) server.command = record.command;
+    if (record.args && record.args.length) server.args = record.args;
+    if (record.auth) server.auth = record.auth;
+    if (record.transport) server.transport = record.transport;
+    servers[key] = server;
+  });
+  return servers;
+}
+
+function mcpServersFromObject(value) {
+  return Object.entries(value || {}).map(([name, config]) => ({
+    id: name,
+    name,
+    ...(config && typeof config === "object" ? config : {}),
+    enabled: true,
+  }));
 }
 
 function renderOpenHandsStatus() {
@@ -712,7 +1039,7 @@ function renderOpenHandsStatus() {
   els.openHandsStatus.innerHTML = `
     <div>
       <strong>${escapeHtml(assistantRuntimeLabel(status))}</strong>
-      <span>${escapeHtml(status.dispatch === "queued" ? "Messages are currently stored with OptPilot context until the OpenHands dispatch bridge is connected." : "Runtime dispatch is available.")}</span>
+      <span>${escapeHtml(assistantRuntimeDetail(status))}</span>
     </div>
     <div class="settings-status-grid">
       <span>Model</span><strong>${escapeHtml(model)}</strong>
@@ -725,12 +1052,40 @@ function renderOpenHandsStatus() {
 function assistantRuntimeLabel(status) {
   if (!status || status.error) return "Assistant settings unavailable";
   if (!status.enabled) return "OpenHands disabled";
-  if (status.mode === "configured") return status.connected ? "Tell OptPilot Assistant what you want to do" : "OpenHands configured";
+  if (status.mode === "configured") return status.connected ? "OpenHands ready" : "OpenHands not reachable";
   if (status.mode) return `OpenHands ${status.mode}`;
   return "OpenHands not configured";
 }
 
+function assistantRuntimeDetail(status) {
+  if (!status || status.error) return "Settings could not be loaded.";
+  if (!status.enabled) return "Messages stay local until OpenHands is enabled.";
+  if (!status.model) return "Choose a model before sending messages.";
+  if (!status.api_key_configured) return "Add an API key before sending messages.";
+  if (status.mode === "model chat") return "No agent server URL is configured; messages use the chat fallback.";
+  if (status.mode === "configured" && status.connected) return "Runtime dispatch is available.";
+  if (status.mode === "configured") return "Agent server is configured but not reachable.";
+  if (status.dispatch === "queued") return "Complete assistant settings before sending messages.";
+  return "Runtime dispatch is available.";
+}
+
 async function saveSettings() {
+  let capabilities;
+  try {
+    const skills = parseJsonInput(els.assistantSkillsInput, [], "AgentSkills");
+    const mcpServers = parseJsonInput(els.assistantMcpServersInput, {}, "MCP servers");
+    const customTools = parseJsonInput(els.assistantCustomToolsInput, [], "Custom tools");
+    capabilities = {
+      skills: Array.isArray(skills) ? skills : [],
+      mcp_servers: mcpServersFromObject(mcpServers && typeof mcpServers === "object" && !Array.isArray(mcpServers) ? mcpServers : {}),
+      mcp_filter_regex: els.assistantMcpFilterRegex ? els.assistantMcpFilterRegex.value.trim() : "",
+      custom_tools: Array.isArray(customTools) ? customTools : [],
+    };
+  } catch (error) {
+    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "settings error", error: String(error.message || error) };
+    renderOpenHandsStatus();
+    return;
+  }
   const payload = {
     openhands: {
       enabled: Boolean(els.openHandsEnabled && els.openHandsEnabled.checked),
@@ -739,6 +1094,14 @@ async function saveSettings() {
       model: els.openHandsModel ? els.openHandsModel.value.trim() : "",
       api_key: els.openHandsApiKey ? els.openHandsApiKey.value.trim() : "",
       clear_api_key: Boolean(els.openHandsClearApiKey && els.openHandsClearApiKey.checked),
+    },
+    capabilities,
+    permissions: {
+      file_write: els.assistantPermissionFileWrite ? els.assistantPermissionFileWrite.value : "attached_editable",
+      shell_run: els.assistantPermissionShellRun ? els.assistantPermissionShellRun.value : "approval_required",
+      catalog_registration: els.assistantPermissionCatalogRegistration ? els.assistantPermissionCatalogRegistration.value : "approval_required",
+      study_launch: els.assistantPermissionStudyLaunch ? els.assistantPermissionStudyLaunch.value : "approval_required",
+      job_stop: els.assistantPermissionJobStop ? els.assistantPermissionJobStop.value : "approval_required",
     },
   };
   const result = await postJson("/api/agent/settings", payload, { tolerateError: true });
@@ -755,9 +1118,16 @@ async function saveSettings() {
 }
 
 function setView(view) {
+  if (view !== "workspace") {
+    clearSelectedWorkspaceForPage();
+  } else if (!state.selectedSessionId) {
+    const firstAttached = attachedWorkspaceIds()[0] || null;
+    if (firstAttached) setSelectedWorkspace(firstAttached, { sync: true });
+  }
   state.view = view;
   renderNavigation();
   if (view === "workspace") renderWorkspace();
+  if (view !== "workspace") renderWorkspace();
   if (view === "catalog") renderCatalog();
   if (view === "experiments") renderExperiments();
   if (view === "runs") {
@@ -770,9 +1140,9 @@ function setView(view) {
 }
 
 function setWorkbenchMode(mode) {
-  state.workbenchMode = mode || "code";
+  state.workbenchMode = mode === "preview" ? "preview" : "code";
   renderWorkbenchMode();
-  if (state.workbenchMode === "evidence") renderEvidenceWorkbench();
+  if (state.workbenchMode === "preview") renderPreviewWorkbench();
 }
 
 function toggleAssistant() {
@@ -800,19 +1170,18 @@ function renderAssistant() {
   const isRegistration = state.assistantMode === "registration";
   if (els.assistantBackButton) els.assistantBackButton.hidden = isSessionList;
   if (els.assistantTitle) {
-    els.assistantTitle.textContent = isSessionList ? "Agent Sessions" : isRegistration ? "Register to Catalog" : session ? session.title : "OptPilot Assistant";
+    els.assistantTitle.textContent = isSessionList ? "Assistant Sessions" : isRegistration ? "Register to Catalog" : session ? session.title : "OptPilot Assistant";
   }
   if (els.assistantSubtitle) {
     els.assistantSubtitle.textContent = isSessionList
       ? "Resume a conversation or start a new one"
       : isRegistration
         ? "Discover configs, validate targets, and register selected files"
-      : `${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached - ${pageLabel}`;
+      : "";
+    els.assistantSubtitle.hidden = !els.assistantSubtitle.textContent;
   }
   if (els.assistantContextHint) {
-    const selected = currentSession();
-    const selectedLabel = selected ? selected.title : "No workspace";
-    els.assistantContextHint.textContent = `${pageLabel} - ${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached - ${selectedLabel}`;
+    els.assistantContextHint.textContent = assistantContextSummary();
   }
   if (els.assistantSessionList) els.assistantSessionList.hidden = !isSessionList;
   if (els.agentTimeline) {
@@ -845,7 +1214,7 @@ function scrollWorkingAssistantStepsToBottom() {
 }
 
 function assistantTimelineHtml(session) {
-  return `${assistantApprovalsHtml()}${assistantInterleavedTimelineHtml(session)}`;
+  return `${assistantInterleavedTimelineHtml(session)}${assistantApprovalsHtml()}`;
 }
 
 function assistantApprovalsHtml() {
@@ -895,7 +1264,7 @@ function assistantInterleavedTimelineHtml(session) {
     const turnMessages = messages.slice(index + 1, turnEndIndex);
     const hasAssistantReply = turnMessages.some((candidate) => candidate[0] === "assistant" || candidate[0] === "agent");
     const isLatestUserTurn = turnEndIndex === messages.length;
-    const isWorking = isLatestUserTurn && !hasAssistantReply && (!session || session.status !== "error");
+    const isWorking = isLatestUserTurn && !hasAssistantReply && Boolean(session && ["waiting_for_agent", "running"].includes(session.status || ""));
     const nextUserTime = messages
       .slice(index + 1)
       .filter((candidate) => candidate[0] === "user")
@@ -977,6 +1346,9 @@ function assistantEventIsInformative(event) {
   }
   if (type === "approval_requested" || type === "approval_approved" || type === "approval_rejected") return true;
   if (type === "workspace_attached" || type === "workspace_detached") return true;
+  if (type === "openhands_dispatch_cancelled") return true;
+  if (type === "openhands_cancel_acknowledged" || type === "openhands_cancel_failed") return true;
+  if (type === "openhands_tool_result_forwarded" || type === "openhands_tool_result_forward_skipped") return true;
   return type.includes("failed") || type.includes("error");
 }
 
@@ -1053,6 +1425,12 @@ function assistantStepSummary(event) {
   if (event.type === "approval_rejected") {
     return { ...base, title: "Approval rejected", detail: payload.reason || payload.tool || "" };
   }
+  if (event.type === "openhands_tool_result_forwarded") {
+    return { ...base, title: "Approved result sent to OpenHands", detail: payload.tool || payload.tool_call_id || "" };
+  }
+  if (event.type === "openhands_tool_result_forward_skipped") {
+    return { ...base, title: "Approved result kept in Studio", detail: payload.reason || payload.tool || "" };
+  }
   if (event.type === "openhands_dispatch_failed") {
     return { ...base, title: "OpenHands dispatch failed", detail: payload.error || "" };
   }
@@ -1064,6 +1442,19 @@ function assistantStepSummary(event) {
   }
   if (event.type === "openhands_dispatch_completed") {
     return { ...base, title: "OpenHands dispatch completed", detail: payload.dispatch || payload.status || "" };
+  }
+  if (event.type === "openhands_dispatch_cancelled") {
+    const detail = payload.remote_cancelled
+      ? `Interrupted OpenHands${payload.remote_action ? ` via ${payload.remote_action}` : ""}.`
+      : (payload.remote_cancel_scheduled ? "Stopped locally. Interrupting OpenHands in the background." : (payload.remote_error || "Stopped locally."));
+    return { ...base, title: "Assistant stopped", detail };
+  }
+  if (event.type === "openhands_cancel_acknowledged") {
+    const detail = payload.remote_action ? `OpenHands accepted ${payload.remote_action}.` : "OpenHands accepted the interrupt.";
+    return { ...base, title: "OpenHands interrupt acknowledged", detail };
+  }
+  if (event.type === "openhands_cancel_failed") {
+    return { ...base, title: "OpenHands interrupt failed", detail: payload.remote_error || "Studio stopped locally, but OpenHands did not acknowledge the interrupt." };
   }
   if (event.type === "openhands_chat_completion_completed") {
     return { ...base, title: "OpenHands chat completed", detail: payload.conversation_id || "" };
@@ -1169,6 +1560,11 @@ function bindAssistantApprovals() {
 
 async function resolveAssistantApproval(sessionId, approvalId, action) {
   if (!approvalId) return;
+  const selector = action === "approve"
+    ? `[data-approve-approval="${cssEscape(approvalId)}"]`
+    : `[data-reject-approval="${cssEscape(approvalId)}"]`;
+  const card = document.querySelector(selector) && document.querySelector(selector).closest(".approval-card");
+  if (card) card.classList.add("is-resolving");
   try {
     const payload = await postJson(
       `/api/agent-sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}/${action}`,
@@ -1178,18 +1574,17 @@ async function resolveAssistantApproval(sessionId, approvalId, action) {
       const approvals = state.agentApprovalsBySession[sessionId] || [];
       state.agentApprovalsBySession[sessionId] = approvals.map((item) => item.id === approvalId ? payload.approval : item);
     }
-    const result = payload.result || {};
-    pushAssistantMessage([
-      result.ok === false ? "tool" : "assistant",
-      action === "approve" ? "Approval handled" : "Approval rejected",
-      result.summary || (action === "approve" ? "The approved action finished." : "The requested action was rejected."),
-    ]);
-    await loadAgentSessions();
+    if (payload.session) {
+      await updateAgentSessionFromPayload(payload.session);
+    } else {
+      await loadAgentSessions();
+      renderAssistant();
+    }
     await refreshAgentWorkspaceState();
   } catch (error) {
     pushAssistantMessage(["tool", "Approval failed", String(error.message || error)]);
+    renderAssistant();
   }
-  renderAssistant();
 }
 
 function updateAssistantInputPlaceholder() {
@@ -1200,13 +1595,23 @@ function updateAssistantInputPlaceholder() {
 function handleAgentInputKeydown(event) {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
+    if (assistantIsBusy()) return;
     sendAgentMessage();
   }
 }
 
 function updateAssistantComposerState() {
   if (!els.sendAgentButton) return;
-  els.sendAgentButton.disabled = assistantIsBusy();
+  const busy = assistantIsBusy();
+  const session = currentAgentSession();
+  const cancelling = Boolean(session && state.cancellingAgentSessionIds.has(session.id));
+  els.sendAgentButton.disabled = cancelling;
+  els.sendAgentButton.classList.toggle("stopping", busy);
+  els.sendAgentButton.setAttribute("aria-label", busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("title", busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.innerHTML = busy
+    ? `<span aria-hidden="true" class="stop-icon"></span>`
+    : `<span aria-hidden="true">&uarr;</span>`;
 }
 
 function assistantIsBusy() {
@@ -1229,6 +1634,29 @@ function assistantPromptForContext() {
   return "Help me inspect this workspace, edit code, validate configs, or register catalog entries.";
 }
 
+function assistantContextSummary() {
+  const parts = [`Viewing ${currentViewLabel()}`];
+  if (state.view === "catalog") {
+    const component = componentByKey(state.selectedComponentKey);
+    parts.push(component ? `Catalog entry: ${component.entry.label} (${component.kind})` : "No catalog entry selected");
+  } else if (state.view === "experiments") {
+    const plan = currentPlan();
+    parts.push(plan ? `Study config: ${plan.title}` : "No study config selected");
+  } else if (state.view === "runs") {
+    const run = selectedRunSummary();
+    parts.push(run ? `Run: ${run.name || run.id}${run.status ? ` (${run.status})` : ""}` : "No run selected");
+  } else {
+    const workspace = currentSession();
+    parts.push(workspace ? `Workspace open: ${workspace.title}` : "No workspace open");
+  }
+  return parts.join(" · ");
+}
+
+function selectedRunSummary() {
+  if (state.selectedRun && state.selectedRun.run) return state.selectedRun.run;
+  return state.runs.find((run) => run.id === state.selectedRunId) || null;
+}
+
 function renderNavigation() {
   ["workspace", "catalog", "experiments", "runs"].forEach((view) => {
     document.body.classList.toggle(`view-${view}`, state.view === view);
@@ -1240,10 +1668,10 @@ function renderNavigation() {
     section.classList.toggle("active-view", section.id === `${state.view}View`);
   });
   const titles = {
-    workspace: ["Editor", "Attached workspaces, one embedded code editor, and catalog registration."],
-    catalog: ["Catalog", "Reusable environments and methods with inspection and edit-copy entry points."],
-    experiments: ["Studies", "Configure objective, budget, runtime, and evidence before launch."],
-    runs: ["Runs", "Live and completed study evidence, artifacts, metrics, and logs."],
+    workspace: ["Editor", "Open, preview, and register the selected workspace."],
+    catalog: ["Catalog", "Reusable environments, methods, and resources."],
+    experiments: ["Studies", "Study configurations for launching optimization runs."],
+    runs: ["Runs", "Run history, metrics, artifacts, and logs."],
   };
   els.pageTitle.textContent = titles[state.view][0];
   els.pageSubtitle.textContent = titles[state.view][1];
@@ -1272,7 +1700,7 @@ function uiWorkspaceSession(workspace) {
     files[`file${index}`] = {
       label: path,
       state: workspace.mode === "read-only" || workspace.mode === "analysis" ? "read-only" : "editable",
-      content: `# ${path}\n\nOpen this workspace in the embedded or separate code editor to inspect the live file contents.\n`,
+      content: `# ${path}\n\nOpen this workspace in embedded or separate Code Server to inspect the live file contents.\n`,
     };
   });
   if (!Object.keys(files).length) {
@@ -1288,6 +1716,7 @@ function uiWorkspaceSession(workspace) {
     backendWorkspaceId: workspace.id,
     kind: primary ? primary.kind : sourceType,
     mode: workspace.mode || "editable",
+    sourceType,
     title: workspace.title || "Workspace",
     status: workspace.status || (entries.length ? "registered" : "ready"),
     target: workspace.source_path || workspace.root,
@@ -1298,14 +1727,46 @@ function uiWorkspaceSession(workspace) {
     tools: workspaceCapabilities(workspace),
     registrationEnabled: workspace.registration_enabled !== false,
     registeredEntries: entries,
+    attachedSessions: workspace.attached_sessions || [],
+    ownership: workspace.ownership || (workspace.managed_by_studio ? "studio-owned" : "external-reference"),
+    managedByStudio: Boolean(workspace.managed_by_studio),
+    deleteAction: workspace.delete_action || (workspace.managed_by_studio ? "delete_draft" : "remove_reference"),
+    deleteLabel: workspace.source_type === "catalog-copy" && workspace.managed_by_studio
+      ? "Delete Copy"
+      : workspace.delete_label || (workspace.managed_by_studio ? "Delete Draft" : "Remove From Studio"),
+    runtime: workspace.runtime || null,
+    updatedAt: workspace.updated_at || workspace.created_at || "",
+    createdAt: workspace.created_at || "",
     files,
     lenses: [["Source", sourceType], ["Mode", workspace.mode || "editable"], ["Registered", entries.length ? String(entries.length) : "none"]],
     timeline: [["assistant", "Workspace attached", workspace.description || "Workspace is available to the current assistant session."]],
     terminal: workspace.registration_enabled === false
       ? ["$ optpilot inspect-run", `root: ${shortPath(workspace.root || "")}`]
       : ["$ optpilot discover-configs", `root: ${shortPath(workspace.root || "")}`],
-    checks: [["Workspace root", shortPath(workspace.root || ""), "ready"], ["Catalog registration", entries.length ? "registered" : "not registered", entries.length ? "ready" : "review"]],
+    checks: [
+      ["Workspace root", shortPath(workspace.root || ""), "ready"],
+      ["Ownership", workspace.ownership || (workspace.managed_by_studio ? "studio-owned" : "external-reference"), "ready"],
+      ["Runtime", workspace.runtime && workspace.runtime.status || "unavailable", workspace.runtime && workspace.runtime.containerized ? "ready" : "review"],
+      ["Catalog registration", entries.length ? "registered" : "not registered", entries.length ? "ready" : "review"],
+    ],
   };
+}
+
+function mergeUiWorkspace(workspace) {
+  if (!workspace || !workspace.id) return null;
+  if (workspace.deleted) {
+    state.uiWorkspaces = state.uiWorkspaces.filter((item) => item.id !== workspace.id);
+    state.sessions = state.sessions.filter((item) => item.id !== workspace.id);
+    Object.keys(state.agentWorkspaceAttachments).forEach((sessionId) => {
+      state.agentWorkspaceAttachments[sessionId] = (state.agentWorkspaceAttachments[sessionId] || []).filter((id) => id !== workspace.id);
+    });
+    if (state.selectedSessionId === workspace.id) state.selectedSessionId = null;
+    return null;
+  }
+  state.uiWorkspaces = [workspace, ...state.uiWorkspaces.filter((item) => item.id !== workspace.id)];
+  const session = uiWorkspaceSession(workspace);
+  upsertSession(session);
+  return session;
 }
 
 function workspaceCapabilities(workspace) {
@@ -1316,13 +1777,13 @@ function workspaceCapabilities(workspace) {
     return [
       { label: "Browse artifacts", status: "available" },
       { label: "Analyze results", status: "available" },
-      { label: "Open code editor", status: "available" },
+      { label: "Open Code Server", status: "available" },
     ];
   }
   if (workspace.mode === "read-only") {
     return [
       { label: "Inspect source", status: "available" },
-      { label: "Open code editor", status: "available" },
+      { label: "Open Code Server", status: "available" },
     ];
   }
   return [
@@ -1372,18 +1833,22 @@ function buildPlans() {
 }
 
 function renderWorkspace() {
-  const workspaces = attachedWorkspaces();
-  let session = currentSession();
-  if (session && session.id !== state.selectedSessionId) {
-    setSelectedWorkspace(session.id);
-  }
-  els.sessionCount.textContent = String(workspaces.length);
-  els.sessionList.innerHTML = workspaces.map(sessionCard).join("") || emptyInline("No workspaces attached to this session.");
+  const allWorkspaces = orderedWorkspaceSessions();
+  const attachedCount = attachedWorkspaceIds().length;
+  const session = currentSession();
+  els.sessionCount.textContent = allWorkspaces.length ? `${attachedCount}/${allWorkspaces.length}` : "0";
+  els.sessionList.innerHTML = allWorkspaces.map(sessionCard).join("") || emptyInline("No workspaces yet.");
   document.querySelectorAll("[data-session-id]").forEach((button) => {
     button.addEventListener("click", () => selectSession(button.dataset.sessionId));
   });
   document.querySelectorAll("[data-close-workspace-id]").forEach((button) => {
     button.addEventListener("click", () => closeWorkspaceFromCurrentSession(button.dataset.closeWorkspaceId));
+  });
+  document.querySelectorAll("[data-attach-workspace-id]").forEach((button) => {
+    button.addEventListener("click", () => attachWorkspaceAndRender(button.dataset.attachWorkspaceId));
+  });
+  document.querySelectorAll("[data-delete-workspace-id]").forEach((button) => {
+    button.addEventListener("click", () => requestWorkspaceDelete(button.dataset.deleteWorkspaceId));
   });
   document.querySelectorAll("[data-workspace-action]").forEach((button) => {
     button.addEventListener("click", () => runWorkspaceAction(button.dataset.workspaceAction));
@@ -1397,8 +1862,11 @@ function renderWorkspace() {
   els.sessionPath.textContent = session.path;
   els.sessionStatus.textContent = session.status;
   els.sessionStatus.className = `status-pill ${statusClass(session.status)}`;
+  renderWorkspaceWorkbenchToolbar(session);
   els.sessionSummary.innerHTML = [
     ["Mode", session.mode],
+    ["Ownership", session.ownership || "-"],
+    ["Runtime", session.runtime && session.runtime.status || "-"],
     ["Target", shortPath(session.target)],
     ["IDE folder", session.ideFolder],
   ].map(summaryCell).join("");
@@ -1414,13 +1882,13 @@ function renderWorkspace() {
   els.sessionContext.innerHTML = session.context.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
   els.sessionTools.innerHTML = session.tools.map(capabilityItem).join("");
   els.sessionWorkspaceActions.innerHTML = `
-    <button class="file-tree-item open-session-code" type="button">Focus folder in code editor</button>
+    <button class="file-tree-item open-session-code" type="button">Open folder in Code Server</button>
     <div class="path-text">${escapeHtml(shortPath(session.codeFolder || session.path))}</div>
   `;
   els.sessionWorkspaceActions.querySelector(".open-session-code").addEventListener("click", openCodeServerEmbedded);
   renderSessionEditor(session);
   renderWorkbenchMode();
-  renderEvidenceWorkbench();
+  renderPreviewWorkbench();
   renderAssistant();
   renderSessionBottom();
   maybeAutoOpenCodeWorkspace(session);
@@ -1487,11 +1955,13 @@ function buildRegistrationDraft(session, discoveredConfigs = null) {
     workspaceTitle: session.title,
     status: alreadyRegistered ? "applied" : configs.length ? "draft" : "needs-config",
     configs,
+    resourceId: slug(session.title || session.id || "resource"),
+    resourceDescription: session.context && session.context[1] || "",
     note: alreadyRegistered
       ? "This workspace is already registered in the catalog. Create an editable copy if you want to modify and register a new version."
       : configs.length
       ? "Select one or more configs, validate them, then register selected files to user_catalog."
-      : "No OptPilot config file is selected yet. Ask the assistant to create one or add a config in the code editor.",
+      : "No environment or method config was found. You can add one in Code Server or register this workspace as a reusable resource.",
   };
 }
 
@@ -1517,11 +1987,33 @@ function registrationMenuHtml() {
       <div class="registration-targets">
         ${configs.map(registrationTarget).join("") || emptyInline("No config files yet.")}
       </div>
+      ${resourceRegistrationHtml(draft)}
       <div class="registration-actions">
         <button class="ghost-button registration-discover" type="button">Discover configs</button>
         <button class="ghost-button registration-validate" type="button" ${configs.length ? "" : "disabled"}>Validate selected</button>
         <button class="primary-button registration-apply" type="button" ${configs.some((item) => item.validation === "valid") ? "" : "disabled"}>Register selected</button>
       </div>
+    </div>
+  `;
+}
+
+function resourceRegistrationHtml(draft) {
+  if (!draft || draft.status === "applied") return "";
+  return `
+    <div class="registration-resource">
+      <div>
+        <strong>Register as Resource</strong>
+        <p>Copy this draft into <code>user_catalog/resources/</code> as a reusable reference workspace.</p>
+      </div>
+      <label class="control-field">
+        <span>Resource id</span>
+        <input data-resource-registration-field="resourceId" type="text" value="${escapeHtml(draft.resourceId || "")}" />
+      </label>
+      <label class="control-field">
+        <span>Description</span>
+        <input data-resource-registration-field="resourceDescription" type="text" value="${escapeHtml(draft.resourceDescription || "")}" />
+      </label>
+      <button class="ghost-button registration-resource-apply" type="button">Register Resource</button>
     </div>
   `;
 }
@@ -1566,6 +2058,13 @@ function bindRegistrationMenu() {
       const target = draft.configs.find((item) => item.key === input.dataset.registrationTarget);
       if (target) target.selected = input.checked;
       renderAssistant();
+    });
+  });
+  document.querySelectorAll("[data-resource-registration-field]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const draft = state.registrationDraft;
+      if (!draft) return;
+      draft[input.dataset.resourceRegistrationField] = input.value;
     });
   });
   const discover = document.querySelector(".registration-discover");
@@ -1628,15 +2127,41 @@ function bindRegistrationMenu() {
       }
       const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/apply`, {});
       if (applied.workspace) {
-        state.uiWorkspaces = [applied.workspace, ...state.uiWorkspaces.filter((item) => item.id !== applied.workspace.id)];
-        const refreshed = uiWorkspaceSession(applied.workspace);
-        Object.assign(session, refreshed);
+        const refreshed = mergeUiWorkspace(applied.workspace);
+        if (refreshed) Object.assign(session, refreshed);
       }
       draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
       pushAssistantMessage(["assistant", applied.applied ? "Registration applied" : "Registration blocked", applied.applied ? "Selected targets were copied into the user catalog." : "Validation must pass before registration can be applied."]);
       renderWorkspace();
     } catch (error) {
       pushAssistantMessage(["tool", "Registration failed", String(error.message || error)]);
+    }
+    renderAssistant();
+  });
+  const resourceApply = document.querySelector(".registration-resource-apply");
+  if (resourceApply) resourceApply.addEventListener("click", async () => {
+    const draft = state.registrationDraft;
+    const session = currentSession();
+    if (!draft || !session || !draft.backendWorkspaceId) return;
+    try {
+      const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, {
+        kind: "resource",
+        resource_id: draft.resourceId || slug(session.title || session.id || "resource"),
+        description: draft.resourceDescription || "",
+      });
+      draft.manifestId = created.registration && created.registration.id;
+      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/apply`, {});
+      if (applied.workspace) {
+        const refreshed = mergeUiWorkspace(applied.workspace);
+        if (refreshed) Object.assign(session, refreshed);
+      }
+      draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
+      await loadCatalogAndCompatibility();
+      pushAssistantMessage(["assistant", applied.applied ? "Resource registered" : "Resource registration blocked", applied.applied ? "The draft was copied into user_catalog/resources." : "Validation must pass before registration can be applied."]);
+      renderCatalog();
+      renderWorkspace();
+    } catch (error) {
+      pushAssistantMessage(["tool", "Resource registration failed", String(error.message || error)]);
     }
     renderAssistant();
   });
@@ -1653,19 +2178,23 @@ function renderEmptyWorkspace() {
   els.sessionContext.innerHTML = "";
   els.sessionTools.innerHTML = "";
   els.sessionWorkspaceActions.innerHTML = `<button class="file-tree-item open-session-code" type="button" disabled>No code folder selected</button>`;
-  if (els.sessionEditor) els.sessionEditor.textContent = "";
-  if (els.sessionLenses) els.sessionLenses.innerHTML = "";
   state.embeddedCodeUrl = "";
   state.embeddedCodeFolder = "";
   state.codeWorkspaceStatus = "detached";
   state.codeWorkspaceMessage = "Attach or create a workspace to start editing.";
   if (els.embeddedCodeWorkspace) els.embeddedCodeWorkspace.removeAttribute("src");
+  renderWorkspaceWorkbenchToolbar(null);
+  renderPreviewWorkbench();
   renderWorkbenchMode();
   renderAssistant();
   renderSessionBottom();
 }
 
 async function selectSession(sessionId) {
+  if (!attachedWorkspaceIds().includes(sessionId)) {
+    await attachWorkspaceAndRender(sessionId);
+    return;
+  }
   if (state.view !== "workspace") setView("workspace");
   setSelectedWorkspace(sessionId);
   const agentSession = currentAgentSession();
@@ -1682,6 +2211,17 @@ async function selectSession(sessionId) {
     return;
   }
   renderWorkspace();
+}
+
+async function attachWorkspaceAndRender(workspaceId) {
+  if (!workspaceId) return;
+  await attachWorkspaceToCurrent(workspaceId);
+  if (state.view !== "workspace") setView("workspace");
+  state.selectedFileKey = firstFileKey(currentSession());
+  await loadUiWorkspaces();
+  rebuildDerivedState();
+  renderWorkspace();
+  renderAssistant();
 }
 
 function startAssistantResize(event) {
@@ -1726,8 +2266,11 @@ function startAssistantResize(event) {
 
 async function selectAgentSession(sessionId) {
   state.selectedAgentSessionId = sessionId;
+  storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
   state.assistantMode = "chat";
-  const selectedWorkspace = state.selectedWorkspaceByAgentSession[sessionId] || attachedWorkspaceIds(sessionId)[0] || null;
+  const selectedWorkspace = state.view === "workspace"
+    ? state.selectedWorkspaceByAgentSession[sessionId] || attachedWorkspaceIds(sessionId)[0] || null
+    : null;
   state.selectedSessionId = selectedWorkspace;
   const next = currentSession();
   state.selectedFileKey = firstFileKey(next);
@@ -1739,17 +2282,27 @@ async function selectAgentSession(sessionId) {
 }
 
 async function createAgentSession() {
+  const currentAttachedIds = attachedWorkspaceIds();
+  const attached = currentAttachedIds
+    .map((workspaceId) => state.sessions.find((session) => session.id === workspaceId))
+    .map((session) => session && session.backendWorkspaceId)
+    .filter(Boolean);
   const selectedWorkspace = currentSession();
-  const attached = selectedWorkspace && selectedWorkspace.backendWorkspaceId ? [selectedWorkspace.backendWorkspaceId] : [];
+  const selectedWorkspaceId = selectedWorkspace && attached.includes(selectedWorkspace.backendWorkspaceId)
+    ? selectedWorkspace.backendWorkspaceId
+    : state.view === "workspace"
+    ? attached[0] || ""
+    : "";
   try {
     const payload = await postJson("/api/agent-sessions", {
       title: `Session ${state.agentSessions.length + 1}`,
       description: "New conversation",
       attached_workspace_ids: attached,
-      selected_workspace_id: attached[0] || "",
+      selected_workspace_id: selectedWorkspaceId,
     });
     await updateAgentSessionFromPayload(payload.session);
     state.selectedAgentSessionId = payload.session.id;
+    storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
   } catch (error) {
     const id = `agent-session-${Date.now().toString(36)}`;
     const index = state.agentSessionSeq++;
@@ -1760,11 +2313,14 @@ async function createAgentSession() {
       createdAt: "now",
     };
     state.agentSessions = [session, ...state.agentSessions];
-    state.agentWorkspaceAttachments[id] = state.selectedSessionId ? [state.selectedSessionId] : [];
-    state.selectedWorkspaceByAgentSession[id] = state.selectedSessionId || null;
+    state.agentWorkspaceAttachments[id] = currentAttachedIds.slice();
+    state.selectedWorkspaceByAgentSession[id] = state.view === "workspace" && currentAttachedIds.includes(state.selectedSessionId)
+      ? state.selectedSessionId
+      : null;
     state.assistantMessagesBySession[id] = defaultAssistantMessages();
     state.agentEventsBySession[id] = [];
     state.selectedAgentSessionId = id;
+    storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
   }
   state.assistantMode = "chat";
   renderWorkspace();
@@ -1776,14 +2332,46 @@ async function closeWorkspaceFromCurrentSession(workspaceId) {
   const label = workspace ? workspace.title : "this workspace";
   const agentSession = currentAgentSession();
   if (!agentSession) return;
+  if (workspaceShouldPromptOnLastDetach(workspace, agentSession.id)) {
+    state.pendingWorkspaceCleanup = { workspaceId, sessionId: agentSession.id, intent: "detach" };
+    renderWorkspaceCleanupModal();
+    return;
+  }
+  await detachWorkspaceFromSession(workspaceId, agentSession.id, { announce: true });
+}
+
+function workspaceShouldPromptOnLastDetach(workspace, sessionId) {
+  if (!workspace || !sessionId) return false;
+  if (workspace.registrationEnabled === false) return false;
+  if (workspace.mode !== "editable") return false;
+  if (!workspace.managedByStudio) return false;
+  const attached = workspace.attachedSessions || [];
+  return attached.length <= 1 && (!attached.length || attached.includes(sessionId));
+}
+
+async function detachWorkspaceFromSession(workspaceId, agentSessionId, options = {}) {
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  const label = workspace ? workspace.title : "this workspace";
+  const agentSession = state.agentSessions.find((item) => item.id === agentSessionId) || currentAgentSession();
+  if (!agentSession) return;
   state.agentWorkspaceAttachments[agentSession.id] = attachedWorkspaceIds(agentSession.id).filter((id) => id !== workspaceId);
   if (!agentSession.id.startsWith("agent-session-")) {
-    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`, { workspace_id: workspaceId })
-      .then((payload) => updateAgentSessionFromPayload(payload.session))
-      .catch(() => {});
+    try {
+      const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`, { workspace_id: workspaceId });
+      if (payload.session) mergeAgentSessionPayload(payload.session);
+    } catch (error) {
+      // Keep the optimistic UI state; a refresh will reconcile if needed.
+    }
   }
   if (workspace && workspace.backendWorkspaceId) {
-    postJson(`/api/workspaces/${encodeURIComponent(workspace.backendWorkspaceId)}/detach`, { session_id: agentSession.id }).catch(() => {});
+    try {
+      const payload = await postJson(`/api/workspaces/${encodeURIComponent(workspace.backendWorkspaceId)}/detach`, { session_id: agentSession.id });
+      if (payload.workspace) {
+        mergeUiWorkspace(payload.workspace);
+      }
+    } catch (error) {
+      // Session detach already succeeded; workspace record can be refreshed later.
+    }
   }
   if (state.selectedSessionId === workspaceId) {
     const nextId = attachedWorkspaceIds(agentSession.id)[0] || null;
@@ -1796,8 +2384,120 @@ async function closeWorkspaceFromCurrentSession(workspaceId) {
       return;
     }
   }
-  pushAssistantMessage(["tool", "Workspace detached", `${label} was detached from this assistant session. Files remain on disk.`]);
+  if (options.announce) pushAssistantMessage(["tool", "Workspace detached", `${label} was detached from this assistant session. Files remain on disk.`]);
+  await loadUiWorkspaces();
+  rebuildDerivedState();
   renderWorkspace();
+}
+
+function renderWorkspaceCleanupModal() {
+  if (!els.workspaceCleanupModal) return;
+  const pending = state.pendingWorkspaceCleanup;
+  const workspace = pending && state.sessions.find((item) => item.id === pending.workspaceId);
+  els.workspaceCleanupModal.hidden = !pending;
+  if (!pending || !workspace) return;
+  const deleting = pending.intent === "delete";
+  const destructiveLabel = workspaceDestructiveLabel(workspace);
+  const isCatalogCopy = workspace.sourceType === "catalog-copy";
+  if (els.workspaceCleanupTitle) els.workspaceCleanupTitle.textContent = `${deleting ? destructiveLabel : "Detach"} ${workspace.title}`;
+  if (els.workspaceCleanupBody) {
+    const destructiveDescription = workspace.managedByStudio
+      ? isCatalogCopy
+        ? "delete the Studio-managed copy folder without changing the original catalog entry"
+        : "delete the Studio-managed draft folder"
+      : "remove the workspace from Studio without deleting the referenced folder";
+    const ownershipDescription = workspace.managedByStudio
+      ? isCatalogCopy
+        ? "a Studio-owned editable copy"
+        : "a Studio-owned draft workspace"
+      : "an unregistered workspace";
+    els.workspaceCleanupBody.textContent = deleting
+      ? `This is ${ownershipDescription}. Keep it in the workspace list, register reusable files to the catalog, or ${destructiveDescription}.`
+      : `This is the last assistant session using ${ownershipDescription}. Keep it in the workspace list, register reusable files to the catalog, or ${destructiveDescription}.`;
+  }
+  if (els.workspaceCleanupDeleteButton) {
+    els.workspaceCleanupDeleteButton.textContent = destructiveLabel;
+    els.workspaceCleanupDeleteButton.title = workspace.managedByStudio
+      ? isCatalogCopy
+        ? "Delete this Studio-owned copy and runtime state. The original catalog entry is not changed."
+        : "Delete the Studio-owned draft folder and runtime state."
+      : "Remove this external folder from Studio without deleting files.";
+  }
+}
+
+async function keepPendingWorkspaceDraft() {
+  const pending = state.pendingWorkspaceCleanup;
+  state.pendingWorkspaceCleanup = null;
+  renderWorkspaceCleanupModal();
+  if (!pending) return;
+  await detachWorkspaceFromSession(pending.workspaceId, pending.sessionId, { announce: true });
+}
+
+async function registerPendingWorkspaceDraft() {
+  const pending = state.pendingWorkspaceCleanup;
+  state.pendingWorkspaceCleanup = null;
+  renderWorkspaceCleanupModal();
+  if (!pending) return;
+  const workspaceId = pending.workspaceId;
+  if (!attachedWorkspaceIds(pending.sessionId).includes(workspaceId)) {
+    await attachWorkspaceToCurrent(workspaceId);
+  }
+  setSelectedWorkspace(workspaceId);
+  await openRegistrationMenu();
+}
+
+async function deletePendingWorkspaceDraft() {
+  const pending = state.pendingWorkspaceCleanup;
+  state.pendingWorkspaceCleanup = null;
+  renderWorkspaceCleanupModal();
+  if (!pending) return;
+  await detachWorkspaceFromSession(pending.workspaceId, pending.sessionId, { announce: false });
+  await deleteWorkspaceDraft(pending.workspaceId);
+}
+
+async function requestWorkspaceDelete(workspaceId) {
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  if (!workspace) return;
+  state.pendingWorkspaceCleanup = { workspaceId, sessionId: state.selectedAgentSessionId || "", intent: "delete" };
+  renderWorkspaceCleanupModal();
+}
+
+async function deleteWorkspaceDraft(workspaceId) {
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  const label = workspace ? workspace.title : "Draft workspace";
+  try {
+    const payload = await deleteJson(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
+    const deleted = payload.workspace || {};
+    const isCatalogCopy = workspace && workspace.sourceType === "catalog-copy";
+    state.uiWorkspaces = state.uiWorkspaces.filter((item) => item.id !== workspaceId);
+    Object.keys(state.agentWorkspaceAttachments).forEach((sessionId) => {
+      state.agentWorkspaceAttachments[sessionId] = (state.agentWorkspaceAttachments[sessionId] || []).filter((id) => id !== workspaceId);
+      if (state.selectedWorkspaceByAgentSession[sessionId] === workspaceId) {
+        state.selectedWorkspaceByAgentSession[sessionId] = null;
+      }
+    });
+    if (state.selectedSessionId === workspaceId) state.selectedSessionId = null;
+    rebuildDerivedState();
+    const title = deleted.files_deleted ? "Workspace deleted" : "Workspace removed";
+    const detail = deleted.files_deleted
+      ? isCatalogCopy
+        ? `${label} was deleted from Studio workspace storage. The original catalog entry was not changed.`
+        : `${label} was deleted from Studio-owned draft storage.`
+      : `${label} was removed from Studio. The referenced folder was left on disk.`;
+    pushAssistantMessage(["tool", title, detail]);
+  } catch (error) {
+    pushAssistantMessage(["tool", "Workspace removal failed", String(error.message || error)]);
+    setAssistantOpen(true);
+  }
+  renderWorkspace();
+  renderAssistant();
+}
+
+function workspaceDestructiveLabel(workspace) {
+  if (!workspace) return "Remove From Studio";
+  if (workspace.managedByStudio && workspace.sourceType === "catalog-copy") return "Delete Copy";
+  if (workspace.deleteLabel) return workspace.deleteLabel;
+  return workspace.managedByStudio ? "Delete Draft" : "Remove From Studio";
 }
 
 function renderCodeServerCard(session) {
@@ -1917,31 +2617,21 @@ function openHandsService(status) {
 }
 
 function sandboxService(runtime) {
-  const docker = runtime.docker || {};
-  const podman = runtime.podman || {};
-  if (docker.ok) {
+  const workspaceRuntime = runtime.workspace_runtime || {};
+  if (workspaceRuntime.engine_available) {
     return {
       label: "Sandbox",
-      badge: "docker",
+      badge: workspaceRuntime.engine || "ON",
       level: "ready",
-      detail: compactVersion(docker.version) || "Docker ready",
-      required: false,
-    };
-  }
-  if (podman.ok) {
-    return {
-      label: "Sandbox",
-      badge: "podman",
-      level: "ready",
-      detail: compactVersion(podman.version) || "Podman ready",
+      detail: workspaceRuntime.image || "Workspace containers ready",
       required: false,
     };
   }
   return {
     label: "Sandbox",
-    badge: "host",
+    badge: "OFF",
     level: "review",
-    detail: "Container sandbox unavailable; host runs only",
+    detail: workspaceRuntime.message || "Workspace container runtime unavailable",
     required: false,
   };
 }
@@ -1967,39 +2657,27 @@ function compactVersion(value) {
 
 function renderSessionEditor(session) {
   if (!session.files[state.selectedFileKey]) state.selectedFileKey = firstFileKey(session);
-  const file = session.files[state.selectedFileKey];
-  els.fileTabs.innerHTML = Object.entries(session.files).map(([key, item]) => `
-    <button class="tab ${key === state.selectedFileKey ? "active" : ""}" data-file-key="${escapeHtml(key)}" type="button">${escapeHtml(item.label)}</button>
-  `).join("");
-  document.querySelectorAll("#fileTabs [data-file-key]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedFileKey = button.dataset.fileKey;
-      renderWorkspace();
-    });
-  });
-  if (els.fileState) {
-    els.fileState.textContent = file.state;
-    els.fileState.className = `status-pill ${statusClass(file.state)}`;
-  }
-  els.sessionEditor.textContent = file.content;
-  els.sessionLenses.innerHTML = session.lenses.map(summaryCell).join("");
 }
 
 function renderWorkbenchMode() {
-  const mode = state.workbenchMode || "code";
+  const mode = state.workbenchMode === "preview" ? "preview" : "code";
+  state.workbenchMode = mode;
+  const session = currentSession();
   const grid = document.querySelector("#workspaceView .workspace-grid");
-  if (grid) grid.classList.toggle("code-focused", mode === "code");
+  if (grid) {
+    grid.classList.toggle("workbench-focused", true);
+    grid.classList.toggle("code-focused", mode === "code");
+    grid.classList.toggle("preview-focused", mode === "preview");
+  }
   document.querySelectorAll("[data-workbench-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.workbenchMode === mode);
   });
   [
-    ["contract", els.contractWorkbench],
     ["code", els.codeWorkbench],
-    ["evidence", els.evidenceWorkbench],
+    ["preview", els.previewWorkbench],
   ].forEach(([key, element]) => {
     if (element) element.classList.toggle("active-workbench", key === mode);
   });
-  const session = currentSession();
   if (session && els.embeddedCodeWorkspacePath) {
     els.embeddedCodeWorkspacePath.textContent = shortPath(session.codeFolder || session.path);
   } else if (els.embeddedCodeWorkspacePath) {
@@ -2014,11 +2692,90 @@ function renderWorkbenchMode() {
   if (els.reloadEmbeddedCodeButton) {
     els.reloadEmbeddedCodeButton.disabled = state.codeWorkspaceStatus === "opening" || !state.embeddedCodeUrl;
   }
+  renderWorkspaceWorkbenchToolbar(session);
+  renderPreviewWorkbench();
   renderAssistant();
+}
+
+function renderWorkspaceWorkbenchToolbar(session = currentSession()) {
+  if (els.workspaceTitleInput) {
+    els.workspaceTitleInput.disabled = !session;
+    els.workspaceTitleInput.placeholder = session ? "Workspace name" : "No workspace attached";
+    if (document.activeElement !== els.workspaceTitleInput) {
+      els.workspaceTitleInput.value = session ? session.title : "";
+    }
+  }
+  if (els.primaryActionButton) {
+    const hasRegistrations = Boolean(session && (session.registeredEntries || []).length);
+    els.primaryActionButton.textContent = hasRegistrations ? "Registration Details" : "Register to Catalog";
+    els.primaryActionButton.disabled = !session || session.registrationEnabled === false || session.mode === "read-only";
+  }
+  if (els.openWorkspaceExternalButton) {
+    const mode = state.workbenchMode === "preview" ? "preview" : "code";
+    const preview = currentWorkspacePreview(session);
+    const openingPreview = preview.status === "opening";
+    const codeOpening = state.codeWorkspaceStatus === "opening";
+    els.openWorkspaceExternalButton.textContent = "Open Separate Window";
+    els.openWorkspaceExternalButton.disabled = !session || (mode === "preview" ? (!preview.url || openingPreview) : codeOpening);
+  }
+}
+
+function handleWorkspaceTitleKeydown(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.currentTarget.blur();
+    return;
+  }
+  if (event.key === "Escape") {
+    const session = currentSession();
+    event.currentTarget.value = session ? session.title : "";
+    event.currentTarget.blur();
+  }
+}
+
+async function saveWorkspaceTitleFromInput() {
+  const session = currentSession();
+  const input = els.workspaceTitleInput;
+  if (!session || !input || input.disabled) return;
+  const title = input.value.trim().replace(/\s+/g, " ");
+  if (!title) {
+    input.value = session.title;
+    return;
+  }
+  if (title === session.title) return;
+  input.disabled = true;
+  try {
+    const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId || session.id)}/rename`, { title });
+    if (payload.workspace) {
+      mergeUiWorkspace(payload.workspace);
+      if (state.registrationDraft && state.registrationDraft.workspaceId === session.id) {
+        state.registrationDraft.workspaceTitle = payload.workspace.title || title;
+      }
+    }
+  } catch (error) {
+    input.value = session.title;
+    pushAssistantMessage(["tool", "Workspace rename failed", String(error.message || error)]);
+    setAssistantOpen(true);
+  } finally {
+    input.disabled = false;
+    renderWorkspace();
+    renderAssistant();
+  }
 }
 
 function renderCodeWorkspacePlaceholder() {
   const active = Boolean(state.embeddedCodeUrl);
+  if (els.embeddedCodeWorkspace) {
+    if (active) {
+      if (els.embeddedCodeWorkspace.getAttribute("src") !== state.embeddedCodeUrl) {
+        els.embeddedCodeWorkspace.src = state.embeddedCodeUrl;
+      }
+      els.embeddedCodeWorkspace.style.display = "block";
+    } else {
+      els.embeddedCodeWorkspace.removeAttribute("src");
+      els.embeddedCodeWorkspace.style.display = "none";
+    }
+  }
   els.embeddedCodeWorkspaceEmpty.style.display = active ? "none" : "grid";
   if (active) return;
   const status = state.codeWorkspaceStatus || "idle";
@@ -2030,33 +2787,33 @@ function renderCodeWorkspacePlaceholder() {
       false,
     ],
     error: [
-      "Code editor unavailable",
-      state.codeWorkspaceMessage || "code-server could not open this workspace. Check the server logs or retry.",
-      "Retry Code Editor",
+      "Code Server unavailable",
+      state.codeWorkspaceMessage || "Code Server could not open this workspace. Check the server logs or retry.",
+      "Retry Code Server",
       false,
     ],
     opening: [
-      "Opening code editor",
-      state.codeWorkspaceMessage || "Preparing the selected workspace folder in code-server.",
+      "Opening Code Server",
+      state.codeWorkspaceMessage || "Preparing the selected workspace folder in Code Server.",
       "Opening...",
       true,
     ],
     paused: [
-      "Code editor paused",
+      "Code Server paused",
       "Start the selected workspace folder when you are ready to inspect or edit code.",
-      "Start Code Editor",
+      "Start Code Server",
       false,
     ],
     idle: [
-      "Starting code editor",
+      "Starting Code Server",
       "OptPilot is preparing the selected workspace folder.",
-      "Start Code Editor",
+      "Start Code Server",
       false,
     ],
   }[status] || [
-    "Start the code editor",
-    "Inspect or edit this component without leaving OptPilot.",
-    "Start Code Editor",
+    "Start Code Server",
+    "Inspect or edit this workspace without leaving OptPilot.",
+    "Start Code Server",
     false,
   ];
   if (els.codeWorkspaceEmptyTitle) els.codeWorkspaceEmptyTitle.textContent = details[0];
@@ -2067,40 +2824,79 @@ function renderCodeWorkspacePlaceholder() {
   }
 }
 
-function renderEvidenceWorkbench() {
+function renderPreviewWorkbench() {
+  if (!els.previewWorkbench) return;
   const session = currentSession();
-  if (!session || !els.evidenceWorkbench) return;
-  els.evidenceWorkbench.innerHTML = `
-    <div class="evidence-grid">
-      <section>
-        <div class="mini-label">Validation</div>
-        <div class="check-list">${(session.checks || []).map(checkRow).join("")}</div>
-      </section>
-      <section>
-        <div class="mini-label">Activity</div>
-        <div class="agent-timeline compact-timeline">${(session.timeline || []).map(timelineItem).join("")}</div>
-      </section>
-      <section>
-        <div class="mini-label">Preview</div>
-        ${previewHtml(session)}
-      </section>
-    </div>
-  `;
+  const preview = currentWorkspacePreview(session);
+  const hasWorkspace = Boolean(session);
+  const hasPreview = Boolean(hasWorkspace && preview.url);
+  const opening = preview.status === "opening";
+  if (els.workspacePreviewPort && document.activeElement !== els.workspacePreviewPort) {
+    els.workspacePreviewPort.value = String(preview.port || 5173);
+  }
+  if (els.workspacePreviewStatus) {
+    const status = hasPreview
+      ? `Port ${preview.port} in ${session.title}`
+      : hasWorkspace
+      ? `Run your app in ${session.title}, then open its port here.`
+      : "Attach a workspace before opening a preview.";
+    els.workspacePreviewStatus.textContent = preview.message || status;
+  }
+  if (els.workspacePreviewFrame) {
+    if (hasPreview) {
+      if (els.workspacePreviewFrame.getAttribute("src") !== preview.url) {
+        els.workspacePreviewFrame.src = preview.url;
+      }
+      els.workspacePreviewFrame.style.display = "block";
+    } else {
+      els.workspacePreviewFrame.removeAttribute("src");
+      els.workspacePreviewFrame.style.display = "none";
+    }
+  }
+  if (els.workspacePreviewEmpty) {
+    els.workspacePreviewEmpty.style.display = hasPreview ? "none" : "grid";
+  }
+  if (els.workspacePreviewTitle) {
+    els.workspacePreviewTitle.textContent = !hasWorkspace
+      ? "No workspace attached"
+      : opening
+      ? "Opening workspace preview"
+      : preview.status === "error"
+      ? "Preview unavailable"
+      : "Open a workspace preview";
+  }
+  if (els.workspacePreviewBody) {
+    els.workspacePreviewBody.textContent = !hasWorkspace
+      ? "Create or attach a workspace before launching a frontend preview."
+      : opening
+      ? `Preparing port ${preview.port || 5173} through the workspace runtime.`
+      : preview.status === "error"
+      ? preview.message || "The preview could not be opened."
+      : "Start a frontend server in the workspace terminal, make it listen on 0.0.0.0, then enter the port here.";
+  }
+  if (els.openWorkspacePreviewButton) {
+    els.openWorkspacePreviewButton.disabled = !hasWorkspace || opening;
+    els.openWorkspacePreviewButton.textContent = opening ? "Opening..." : "Open Preview";
+  }
+  if (els.reloadWorkspacePreviewButton) {
+    els.reloadWorkspacePreviewButton.disabled = !hasPreview || opening;
+  }
+  renderWorkspaceWorkbenchToolbar(session);
 }
 
 function renderSessionBottom() {
+  if (state.sessionTab === "preview") state.sessionTab = "terminal";
   document.querySelectorAll("[data-session-tab]").forEach((button) => {
     button.classList.toggle("active", button.dataset.sessionTab === state.sessionTab);
   });
   const session = currentSession();
   if (!session) {
-    els.sessionBottom.innerHTML = emptyState("No workspace is attached to this agent session.");
+    els.sessionBottom.innerHTML = emptyState("No workspace is attached to this assistant session.");
     return;
   }
   const content = {
     terminal: `<pre class="code-box terminal-box">${escapeHtml((session.terminal || []).join("\n"))}</pre>`,
     checks: `<div class="check-list">${(session.checks || []).map(checkRow).join("")}</div>`,
-    preview: previewHtml(session),
     diff: `<pre class="code-box terminal-box">--- catalog/source\n+++ ${escapeHtml(session.path)}\n@@\n+ changes stay in the workspace until registration or launch\n</pre>`,
   };
   els.sessionBottom.innerHTML = content[state.sessionTab] || content.terminal;
@@ -2135,11 +2931,47 @@ function renderCatalog() {
 function renderComponentDetail() {
   const component = componentByKey(state.selectedComponentKey);
   if (!component) {
-    els.componentDetail.innerHTML = emptyState("Select a catalog component.");
+    els.componentDetail.innerHTML = emptyState("Select a catalog entry.");
     return;
   }
   const item = component.entry;
   const summary = item.summary || {};
+  const hasInterface = Boolean(item.interface && item.interface.port && item.interface.command && item.interface.command.length);
+  const launchState = hasInterface && state.interfaceLaunch && state.interfaceLaunch.key === componentLaunchKey(component)
+    ? state.interfaceLaunch
+    : null;
+  const interfaceAction = hasInterface
+    ? `<button class="ghost-button component-launch-interface" type="button" ${launchState ? "disabled" : ""}>${launchState ? "Launching..." : "Launch Interface"}</button>`
+    : "";
+  const launchStatus = launchState ? interfaceLaunchStatus(component, launchState) : "";
+  if (component.kind === "resource") {
+    els.componentDetail.innerHTML = `
+      ${entityHeader(item, component.kind)}
+      <div class="action-row">
+        <button class="ghost-button component-inspect" type="button">Inspect</button>
+        <button class="ghost-button component-edit" type="button">Edit Copy</button>
+        ${interfaceAction}
+      </div>
+      ${launchStatus}
+      <div class="detail-grid">
+        ${kvPanel("Resource", [
+          ["Files", summary.file_count ?? "-"],
+          ["README", summary.readme || "-"],
+          ["Mode", "read-only catalog asset"],
+        ])}
+        ${kvPanel("Use", [
+          ["Assistant", "reference workspace"],
+          ["Registration", "editable copies only"],
+          ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
+        ])}
+      </div>
+    `;
+    els.componentDetail.querySelector(".component-inspect").addEventListener("click", () => openComponentSession(component, "inspect"));
+    els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openComponentSession(component, "edit"));
+    const launchButton = els.componentDetail.querySelector(".component-launch-interface");
+    if (launchButton) launchButton.addEventListener("click", () => launchComponentInterface(component));
+    return;
+  }
   const pairs = component.kind === "environment"
     ? compatibleMethodsForEnvironment(item.uid)
     : compatibleEnvironmentsForMethod(item.uid);
@@ -2147,8 +2979,10 @@ function renderComponentDetail() {
     ${entityHeader(item, component.kind)}
     <div class="action-row">
       <button class="ghost-button component-inspect" type="button">Inspect</button>
-      <button class="ghost-button component-edit" type="button">Edit copy</button>
+      <button class="ghost-button component-edit" type="button">Edit Copy</button>
+      ${interfaceAction}
     </div>
+    ${launchStatus}
     <div class="detail-grid">
       ${kvPanel("Contract", component.kind === "environment" ? [
         ["Candidate", summary.candidate_format],
@@ -2162,9 +2996,11 @@ function renderComponentDetail() {
       ${kvPanel("Runtime", component.kind === "environment" ? [
         ["Timeout", summary.runtime && summary.runtime.timeoutSeconds],
         ["Sandbox", summary.runtime && summary.runtime.sandbox],
+        ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
       ] : [
         ["Runtime", summary.runtime && summary.runtime.type],
         ["Image", summary.runtime && summary.runtime.image],
+        ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
       ])}
     </div>
     <div class="panel-section">
@@ -2174,12 +3010,49 @@ function renderComponentDetail() {
   `;
   els.componentDetail.querySelector(".component-inspect").addEventListener("click", () => openComponentSession(component, "inspect"));
   els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openComponentSession(component, "edit"));
+  const launchButton = els.componentDetail.querySelector(".component-launch-interface");
+  if (launchButton) launchButton.addEventListener("click", () => launchComponentInterface(component));
   els.componentDetail.querySelectorAll("[data-build-study-index]").forEach((button) => {
     button.addEventListener("click", () => {
       const pair = pairs[Number(button.dataset.buildStudyIndex)];
       if (pair) createPlanFromPair(pair);
     });
   });
+}
+
+function componentLaunchKey(component) {
+  if (!component) return "";
+  return `${component.kind}:${component.entry && component.entry.uid || component.key}`;
+}
+
+function interfaceLaunchStatus(component, launchState) {
+  const item = component.entry || {};
+  const iface = item.interface || {};
+  const port = iface.port || launchState.port || "-";
+  const label = iface.label || launchState.label || "interface";
+  const steps = (launchState.steps || []).slice(-6);
+  const currentStep = steps[steps.length - 1];
+  const logs = launchState.logs || {};
+  const logText = [logs.stdout, logs.stderr].filter(Boolean).join("\n").trim();
+  return `
+    <div class="interface-launch-status" role="status" aria-live="polite">
+      <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <div>
+        <strong>Preparing ${escapeHtml(label)}</strong>
+        <p>${escapeHtml(currentStep && currentStep.detail || `Creating an editable workspace, starting the runtime, running the launch command, and waiting for port ${port}.`)}</p>
+        ${steps.length ? `
+          <ol class="interface-launch-steps">
+            ${steps.map((step) => `
+              <li class="${escapeHtml(step.status || "running")}">
+                <span>${escapeHtml(step.title || "Working")}</span>
+              </li>
+            `).join("")}
+          </ol>
+        ` : ""}
+        ${logText ? `<pre class="interface-launch-log">${escapeHtml(logText)}</pre>` : ""}
+      </div>
+    </div>
+  `;
 }
 
 function renderExperiments() {
@@ -2193,6 +3066,7 @@ function renderExperiments() {
     button.addEventListener("click", () => {
       state.selectedPlanId = button.dataset.planId;
       renderExperiments();
+      renderAssistant();
     });
   });
   renderPlanDetail();
@@ -2214,6 +3088,8 @@ function catalogSearchText(component) {
     summary.candidate_format,
     summary.protocol,
     summary.implementation_type,
+    component.entry && component.entry.interface && component.entry.interface.label,
+    component.entry && component.entry.interface && component.entry.interface.port,
     ...[].concat(summary.candidate_formats || []),
     ...[].concat(summary.metrics || []),
   ].filter(Boolean).join(" "));
@@ -2548,13 +3424,13 @@ function renderJobDetail(job) {
 
 async function openRunWorkspace(runId) {
   try {
-    const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/open-workspace`, {});
+    const agentSession = currentAgentSession();
+    const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/open-workspace`, { session_id: agentSession ? agentSession.id : "" });
     if (payload.workspace) {
-      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
-      const session = uiWorkspaceSession(payload.workspace);
-      upsertSession(session);
+      const session = mergeUiWorkspace(payload.workspace);
       state.selectedSessionId = session.id;
       state.selectedFileKey = firstFileKey(session);
+      await attachWorkspaceToCurrent(session.id);
       setView("workspace");
     }
   } catch (error) {
@@ -2591,14 +3467,13 @@ function runTabContent(detail) {
 async function openComponentSession(component, mode) {
   try {
     const action = mode === "edit" ? "edit-copy" : "open-workspace";
-    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/${action}`, {});
+    const agentSession = currentAgentSession();
+    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/${action}`, { session_id: agentSession ? agentSession.id : "" });
     if (payload.workspace) {
-      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
-      const session = uiWorkspaceSession(payload.workspace);
-      upsertSession(session);
+      const session = mergeUiWorkspace(payload.workspace);
       state.selectedSessionId = session.id;
       state.selectedFileKey = firstFileKey(session);
-      attachWorkspaceToCurrent(session.id);
+      await attachWorkspaceToCurrent(session.id);
       setView("workspace");
       return;
     }
@@ -2609,20 +3484,93 @@ async function openComponentSession(component, mode) {
   }
 }
 
+async function launchComponentInterface(component) {
+  const launchKey = componentLaunchKey(component);
+  if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) return;
+  state.interfaceLaunch = {
+    key: launchKey,
+    label: component.entry && component.entry.interface && component.entry.interface.label,
+    port: component.entry && component.entry.interface && component.entry.interface.port,
+    startedAt: Date.now(),
+  };
+  renderComponentDetail();
+  try {
+    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/launch-interface-job`, {});
+    const launch = payload.launch || {};
+    state.interfaceLaunch = { ...state.interfaceLaunch, ...launch, key: launchKey };
+    renderComponentDetail();
+    await pollComponentInterfaceLaunch(launchKey, launch.launch_id);
+  } catch (error) {
+    if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
+      state.interfaceLaunch = null;
+      renderComponentDetail();
+    }
+    pushAssistantMessage(["tool", "Interface launch failed", String(error.message || error)]);
+    setAssistantOpen(true);
+    renderAssistant();
+  }
+}
+
+async function pollComponentInterfaceLaunch(launchKey, launchId) {
+  if (!launchId) throw new Error("Interface launch did not return a launch id.");
+  while (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
+    const payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
+    const launch = payload.launch || {};
+    state.interfaceLaunch = { ...state.interfaceLaunch, ...launch, key: launchKey };
+    renderComponentDetail();
+    if (launch.status === "ready") {
+      const result = launch.result || {};
+      if (!result.workspace) throw new Error("Interface launch completed without a workspace.");
+      state.interfaceLaunch = null;
+      const session = mergeUiWorkspace(result.workspace);
+      state.selectedSessionId = session.id;
+      state.selectedFileKey = firstFileKey(session);
+      await attachWorkspaceToCurrent(session.id);
+      applyWorkspacePreviewPayload(session, result.preview, result.interface);
+      state.workbenchMode = "preview";
+      setView("workspace");
+      return;
+    }
+    if (launch.status === "failed") {
+      throw new Error(launch.error || "Interface launch failed.");
+    }
+    await sleep(1000);
+  }
+}
+
+function applyWorkspacePreviewPayload(session, previewPayload, interfaceConfig = {}) {
+  if (!session || !previewPayload || !previewPayload.preview_url) return;
+  const preview = currentWorkspacePreview(session);
+  preview.port = Number(previewPayload.port || interfaceConfig.port || preview.port || 5173);
+  preview.url = String(previewPayload.preview_url || "");
+  preview.status = "ready";
+  const label = interfaceConfig && interfaceConfig.label ? interfaceConfig.label : "interface";
+  preview.message = `Previewing ${label} on port ${preview.port} through ${session.title}.`;
+  if (previewPayload.code_server && typeof previewPayload.code_server === "object") {
+    state.codeServer = previewPayload.code_server;
+    if (previewPayload.code_server.open_url) {
+      state.embeddedCodeUrl = previewPayload.code_server.open_url;
+      state.embeddedCodeFolder = previewPayload.folder || session.codeFolder || "";
+      state.codeWorkspaceStatus = "ready";
+      state.codeWorkspaceMessage = "";
+    }
+  }
+  session.timeline.push(["tool", "interface launched", preview.message]);
+}
+
 async function createBlankSession() {
   try {
+    const title = nextDraftWorkspaceTitle();
     const payload = await postJson("/api/workspaces", {
-      title: "New Workspace",
-      description: "Generic project workspace",
+      title,
+      description: "Draft project workspace",
       attached_sessions: state.selectedAgentSessionId ? [state.selectedAgentSessionId] : [],
     });
     if (payload.workspace) {
-      state.uiWorkspaces = [payload.workspace, ...state.uiWorkspaces.filter((item) => item.id !== payload.workspace.id)];
-      const session = uiWorkspaceSession(payload.workspace);
-      upsertSession(session);
+      const session = mergeUiWorkspace(payload.workspace);
       state.selectedSessionId = session.id;
       state.selectedFileKey = firstFileKey(session);
-      attachWorkspaceToCurrent(session.id);
+      await attachWorkspaceToCurrent(session.id);
       setView("workspace");
       return;
     }
@@ -2631,6 +3579,15 @@ async function createBlankSession() {
     setAssistantOpen(true);
     renderAssistant();
   }
+}
+
+function nextDraftWorkspaceTitle() {
+  const titles = new Set(state.sessions.map((session) => String(session.title || "").toLowerCase()));
+  for (let index = 1; index < 1000; index += 1) {
+    const title = `Draft Workspace ${index}`;
+    if (!titles.has(title.toLowerCase())) return title;
+  }
+  return `Draft Workspace ${Date.now()}`;
 }
 
 function createPlanFromPair(pair) {
@@ -2702,6 +3659,34 @@ function isEmbeddedCodeWorkspaceActive() {
 
 function codeFolderForSession(session) {
   return session && (session.codeFolder || session.path);
+}
+
+function workspacePreviewKey(session = currentSession()) {
+  return session ? session.backendWorkspaceId || session.id : "";
+}
+
+function currentWorkspacePreview(session = currentSession()) {
+  const key = workspacePreviewKey(session);
+  if (!key) return { port: 5173, url: "", status: "idle", message: "" };
+  if (!state.workspacePreviews[key]) {
+    state.workspacePreviews[key] = { port: 5173, url: "", status: "idle", message: "" };
+  }
+  return state.workspacePreviews[key];
+}
+
+function previewPortValue() {
+  const raw = Number(els.workspacePreviewPort && els.workspacePreviewPort.value || 5173);
+  if (!Number.isFinite(raw)) return 5173;
+  return Math.max(1, Math.min(65535, Math.trunc(raw)));
+}
+
+function updateWorkspacePreviewPort() {
+  const session = currentSession();
+  if (!session) return;
+  const preview = currentWorkspacePreview(session);
+  preview.port = previewPortValue();
+  preview.message = preview.url ? `Port changed to ${preview.port}. Open Preview to update the frame.` : "";
+  renderPreviewWorkbench();
 }
 
 function shouldAutoOpenCodeWorkspace(session = currentSession()) {
@@ -2778,6 +3763,64 @@ function reloadEmbeddedCodeWorkspace() {
   }
 }
 
+async function openWorkspacePreview() {
+  const session = currentSession();
+  if (!session) return;
+  const preview = currentWorkspacePreview(session);
+  const folder = codeFolderForSession(session);
+  const port = previewPortValue();
+  preview.port = port;
+  preview.status = "opening";
+  preview.message = `Opening port ${port} through the workspace runtime.`;
+  preview.url = "";
+  state.workbenchMode = "preview";
+  session.timeline.push(["tool", "workspace preview", `Opening ${shortPath(folder)} on port ${port}.`]);
+  renderWorkspace();
+  const result = await postJson("/api/workspace-preview/open", { folder, port }, { tolerateError: true });
+  if (result.preview_url) {
+    preview.url = result.preview_url;
+    preview.status = "ready";
+    preview.message = `Previewing port ${port} through ${shortPath(result.folder || folder)}.`;
+    if (result.code_server) {
+      state.codeServer = result.code_server;
+      if (result.code_server.open_url) {
+        state.embeddedCodeUrl = result.code_server.open_url;
+        state.embeddedCodeFolder = folder;
+        state.codeWorkspaceStatus = "ready";
+        state.codeWorkspaceMessage = "";
+      }
+    }
+    session.timeline.push(["tool", "workspace preview ready", `URL: ${result.preview_url}`]);
+  } else {
+    preview.status = "error";
+    preview.message = result.error || "Preview could not be opened.";
+    session.timeline.push(["tool", "workspace preview unavailable", preview.message]);
+  }
+  renderWorkspace();
+}
+
+function reloadWorkspacePreview() {
+  const preview = currentWorkspacePreview();
+  if (!preview.url || !els.workspacePreviewFrame) return;
+  els.workspacePreviewFrame.removeAttribute("src");
+  window.requestAnimationFrame(() => {
+    els.workspacePreviewFrame.src = preview.url;
+  });
+}
+
+function openWorkspacePreviewExternal() {
+  const preview = currentWorkspacePreview();
+  if (preview.url) window.open(preview.url, "_blank", "noopener");
+}
+
+async function openActiveWorkspaceExternal() {
+  if (state.workbenchMode === "preview") {
+    openWorkspacePreviewExternal();
+    return;
+  }
+  await openCodeServerFull();
+}
+
 async function stopCodeServer() {
   const result = await postJson("/api/code-server/stop", {}, { tolerateError: true });
   state.codeServer = result;
@@ -2799,6 +3842,32 @@ async function primaryAction() {
   await openRegistrationMenu();
 }
 
+async function handleAgentActionButton() {
+  if (assistantIsBusy()) {
+    await cancelAgentMessage();
+    return;
+  }
+  await sendAgentMessage();
+}
+
+async function cancelAgentMessage() {
+  const session = currentAgentSession();
+  if (!session || !session.id || session.id.startsWith("agent-session-")) return;
+  if (state.cancellingAgentSessionIds.has(session.id)) return;
+  state.cancellingAgentSessionIds.add(session.id);
+  updateAssistantComposerState();
+  try {
+    const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/cancel`, {});
+    if (payload.session) await updateAgentSessionFromPayload(payload.session);
+    await loadAgentSessions();
+  } catch (error) {
+    pushAssistantMessage(["tool", "Stop failed", String(error.message || error)]);
+  } finally {
+    state.cancellingAgentSessionIds.delete(session.id);
+    renderAssistant();
+  }
+}
+
 async function sendAgentMessage() {
   if (assistantIsBusy()) return;
   const message = els.agentInput.value.trim();
@@ -2810,7 +3879,7 @@ async function sendAgentMessage() {
   els.agentInput.value = "";
   delete els.agentInput.dataset.touched;
   renderAssistant();
-  const persisted = await persistAssistantMessage(userMessage);
+  const persisted = await persistAssistantMessage(userMessage, { keepalive: true, sessionId: session && session.id });
   if (!persisted) {
     pushAssistantMessage(["assistant", "Runtime unavailable", "This message is visible in the local transcript, but the backend assistant session could not store it."]);
   }
@@ -2839,7 +3908,6 @@ function planPayload(plan) {
 
 function upsertSession(session) {
   state.sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)];
-  attachWorkspaceToCurrent(session.id);
 }
 
 function upsertPlan(plan) {
@@ -2848,7 +3916,7 @@ function upsertPlan(plan) {
 
 function currentSession() {
   const attached = new Set(attachedWorkspaceIds());
-  return state.sessions.find((session) => session.id === state.selectedSessionId && attached.has(session.id)) || attachedWorkspaces()[0] || null;
+  return state.sessions.find((session) => session.id === state.selectedSessionId && attached.has(session.id)) || null;
 }
 
 function currentPlan() {
@@ -2859,6 +3927,7 @@ function allComponents() {
   return [
     ...(state.catalog.environments || []).map((entry) => ({ key: `environment:${entry.uid}`, kind: "environment", entry })),
     ...(state.catalog.methods || []).map((entry) => ({ key: `method:${entry.uid}`, kind: "method", entry })),
+    ...(state.catalog.resources || []).map((entry) => ({ key: `resource:${entry.uid}`, kind: "resource", entry })),
   ];
 }
 
@@ -3089,22 +4158,23 @@ function entityHeader(item, kind) {
 }
 
 function sessionCard(session) {
-  const active = session.id === state.selectedSessionId;
-  const registrationLabel = (session.registeredEntries || []).length ? "Registration Details" : "Register to Catalog";
-  const canRegister = session.registrationEnabled !== false && session.mode !== "read-only";
+  const active = state.view === "workspace" && session.id === state.selectedSessionId;
+  const canDelete = session.registrationEnabled !== false && session.mode === "editable";
+  const attached = Boolean(session.attachedToCurrent);
+  const destructiveLabel = workspaceDestructiveLabel(session);
   return `
-    <div class="session-card ${active ? "active" : ""}">
+    <div class="session-card ${active ? "active" : ""} ${attached ? "attached" : "unattached"}">
       <button class="session-main" data-session-id="${escapeHtml(session.id)}" type="button">
         <strong>${escapeHtml(session.title)}</strong>
         <span>${escapeHtml(workspaceSubtitle(session))}</span>
         ${workspaceBadges(session)}
-        ${statusPill(session.status)}
       </button>
-      <button class="workspace-close-button" data-close-workspace-id="${escapeHtml(session.id)}" type="button" title="Detach from this assistant session">Detach</button>
-      ${active ? `
+      ${attached
+        ? `<button class="workspace-close-button" data-close-workspace-id="${escapeHtml(session.id)}" type="button" title="Detach from this assistant session">Detach</button>`
+        : `<button class="workspace-close-button" data-attach-workspace-id="${escapeHtml(session.id)}" type="button" title="Attach to this assistant session">Attach</button>`}
+      ${(active || !attached) && canDelete ? `
         <div class="session-card-actions">
-          ${canRegister ? `<button class="primary-button compact-action" data-workspace-action="register" type="button">${escapeHtml(registrationLabel)}</button>` : ""}
-          <button class="ghost-button compact-action" data-workspace-action="open-ide" type="button">Open Separate Window</button>
+          <button class="ghost-button compact-action" data-delete-workspace-id="${escapeHtml(session.id)}" type="button">${escapeHtml(destructiveLabel)}</button>
         </div>
       ` : ""}
     </div>
@@ -3113,18 +4183,34 @@ function sessionCard(session) {
 
 function workspaceSubtitle(session) {
   const mode = session.mode || "editable";
-  if (session.kind === "workspace") return `${mode} project folder`;
-  if (session.kind === "experiment plan") return `${mode} study plan workspace`;
-  return `${mode} ${session.kind} workspace`;
+  return `${mode} ${workspaceTypeLabel(session)}`;
 }
 
 function workspaceBadges(session) {
-  if (session.registrationEnabled === false || session.kind === "run") {
-    return `<span class="workspace-badges"><span class="tag">run evidence</span></span>`;
+  if (session.kind === "run" || session.sourceType === "run") {
+    return '<span class="workspace-badges"><span class="tag">run evidence</span></span>';
+  }
+  if (session.sourceType === "catalog" || session.mode === "read-only") {
+    const label = session.kind && session.kind !== "catalog" ? `catalog ${session.kind}` : "catalog asset";
+    return `<span class="workspace-badges"><span class="tag">${escapeHtml(label)}</span></span>`;
   }
   const entries = session.registeredEntries || [];
-  if (!entries.length) return `<span class="workspace-badges"><span class="tag">unregistered</span></span>`;
+  if (!entries.length) {
+    const label = session.managedByStudio ? "draft" : "unregistered";
+    return `<span class="workspace-badges"><span class="tag">${escapeHtml(label)}</span></span>`;
+  }
   return `<span class="workspace-badges">${entries.map((entry) => `<span class="tag">${escapeHtml(entry.kind)}: ${escapeHtml(entry.id)}</span>`).join("")}</span>`;
+}
+
+function workspaceTypeLabel(session) {
+  if (!session) return "workspace";
+  if (session.sourceType === "blank" || session.sourceType === "workspace") return "project workspace";
+  if (session.kind === "workspace") return "project workspace";
+  if (session.kind === "experiment plan") return "study workspace";
+  if (session.kind === "run") return "run workspace";
+  if (session.sourceType === "catalog-copy") return `${session.kind} copy`;
+  if (session.sourceType === "catalog") return `catalog ${session.kind}`;
+  return `${session.kind} workspace`;
 }
 
 function agentSessionCard(session) {
@@ -3174,14 +4260,49 @@ function summaryCell([label, value]) {
   return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? "-")}</strong></div>`;
 }
 
-function timelineItem([kind, title, text]) {
-  const isAssistantOutput = kind === "assistant" || kind === "agent" || kind === "tool";
+function timelineItem([kind, title, text, metadata = {}]) {
+  const isStatus = isStudioStatusMessage(kind, metadata);
+  const isAssistantOutput = !isStatus && (kind === "assistant" || kind === "agent" || kind === "tool");
+  const time = formatMessageTime(metadata);
+  if (isStatus) {
+    const label = metadata.source === "studio_system" ? "studio" : "studio status";
+    return `
+      <div class="timeline-item ${escapeHtml(kind)} studio-status">
+        ${timelineMetaHtml(label, time)}
+        <div class="timeline-content">
+          ${title ? `<strong>${escapeHtml(title)}</strong>` : ""}
+          ${text ? `<p>${escapeHtml(text)}</p>` : ""}
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="timeline-item ${escapeHtml(kind)}">
-      <span>${escapeHtml(kind)}</span>
+      ${timelineMetaHtml(kind, time)}
       <div class="timeline-content">${isAssistantOutput ? renderMarkdown(text) : `<p>${escapeHtml(text)}</p>`}</div>
     </div>
   `;
+}
+
+function timelineMetaHtml(label, time) {
+  return `
+    <div class="timeline-meta">
+      <span>${escapeHtml(label)}</span>
+      ${time ? `<time datetime="${escapeHtml(time.iso)}">${escapeHtml(time.label)}</time>` : ""}
+    </div>
+  `;
+}
+
+function formatMessageTime(metadata = {}) {
+  const value = metadata.createdAt || metadata.created_at || "";
+  const label = formatEventTime(value);
+  return label ? { label, iso: value } : null;
+}
+
+function isStudioStatusMessage(kind, metadata = {}) {
+  const source = metadata.source || "";
+  if (source === "studio_ui" || source === "studio_system") return true;
+  return kind === "tool" && metadata.source !== "openhands";
 }
 
 function checkRow([label, value, status]) {
@@ -3335,8 +4456,24 @@ async function getJson(url) {
   return response.json();
 }
 
+function sleep(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 async function postJson(url, payload, options = {}) {
-  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: Boolean(options.keepalive),
+  });
+  const json = await response.json();
+  if (!response.ok && !options.tolerateError) throw new Error(json.error || `${response.status} ${response.statusText}`);
+  return json;
+}
+
+async function deleteJson(url, options = {}) {
+  const response = await fetch(url, { method: "DELETE" });
   const json = await response.json();
   if (!response.ok && !options.tolerateError) throw new Error(json.error || `${response.status} ${response.statusText}`);
   return json;
@@ -3580,4 +4717,11 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(String(value ?? ""));
+  }
+  return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }

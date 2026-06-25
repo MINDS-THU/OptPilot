@@ -1,0 +1,73 @@
+root_model_name: ABP_D1
+requirements:
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Libraries: `argparse`, `sys`, `json`, `random`, `simpy`.
+
+        2. Input Interface:
+        - **CLI Arguments:** Use `argparse` for configuration.
+        - No stdin input required.
+
+        3. Output Interface:
+        - Stream 1: Event Data (sys.stdout)
+            - Format: JSONL, one JSON object per line.
+            - Schema: `{"time": <float>, "entity": <str>, "event": <str>, "payload": <dict>}`
+        - Stream 2: Debug/Log (sys.stderr)
+
+        4. Entry point: executable via `python run.py`
+
+    scenario: |
+        ### Scenario: Alternating Bit Protocol (ABP) with Deterministic Noise
+
+        1. System Objective
+        A communication system with Sender, Receiver, and two uni-directional channels (Subnet1: Sender→Receiver, Subnet2: Receiver→Sender).
+        Goal: Transmit packets reliably using Alternating Bit Protocol despite deterministic packet loss.
+
+        2. Entity Behaviors:
+
+        The Sender:
+            - Accepts total number of packets to send at start.
+            - Preparation delay before sending each packet (default 10ms, configurable).
+            - Sends packets sequentially through Subnet1 with alternating control bit (0, 1, 0, 1...).
+            - Stop-and-Wait: Must not send next packet until correct ACK received.
+            - Retransmission: If timer expires (default 20ms), retransmit same packet.
+            - ACK valid only if bit matches current packet's control bit.
+
+        The Receiver:
+            - Processing delay after receiving packet (default 10ms, configurable).
+            - Buffer capacity 1. During busy period, buffer the packet and process after delay.
+            - After processing, sends ACK with same control bit through Subnet2.
+
+        The Subnets:
+            - Two independent channels: Subnet1 (forward) and Subnet2 (backward).
+            - Latency: Exactly 3ms per packet (configurable).
+            - Deterministic noise: Each subnet maintains noise level x, initialized to seed.
+            - On packet arrival: x_new = (17 * x_old + 11) mod 100.
+            - If x_new < 10: packet dropped. Otherwise transmitted after delay.
+            - Update x_old = x_new after determination.
+
+        3. Constraints:
+            - Time Unit: 1.0 = 1 Millisecond.
+            - System starts at time 0.0.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        * `--total_packets` (int): Total packets to send. Default: 10.
+        * `--seed` (int): Noise generator seed. Default: 42.
+        * `--timeout` (int): Sender timeout in ms. Default: 20.
+        * `--sender_delay` (int): Sender preparation delay in ms. Default: 10.
+        * `--receiver_delay` (int): Receiver processing delay in ms. Default: 10.
+        * `--channel_delay` (int): Channel transmission delay in ms. Default: 3.
+        * `--simulation_time` (int): Max simulation time in ms. Default: 10000.
+
+        2. Output Format (STDOUT):
+        JSONL events:
+        - Sender: `delay_start`, `packet_sent` (payload: seq_num, bit, is_retry), `ack_received` (payload: ack_bit, is_valid)
+        - Receiver: `delay_start`, `packet_received` (payload: seq_num, bit)
+        - Subnet: `packet_get` (payload: behavior "drop"|"pass", channel "forward"|"backward", noise_value)
+
+base_folder: abp_model
+skip_simulation_check: false
+only_ensure_executable: false

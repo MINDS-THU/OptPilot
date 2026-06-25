@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Multiproduct_Demo_Multi_Base",
+    "description": "Supplier to outlets with two products and product-specific demand hooks.",
+    "sim_timeout": 30.0,
+    "checker_args": {
+      "golden_data_path": "outputs/Multi_Base_golden.json",
+      "kpi_tolerance_margin": 0.05
+    },
+    "cases": [
+      {
+        "num": 8,
+        "sim_args": {
+          "--num_outlets": "4",
+          "--simulate_time": "100"
+        },
+        "sim_stdin": "",
+        "checker_config": {}
+      }
+    ]
+  }
+]

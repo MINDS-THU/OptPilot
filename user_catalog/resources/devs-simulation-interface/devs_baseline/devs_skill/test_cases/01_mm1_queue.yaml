@@ -1,0 +1,62 @@
+root_model_name: MM1Queue
+requirements:
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Libraries: `argparse`, `sys`, `json`, `random`, `math`, `simpy`.
+
+        2. Input Interface:
+        - **CLI Arguments:** Use `argparse` for configuration.
+        - No stdin input required.
+
+        3. Output Interface:
+        - Stream 1: Event Data (sys.stdout)
+            - Format: JSONL, one JSON object per line.
+            - Schema: `{"time": <float>, "entity": <str>, "event": <str>, "payload": <dict>}`
+        - Stream 2: Debug/Log (sys.stderr)
+
+        4. Entry point: executable via `python run.py`
+
+    scenario: |
+        ### Scenario: M/M/1 Queue System
+
+        1. System Overview
+        A single-server queueing system with Poisson arrivals and exponential service times.
+
+        2. Entity Behaviors:
+
+        The Generator:
+            - Generates customers with inter-arrival times following an exponential distribution with rate `arrival_rate`.
+            - Each customer has a unique sequential ID starting from 1.
+            - Sends each customer to the Server immediately upon generation.
+            - Stops after generating `num_customers` customers.
+
+        The Server:
+            - Processes one customer at a time (FIFO).
+            - Service time follows an exponential distribution with rate `service_rate`.
+            - If busy when a customer arrives, the customer waits in a queue.
+            - After service completion, outputs the customer's departure data.
+
+        3. Scenario Constraints:
+            - Time Unit: Seconds (1.0 = 1 second).
+            - Use a fixed random seed for reproducibility.
+            - System starts at time 0.0.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        * `--arrival_rate` (float): Average arrivals per second. Default: 0.5.
+        * `--service_rate` (float): Average services per second. Default: 1.0.
+        * `--num_customers` (int): Total customers to generate. Default: 100.
+        * `--seed` (int): Random seed. Default: 42.
+        * `--simulation_time` (float): Maximum simulation time. Default: 10000.0.
+
+        2. Output Format (STDOUT):
+        JSONL with the following event types:
+        - event: `arrival` — payload: `{"customer_id": <int>}`
+        - event: `service_start` — payload: `{"customer_id": <int>, "queue_length": <int>}`
+        - event: `departure` — payload: `{"customer_id": <int>, "wait_time": <float>, "service_time": <float>}`
+
+base_folder: mm1_queue_model
+skip_simulation_check: false
+only_ensure_executable: false

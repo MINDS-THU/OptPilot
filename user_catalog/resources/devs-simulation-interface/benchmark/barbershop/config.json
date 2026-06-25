@@ -1,0 +1,137 @@
+[
+    {
+        "name": "L0_01_Empty",
+        "description": "Empty input test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l0/test_l0_01_empty.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L0_01_Empty_Input.json"
+        }
+    },
+    {
+        "name": "L1_01_Single",
+        "description": "Single customer test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l1/test_l1_01_single.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L1_01_Single_Customer.json"
+        }
+    },
+    {
+        "name": "L1_02_Multiple",
+        "description": "Multiple customers test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l1/test_l1_02_multiple.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L1_02_Multiple_Customers.json"
+        }
+    },
+    {
+        "name": "L1_03_Queue_Full",
+        "description": "Queue full test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l1/test_l1_03_queue_full.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L1_03_Queue_Full.json"
+        }
+    },
+    {
+        "name": "L1_04_Spaced",
+        "description": "Spaced customers test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l1/test_l1_04_spaced.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L1_04_Spaced_Customers.json"
+        }
+    },
+    {
+        "name": "L1_05_Rapid",
+        "description": "Rapid customers test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l1/test_l1_05_rapid.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L1_05_Rapid_Customers.json"
+        }
+    },
+    {
+        "name": "L2_01_Single",
+        "description": "L2 single customer test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l2/test_l2_01_single.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L2_01_Complete_Single.json"
+        }
+    },
+    {
+        "name": "L2_02_Multiple",
+        "description": "L2 multiple customers test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l2/test_l2_02_multiple.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L2_02_Complete_Multiple.json"
+        }
+    },
+    {
+        "name": "L2_03_Stress",
+        "description": "L2 queue stress test",
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulation_time": 360000
+                },
+                "sim_stdin_file": "./l2/test_l2_03_queue_stress.txt"
+            }
+        ],
+        "checker_args": {
+            "--validation_rules": "validation_rules/L2_03_Queue_Stress.json"
+        }
+    }
+]

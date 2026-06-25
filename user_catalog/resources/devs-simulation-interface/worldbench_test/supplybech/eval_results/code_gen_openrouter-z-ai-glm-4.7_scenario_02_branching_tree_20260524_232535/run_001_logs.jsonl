@@ -1,0 +1,1270 @@
+{"time": 1, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 800.0, "holding_cost": 640.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 800.0, "holding_cost": 640.0, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 70.59975252908608, "holding_cost": 211.79925758725824, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 80.43040922084954, "holding_cost": 241.29122766254864, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 76.43011221050631, "holding_cost": 229.29033663151893, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 77.25920949403104, "holding_cost": 231.77762848209312, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 69.04704187778802, "holding_cost": 207.14112563336406, "stockout_cost": 0.0}
+{"time": 1, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 70.00338950564563, "holding_cost": 210.0101685169369, "stockout_cost": 0.0}
+{"time": 2, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 783.0, "holding_cost": 626.4000000000001, "stockout_cost": 0.0}
+{"time": 2, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 770.0, "holding_cost": 616.0, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 35.4157220334684, "holding_cost": 106.2471661004052, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 58.130230486438734, "holding_cost": 174.3906914593162, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 48.77020568320183, "holding_cost": 146.3106170496055, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 55.87329657068177, "holding_cost": 167.6198897120453, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 44.639676868590215, "holding_cost": 133.91903060577064, "stockout_cost": 0.0}
+{"time": 2, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 41.00854748365168, "holding_cost": 123.02564245095505, "stockout_cost": 0.0}
+{"time": 3, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 3, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 694.0, "holding_cost": 555.2, "stockout_cost": 0.0}
+{"time": 3, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 693.0, "holding_cost": 554.4, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.11650695761746, "holding_cost": 39.34952087285238, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 33.07418851454324, "holding_cost": 99.22256554362971, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 16.49741511782034, "holding_cost": 49.492245353461016, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 25.27959332012118, "holding_cost": 75.83877996036354, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 19.23798735502995, "holding_cost": 57.71396206508985, "stockout_cost": 0.0}
+{"time": 3, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 9.705656980728023, "holding_cost": 29.116970942184068, "stockout_cost": 0.0}
+{"time": 4, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 614.0, "holding_cost": 491.20000000000005, "stockout_cost": 0.0}
+{"time": 4, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 605.0, "holding_cost": 484.0, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1285.0823892164258}
+{"time": 4, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.709019910136881}
+{"time": 4, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 12.095568798785145, "holding_cost": 36.286706396355434, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1592.4398966896447}
+{"time": 4, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.270332472413706}
+{"time": 4, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 331.833187271948}
+{"time": 4, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.765276560599567}
+{"time": 4, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 4.9193395298329605, "holding_cost": 14.758018589498882, "stockout_cost": 0.0}
+{"time": 4, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 318.79854926035165}
+{"time": 4, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.656654577169597}
+{"time": 5, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 525.0, "holding_cost": 420.0, "stockout_cost": 0.0}
+{"time": 5, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 523.0, "holding_cost": 418.40000000000003, "stockout_cost": 0.0}
+{"time": 5, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1312.030377334264}
+{"time": 5, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.933586477785532}
+{"time": 5, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 9.800898664642965, "holding_cost": 29.402695993928894, "stockout_cost": 0.0}
+{"time": 5, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 799.6108054603465}
+{"time": 5, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.663423378836221}
+{"time": 5, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 386.6275202730169}
+{"time": 5, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.221896002275141}
+{"time": 5, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 545.9673292879853}
+{"time": 5, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.549727744066544}
+{"time": 5, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 387.05141896560053}
+{"time": 5, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.225428491380004}
+{"time": 6, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 6, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 446.0, "holding_cost": 356.8, "stockout_cost": 0.0}
+{"time": 6, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 442.0, "holding_cost": 353.6, "stockout_cost": 0.0}
+{"time": 6, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2402.046905491609}
+{"time": 6, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 20.017057545763407}
+{"time": 6, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.95577138195409, "holding_cost": 11.86731414586227, "stockout_cost": 0.0}
+{"time": 6, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 289.49898452390653}
+{"time": 6, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.4124915376992213}
+{"time": 6, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 835.3400305839433}
+{"time": 6, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.961166921532861}
+{"time": 6, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 453.083576998559}
+{"time": 6, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.775696474987992}
+{"time": 6, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 27.29967448073097}
+{"time": 6, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.22749728733942476}
+{"time": 7, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 362.0, "holding_cost": 289.6, "stockout_cost": 0.0}
+{"time": 7, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 360.0, "holding_cost": 288.0, "stockout_cost": 0.0}
+{"time": 7, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1954.503860857359}
+{"time": 7, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.287532173811325}
+{"time": 7, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 232.86535870486162}
+{"time": 7, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.9405446558738468}
+{"time": 7, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.8001980573283412, "holding_cost": 2.4005941719850235, "stockout_cost": 0.0}
+{"time": 7, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 143.85614947692645}
+{"time": 7, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.1988012456410537}
+{"time": 7, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 725.8615025312123}
+{"time": 7, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.048845854426769}
+{"time": 7, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 6.03931257416998, "holding_cost": 18.11793772250994, "stockout_cost": 0.0}
+{"time": 8, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 280.0, "holding_cost": 224.0, "stockout_cost": 0.0}
+{"time": 8, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 294.0, "holding_cost": 235.20000000000002, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 91.73830663779412}
+{"time": 8, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.7644858886482844}
+{"time": 8, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 2.5986666220802306, "holding_cost": 7.795999866240692, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 5.692945122138092, "holding_cost": 17.078835366414275, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.2459632681702537, "holding_cost": 0.7378898045107611, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 10.504549970605353, "holding_cost": 31.51364991181606, "stockout_cost": 0.0}
+{"time": 8, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 14.7611536199963, "holding_cost": 44.2834608599889, "stockout_cost": 0.0}
+{"time": 9, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 9, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 232.0, "holding_cost": 185.60000000000002, "stockout_cost": 0.0}
+{"time": 9, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 245.0, "holding_cost": 196.0, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 5.973720415461461, "holding_cost": 17.921161246384383, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 12.670509170899031, "holding_cost": 38.01152751269709, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 11.679207060608121, "holding_cost": 35.03762118182436, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 16.8030081881666, "holding_cost": 50.4090245644998, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 16.142062230159688, "holding_cost": 48.426186690479064, "stockout_cost": 0.0}
+{"time": 9, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 12.683837628936544, "holding_cost": 38.05151288680963, "stockout_cost": 0.0}
+{"time": 10, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 10, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 174.0, "holding_cost": 139.20000000000002, "stockout_cost": 0.0}
+{"time": 10, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 187.0, "holding_cost": 149.6, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 11.47979381242508, "holding_cost": 34.43938143727524, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 15.799052641136335, "holding_cost": 47.397157923409004, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 25.815628250347686, "holding_cost": 77.44688475104306, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 17.01161898187013, "holding_cost": 51.034856945610386, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 27.402261890877952, "holding_cost": 82.20678567263386, "stockout_cost": 0.0}
+{"time": 10, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 10.487190121723295, "holding_cost": 31.461570365169884, "stockout_cost": 0.0}
+{"time": 11, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 11, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 114.0, "holding_cost": 91.2, "stockout_cost": 0.0}
+{"time": 11, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 129.0, "holding_cost": 103.2, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.5220597631486719, "holding_cost": 1.5661792894460156, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 10.433696044379968, "holding_cost": 31.301088133139903, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 18.779071910862466, "holding_cost": 56.337215732587396, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 10.932430526941257, "holding_cost": 32.79729158082377, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 16.791270728750117, "holding_cost": 50.37381218625035, "stockout_cost": 0.0}
+{"time": 11, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 2.9458310978924978, "holding_cost": 8.837493293677493, "stockout_cost": 0.0}
+{"time": 12, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 12, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 44.0, "holding_cost": 35.2, "stockout_cost": 0.0}
+{"time": 12, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 61.0, "holding_cost": 48.800000000000004, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 5.766448024063152, "holding_cost": 17.299344072189456, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 14.829249554255515, "holding_cost": 44.48774866276655, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 18.64098055425731, "holding_cost": 55.92294166277193, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 8.557733923670163, "holding_cost": 25.67320177101049, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 16.324702643709045, "holding_cost": 48.974107931127136, "stockout_cost": 0.0}
+{"time": 12, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 1.7684330808717768, "holding_cost": 5.30529924261533, "stockout_cost": 0.0}
+{"time": 13, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 70.0, "holding_cost": 56.0, "stockout_cost": 0.0}
+{"time": 13, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 56.0, "holding_cost": 44.800000000000004, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 10.321836469411778}
+{"time": 13, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.08601530391176482}
+{"time": 13, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 16.963822157067654, "holding_cost": 50.89146647120296, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 8.323380605127017, "holding_cost": 24.97014181538105, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 11.397042202287324, "holding_cost": 34.19112660686197, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 1.861359903448136, "holding_cost": 5.584079710344408, "stockout_cost": 0.0}
+{"time": 13, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 168.45334379265807}
+{"time": 13, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.4037778649388173}
+{"time": 14, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 35.0, "holding_cost": 28.0, "stockout_cost": 0.0}
+{"time": 14, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 24.0, "holding_cost": 19.200000000000003, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 7.675902032119396, "holding_cost": 23.027706096358187, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.01778203396392, "holding_cost": 60.053346101891755, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 4.341490458516606, "holding_cost": 13.024471375549819, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 14.19317646592036, "holding_cost": 42.57952939776108, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 1.507984059871486, "holding_cost": 4.523952179614458, "stockout_cost": 0.0}
+{"time": 14, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 932.2732803094141}
+{"time": 14, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.768944002578451}
+{"time": 15, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 15, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 19.0, "holding_cost": 15.200000000000001, "stockout_cost": 0.0}
+{"time": 15, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 160.0}
+{"time": 15, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.0}
+{"time": 15, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.11607525428525278, "holding_cost": 0.34822576285575835, "stockout_cost": 0.0}
+{"time": 15, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 12.339231191859596, "holding_cost": 37.01769357557879, "stockout_cost": 0.0}
+{"time": 15, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1294.6235929191537}
+{"time": 15, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.788529940992948}
+{"time": 15, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 5.871337071509139, "holding_cost": 17.614011214527416, "stockout_cost": 0.0}
+{"time": 15, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 13.918227659640365}
+{"time": 15, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.11598523049700304}
+{"time": 15, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 2.3077752950380095, "holding_cost": 6.9233258851140285, "stockout_cost": 0.0}
+{"time": 16, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 16, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 360.0}
+{"time": 16, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.0}
+{"time": 16, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 680.0}
+{"time": 16, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 17.0}
+{"time": 16, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.452531756334558, "holding_cost": 25.357595269003674, "stockout_cost": 0.0}
+{"time": 16, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.3909371122700094, "holding_cost": 10.172811336810028, "stockout_cost": 0.0}
+{"time": 16, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1964.5148619768627}
+{"time": 16, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.370957183140522}
+{"time": 16, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 2.2076201903740476, "holding_cost": 6.622860571122143, "stockout_cost": 0.0}
+{"time": 16, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 8.958414058731538, "holding_cost": 26.875242176194615, "stockout_cost": 0.0}
+{"time": 16, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 84.87488416880723}
+{"time": 16, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.7072907014067269}
+{"time": 17, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 17, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 760.0}
+{"time": 17, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.0}
+{"time": 17, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 760.0}
+{"time": 17, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.0}
+{"time": 17, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 763.2059866099328}
+{"time": 17, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.360049888416107}
+{"time": 17, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 473.94383642703616}
+{"time": 17, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.9495319702253013}
+{"time": 17, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3093.942094304103}
+{"time": 17, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 25.782850785867527}
+{"time": 17, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1252.7393527544446}
+{"time": 17, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.439494606287038}
+{"time": 17, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 15.9000781467373, "holding_cost": 47.7002344402119, "stockout_cost": 0.0}
+{"time": 17, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 493.6175246494747}
+{"time": 17, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.113479372078956}
+{"time": 18, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 18, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2800.0}
+{"time": 18, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 70.0}
+{"time": 18, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1520.0}
+{"time": 18, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 38.0}
+{"time": 18, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1337.0466424500505}
+{"time": 18, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.142055353750422}
+{"time": 18, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1129.8836181210168}
+{"time": 18, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.41569681767514}
+{"time": 18, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2871.2032063220795}
+{"time": 18, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 23.92669338601733}
+{"time": 18, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1628.3427533367699}
+{"time": 18, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.569522944473082}
+{"time": 18, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 14.24060380829416, "holding_cost": 42.72181142488248, "stockout_cost": 0.0}
+{"time": 18, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2873.3235532432504}
+{"time": 18, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 23.944362943693754}
+{"time": 19, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 19, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2880.0}
+{"time": 19, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 72.0}
+{"time": 19, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1520.0}
+{"time": 19, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 38.0}
+{"time": 19, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1957.2950480829447}
+{"time": 19, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.310792067357873}
+{"time": 19, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1750.3090884423086}
+{"time": 19, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.585909070352571}
+{"time": 19, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4181.939741329031}
+{"time": 19, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 34.84949784440859}
+{"time": 19, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1163.148620259682}
+{"time": 19, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.692905168830684}
+{"time": 19, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 8.32206858714924, "holding_cost": 24.966205761447718, "stockout_cost": 0.0}
+{"time": 19, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2605.434053341921}
+{"time": 19, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.711950444516006}
+{"time": 20, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 20, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3560.0}
+{"time": 20, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 89.0}
+{"time": 20, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 880.0}
+{"time": 20, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 22.0}
+{"time": 20, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1449.870743095535}
+{"time": 20, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.082256192462793}
+{"time": 20, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3562.034985999436}
+{"time": 20, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 29.683624883328633}
+{"time": 20, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7055.283984380941}
+{"time": 20, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 58.79403320317451}
+{"time": 20, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 490.2618938729475}
+{"time": 20, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.0855157822745625}
+{"time": 20, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 1.4091265085506919, "holding_cost": 4.227379525652076, "stockout_cost": 0.0}
+{"time": 20, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3519.2156924277547}
+{"time": 20, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 29.326797436897955}
+{"time": 21, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 21, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3280.0}
+{"time": 21, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 82.0}
+{"time": 21, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 800.0}
+{"time": 21, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 20.0}
+{"time": 21, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1113.8914792398261}
+{"time": 21, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.282428993665217}
+{"time": 21, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1597.6427238291178}
+{"time": 21, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.313689365242649}
+{"time": 21, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 9390.246823351612}
+{"time": 21, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 78.25205686126344}
+{"time": 21, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 1.4288254626025925, "holding_cost": 4.286476387807777, "stockout_cost": 0.0}
+{"time": 21, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 7.399976170503592, "holding_cost": 22.199928511510777, "stockout_cost": 0.0}
+{"time": 21, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2821.595321876727}
+{"time": 21, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 23.513294348972728}
+{"time": 22, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 22, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2840.0}
+{"time": 22, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 71.0}
+{"time": 22, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.0, "holding_cost": 2.4000000000000004, "stockout_cost": 0.0}
+{"time": 22, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 1.5753618237492457, "holding_cost": 4.726085471247737, "stockout_cost": 0.0}
+{"time": 22, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 961.1818235866491}
+{"time": 22, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 8.009848529888743}
+{"time": 22, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 10937.062585301594}
+{"time": 22, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 91.14218821084661}
+{"time": 22, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 325.0085173906199}
+{"time": 22, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.708404311588499}
+{"time": 22, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 14.649168859648789, "holding_cost": 43.94750657894637, "stockout_cost": 0.0}
+{"time": 22, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 152.48139807503372}
+{"time": 22, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.2706783172919476}
+{"time": 23, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 23, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1400.0}
+{"time": 23, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 35.0}
+{"time": 23, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 32.0, "holding_cost": 25.6, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 6.436365648824744, "holding_cost": 19.30909694647423, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 630.2258690779802}
+{"time": 23, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.251882242316501}
+{"time": 23, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 9192.418323791102}
+{"time": 23, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 76.60348603159252}
+{"time": 23, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 3.424905687685829, "holding_cost": 10.274717063057487, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 27.4509259764948, "holding_cost": 82.3527779294844, "stockout_cost": 0.0}
+{"time": 23, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 663.7386658881003}
+{"time": 23, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.531155549067503}
+{"time": 24, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 24, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 760.0}
+{"time": 24, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.0}
+{"time": 24, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 52.0, "holding_cost": 41.6, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.057654340822062, "holding_cost": 27.172963022466185, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.5684938865964106, "holding_cost": 10.705481659789232, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7000.003742431573}
+{"time": 24, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 58.33336452026311}
+{"time": 24, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 5.502687752675843, "holding_cost": 16.50806325802753, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 25.084659474362972, "holding_cost": 75.25397842308891, "stockout_cost": 0.0}
+{"time": 24, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 8.384555354477492, "holding_cost": 25.153666063432475, "stockout_cost": 0.0}
+{"time": 25, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 25, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 14.0, "holding_cost": 11.200000000000001, "stockout_cost": 0.0}
+{"time": 25, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 59.0, "holding_cost": 47.2, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.162086858516986, "holding_cost": 12.486260575550958, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 16.05436216043222, "holding_cost": 48.16308648129666, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1930.495485579039}
+{"time": 25, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.087462379825325}
+{"time": 25, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 8.69843020814534, "holding_cost": 26.095290624436018, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 27.740882021036953, "holding_cost": 83.22264606311086, "stockout_cost": 0.0}
+{"time": 25, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 5.271734254572287, "holding_cost": 15.815202763716862, "stockout_cost": 0.0}
+{"time": 26, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 26, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 38.0, "holding_cost": 30.400000000000002, "stockout_cost": 0.0}
+{"time": 26, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 71.0, "holding_cost": 56.800000000000004, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 1.1488545642828178, "holding_cost": 3.4465636928484535, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 19.565470650541112, "holding_cost": 58.69641195162333, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 742.5487572140695}
+{"time": 26, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.187906310117246}
+{"time": 26, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 7.326374163916036, "holding_cost": 21.979122491748107, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 26.713972299484844, "holding_cost": 80.14191689845453, "stockout_cost": 0.0}
+{"time": 26, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 13.585734274407518, "holding_cost": 40.757202823222556, "stockout_cost": 0.0}
+{"time": 27, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 27, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 34.0, "holding_cost": 27.200000000000003, "stockout_cost": 0.0}
+{"time": 27, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 66.0, "holding_cost": 52.800000000000004, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.908904265511328, "holding_cost": 14.726712796533985, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 10.321949850813176, "holding_cost": 30.96584955243953, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 13.299676663925315, "holding_cost": 39.89902999177595, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 9.97231470827888, "holding_cost": 29.91694412483664, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 26.74750161892812, "holding_cost": 80.24250485678436, "stockout_cost": 0.0}
+{"time": 27, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 14.657505653673724, "holding_cost": 43.97251696102117, "stockout_cost": 0.0}
+{"time": 28, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 28, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 31.0, "holding_cost": 24.8, "stockout_cost": 0.0}
+{"time": 28, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 58.0, "holding_cost": 46.400000000000006, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.24583572453286, "holding_cost": 12.73750717359858, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 619.7724428741843}
+{"time": 28, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.164770357284869}
+{"time": 28, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 4.54551025986537, "holding_cost": 13.63653077959611, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 15.83859711006043, "holding_cost": 47.51579133018129, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 21.9394274690242, "holding_cost": 65.8182824070726, "stockout_cost": 0.0}
+{"time": 28, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 4.953861200933236, "holding_cost": 14.861583602799708, "stockout_cost": 0.0}
+{"time": 29, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 29, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.0, "holding_cost": 7.2, "stockout_cost": 0.0}
+{"time": 29, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 44.0, "holding_cost": 35.2, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 12.648628111018056, "holding_cost": 37.94588433305417, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 174.1414358967667}
+{"time": 29, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.4511786324730558}
+{"time": 29, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 911.0563542015781}
+{"time": 29, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.592136285013151}
+{"time": 29, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 11.532488921268097, "holding_cost": 34.59746676380429, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 12.207272352447703, "holding_cost": 36.62181705734311, "stockout_cost": 0.0}
+{"time": 29, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1052.3361939967926}
+{"time": 29, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 8.769468283306605}
+{"time": 30, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 30, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 560.0}
+{"time": 30, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.0}
+{"time": 30, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 16.0, "holding_cost": 12.8, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.8195187344116164, "holding_cost": 2.458556203234849, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.5931053253967598, "holding_cost": 4.779315976190279, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1086.2624070017362}
+{"time": 30, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.052186725014469}
+{"time": 30, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 3.726512590425912, "holding_cost": 11.179537771277737, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 2.5208569717888274, "holding_cost": 7.562570915366482, "stockout_cost": 0.0}
+{"time": 30, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1218.1224461080255}
+{"time": 30, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.151020384233547}
+{"time": 31, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 31, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1440.0}
+{"time": 31, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 36.0}
+{"time": 31, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 360.0}
+{"time": 31, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.0}
+{"time": 31, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1166.4401301426137}
+{"time": 31, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.720334417855113}
+{"time": 31, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.9446330077948204, "holding_cost": 5.833899023384461, "stockout_cost": 0.0}
+{"time": 31, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1640.816360133485}
+{"time": 31, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.673469667779042}
+{"time": 31, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.2771870910854517, "holding_cost": 0.8315612732563551, "stockout_cost": 0.0}
+{"time": 31, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 335.48677233079076}
+{"time": 31, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.7957231027565896}
+{"time": 31, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 894.5401957754486}
+{"time": 31, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.4545016314620725}
+{"time": 32, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 32, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2400.0}
+{"time": 32, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 60.0}
+{"time": 32, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1080.0}
+{"time": 32, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 27.0}
+{"time": 32, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2565.8081472490667}
+{"time": 32, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.381734560408887}
+{"time": 32, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 109.02094750066397}
+{"time": 32, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.9085078958388664}
+{"time": 32, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1990.9742116489374}
+{"time": 32, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.591451763741144}
+{"time": 32, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 1.2247307648462211, "holding_cost": 3.6741922945386634, "stockout_cost": 0.0}
+{"time": 32, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 290.4562681219406}
+{"time": 32, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.4204689010161715}
+{"time": 32, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.21413649295776338, "holding_cost": 0.6424094788732901, "stockout_cost": 0.0}
+{"time": 33, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 33, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2800.0}
+{"time": 33, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 70.0}
+{"time": 33, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1600.0}
+{"time": 33, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 40.0}
+{"time": 33, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1354.5354166635175}
+{"time": 33, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.287795138862645}
+{"time": 33, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1390.789787591427}
+{"time": 33, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.589914896595225}
+{"time": 33, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5230.884131632392}
+{"time": 33, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 43.590701096936606}
+{"time": 33, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 535.921478841986}
+{"time": 33, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.466012323683216}
+{"time": 33, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 496.17975750646707}
+{"time": 33, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.134831312553892}
+{"time": 33, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 180.53210301365837}
+{"time": 33, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.5044341917804864}
+{"time": 34, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 34, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2440.0}
+{"time": 34, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 61.0}
+{"time": 34, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1800.0}
+{"time": 34, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 45.0}
+{"time": 34, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1493.4879994864864}
+{"time": 34, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.445733329054054}
+{"time": 34, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1336.2929944154687}
+{"time": 34, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.135774953462239}
+{"time": 34, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7711.68718908965}
+{"time": 34, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 64.26405990908042}
+{"time": 34, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1734.8763296881252}
+{"time": 34, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.457302747401044}
+{"time": 34, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 946.0058110524682}
+{"time": 34, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.883381758770568}
+{"time": 34, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1720.1796788437075}
+{"time": 34, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.334830657030896}
+{"time": 35, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 35, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2840.0}
+{"time": 35, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 71.0}
+{"time": 35, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1240.0}
+{"time": 35, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 31.0}
+{"time": 35, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 385.91896035186636}
+{"time": 35, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.215991336265553}
+{"time": 35, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 786.6878088778976}
+{"time": 35, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.555731740649147}
+{"time": 35, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 8841.6845507846}
+{"time": 35, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 73.68070458987167}
+{"time": 35, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 527.4562976347092}
+{"time": 35, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.395469146955911}
+{"time": 35, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 473.6341994881475}
+{"time": 35, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.9469516624012293}
+{"time": 35, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4091.972658900781}
+{"time": 35, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 34.09977215750651}
+{"time": 36, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 36, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2040.0}
+{"time": 36, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 51.0}
+{"time": 36, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 520.0}
+{"time": 36, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.0}
+{"time": 36, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.7101784285678008, "holding_cost": 2.1305352857034023, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.06855732376152801, "holding_cost": 0.20567197128458403, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7294.970372605221}
+{"time": 36, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 60.791419771710174}
+{"time": 36, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 7.005829772789269, "holding_cost": 21.017489318367808, "stockout_cost": 0.0}
+{"time": 36, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 731.3538264681854}
+{"time": 36, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.094615220568212}
+{"time": 36, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5982.853979256258}
+{"time": 36, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 49.857116493802145}
+{"time": 37, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 37, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 440.0}
+{"time": 37, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.0}
+{"time": 37, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 480.0}
+{"time": 37, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.0}
+{"time": 37, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 11.727042666418054, "holding_cost": 35.18112799925416, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 5.48318233136046, "holding_cost": 16.44954699408138, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6523.081387650606}
+{"time": 37, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 54.359011563755054}
+{"time": 37, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 20.167661977216387, "holding_cost": 60.502985931649164, "stockout_cost": 0.0}
+{"time": 37, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 442.176917728153}
+{"time": 37, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.6848076477346083}
+{"time": 37, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4705.781248142652}
+{"time": 37, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 39.2148437345221}
+{"time": 38, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 10.0, "holding_cost": 8.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.926559005338788, "holding_cost": 41.779677016016365, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 73.17444885545385}
+{"time": 38, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.6097870737954487}
+{"time": 38, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3047.8819643238803}
+{"time": 38, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 25.39901636936567}
+{"time": 38, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 14.695460026781959, "holding_cost": 44.086380080345876, "stockout_cost": 0.0}
+{"time": 38, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 342.6929056245248}
+{"time": 38, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.855774213537707}
+{"time": 38, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1918.046693566266}
+{"time": 38, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 15.98372244638555}
+{"time": 39, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 39, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 31.0, "holding_cost": 24.8, "stockout_cost": 0.0}
+{"time": 39, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.0, "holding_cost": 8.8, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 16.28227491921617, "holding_cost": 48.84682475764851, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 252.91319583330434}
+{"time": 39, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.107609965277536}
+{"time": 39, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 21.193839747694057, "holding_cost": 63.58151924308217, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 19.596900211999504, "holding_cost": 58.79070063599851, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 3.498303644170967, "holding_cost": 10.494910932512902, "stockout_cost": 0.0}
+{"time": 39, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1069.4980491770252}
+{"time": 39, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 8.912483743141877}
+{"time": 40, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 40, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 65.0, "holding_cost": 52.0, "stockout_cost": 0.0}
+{"time": 40, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 26.0, "holding_cost": 20.8, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.42817001154142, "holding_cost": 61.28451003462426, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 6.883361623908629, "holding_cost": 20.650084871725888, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 18.858400133963208, "holding_cost": 56.575200401889624, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 19.566612059721656, "holding_cost": 58.69983617916497, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 8.89515459997606, "holding_cost": 26.68546379992818, "stockout_cost": 0.0}
+{"time": 40, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 1.0865695038846255, "holding_cost": 3.2597085116538764, "stockout_cost": 0.0}
+{"time": 41, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 41, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 61.0, "holding_cost": 48.800000000000004, "stockout_cost": 0.0}
+{"time": 41, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 23.0, "holding_cost": 18.400000000000002, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 19.88999006175526, "holding_cost": 59.66997018526578, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 6.714023690836825, "holding_cost": 20.142071072510475, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 9.66329538103966, "holding_cost": 28.98988614311898, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 10.780730631526616, "holding_cost": 32.34219189457985, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 10.796426104787272, "holding_cost": 32.38927831436182, "stockout_cost": 0.0}
+{"time": 41, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.7969193868417825, "holding_cost": 2.3907581605253476, "stockout_cost": 0.0}
+{"time": 42, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 42, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 47.0, "holding_cost": 37.6, "stockout_cost": 0.0}
+{"time": 42, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 18.0, "holding_cost": 14.4, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 15.071014819901723, "holding_cost": 45.21304445970517, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.381450142176757, "holding_cost": 34.144350426530266, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 490.0497823583852}
+{"time": 42, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.083748186319877}
+{"time": 42, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 4.980777354746426, "holding_cost": 14.942332064239277, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 11.737590964437612, "holding_cost": 35.21277289331283, "stockout_cost": 0.0}
+{"time": 42, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 507.9494990146375}
+{"time": 42, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.232912491788646}
+{"time": 43, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 27.0, "holding_cost": 21.6, "stockout_cost": 0.0}
+{"time": 43, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 5.0, "holding_cost": 4.0, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 12.740906292423418, "holding_cost": 38.22271887727025, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.87946308469159, "holding_cost": 5.63838925407477, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1227.4125522694492}
+{"time": 43, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.228437935578743}
+{"time": 43, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1335.1421407827447}
+{"time": 43, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.126184506522872}
+{"time": 43, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 15.3960007312557, "holding_cost": 46.188002193767105, "stockout_cost": 0.0}
+{"time": 43, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 217.53602203788972}
+{"time": 43, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.812800183649081}
+{"time": 44, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 44, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 1.0, "holding_cost": 0.8, "stockout_cost": 0.0}
+{"time": 44, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 440.0}
+{"time": 44, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.0}
+{"time": 44, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 11.588542244076862, "holding_cost": 34.76562673223059, "stockout_cost": 0.0}
+{"time": 44, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 955.4213250657465}
+{"time": 44, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.961844375547887}
+{"time": 44, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2427.770655228229}
+{"time": 44, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 20.231422126901908}
+{"time": 44, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1692.439895833883}
+{"time": 44, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.10366579861569}
+{"time": 44, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 8.574409899093418, "holding_cost": 25.723229697280253, "stockout_cost": 0.0}
+{"time": 44, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 2.7540930862950717, "holding_cost": 8.262279258885215, "stockout_cost": 0.0}
+{"time": 45, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 45, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1480.0}
+{"time": 45, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 37.0}
+{"time": 45, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1280.0}
+{"time": 45, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 32.0}
+{"time": 45, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 75.12199092830002}
+{"time": 45, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.6260165910691669}
+{"time": 45, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1811.1747285425924}
+{"time": 45, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 15.093122737854937}
+{"time": 45, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2627.148712731147}
+{"time": 45, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.892905939426225}
+{"time": 45, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3332.884125315465}
+{"time": 45, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 27.774034377628876}
+{"time": 45, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.23614925481258098, "holding_cost": 0.7084477644377429, "stockout_cost": 0.0}
+{"time": 45, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 11.754283810951428, "holding_cost": 35.26285143285428, "stockout_cost": 0.0}
+{"time": 46, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 46, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2840.0}
+{"time": 46, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 71.0}
+{"time": 46, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2160.0}
+{"time": 46, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 54.0}
+{"time": 46, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1628.9186776590802}
+{"time": 46, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.574322313825668}
+{"time": 46, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1650.9386800756442}
+{"time": 46, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.757822333963702}
+{"time": 46, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2085.8117927751096}
+{"time": 46, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 17.38176493979258}
+{"time": 46, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3320.586480164599}
+{"time": 46, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 27.671554001371657}
+{"time": 46, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 94.45777636685094}
+{"time": 46, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.7871481363904245}
+{"time": 46, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 2.032785523336674, "holding_cost": 6.098356570010022, "stockout_cost": 0.0}
+{"time": 47, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 47, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3320.0}
+{"time": 47, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 83.0}
+{"time": 47, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2120.0}
+{"time": 47, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 53.0}
+{"time": 47, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1223.52664434198}
+{"time": 47, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.1960553695165}
+{"time": 47, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 902.2269600553088}
+{"time": 47, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.5185580004609065}
+{"time": 47, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5117.819249900374}
+{"time": 47, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 42.64849374916979}
+{"time": 47, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2670.958637543447}
+{"time": 47, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 22.25798864619539}
+{"time": 47, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 741.3720651541614}
+{"time": 47, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.178100542951345}
+{"time": 47, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2296.071466349127}
+{"time": 47, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.133928886242725}
+{"time": 48, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 48, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2960.0}
+{"time": 48, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 74.0}
+{"time": 48, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2040.0}
+{"time": 48, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 51.0}
+{"time": 48, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 421.5937688718684}
+{"time": 48, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.51328140726557}
+{"time": 48, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.08828087786474725, "holding_cost": 0.26484263359424176, "stockout_cost": 0.0}
+{"time": 48, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 8356.130649497714}
+{"time": 48, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 69.63442207914761}
+{"time": 48, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2149.5349438862822}
+{"time": 48, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 17.912791199052354}
+{"time": 48, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 706.2214381508192}
+{"time": 48, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.885178651256826}
+{"time": 48, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4773.61476782811}
+{"time": 48, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 39.78012306523425}
+{"time": 49, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 49, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2360.0}
+{"time": 49, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 59.0}
+{"time": 49, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1840.0}
+{"time": 49, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 46.0}
+{"time": 49, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 5.709506231714805, "holding_cost": 17.128518695144415, "stockout_cost": 0.0}
+{"time": 49, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 7.661397294308717, "holding_cost": 22.98419188292615, "stockout_cost": 0.0}
+{"time": 49, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 8482.938372546256}
+{"time": 49, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 70.69115310455213}
+{"time": 49, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1350.0838520839668}
+{"time": 49, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.25069876736639}
+{"time": 49, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1209.4791225694687}
+{"time": 49, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.078992688078905}
+{"time": 49, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4436.5688717020585}
+{"time": 49, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 36.971407264183824}
+{"time": 50, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 50, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 600.0}
+{"time": 50, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 15.0}
+{"time": 50, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1200.0}
+{"time": 50, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 30.0}
+{"time": 50, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.019230393735696794, "holding_cost": 0.05769118120709038, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 12.00392925187424, "holding_cost": 36.01178775562272, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7123.767013518625}
+{"time": 50, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 59.36472511265521}
+{"time": 50, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 1.7640047344879584, "holding_cost": 5.292014203463875, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 3.8865242463286087, "holding_cost": 11.659572738985826, "stockout_cost": 0.0}
+{"time": 50, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5031.8029033677985}
+{"time": 50, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 41.93169086139832}
+{"time": 51, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 51, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 18.0, "holding_cost": 14.4, "stockout_cost": 0.0}
+{"time": 51, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 7.0, "holding_cost": 5.6000000000000005, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.46553066111755115, "holding_cost": 1.3965919833526534, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.183642036926027, "holding_cost": 33.55092611077808, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5497.090562218958}
+{"time": 51, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 45.80908801849132}
+{"time": 51, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 11.353009082991395, "holding_cost": 34.05902724897419, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 19.42618108958903, "holding_cost": 58.27854326876709, "stockout_cost": 0.0}
+{"time": 51, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3967.3994109086875}
+{"time": 51, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 33.061661757572395}
+{"time": 52, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 52, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 31.0, "holding_cost": 24.8, "stockout_cost": 0.0}
+{"time": 52, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 35.0, "holding_cost": 28.0, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.4080366231445325, "holding_cost": 13.224109869433597, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.674577777953708, "holding_cost": 11.023733333861124, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1400.6886402949044}
+{"time": 52, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.67240533579087}
+{"time": 52, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 12.456407331886066, "holding_cost": 37.369221995658194, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 17.918026466074554, "holding_cost": 53.754079398223666, "stockout_cost": 0.0}
+{"time": 52, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1625.7896172119208}
+{"time": 52, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.54824681009934}
+{"time": 53, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 53, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 33.0, "holding_cost": 26.400000000000002, "stockout_cost": 0.0}
+{"time": 53, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 44.0, "holding_cost": 35.2, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.29020035648686, "holding_cost": 39.87060106946058, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.904519392114256, "holding_cost": 35.71355817634277, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 273.55507737897995}
+{"time": 53, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.279625644824833}
+{"time": 53, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 97.8129996505146}
+{"time": 53, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.815108330420955}
+{"time": 53, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 13.290627789669806, "holding_cost": 39.87188336900942, "stockout_cost": 0.0}
+{"time": 53, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 21.39580858839837, "holding_cost": 64.18742576519512, "stockout_cost": 0.0}
+{"time": 54, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 54, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 47.0, "holding_cost": 37.6, "stockout_cost": 0.0}
+{"time": 54, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 53.0, "holding_cost": 42.400000000000006, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 24.726504355511743, "holding_cost": 74.17951306653524, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.935580553355614, "holding_cost": 14.806741660066841, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 384.49912464049277}
+{"time": 54, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.2041593720041064}
+{"time": 54, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 903.0296933971451}
+{"time": 54, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.525247444976209}
+{"time": 54, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 2.227437682963604, "holding_cost": 6.682313048890812, "stockout_cost": 0.0}
+{"time": 54, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 8.202306726125329, "holding_cost": 24.606920178375987, "stockout_cost": 0.0}
+{"time": 55, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 55, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 23.0, "holding_cost": 18.400000000000002, "stockout_cost": 0.0}
+{"time": 55, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 34.0, "holding_cost": 27.200000000000003, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 26.49934126072852, "holding_cost": 79.49802378218556, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.319967700862094, "holding_cost": 12.959903102586281, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 1.6502918364408288, "holding_cost": 4.950875509322486, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1349.8659511393948}
+{"time": 55, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.248882926161624}
+{"time": 55, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.5610941555571749, "holding_cost": 1.6832824666715247, "stockout_cost": 0.0}
+{"time": 55, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 534.3958838749618}
+{"time": 55, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.453299032291348}
+{"time": 56, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 56, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 18.0, "holding_cost": 14.4, "stockout_cost": 0.0}
+{"time": 56, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 200.0}
+{"time": 56, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.0}
+{"time": 56, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.527352195538302, "holding_cost": 40.58205658661491, "stockout_cost": 0.0}
+{"time": 56, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 233.8708383179346}
+{"time": 56, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.948923652649455}
+{"time": 56, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 353.7240371672047}
+{"time": 56, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.947700309726706}
+{"time": 56, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 357.4095538330721}
+{"time": 56, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.978412948608934}
+{"time": 56, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1247.2289245128309}
+{"time": 56, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.393574370940257}
+{"time": 56, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1462.894926443502}
+{"time": 56, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.19079105369585}
+{"time": 57, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 57, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 5.0, "holding_cost": 4.0, "stockout_cost": 0.0}
+{"time": 57, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1680.0}
+{"time": 57, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 42.0}
+{"time": 57, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 7.7989940192198866, "holding_cost": 23.39698205765966, "stockout_cost": 0.0}
+{"time": 57, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 502.04736453457286}
+{"time": 57, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.183728037788107}
+{"time": 57, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 57.83649122130811}
+{"time": 57, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.48197076017756757}
+{"time": 57, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 2.96911447838567, "holding_cost": 8.90734343515701, "stockout_cost": 0.0}
+{"time": 57, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1714.6225263568601}
+{"time": 57, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.288521052973834}
+{"time": 57, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 720.2085057369555}
+{"time": 57, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.001737547807963}
+{"time": 58, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 58, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 440.0}
+{"time": 58, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.0}
+{"time": 58, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2240.0}
+{"time": 58, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 56.0}
+{"time": 58, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.5112056516565175, "holding_cost": 13.533616954969553, "stockout_cost": 0.0}
+{"time": 58, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.817037936628406, "holding_cost": 2.451113809885218, "stockout_cost": 0.0}
+{"time": 58, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 557.1983270017222}
+{"time": 58, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.643319391681018}
+{"time": 58, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.23030999356094384, "holding_cost": 0.6909299806828315, "stockout_cost": 0.0}
+{"time": 58, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2600.1484956105305}
+{"time": 58, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.667904130087756}
+{"time": 58, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 765.227381243766}
+{"time": 58, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.37689484369805}
+{"time": 59, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 59, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1040.0}
+{"time": 59, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 26.0}
+{"time": 59, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3320.0}
+{"time": 59, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 83.0}
+{"time": 59, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.372858273025358, "holding_cost": 13.118574819076073, "stockout_cost": 0.0}
+{"time": 59, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 534.2946928850022}
+{"time": 59, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.452455774041685}
+{"time": 59, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1225.9624737314762}
+{"time": 59, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.2163539477623}
+{"time": 59, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1106.8537544409269}
+{"time": 59, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.223781287007725}
+{"time": 59, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3428.4405523430787}
+{"time": 59, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 28.570337936192324}
+{"time": 59, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3611.640292107601}
+{"time": 59, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 30.09700243423001}
+{"time": 60, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 60, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1800.0}
+{"time": 60, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 45.0}
+{"time": 60, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3320.0}
+{"time": 60, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 83.0}
+{"time": 60, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1083.3829277087298}
+{"time": 60, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.028191064239415}
+{"time": 60, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.815819606289775, "holding_cost": 14.447458818869325, "stockout_cost": 0.0}
+{"time": 60, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3658.985107302757}
+{"time": 60, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 30.49154256085631}
+{"time": 60, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1121.5059177941214}
+{"time": 60, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.345882648284345}
+{"time": 60, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1821.5301903044192}
+{"time": 60, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 15.179418252536827}
+{"time": 60, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6230.959455860812}
+{"time": 60, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 51.92466213217344}
+{"time": 61, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 61, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2760.0}
+{"time": 61, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 69.0}
+{"time": 61, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2600.0}
+{"time": 61, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 65.0}
+{"time": 61, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2351.28833364274}
+{"time": 61, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.594069447022832}
+{"time": 61, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.8878251668297636, "holding_cost": 11.663475500489291, "stockout_cost": 0.0}
+{"time": 61, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5772.00499513137}
+{"time": 61, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 48.10004162609475}
+{"time": 61, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 292.5370818403376}
+{"time": 61, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.4378090153361462}
+{"time": 61, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 630.2043118071139}
+{"time": 61, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.251702598392615}
+{"time": 61, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 9847.107388855104}
+{"time": 61, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 82.05922824045919}
+{"time": 62, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 62, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2520.0}
+{"time": 62, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 63.0}
+{"time": 62, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2200.0}
+{"time": 62, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 55.0}
+{"time": 62, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1180.6857888993522}
+{"time": 62, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.839048240827935}
+{"time": 62, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.37784192989524, "holding_cost": 4.13352578968572, "stockout_cost": 0.0}
+{"time": 62, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5915.582492781674}
+{"time": 62, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 49.29652077318062}
+{"time": 62, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 769.9716430691116}
+{"time": 62, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.416430358909263}
+{"time": 62, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 3.963646752534917, "holding_cost": 11.89094025760475, "stockout_cost": 0.0}
+{"time": 62, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 10768.743230683742}
+{"time": 62, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 89.73952692236452}
+{"time": 63, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 63, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1680.0}
+{"time": 63, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 42.0}
+{"time": 63, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2200.0}
+{"time": 63, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 55.0}
+{"time": 63, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 325.229938351148}
+{"time": 63, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.710249486259567}
+{"time": 63, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 282.2656969239313}
+{"time": 63, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.3522141410327606}
+{"time": 63, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7214.887718601702}
+{"time": 63, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 60.12406432168085}
+{"time": 63, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.4639886630697667, "holding_cost": 1.3919659892093001, "stockout_cost": 0.0}
+{"time": 63, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 79.69874472545371}
+{"time": 63, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.6641562060454476}
+{"time": 63, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7922.727299885529}
+{"time": 63, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 66.02272749904607}
+{"time": 64, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 64, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1600.0}
+{"time": 64, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 40.0}
+{"time": 64, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 640.0}
+{"time": 64, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.0}
+{"time": 64, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.436518888394463, "holding_cost": 25.30955666518339, "stockout_cost": 0.0}
+{"time": 64, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 810.1247901055613}
+{"time": 64, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.751039917546343}
+{"time": 64, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6176.485660117952}
+{"time": 64, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 51.470713834316264}
+{"time": 64, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 8.828251067277325, "holding_cost": 26.484753201831975, "stockout_cost": 0.0}
+{"time": 64, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 4.556707894203889, "holding_cost": 13.670123682611667, "stockout_cost": 0.0}
+{"time": 64, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5926.51144096389}
+{"time": 64, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 49.38759534136575}
+{"time": 65, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 65, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 560.0}
+{"time": 65, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.0}
+{"time": 65, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 16.0, "holding_cost": 12.8, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.907270107811016, "holding_cost": 29.721810323433047, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.427634254378649, "holding_cost": 13.282902763135947, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3431.7793448307084}
+{"time": 65, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 28.59816120692257}
+{"time": 65, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 20.010267139250935, "holding_cost": 60.030801417752805, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 2.4200465748611073, "holding_cost": 7.260139724583322, "stockout_cost": 0.0}
+{"time": 65, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5317.86300640672}
+{"time": 65, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 44.31552505338934}
+{"time": 66, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 24.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 16.0, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 10.337020936998812, "holding_cost": 31.011062810996435, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 7.454035160065676, "holding_cost": 22.362105480197027, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2704.6463566875}
+{"time": 66, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 22.5387196390625}
+{"time": 66, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 15.117911289988882, "holding_cost": 45.353733869966646, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 15.288191100613624, "holding_cost": 45.86457330184087, "stockout_cost": 0.0}
+{"time": 66, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 243.7805954859664}
+{"time": 66, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.0315049623830532}
+{"time": 67, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 45.0, "holding_cost": 36.0, "stockout_cost": 0.0}
+{"time": 67, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 48.0, "holding_cost": 38.400000000000006, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.333450098070578, "holding_cost": 28.000350294211735, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 13.04891822184388, "holding_cost": 39.146754665531645, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 5.860629942597473, "holding_cost": 17.58188982779242, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 13.552739806945777, "holding_cost": 40.65821942083733, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 15.088273872645825, "holding_cost": 45.26482161793747, "stockout_cost": 0.0}
+{"time": 67, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 17.423912182700462, "holding_cost": 52.27173654810139, "stockout_cost": 0.0}
+{"time": 68, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 68, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 44.0, "holding_cost": 35.2, "stockout_cost": 0.0}
+{"time": 68, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 73.0, "holding_cost": 58.400000000000006, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 6.671628535861501, "holding_cost": 20.014885607584503, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 2.5391824209319545, "holding_cost": 7.617547262795863, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 8.033391192909129, "holding_cost": 24.100173578727386, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 16.74683488011705, "holding_cost": 50.24050464035115, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 27.64070269738402, "holding_cost": 82.92210809215206, "stockout_cost": 0.0}
+{"time": 68, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 19.085837436397142, "holding_cost": 57.257512309191426, "stockout_cost": 0.0}
+{"time": 69, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 35.0, "holding_cost": 28.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 75.0, "holding_cost": 60.0, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.713993539196569, "holding_cost": 26.141980617589706, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.345589029962937, "holding_cost": 13.036767089888812, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 347.0358652907645}
+{"time": 69, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.891965544089704}
+{"time": 69, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 10.898043375053131, "holding_cost": 32.69413012515939, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 14.045390664057148, "holding_cost": 42.13617199217144, "stockout_cost": 0.0}
+{"time": 69, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 17.661005476028325, "holding_cost": 52.98301642808498, "stockout_cost": 0.0}
+{"time": 70, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 70, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 23.0, "holding_cost": 18.400000000000002, "stockout_cost": 0.0}
+{"time": 70, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 52.0, "holding_cost": 41.6, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.527914615571351, "holding_cost": 25.583743846714054, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 8.954782826333723, "holding_cost": 26.86434847900117, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 97.13354992119591}
+{"time": 70, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.8094462493432992}
+{"time": 70, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 7.295861867552258, "holding_cost": 21.887585602656774, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 3.449587550061448, "holding_cost": 10.348762650184344, "stockout_cost": 0.0}
+{"time": 70, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 16.495753809075225, "holding_cost": 49.487261427225675, "stockout_cost": 0.0}
+{"time": 71, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 7.0, "holding_cost": 5.6000000000000005, "stockout_cost": 0.0}
+{"time": 71, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 40.0, "holding_cost": 32.0, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.727439744020057, "holding_cost": 14.18231923206017, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 8.70911803894252, "holding_cost": 26.12735411682756, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 4.910171267233569, "holding_cost": 14.730513801700706, "stockout_cost": 0.0}
+{"time": 71, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 721.8269803060325}
+{"time": 71, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.015224835883604}
+{"time": 71, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 915.5839019631993}
+{"time": 71, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.629865849693328}
+{"time": 71, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 16.42258408023242, "holding_cost": 49.267752240697256, "stockout_cost": 0.0}
+{"time": 72, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 72, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 280.0}
+{"time": 72, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.0}
+{"time": 72, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 7.0, "holding_cost": 5.6000000000000005, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.3213541538913631, "holding_cost": 0.9640624616740894, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 10.711243536393866, "holding_cost": 32.1337306091816, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 1.9855822289978562, "holding_cost": 5.956746686993569, "stockout_cost": 0.0}
+{"time": 72, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1229.4145518489777}
+{"time": 72, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.245121265408148}
+{"time": 72, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 269.33040084601146}
+{"time": 72, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.2444200070500955}
+{"time": 72, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 8.711087564808526, "holding_cost": 26.13326269442558, "stockout_cost": 0.0}
+{"time": 73, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 73, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1120.0}
+{"time": 73, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 28.0}
+{"time": 73, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 720.0}
+{"time": 73, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 18.0}
+{"time": 73, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 164.09667771867078}
+{"time": 73, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.3674723143222565}
+{"time": 73, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 898.9023241185455}
+{"time": 73, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.49085270098788}
+{"time": 73, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 621.1657606813334}
+{"time": 73, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.176381339011112}
+{"time": 73, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 710.7905986281016}
+{"time": 73, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.923254988567514}
+{"time": 73, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 4.893767957481245, "holding_cost": 14.681303872443735, "stockout_cost": 0.0}
+{"time": 73, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 688.4320264472565}
+{"time": 73, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.7369335537271375}
+{"time": 74, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 74, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1480.0}
+{"time": 74, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 37.0}
+{"time": 74, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1760.0}
+{"time": 74, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 44.0}
+{"time": 74, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 425.4601299304967}
+{"time": 74, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.5455010827541393}
+{"time": 74, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1342.5789467343875}
+{"time": 74, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.18815788945323}
+{"time": 74, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2487.8717545562254}
+{"time": 74, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 20.732264621301876}
+{"time": 74, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1392.5008558247757}
+{"time": 74, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.604173798539797}
+{"time": 74, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 2.491891301061411, "holding_cost": 7.475673903184234, "stockout_cost": 0.0}
+{"time": 74, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2257.4648219672094}
+{"time": 74, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 18.812206849726746}
+{"time": 75, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 75, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1920.0}
+{"time": 75, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 48.0}
+{"time": 75, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2680.0}
+{"time": 75, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 67.0}
+{"time": 75, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 686.0967969673557}
+{"time": 75, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.717473308061297}
+{"time": 75, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2387.970295917792}
+{"time": 75, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 19.8997524659816}
+{"time": 75, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4817.9766496869015}
+{"time": 75, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 40.14980541405751}
+{"time": 75, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 790.7738217684473}
+{"time": 75, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.589781848070395}
+{"time": 75, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1044.7647392185677}
+{"time": 75, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 8.706372826821397}
+{"time": 75, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4498.47785662082}
+{"time": 75, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 37.48731547184016}
+{"time": 76, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 76, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2920.0}
+{"time": 76, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 73.0}
+{"time": 76, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2840.0}
+{"time": 76, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 71.0}
+{"time": 76, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1829.0665986457548}
+{"time": 76, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 15.24222165538129}
+{"time": 76, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1676.1189883347306}
+{"time": 76, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.967658236122755}
+{"time": 76, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5509.681811857699}
+{"time": 76, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 45.91401509881416}
+{"time": 76, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 828.7518382918201}
+{"time": 76, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.906265319098502}
+{"time": 76, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 699.7952787076497}
+{"time": 76, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.831627322563747}
+{"time": 76, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6823.118058701574}
+{"time": 76, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 56.859317155846455}
+{"time": 77, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 77, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2960.0}
+{"time": 77, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 74.0}
+{"time": 77, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2120.0}
+{"time": 77, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 53.0}
+{"time": 77, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1979.4288724963112}
+{"time": 77, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.495240604135926}
+{"time": 77, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 637.0146289644551}
+{"time": 77, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.30845524137046}
+{"time": 77, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6233.0388108627185}
+{"time": 77, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 51.94199009052265}
+{"time": 77, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 8.700175530220896, "holding_cost": 26.10052659066269, "stockout_cost": 0.0}
+{"time": 77, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 5.928639015600492, "holding_cost": 17.785917046801476, "stockout_cost": 0.0}
+{"time": 77, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7851.716108358826}
+{"time": 77, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 65.43096756965689}
+{"time": 78, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 78, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2400.0}
+{"time": 78, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 60.0}
+{"time": 78, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 840.0}
+{"time": 78, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.0}
+{"time": 78, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 200.79163462357158}
+{"time": 78, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.6732636218630965}
+{"time": 78, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.7456103595171264, "holding_cost": 11.23683107855138, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 8449.80083462762}
+{"time": 78, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 70.41500695523017}
+{"time": 78, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 18.655609241550188, "holding_cost": 55.966827724650564, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 20.39787403553729, "holding_cost": 61.19362210661187, "stockout_cost": 0.0}
+{"time": 78, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 8083.769504502472}
+{"time": 78, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 67.36474587085394}
+{"time": 79, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 79, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1160.0}
+{"time": 79, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 29.0}
+{"time": 79, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 6.0, "holding_cost": 4.800000000000001, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 4.933187523364225, "holding_cost": 14.799562570092675, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 18.62710616043524, "holding_cost": 55.88131848130572, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7923.292734906649}
+{"time": 79, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 66.0274394575554}
+{"time": 79, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 17.8829884058277, "holding_cost": 53.648965217483095, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 21.65464370222695, "holding_cost": 64.96393110668085, "stockout_cost": 0.0}
+{"time": 79, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 4651.7926428893215}
+{"time": 79, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 38.764938690744344}
+{"time": 80, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 80, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.0, "holding_cost": 6.4, "stockout_cost": 0.0}
+{"time": 80, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 51.0, "holding_cost": 40.800000000000004, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.085530799898532, "holding_cost": 39.25659239969559, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 15.024330067901523, "holding_cost": 45.07299020370457, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 5819.768462869667}
+{"time": 80, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 48.49807052391389}
+{"time": 80, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 13.629260182769329, "holding_cost": 40.88778054830799, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 11.821570746273117, "holding_cost": 35.46471223881935, "stockout_cost": 0.0}
+{"time": 80, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1456.7774817269205}
+{"time": 80, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.139812347724337}
+{"time": 81, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 81, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 30.0, "holding_cost": 24.0, "stockout_cost": 0.0}
+{"time": 81, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 63.0, "holding_cost": 50.400000000000006, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 12.87407389796427, "holding_cost": 38.62222169389281, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.80463229146676, "holding_cost": 62.41389687440028, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1590.1886166904753}
+{"time": 81, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.251571805753962}
+{"time": 81, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 4.448297742728279, "holding_cost": 13.344893228184837, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 3.0410430980765675, "holding_cost": 9.123129294229702, "stockout_cost": 0.0}
+{"time": 81, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 5.479941797663088, "holding_cost": 16.439825392989263, "stockout_cost": 0.0}
+{"time": 82, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 82, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 62.0, "holding_cost": 49.6, "stockout_cost": 0.0}
+{"time": 82, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 47.0, "holding_cost": 37.6, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 16.07889078822727, "holding_cost": 48.23667236468181, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 8.753539000158103, "holding_cost": 26.26061700047431, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 11.919468650844767, "holding_cost": 35.758405952534304, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 2.7054137320085694, "holding_cost": 8.116241196025708, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 4.4215814012356205, "holding_cost": 13.264744203706861, "stockout_cost": 0.0}
+{"time": 82, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 4.878353056060263, "holding_cost": 14.635059168180788, "stockout_cost": 0.0}
+{"time": 83, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 83, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 61.0, "holding_cost": 48.800000000000004, "stockout_cost": 0.0}
+{"time": 83, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 38.0, "holding_cost": 30.400000000000002, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 13.274933867068864, "holding_cost": 39.82480160120659, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.458560576598437, "holding_cost": 61.37568172979531, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 13.710814647258424, "holding_cost": 41.13244394177527, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.008562267142753655, "holding_cost": 0.025686801428260964, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 9.121933390621209, "holding_cost": 27.365800171863626, "stockout_cost": 0.0}
+{"time": 83, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 11.407056052391901, "holding_cost": 34.221168157175704, "stockout_cost": 0.0}
+{"time": 84, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 53.0, "holding_cost": 42.400000000000006, "stockout_cost": 0.0}
+{"time": 84, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 16.0, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 7.796691479351914, "holding_cost": 23.39007443805574, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 14.416515820099875, "holding_cost": 43.249547460299624, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 4.754703271673396, "holding_cost": 14.264109815020188, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 8.57709903666056, "holding_cost": 25.73129710998168, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 12.817609289185938, "holding_cost": 38.452827867557815, "stockout_cost": 0.0}
+{"time": 84, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 14.376784323995523, "holding_cost": 43.13035297198657, "stockout_cost": 0.0}
+{"time": 85, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 85, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 31.0, "holding_cost": 24.8, "stockout_cost": 0.0}
+{"time": 85, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 2.0, "holding_cost": 1.6, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 10.193640042319114, "holding_cost": 30.58092012695734, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.963102756362701, "holding_cost": 35.889308269088104, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 7.414092780396569, "holding_cost": 22.242278341189706, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 6.020505236248567, "holding_cost": 18.061515708745702, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 10.843636457780097, "holding_cost": 32.53090937334029, "stockout_cost": 0.0}
+{"time": 85, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 7.14170380139749, "holding_cost": 21.42511140419247, "stockout_cost": 0.0}
+{"time": 86, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 25.0, "holding_cost": 20.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.897918082595268, "holding_cost": 29.693754247785805, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 3.8244124659216183, "holding_cost": 11.473237397764855, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 440.9687949897609}
+{"time": 86, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.674739958248008}
+{"time": 86, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 7.045328374882246, "holding_cost": 21.135985124646737, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 1.9023218685633907, "holding_cost": 5.706965605690172, "stockout_cost": 0.0}
+{"time": 86, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 849.3890608112417}
+{"time": 86, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.0782421734270144}
+{"time": 87, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 87, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 360.0}
+{"time": 87, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.0}
+{"time": 87, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 480.0}
+{"time": 87, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 12.0}
+{"time": 87, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 9.986934013168064, "holding_cost": 29.96080203950419, "stockout_cost": 0.0}
+{"time": 87, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.6392731808262262, "holding_cost": 4.917819542478679, "stockout_cost": 0.0}
+{"time": 87, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 3.1404878880427063, "holding_cost": 9.421463664128119, "stockout_cost": 0.0}
+{"time": 87, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 415.2019143344886}
+{"time": 87, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.460015952787405}
+{"time": 87, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1316.5011538191677}
+{"time": 87, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.970842948493065}
+{"time": 87, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 786.2696680630884}
+{"time": 87, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.55224723385907}
+{"time": 88, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 88, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 160.0}
+{"time": 88, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.0}
+{"time": 88, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1760.0}
+{"time": 88, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 44.0}
+{"time": 88, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 34.80132476868718}
+{"time": 88, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.29001103973905984}
+{"time": 88, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 208.21142086286613}
+{"time": 88, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.7350951738572178}
+{"time": 88, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 739.4671388122376}
+{"time": 88, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.1622261567686465}
+{"time": 88, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1128.286413437874}
+{"time": 88, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.40238677864895}
+{"time": 88, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3124.712427942961}
+{"time": 88, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 26.03927023285801}
+{"time": 88, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 553.9989255082469}
+{"time": 88, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.616657712568724}
+{"time": 89, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 89, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1320.0}
+{"time": 89, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 33.0}
+{"time": 89, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2520.0}
+{"time": 89, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 63.0}
+{"time": 89, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 3.4747512707954797, "holding_cost": 10.42425381238644, "stockout_cost": 0.0}
+{"time": 89, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 1.9176298812459933, "holding_cost": 5.75288964373798, "stockout_cost": 0.0}
+{"time": 89, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 370.9103000515307}
+{"time": 89, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.0909191670960894}
+{"time": 89, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1562.7462845889195}
+{"time": 89, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 13.022885704907662}
+{"time": 89, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2636.6329147294146}
+{"time": 89, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 21.971940956078456}
+{"time": 89, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 721.589733529551}
+{"time": 89, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.013247779412925}
+{"time": 90, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 90, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 640.0}
+{"time": 90, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.0}
+{"time": 90, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2680.0}
+{"time": 90, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 67.0}
+{"time": 90, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 106.3328357676879}
+{"time": 90, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.8861069647307325}
+{"time": 90, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 782.6590065649988}
+{"time": 90, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.522158388041657}
+{"time": 90, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 2.055035843431277, "holding_cost": 6.165107530293831, "stockout_cost": 0.0}
+{"time": 90, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1428.9917163300443}
+{"time": 90, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.908264302750368}
+{"time": 90, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2412.980409954099}
+{"time": 90, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 20.108170082950824}
+{"time": 90, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 3241.82309004757}
+{"time": 90, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 27.015192417063083}
+{"time": 91, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 91, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 640.0}
+{"time": 91, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.0}
+{"time": 91, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2520.0}
+{"time": 91, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 63.0}
+{"time": 91, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.005074246291883355, "holding_cost": 0.015222738875650066, "stockout_cost": 0.0}
+{"time": 91, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 594.9228907904505}
+{"time": 91, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.957690756587088}
+{"time": 91, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1760.9452981308546}
+{"time": 91, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 14.674544151090455}
+{"time": 91, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 3.680880889290151, "holding_cost": 11.042642667870453, "stockout_cost": 0.0}
+{"time": 91, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 131.93831919191666}
+{"time": 91, "node": "Retailer_4", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.0994859932659722}
+{"time": 91, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 6462.329880800358}
+{"time": 91, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 53.852749006669654}
+{"time": 92, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 92, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 160.0}
+{"time": 92, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.0}
+{"time": 92, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1080.0}
+{"time": 92, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 27.0}
+{"time": 92, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1218.7526963297605}
+{"time": 92, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 10.15627246941467}
+{"time": 92, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 616.169175031841}
+{"time": 92, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 5.1347431252653415}
+{"time": 92, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 353.44328835529996}
+{"time": 92, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.945360736294166}
+{"time": 92, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 17.634355939388975, "holding_cost": 52.903067818166924, "stockout_cost": 0.0}
+{"time": 92, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 1.0201020473941256, "holding_cost": 3.0603061421823767, "stockout_cost": 0.0}
+{"time": 92, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7286.30503688383}
+{"time": 92, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 60.71920864069858}
+{"time": 93, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 93, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 240.0}
+{"time": 93, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.0}
+{"time": 93, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 5.0, "holding_cost": 4.0, "stockout_cost": 0.0}
+{"time": 93, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 3.1224640557898375, "holding_cost": 9.367392167369513, "stockout_cost": 0.0}
+{"time": 93, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 70.23358465737545}
+{"time": 93, "node": "Retailer_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.5852798721447954}
+{"time": 93, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1156.9074179249728}
+{"time": 93, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.640895149374774}
+{"time": 93, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 21.9369275146596, "holding_cost": 65.8107825439788, "stockout_cost": 0.0}
+{"time": 93, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 14.992378418657214, "holding_cost": 44.977135255971646, "stockout_cost": 0.0}
+{"time": 93, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 7986.187302311182}
+{"time": 93, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 66.55156085259318}
+{"time": 94, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 94, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 22.0, "holding_cost": 17.6, "stockout_cost": 0.0}
+{"time": 94, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 32.0, "holding_cost": 25.6, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 6.47493807492264, "holding_cost": 19.42481422476792, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 11.734099443829137, "holding_cost": 35.20229833148741, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.37969619977843294, "holding_cost": 1.1390885993352988, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 18.88243305607982, "holding_cost": 56.647299168239456, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 14.77164534473308, "holding_cost": 44.31493603419924, "stockout_cost": 0.0}
+{"time": 94, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2656.394410735752}
+{"time": 94, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 22.1366200894646}
+{"time": 95, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 16.0, "stockout_cost": 0.0}
+{"time": 95, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 54.0, "holding_cost": 43.2, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 8.75636760383852, "holding_cost": 26.26910281151556, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 5.451444315297323, "holding_cost": 16.35433294589197, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 8.565713830383572, "holding_cost": 25.697141491150717, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 5.384471541555676, "holding_cost": 16.15341462466703, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 16.476923208019063, "holding_cost": 49.43076962405719, "stockout_cost": 0.0}
+{"time": 95, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 2.4787024954051873, "holding_cost": 7.436107486215562, "stockout_cost": 0.0}
+{"time": 96, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 96, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 27.0, "holding_cost": 21.6, "stockout_cost": 0.0}
+{"time": 96, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 46.0, "holding_cost": 36.800000000000004, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 198.16959397422693}
+{"time": 96, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.6514132831185577}
+{"time": 96, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 10.392807407514642, "holding_cost": 31.178422222543926, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 15.734146378509454, "holding_cost": 47.202439135528365, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 138.47408950960912}
+{"time": 96, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.1539507459134093}
+{"time": 96, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 13.064762278160803, "holding_cost": 39.19428683448241, "stockout_cost": 0.0}
+{"time": 96, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 4.456672406837246, "holding_cost": 13.370017220511738, "stockout_cost": 0.0}
+{"time": 97, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 97, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 26.0, "holding_cost": 20.8, "stockout_cost": 0.0}
+{"time": 97, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 28.0, "holding_cost": 22.400000000000002, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 11.1313308843404}
+{"time": 97, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 0.09276109070283667}
+{"time": 97, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.826266040971319, "holding_cost": 14.478798122913958, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 12.934373186034957, "holding_cost": 38.80311955810487, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1161.714177504906}
+{"time": 97, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.68095147920755}
+{"time": 97, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 13.939852364961009, "holding_cost": 41.819557094883024, "stockout_cost": 0.0}
+{"time": 97, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 840.1583349461096}
+{"time": 97, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 7.001319457884247}
+{"time": 98, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 20.0, "holding_cost": 16.0, "stockout_cost": 0.0}
+{"time": 98, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 6.0, "holding_cost": 4.800000000000001, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 526.1348871542981}
+{"time": 98, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 4.384457392952484}
+{"time": 98, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 13.439659672080538, "holding_cost": 40.31897901624161, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 380.60709096112646}
+{"time": 98, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.171725758009387}
+{"time": 98, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 189.9319807515407}
+{"time": 98, "node": "Retailer_3", "event": "SHORTAGE_OCCURRED", "missed_qty": 1.582766506262839}
+{"time": 98, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 13.504516899309312, "holding_cost": 40.51355069792794, "stockout_cost": 0.0}
+{"time": 98, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 811.9952070687082}
+{"time": 98, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 6.766626725572568}
+{"time": 99, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 99, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 80.0}
+{"time": 99, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 2.0}
+{"time": 99, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 360.0}
+{"time": 99, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.0}
+{"time": 99, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 434.1245945511009}
+{"time": 99, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.617704954592508}
+{"time": 99, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 14.811041012171305, "holding_cost": 44.43312303651392, "stockout_cost": 0.0}
+{"time": 99, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1194.7667801515843}
+{"time": 99, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 9.956389834596536}
+{"time": 99, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 6.338377083626295, "holding_cost": 19.015131250878884, "stockout_cost": 0.0}
+{"time": 99, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 9.941180600845687, "holding_cost": 29.82354180253706, "stockout_cost": 0.0}
+{"time": 99, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1404.1635756491892}
+{"time": 99, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 11.70136313040991}
+{"time": 100, "node": "Factory_0", "event": "DAILY_SUMMARY", "inventory_qty": 999999.0, "holding_cost": 0.0, "stockout_cost": 0.0}
+{"time": 100, "node": "Regional_DC_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 880.0}
+{"time": 100, "node": "Regional_DC_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 22.0}
+{"time": 100, "node": "Regional_DC_1", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 1360.0}
+{"time": 100, "node": "Regional_DC_1", "event": "SHORTAGE_OCCURRED", "missed_qty": 34.0}
+{"time": 100, "node": "Retailer_0", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 476.6740629073429}
+{"time": 100, "node": "Retailer_0", "event": "SHORTAGE_OCCURRED", "missed_qty": 3.972283857561191}
+{"time": 100, "node": "Retailer_1", "event": "DAILY_SUMMARY", "inventory_qty": 4.816763923699554, "holding_cost": 14.450291771098662, "stockout_cost": 0.0}
+{"time": 100, "node": "Retailer_2", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2170.1384702702285}
+{"time": 100, "node": "Retailer_2", "event": "SHORTAGE_OCCURRED", "missed_qty": 18.084487252251904}
+{"time": 100, "node": "Retailer_3", "event": "DAILY_SUMMARY", "inventory_qty": 10.008922459187197, "holding_cost": 30.02676737756159, "stockout_cost": 0.0}
+{"time": 100, "node": "Retailer_4", "event": "DAILY_SUMMARY", "inventory_qty": 9.869605357486709, "holding_cost": 29.608816072460126, "stockout_cost": 0.0}
+{"time": 100, "node": "Retailer_5", "event": "DAILY_SUMMARY", "inventory_qty": 0.0, "holding_cost": 0.0, "stockout_cost": 2013.5426144619064}
+{"time": 100, "node": "Retailer_5", "event": "SHORTAGE_OCCURRED", "missed_qty": 16.779521787182553}

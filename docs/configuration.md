@@ -104,11 +104,20 @@ user_catalog/
       method.yaml
       method.py
       assets/
-  studies/
-    my_study.yaml
+  resources/
+    my_reference_project/
+      README.md
 ```
 
-Environment and method configs are reusable. A single environment implementation can have multiple environment YAML files for different datasets, fidelity levels, metrics, or runtime settings. A single method implementation can have multiple method YAML files for different prompts, models, hyperparameters, or runtime settings. Study configs are concrete project runs.
+Environment and method configs are reusable. A single environment
+implementation can have multiple environment YAML files for different datasets,
+fidelity levels, metrics, or runtime settings. A single method implementation
+can have multiple method YAML files for different prompts, models,
+hyperparameters, or runtime settings.
+
+Study configs are concrete project runs. Keep them with the project or
+workspace where they are drafted and launched rather than registering them as
+catalog entries.
 
 ## Path Resolution
 
@@ -604,6 +613,53 @@ still returns one OptPilot result with metric values, output files, records,
 and event summary. If per-case details matter, write them as configured
 `records` or `outputFiles` so they appear in evidence.
 
+## Launchable Interfaces
+
+Reusable environments, methods, and resources can optionally declare a small
+frontend or graphical helper with an `interface` block. Studio shows **Launch
+Interface** for catalog entries that include this block.
+
+When launched, Studio copies the catalog folder into an editable draft
+workspace, starts the command inside that workspace's container runtime, and
+opens the configured port in the Preview panel.
+
+```yaml
+interface:
+  label: Demo UI
+  description: Optional short note shown in Studio.
+  command: [python, -m, http.server, "5173", --bind, 0.0.0.0]
+  port: 5173
+  cwd: .
+  env:
+    APP_MODE: demo
+  extraPorts: [8000]
+  readyPath: /
+  readyTimeoutSeconds: 60
+```
+
+Use `command` for the long-running frontend process and `port` for the main
+browser port. The command should bind to `0.0.0.0` inside the workspace runtime
+so Studio can proxy it. `cwd` is relative to the copied workspace root.
+`extraPorts` is only needed when the frontend calls another local backend port
+through the same Preview session. `readyPath` is the HTTP path Studio probes
+before showing the preview, and `readyTimeoutSeconds` controls how long launch
+waits for first-time installs or builds.
+
+Resources can declare the same block in an optional
+`optpilot.resource.yaml` file at the resource root:
+
+```yaml
+apiVersion: optpilot.io/v1
+config: resource
+id: devs-display-generator
+name: DEVS Display Generator
+tags: [simulation, frontend]
+
+interface:
+  command: [python, -m, http.server, "5173", --bind, 0.0.0.0]
+  port: 5173
+```
+
 ## JSON Schema Files
 
 The canonical schemas live in:
@@ -611,6 +667,7 @@ The canonical schemas live in:
 ```text
 src/optpilot/schemas/environment.schema.json
 src/optpilot/schemas/method.schema.json
+src/optpilot/schemas/resource.schema.json
 src/optpilot/schemas/study.schema.json
 src/optpilot/schemas/defs/
 ```

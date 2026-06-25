@@ -1,0 +1,65 @@
+[
+    {
+        "name": "L1_Reference_30d",
+        "description": "30 days with seed 0. Check basic KPI ranges, consistency, and logic correctness.",
+        "checker_args": {
+            "min_profit": -3000.0,
+            "max_profit": 3000.0,
+            "min_service_level": 0.3,
+            "max_service_level": 1.0,
+            "min_fulfillment": 500,
+            "max_waste": 3000,
+            "min_production_batches": 10,
+            "max_production_batches": 100
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--simulate_time": "30",
+                    "--seed": "0"
+                },
+                "num": 1
+            }
+        ]
+    },
+    {
+        "name": "L2_MultiRun_Distribution",
+        "description": "Run 20 times with different seeds. Verify KPI distributions against golden data (relaxed KS) AND reasonable ranges.",
+        "checker_args": {
+            "golden_data_path": "golden_data/complex_sup2_30d_distribution.json",
+            "min_samples": 15,
+            "ks_alpha": 0.001,
+            "ks_stat_max": 0.4,
+            "range_profit_lo": -3000.0,
+            "range_profit_hi": 3000.0,
+            "range_service_lo": 0.3,
+            "range_service_hi": 1.0,
+            "range_waste_lo": 100.0,
+            "range_waste_hi": 3000.0,
+            "range_fulfilled_lo": 500.0,
+            "range_fulfilled_hi": 3000.0
+        },
+        "cases": [
+            {"sim_args": {"--simulate_time": "30", "--seed": "0"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "1"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "2"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "3"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "4"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "5"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "6"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "7"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "8"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "9"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "10"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "11"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "12"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "13"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "14"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "15"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "16"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "17"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "18"}, "num": 1},
+            {"sim_args": {"--simulate_time": "30", "--seed": "19"}, "num": 1}
+        ]
+    }
+]

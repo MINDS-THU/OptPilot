@@ -1,0 +1,40 @@
+{
+  "message_checks": [
+    {
+      "model": "checkhair",
+      "port": "to_cut",
+      "content_contains": "newcust",
+      "count": 3,
+      "description": "3 customers sent to cuthair"
+    },
+    {
+      "model": "checkhair",
+      "port": "to_reception",
+      "content_contains": "done",
+      "count": 3,
+      "description": "3 customers completed final cycle"
+    }
+  ],
+  "timing_checks": [
+    {
+      "event": "customer_1_complete",
+      "time": 28832.0
+    },
+    {
+      "event": "customer_2_complete",
+      "time": 28859.0,
+      "delay_from_previous": 27.0
+    },
+    {
+      "event": "customer_3_complete",
+      "time": 28886.0,
+      "delay_from_previous": 27.0
+    }
+  ],
+  "summary_checks": {
+    "total_customers_processed": 3,
+    "completed_customers": 3,
+    "all_completed_successfully": true
+  },
+  "state_checks": []
+}

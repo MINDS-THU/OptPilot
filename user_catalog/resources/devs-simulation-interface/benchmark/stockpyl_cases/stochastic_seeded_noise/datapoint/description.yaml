@@ -1,0 +1,117 @@
+"root_model_name": |-
+  Stochastic_Seeded_Noise_Chain_Node
+"requirements":
+  "general": "### General Implementation Requirements\n1. Language & Environment:\
+    \ Python 3.10+, using standard libraries.\n2. Input Interface: Use `argparse`\
+    \ for CLI. Read dynamic input from `sys.stdin` line-by-line.\n3. Output Interface:\
+    \ \n   - sys.stdout: MUST print strictly valid JSONL objects containing the required\
+    \ events.\n   - sys.stderr: Print any debug/progress logs here to avoid contaminating\
+    \ stdout.\n4. Time Unit: The underlying simulation base time unit is strictly\
+    \ DAYS (Integers). Do not use seconds/milliseconds unless explicitly requested\
+    \ by the physical rules."
+  "scenario": |-
+    1. System Objective: Plant to hub to stores network with seed-controlled random demand shocks.
+    2. Product Vocabulary: {'1': 'SKU_Noise'}
+    3. Temporal, State, and Accounting Semantics:
+       - One simulation period equals one semantic day. All state transitions, decisions, outputs, and KPI accounting must use this same period interpretation.
+       - Required outputs must cover the evaluator's full horizon with no silent truncation at the beginning or end.
+       - Delayed effects (for example lead-time arrivals) must be accounted for in the first period where they are semantically available.
+       - When processing period t, all still-pending commitments with due time <= t MUST be applied; late-arriving same-period messages must not be silently dropped.
+       - End-of-period inventory in required events represents on-hand quantity for that node and product scope.
+       - Cost fields in required events represent per-period incremental values unless a required event explicitly declares cumulative semantics.
+       - If decision logic uses derived state (for example inventory position), that derived state must be period-consistent and must include all scenario-defined open commitments.
+       - Shortage/backorder semantics must be self-consistent across demand satisfaction, decision logic, and reported costs.
+    4. Network Topology and Group-Level Behavior Semantics:
+       - Node-group instances MUST be expanded by count before simulation starts.
+       - If count is dynamic (e.g., 'arg:x'), it MUST be resolved from CLI arguments at runtime.
+       - Topology defaults are authoritative initialization-time semantics and MUST be effective before the first simulation step.
+       - Topology field semantics (initial_inventory, lead_time, holding_cost, stockout_cost, policy) are binding contracts and MUST NOT be renamed, ignored, or weakened.
+       - Behaviors not explicitly overridden by group-level custom semantics MUST follow topology defaults.
+       - Group 'Plant': role=source, count=1.
+         * Initial inventory by product: {'1': 700000.0}.
+         * Default policy semantics: {'type': 'BS', 'base_stock_level': 700000}.
+       - Group 'Hub': role=distributor, count=1.
+         * Initial inventory by product: {'1': 1300.0}.
+         * Lead time: 2 days.
+         * Holding cost: 0.8 per unit.
+         * Stockout cost: 40.0 per unit.
+         * Default policy semantics: {'type': 'sS', 'reorder_point': 380, 'order_up_to_level': 1600}.
+       - Group 'Store': role=retailer, count=arg:num_stores.
+         * Initial inventory by product: {'1': 120.0}.
+         * Lead time: 1 days.
+         * Holding cost: 1.3 per unit.
+         * Stockout cost: 110.0 per unit.
+         * Default policy semantics: {'type': 'BS', 'base_stock_level': 0}.
+         * Group-level behavior semantics:
+           - Demand behavior: Product-1 demand is baseline plus seed-controlled Gaussian noise and weekend uplift.
+           - Demand behavior semantic example for product 1 across periods 1..14: [12.9071, 24.0097, 12.5541, 14.9773, 22.5718, 30.3005, 23.3375, 22.2932, 23.1709, 20.3492, 21.5876, 20.4616, 30.0114, 21.7739]
+           - Policy behavior: Store orders from Hub_0 up to 140 units when inventory position is at most 45.
+           - Policy behavior semantic example at period 1 with inventory {1: 30.0}: {'Hub_0': {1: 110.0}}
+           - Policy behavior semantic example at period 1 with inventory {1: 80.0}: {}
+           - Holding-cost behavior: Store holding cost is 1.3 multiplied by positive product-1 inventory.
+           - Holding-cost behavior semantic example with inventory {1: 10.0}: 13.0; with inventory {1: 0.0}: 0.0
+           - Stockout-cost behavior: Store stockout cost is 110 multiplied by product-1 shortage quantity.
+           - Stockout-cost behavior semantic example with shortage {1: 5.0}: 550.0; with shortage {1: 0.0}: 0.0
+    5. Connectivity and Expansion Semantics:
+       - {'from_group': 'Plant', 'to_group': 'Hub'}
+       - {'from_group': 'Hub', 'to_group': 'Store'}
+       - For each edge {from_group -> to_group}, every expanded instance in from_group MUST connect to every expanded instance in to_group.
+       - This connectivity is a full bipartite expansion at the group-instance level, not a sampled pairing.
+       - Material shipments and fulfillment move along declared edges (from_group -> to_group).
+       - Replenishment orders and request signals move in the reverse direction of the same connectivity relation.
+    6. Semantic Identity and Indexing Rules:
+       - Node semantic IDs MUST use '<GroupName>_<instance_index>' exactly (for example Retailer_0).
+       - Instance indexing MUST be zero-based: for count N, valid IDs are <GroupName>_0 ... <GroupName>_{N-1}.
+       - Product IDs in logs and contracts MUST follow products_mapping IDs with no aliasing or renaming.
+       - Time semantics are period-based integer days and MUST NOT be reinterpreted as second/millisecond timestamps.
+  "args_input_output": |-
+    1. CLI Arguments:
+       - `--num_stores`: type=int, default=5. Number of store nodes in the last echelon.
+       - `--base_demand`: type=float, default=20.0. Baseline daily demand per store for product 1.
+       - `--demand_sigma`: type=float, default=4.0. Standard deviation of daily random demand shocks.
+       - `--seed`: type=int, default=2026. Random seed controlling demand shock sampling.
+       - `--simulate_time`: type=int, default=90. Simulation horizon in semantic days.
+
+    2. Standard Input (stdin):
+       - No stdin data required.
+
+    3. Stdout JSONL Event Contract:
+       You MUST emit JSONL using `print(json.dumps(event_obj))`, one event object per line.
+       You MAY emit additional event types or additional fields, but grading uses only required event types and required fields.
+       HARD REQUIREMENT: required fields MUST be top-level keys in each required event object.
+       HARD REQUIREMENT: required fields MUST NOT be wrapped in nested containers such as `data`, `payload`, `body`, or `content`.
+       Required top-level base keys for every required event:
+       - `time` (int, current simulation period/day)
+       - `node` (str, semantic instance name such as `Retailer_0`)
+       - `event` (str, exact required event name)
+       Structural validity rule: each required key is a top-level sibling of `time`, `node`, and `event`.
+
+       Coverage rule: required events MUST be emitted for every applicable expanded node instance at every required period in the evaluation horizon.
+
+       Horizon rule: required-event coverage MUST follow the evaluator run horizon; do not hardcode a shorter local reporting horizon (for example 14 or 30) when the evaluator expects longer coverage.
+
+       Uniqueness rule: for one required event type, each `(time, node)` pair MUST appear at most once unless the scenario explicitly declares multi-record semantics.
+
+       Event-name rule: required event names are exact and case-sensitive. Alternative names or aliases are non-compliant for grading.
+
+       Namespace rule: required event names are reserved for evaluator-facing payloads only.
+
+       Auxiliary-log rule: non-required records should avoid the `event` key; if `event` is present, its value MUST NOT equal any required event name.
+
+       KPI-accounting rule: evaluator-facing KPI extraction uses required event payload semantics only; auxiliary records MUST NOT redefine required-event semantics.
+
+       Valid JSONL Event Examples (top-level keys only):
+       - `DAILY_COST_STATE` example: {'time': 1, 'node': 'Retailer_0', 'event': 'DAILY_COST_STATE', 'inventory_qty': 1.0, 'holding_cost': 1.0, 'stockout_cost': 1.0}
+
+       Required Events:
+       - Event: `DAILY_COST_STATE`
+         Description: End-of-day inventory and cost state for one semantic node.
+         Required top-level fields (in addition to top-level `time`, `node`, `event`):
+           * `inventory_qty` (float): Ending inventory quantity.
+           * `holding_cost` (float): Incremental daily holding cost.
+           * `stockout_cost` (float): Incremental daily stockout cost.
+
+    4. Statistical Measurement Contract:
+       - KPI values are computed from required events only, based on the event semantics defined above.
+       - Required event payload values must be period-consistent and comparable across all runs.
+       - The same semantic quantity must use the same unit and meaning for all periods and all node instances.

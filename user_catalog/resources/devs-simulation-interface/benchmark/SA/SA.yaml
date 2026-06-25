@@ -1,0 +1,219 @@
+root_model_name: StrategicAirlift_D0
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - No stdin input is required. All parameters are passed via command line arguments.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+
+        4. Entry point: executable via `python run.py`
+
+        Do not use real time, use simulation time, and guarantee the simulation ends in 10 seconds in real time. 
+
+    scenario: |
+        ### Scenario: Airfreight Logistics Operations
+        
+        1. **System Objective**: 
+           Simulate an airfreight logistics system managing cargo transport via multiple aircraft. The system continuously receives cargo (pallets) at a loading facility, queues them for transport, and delivers them via scheduled aircraft to a destination. Each pallet has a deadline; pallets not delivered by deadline are discarded.
+        
+        2. **System Entities and Behaviors**:
+        
+           a) **Facility (Cargo Source)**:
+              - Continuously generates new cargo pallets at regular intervals.
+              - Each pallet receives a unique ID and a deadline (expiration time, wich is considered ONLY while the pallet is in the Loading Queue. Once assigned to an aircraft, the pallet is considered safe and will be delivered regardless of time.).
+              - Newly generated pallets are immediately sent to the Loading Queue.
+        
+           b) **Loading Queue**:
+              - Holds incoming pallets awaiting aircraft assignment.
+              - **Active Expiration**: Monitors pallet deadlines. If a pallet remains in the queue and its deadline is reached, it is IMMEDIATELY discarded, triggers a `pallet_expired` event, and removes it from the queue.
+              - Non-expired pallets remain queued until assigned to an aircraft by the Coordinator.
+        
+           c) **Fleet Coordinator**:
+              - Monitors aircraft availability and cargo demand.
+              - When (Loading Queue has pallets) AND (an Aircraft is Idle), assigns the next pallet (FIFO) to the aircraft.
+              - Tracks aircraft state (idle, in-flight, unloading, returning, maintenance).
+        
+           d) **Aircraft** (multiple, e.g., Aircraft-1, Aircraft-2):
+              - Each aircraft performs a cyclic operation: 
+                1. Wait idle at facility (until assigned)
+                2. Load assigned cargo (Instantaneous: 0s)
+                3. Fly to destination (takes `flight_time`)
+                4. Unload cargo (takes `unload_time`) -> Delivery happens here
+                5. Return to facility (takes `return_time`)
+                6. Undergo maintenance/rest (takes `maintenance_time`)
+              - Aircraft transitions between states as timers expire.
+              - Reports status changes to Fleet Coordinator.
+        
+           e) **Destination**:
+              - Logically receives delivered cargo from aircraft.
+              - Records successful delivery upon completion of the aircraft's "Unload" phase.
+        
+        3. **Operational Flow**:
+        
+           1. Facility generates pallet at t=0, t+pallet_interval, ...
+           2. New pallet joins Loading Queue.
+           3. If pallet stays in queue > `pallet_expiration_time` -> Discarded immediately.
+           4. Fleet Coordinator checks: if aircraft available AND cargo available → assign.
+           5. Aircraft begins transport cycle: 
+              - Load (0s) → Fly (30s) → Unload (2s) → [Trigger Delivery] → Return (30s) → Maintain (10s) → Idle.
+           6. Simulation continues until `total_duration` time is reached.
+        
+        4. **Scenario Rules**:
+        
+           - **Time Unit**: All durations in seconds (configurable scale).
+           - **Pallet Deadline**: Pallet expires exactly at `generation_time + pallet_expiration_time`. 
+           - **Latency Calculation**: `latency = delivery_time - generation_time`. Delivery time is the moment unloading completes.
+           - **Aircraft Utilization**: Aircraft capacity = 1 pallet per trip. 
+           - **Loading Time**: Assumed to be negligible (0.0s).
+           - **Fair Queuing**: Pallets loaded in FIFO order.
+           - **No Preemption**: Once aircraft departs with cargo, it completes full cycle.
+
+    args_input_output: |
+        1. Command Line Arguments:
+        The script must accept the following named arguments:
+        * `--duration` (float): Total simulation time in time units. Default: 10000.0
+        * `--num_aircraft` (int): Number of aircraft in the system. An integer >= 1. Default: 2
+        * `--pallet_interval` (float): Time interval between pallet generations in time units. Default: 25.0
+        * `--pallet_expiration_time` (float): Time window for pallet expiration (relative to generation). Default: 150.0
+        * `--flight_time` (float): Flight duration for aircraft transport in time units. Default: 30.0
+        * `--unload_time` (float): Time required for unloading cargo at destination. Default: 2.0
+        * `--return_time` (float): Return flight duration for aircraft. Default: 30.0
+        * `--maintenance_time` (float): Duration of maintenance phase for aircraft. Default: 10.0
+
+        2. stdin Format:
+        * No stdin input is required. The system uses command line arguments for configuration.
+
+        3. **Standard Output (stdout)**:
+        * Format: JSONL (JSON Lines - one JSON object per line).
+        * Each line is an independent JSON object representing a key event.
+        * Schema for each log line:
+        ```json
+        {
+            "time": <float>,        # Absolute simulation time
+            "entity": <str>,        # Entity name: "facility", "queue", "coordinator", "aircraft", "destination"
+            "event": <str>,         # Event name (see Event Types below)
+            "payload": <dict>       # Event-specific data
+        }
+        ```
+        * Example: `print(json.dumps({"time": 10.5, "entity": "aircraft", "event": "pallet_delivered", "payload": {"aircraft_id": 1, "pallet_id": 42, "latency": 65.5}}))`
+        
+        **Event Types and Formats**:
+        
+        Facility Events:
+        * `pallet_generated`: New pallet created
+          - entity: `"facility"`
+          - payload: 
+            ```json
+            {
+              "pallet_id": <int>,       # Unique ID of the generated pallet
+              "expiration_time": <float> # Absolute simulation time (Deadline) when pallet expires
+            }
+            ```
+          - Trigger: When Facility generates a new pallet
+        
+        Queue Events:
+        * `pallet_queued`: Pallet added to loading queue
+          - entity: `"queue"`
+          - payload: 
+            ```json
+            {
+              "pallet_id": <int>,       # ID of the pallet entering the queue
+              "queue_size": <int>       # Current number of pallets in queue (including this one)
+            }
+            ```
+          - Trigger: When pallet enters queue
+        
+        * `pallet_expired`: Pallet deadline exceeded
+          - entity: `"queue"`
+          - payload: 
+            ```json
+            {
+              "pallet_id": <int>,       # ID of the pallet being discarded
+              "total_expired": <int>    # Cumulative count of expired pallets so far
+            }
+            ```
+          - Trigger: Exactly when current_time == pallet_expiration_deadline
+        
+        Coordinator Events:
+        * `assignment_created`: Cargo assigned to aircraft
+          - entity: `"coordinator"`
+          - payload: 
+            ```json
+            {
+              "aircraft_id": <int>,     # ID of the assigned aircraft
+              "pallet_id": <int>        # ID of the assigned pallet
+            }
+            ```
+          - Trigger: When Coordinator assigns a pallet to aircraft (Loading starts immediately)
+        
+        Aircraft Events:
+        * `depart`: Aircraft departs with cargo
+          - entity: `"aircraft"`
+          - payload: 
+            ```json
+            {
+              "aircraft_id": <int>,     # ID of the departing aircraft
+              "pallet_id": <int>        # ID of the cargo on board
+            }
+            ```
+          - Trigger: When Aircraft finishes loading (0s duration). Mathematically: time == assignment_time.
+        
+        * `return`: Aircraft returns to facility
+          - entity: `"aircraft"`
+          - payload: 
+            ```json
+            {
+              "aircraft_id": <int>      # ID of the returning aircraft
+            }
+            ```
+          - Trigger: When Aircraft completes return flight
+        
+        * `maintenance_start`: Aircraft enters maintenance
+          - entity: `"aircraft"`
+          - payload: 
+            ```json
+            {
+              "aircraft_id": <int>      # ID of the aircraft starting maintenance
+            }
+            ```
+          - Trigger: When Aircraft begins maintenance phase (immediately after return)
+        
+        * `maintenance_end`: Aircraft completes maintenance
+          - entity: `"aircraft"`
+          - payload: 
+            ```json
+            {
+              "aircraft_id": <int>      # ID of the aircraft finishing maintenance
+            }
+            ```
+          - Trigger: When Aircraft returns to idle state
+        
+        Destination Events:
+        * `pallet_delivered`: Pallet successfully delivered
+          - entity: `"destination"`
+          - payload: 
+            ```json
+            {
+              "pallet_id": <int>,       # ID of the delivered pallet
+              "aircraft_id": <int>,     # ID of the transporting aircraft
+              "latency": <float>        # Total time taken (delivery_time - generation_time) in seconds
+            }
+            ```
+          - Trigger: When Aircraft finishes the 'unload' phase
+          - Note: Latency = time_now - pallet_gen_time.
+
+base_folder: strategic_airlift
+skip_simulation_check: false
+only_ensure_executable: false

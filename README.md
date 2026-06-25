@@ -49,13 +49,13 @@ Included in the current release:
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
 - curated job-shop scheduling tutorial environment with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
 - strategic-airlift DEVS example using an external generated simulator
-- local UI for browsing catalogs, checking compatibility, launching studies, and inspecting runs
+- OptPilot Studio, a local UI for browsing reusable catalogs, opening workspaces, checking compatibility, launching studies, inspecting runs, and optionally using an OpenHands-backed assistant
 
 Not included:
 
 - production Bayesian optimization, RL, LLM, or metaheuristic frameworks
 - remote execution backends
-- automatic dependency inference or package installation
+- automatic dependency inference for study runtimes
 - multi-user UI authentication
 
 ## Prerequisites
@@ -103,6 +103,9 @@ uv run optpilot ui --open-browser
 The UI scans `examples/` and `user_catalog/` by default. Stop the local server
 with `Ctrl-C` in the terminal when you are done.
 
+For the assistant-enabled Studio workflow with OpenHands, embedded Code Server,
+and per-workspace containers, see [UI](docs/ui.md).
+
 Some advanced examples and integration templates, such as Strategic Airlift and upstream `llm_heuristic_search` repository wrappers, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
 
 ## Full Config Examples
@@ -117,7 +120,9 @@ Read [Getting Started](docs/getting-started.md) for the full configs and the exp
 
 ## User-Owned Catalog
 
-Put your own environments, methods, and studies under `user_catalog/`:
+Put reusable environments, methods, and resources under `user_catalog/`.
+Study YAML files are concrete run plans; keep them where you draft or launch
+them rather than registering them as reusable catalog entries:
 
 ```text
 user_catalog/
@@ -129,10 +134,13 @@ user_catalog/
     method.yaml
     method.py
     assets/
-  studies/my_study.yaml
+  resources/my_resource/
+    README.md
 ```
 
-Environment and method directories own reusable implementation code and reusable config variants. Study configs are project-specific bindings.
+Environment and method directories own reusable implementation code and
+reusable config variants. Resources are reusable reference folders. Study
+configs are project-specific bindings.
 
 ## Container Runtime Example
 

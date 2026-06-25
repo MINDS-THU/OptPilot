@@ -15,6 +15,8 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import List
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 import yaml
@@ -30,38 +32,149 @@ from optpilot.environment import build_environment_snapshot
 from optpilot.execution import _aggregate_metric_values
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 from optpilot.runner import run_expanded_study_spec, run_study
+from optpilot.schema_validation import validate_public_config_schema
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
 from optpilot.ui.server import (
     CodeServerOptions,
     UiState,
+    WorkspaceRuntimeOptions,
     _agent_context_packet,
+    _assistant_response_texts,
     _agent_session_by_id,
+    _agent_session_operation_lock,
     _append_agent_message,
     _append_jsonl,
     _agent_settings_payload,
+    _approve_agent_action,
     _attach_agent_workspace,
     _catalog_payload,
     _compatibility_payload,
+    _cancel_agent_session,
     _create_agent_session,
+    _create_registration_manifest,
     _create_ui_workspace,
     _default_catalog_roots,
+    _delete_ui_workspace,
     _detach_agent_workspace,
+    _detach_workspace,
     _draft_study,
+    _apply_registration_manifest,
     _list_agent_sessions,
     _list_ui_workspaces,
     _list_runs,
+    _launch_catalog_interface,
+    _interface_launch_by_id,
     _open_study_workspace,
     _read_agent_approvals,
     _read_agent_events,
     _read_agent_messages,
     _reject_agent_action,
+    _rename_ui_workspace,
+    _require_ui_workspace,
     _sync_agent_session,
     _update_agent_settings,
     _execute_agent_tool,
     _local_code_server_executable,
+    _start_catalog_interface_launch,
     _validate_study,
 )
+
+
+def _write_fake_workspace_container(tmp_path: Path) -> Path:
+    executable = tmp_path / "fake_workspace_container.py"
+    state_path = tmp_path / "fake_workspace_container_state.json"
+    log_path = tmp_path / "fake_workspace_container_calls.jsonl"
+    executable.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json, os, pathlib, subprocess, sys",
+                f"state_path = pathlib.Path({str(state_path)!r})",
+                f"log_path = pathlib.Path({str(log_path)!r})",
+                "args = sys.argv[1:]",
+                "with log_path.open('a', encoding='utf-8') as handle:",
+                "    handle.write(json.dumps(args) + '\\n')",
+                "if args == ['--version']:",
+                "    print('fake-docker 1.0')",
+                "    raise SystemExit(0)",
+                "if args == ['info']:",
+                "    print('fake daemon ready')",
+                "    raise SystemExit(0)",
+                "state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {'running': {}}",
+                "def save():",
+                "    state_path.write_text(json.dumps(state), encoding='utf-8')",
+                "if len(args) >= 3 and args[:2] == ['image', 'inspect']:",
+                "    raise SystemExit(0)",
+                "if len(args) >= 2 and args[0] == 'pull':",
+                "    print(args[1])",
+                "    raise SystemExit(0)",
+                "if args[:3] == ['inspect', '-f', '{{.State.Running}}']:",
+                "    name = args[3] if len(args) > 3 else ''",
+                "    if state['running'].get(name):",
+                "        print('true')",
+                "        raise SystemExit(0)",
+                "    print('false')",
+                "    raise SystemExit(1)",
+                "if args and args[0] == 'rm':",
+                "    for name in args[1:]:",
+                "        if not name.startswith('-'):",
+                "            state['running'].pop(name, None)",
+                "    save()",
+                "    raise SystemExit(0)",
+                "if args and args[0] == 'run':",
+                "    name = 'container'",
+                "    if '--name' in args:",
+                "        name = args[args.index('--name') + 1]",
+                "    state['running'][name] = True",
+                "    save()",
+                "    print(name)",
+                "    raise SystemExit(0)",
+                "if args and args[0] == 'exec':",
+                "    index = 1",
+                "    detach = False",
+                "    cwd = None",
+                "    env = os.environ.copy()",
+                "    while index < len(args) and args[index].startswith('-'):",
+                "        flag = args[index]",
+                "        if flag == '-d':",
+                "            detach = True",
+                "            index += 1",
+                "            continue",
+                "        if flag in {'-w', '--workdir'}:",
+                "            cwd = args[index + 1]",
+                "            index += 2",
+                "            continue",
+                "        if flag in {'-e', '--env'}:",
+                "            key, value = args[index + 1].split('=', 1)",
+                "            env[key] = value",
+                "            index += 2",
+                "            continue",
+                "        index += 1",
+                "    command = args[index + 1:]",
+                "    if detach:",
+                "        raise SystemExit(0)",
+                "    if any('code-server' in item for item in command):",
+                "        print('12345')",
+                "        raise SystemExit(0)",
+                "    completed = subprocess.run(command, cwd=cwd, env=env, text=True, capture_output=True)",
+                "    sys.stdout.write(completed.stdout)",
+                "    sys.stderr.write(completed.stderr)",
+                "    raise SystemExit(completed.returncode)",
+                "raise SystemExit(2)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
+
+
+def _fake_workspace_container_calls(tmp_path: Path) -> List[List[str]]:
+    log_path = tmp_path / "fake_workspace_container_calls.jsonl"
+    if not log_path.exists():
+        return []
+    return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _stable_baselines3_stack_importable() -> bool:
@@ -2492,6 +2605,203 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(catalog["methods"])
         self.assertTrue(catalog["studies"])
 
+    def test_ui_catalog_scans_user_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            resource = tmp_path / "user_catalog" / "resources" / "devs_display_new"
+            resource.mkdir(parents=True)
+            (resource / "README.md").write_text(
+                "# DEVS Display Generator\n\nReusable simulation codebase for DEVS displays.\n",
+                encoding="utf-8",
+            )
+            (resource / "tool.py").write_text("print('ready')\n", encoding="utf-8")
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+
+            catalog = _catalog_payload(state)
+
+        self.assertEqual(len(catalog["resources"]), 1)
+        self.assertEqual(catalog["resources"][0]["id"], "devs-display-new")
+        self.assertEqual(catalog["resources"][0]["label"], "DEVS Display Generator")
+        self.assertIn("simulation", catalog["resources"][0]["tags"])
+
+    def test_resource_manifest_declares_launchable_interface(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            resource = tmp_path / "user_catalog" / "resources" / "ui_tool"
+            resource.mkdir(parents=True)
+            (resource / "README.md").write_text("# UI Tool\n\nReusable graphical helper.\n", encoding="utf-8")
+            (resource / "optpilot.resource.yaml").write_text(
+                "\n".join(
+                    [
+                        "apiVersion: optpilot.io/v1",
+                        "config: resource",
+                        "id: ui-tool",
+                        "name: UI Tool",
+                        "tags: [simulation, frontend]",
+                        "interface:",
+                        "  label: Demo UI",
+                        "  command: [python, -m, http.server, '5173', --bind, 0.0.0.0]",
+                        "  port: 5173",
+                        "  extraPorts: [8000]",
+                        "  readyPath: /health",
+                        "  readyTimeoutSeconds: 30",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+
+            catalog = _catalog_payload(state)
+
+        self.assertEqual(len(catalog["resources"]), 1)
+        entry = catalog["resources"][0]
+        self.assertEqual(entry["id"], "ui-tool")
+        self.assertEqual(entry["interface"]["label"], "Demo UI")
+        self.assertEqual(entry["interface"]["port"], 5173)
+        self.assertEqual(entry["summary"]["interface"]["extraPorts"], [8000])
+        self.assertEqual(entry["summary"]["interface"]["readyPath"], "/health")
+        self.assertEqual(entry["summary"]["interface"]["readyTimeoutSeconds"], 30)
+
+    def test_ui_launches_catalog_resource_interface_in_workspace_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            resource = tmp_path / "user_catalog" / "resources" / "preview_tool"
+            resource.mkdir(parents=True)
+            (resource / "README.md").write_text("# Preview Tool\n\nHas a local frontend.\n", encoding="utf-8")
+            (resource / "index.html").write_text("<h1>Preview</h1>\n", encoding="utf-8")
+            (resource / "optpilot.resource.yaml").write_text(
+                "\n".join(
+                    [
+                        "apiVersion: optpilot.io/v1",
+                        "config: resource",
+                        "id: preview-tool",
+                        "name: Preview Tool",
+                        "interface:",
+                        "  label: Preview UI",
+                        "  command: [python, -m, http.server, '5173', --bind, 0.0.0.0]",
+                        "  port: 5173",
+                        "  extraPorts: [8000]",
+                        "  readyTimeoutSeconds: 0",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[tmp_path / "user_catalog"],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19180,
+                ),
+            )
+            resource_entry = _catalog_payload(state)["resources"][0]
+
+            launched = _launch_catalog_interface(state, "resource", resource_entry["uid"])
+            calls = _fake_workspace_container_calls(tmp_path)
+            copied_index_exists = Path(launched["workspace"]["root"], "index.html").exists()
+            deleted = _delete_ui_workspace(state, launched["workspace"]["id"])
+            copied_root_exists_after_delete = Path(launched["workspace"]["root"]).exists()
+            source_exists_after_delete = resource.exists()
+
+        self.assertEqual(launched["workspace"]["mode"], "editable")
+        self.assertEqual(launched["workspace"]["source_type"], "catalog-copy")
+        self.assertEqual(launched["workspace"]["delete_label"], "Delete Copy")
+        self.assertTrue(launched["workspace"]["title"].startswith("Launch Preview Tool"))
+        self.assertTrue(copied_index_exists)
+        self.assertTrue(deleted["files_deleted"])
+        self.assertEqual(deleted["delete_label"], "Delete Copy")
+        self.assertFalse(copied_root_exists_after_delete)
+        self.assertTrue(source_exists_after_delete)
+        self.assertEqual(launched["interface"]["port"], 5173)
+        self.assertEqual(launched["preview"]["workspace_id"], launched["workspace"]["id"])
+        self.assertEqual(launched["preview"]["allowed_ports"], [5173, 8000])
+        preview_url = urlparse(launched["preview"]["preview_url"])
+        self.assertIn("__optpilot_preview_token", parse_qs(preview_url.query))
+        detached_execs = [call for call in calls if call and call[0] == "exec" and "-d" in call]
+        self.assertTrue(detached_execs, calls)
+        self.assertTrue(any("http.server" in " ".join(call) for call in detached_execs), detached_execs)
+
+    def test_ui_tracks_catalog_interface_launch_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            resource = tmp_path / "user_catalog" / "resources" / "preview_tool"
+            resource.mkdir(parents=True)
+            (resource / "README.md").write_text("# Preview Tool\n\nHas a local frontend.\n", encoding="utf-8")
+            (resource / "index.html").write_text("<h1>Preview</h1>\n", encoding="utf-8")
+            (resource / "optpilot.resource.yaml").write_text(
+                "\n".join(
+                    [
+                        "apiVersion: optpilot.io/v1",
+                        "config: resource",
+                        "id: preview-tool",
+                        "name: Preview Tool",
+                        "interface:",
+                        "  label: Preview UI",
+                        "  command: [python, -m, http.server, '5173', --bind, 0.0.0.0]",
+                        "  port: 5173",
+                        "  readyTimeoutSeconds: 0",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[tmp_path / "user_catalog"],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19190,
+                ),
+            )
+            resource_entry = _catalog_payload(state)["resources"][0]
+
+            created = _start_catalog_interface_launch(state, "resource", resource_entry["uid"])
+            launch_id = created["launch"]["launch_id"]
+            for _ in range(240):
+                current = _interface_launch_by_id(state, launch_id)
+                if current["status"] in {"ready", "failed"}:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("interface launch job did not finish")
+            deleted = _delete_ui_workspace(state, current["result"]["workspace"]["id"])
+
+        self.assertEqual(current["status"], "ready")
+        self.assertTrue(deleted["files_deleted"])
+        step_titles = [step["title"] for step in current["steps"]]
+        self.assertIn("Creating editable workspace", step_titles)
+        self.assertIn("Starting workspace runtime", step_titles)
+        self.assertIn("Waiting for preview port", step_titles)
+        self.assertIn("Preview ready", step_titles)
+        self.assertEqual(current["result"]["workspace"]["mode"], "editable")
+        self.assertEqual(current["result"]["interface"]["port"], 5173)
+
+    def test_public_config_schema_allows_environment_and_method_interfaces(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        environment = yaml.safe_load((repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml").read_text(encoding="utf-8"))
+        environment["interface"] = {
+            "command": ["python", "-m", "http.server", "5173", "--bind", "0.0.0.0"],
+            "port": 5173,
+            "readyPath": "/",
+            "readyTimeoutSeconds": 10,
+        }
+        method = yaml.safe_load((repo_root / "tests" / "fixtures" / "catalog" / "methods" / "fixed_parameter_method.yaml").read_text(encoding="utf-8"))
+        method["interface"] = {
+            "command": ["python", "-m", "http.server", "5174", "--bind", "0.0.0.0"],
+            "port": 5174,
+        }
+
+        self.assertTrue(validate_public_config_schema(environment).valid)
+        self.assertTrue(validate_public_config_schema(method).valid)
+
     def test_ui_compatibility_payload_and_study_draft(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2644,6 +2954,43 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue((root / "README.md").exists())
             self.assertIn("ui-study-workspace", (root / "study.yaml").read_text(encoding="utf-8"))
             self.assertTrue(any(item["id"] == workspace["id"] for item in indexed))
+            self.assertFalse(workspace["registration_enabled"])
+
+    def test_ui_registration_skips_studies_and_registers_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Reusable Tool",
+                    "description": "Resource draft",
+                    "focus_paths": ["README.md"],
+                },
+            )
+            root = Path(workspace["root"])
+            (root / "study.yaml").write_text(
+                "apiVersion: optpilot.io/v1\nconfig: study\nname: should-not-register\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "No environment or method"):
+                _create_registration_manifest(state, workspace["id"], {"config_paths": ["study.yaml"]})
+
+            created = _create_registration_manifest(
+                state,
+                workspace["id"],
+                {"kind": "resource", "resource_id": "reusable-tool"},
+            )
+            applied = _apply_registration_manifest(state, workspace["id"], created["registration"]["id"])
+
+            destination = tmp_path / "user_catalog" / "resources" / "reusable-tool"
+            indexed = _list_ui_workspaces(state)
+
+            self.assertTrue(applied["applied"])
+            self.assertTrue((destination / "README.md").exists())
+            self.assertTrue(any(entry["kind"] == "resource" for entry in applied["workspace"]["registered_entries"]))
+            self.assertTrue(any(item["id"] == workspace["id"] and item["registered_entries"] for item in indexed))
 
     def test_ui_agent_sessions_persist_workspace_context_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2680,15 +3027,38 @@ class MvpIntegrationTest(unittest.TestCase):
                     },
                 },
             )
+            tool_message = _append_agent_message(
+                state,
+                session["id"],
+                {
+                    "role": "tool",
+                    "title": "Workspace detached",
+                    "content": "Scratch tool workspace was detached from this assistant session.",
+                    "source": "studio_ui",
+                    "memory_scope": "ui_history",
+                },
+            )
+            studio_status = _append_agent_message(
+                state,
+                session["id"],
+                {
+                    "role": "assistant",
+                    "title": "Registration opened",
+                    "content": "Prepared catalog registration for Scratch tool workspace.",
+                    "source": "studio_ui",
+                    "memory_scope": "ui_history",
+                },
+            )
             detached = _detach_agent_workspace(state, session["id"], workspace["id"])
 
             reloaded = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
             sessions = _list_agent_sessions(reloaded)
             persisted = next(item for item in sessions if item["id"] == session["id"])
+            response_texts = _assistant_response_texts(reloaded, session["id"])
 
         self.assertEqual(attached["selected_workspace_id"], workspace["id"])
         self.assertEqual(message_result["session"]["status"], "waiting_for_agent")
-        self.assertEqual(message_result["message"]["context"]["selected_workspace"]["id"], workspace["id"])
+        self.assertIsNone(message_result["message"]["context"]["selected_workspace"])
         self.assertEqual(message_result["message"]["context"]["current_page"], "catalog")
         self.assertEqual(message_result["message"]["context"]["selected_catalog_entry"]["id"], "toy-factory")
         self.assertIsNone(message_result["message"]["context"]["selected_study_plan"])
@@ -2697,10 +3067,262 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIsNone(message_result["message"]["context"]["registration_menu"])
         self.assertEqual(message_result["message"]["context"]["runtime"]["runtime"], "openhands")
         self.assertIn("optpilot_workspace_list", message_result["message"]["context"]["available_tools"])
+        self.assertEqual(tool_message["message"]["role"], "tool")
+        self.assertEqual(tool_message["message"]["source"], "studio_ui")
+        self.assertEqual(tool_message["message"]["memory_scope"], "ui_history")
+        self.assertEqual(studio_status["message"]["source"], "studio_ui")
+        self.assertEqual(studio_status["message"]["memory_scope"], "ui_history")
         self.assertEqual(detached["attached_workspace_ids"], [])
         self.assertEqual(persisted["attached_workspace_ids"], [])
         self.assertTrue(any(message["content"].startswith("Inspect this workspace") for message in persisted["messages"]))
+        self.assertTrue(any(message["role"] == "tool" and message["title"] == "Workspace detached" for message in persisted["messages"]))
+        self.assertTrue(any(message["role"] == "assistant" and message["title"] == "Registration opened" for message in persisted["messages"]))
+        self.assertNotIn("Prepared catalog registration for Scratch tool workspace.", response_texts)
         self.assertTrue(any(event["type"] == "workspace_detached" for event in persisted["events"]))
+
+    def test_ui_delete_managed_draft_workspace_removes_files_and_session_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Scratch Draft"})
+            workspace_root = Path(workspace["root"])
+            workspace_container = workspace_root.parent
+            runtime_root = state.runtime_dir / workspace["id"]
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            (runtime_root / "runtime.log").write_text("cached runtime state\n", encoding="utf-8")
+            session = _create_agent_session(state, {"title": "Draft cleanup"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            deleted = _delete_ui_workspace(state, workspace["id"])
+            sessions = _list_agent_sessions(state)
+
+            self.assertTrue(workspace["managed_by_studio"])
+            self.assertEqual(workspace["delete_action"], "delete_draft")
+            self.assertTrue(deleted["deleted"])
+            self.assertTrue(deleted["files_deleted"])
+            self.assertTrue(deleted["runtime_deleted"])
+            self.assertFalse(workspace_container.exists())
+            self.assertFalse(runtime_root.exists())
+            self.assertFalse(any(item["id"] == workspace["id"] for item in _list_ui_workspaces(state)))
+            self.assertEqual(sessions[0]["attached_workspace_ids"], [])
+
+    def test_ui_workspace_can_be_renamed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Scratch Draft"})
+
+            renamed = _rename_ui_workspace(state, workspace["id"], "  Solver prototype  ")
+            persisted = _require_ui_workspace(state, workspace["id"])
+
+        self.assertEqual(renamed["title"], "Solver prototype")
+        self.assertEqual(persisted["title"], "Solver prototype")
+
+    def test_ui_remove_external_draft_reference_keeps_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            external_root = tmp_path / "external-tool"
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "External Tool",
+                    "root": str(external_root),
+                    "source_type": "local",
+                },
+            )
+            runtime_root = state.runtime_dir / workspace["id"]
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            (runtime_root / "runtime.log").write_text("cached runtime state\n", encoding="utf-8")
+            session = _create_agent_session(state, {"title": "External cleanup"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            deleted = _delete_ui_workspace(state, workspace["id"])
+            sessions = _list_agent_sessions(state)
+
+            self.assertFalse(workspace["managed_by_studio"])
+            self.assertEqual(workspace["ownership"], "external-reference")
+            self.assertEqual(workspace["delete_action"], "remove_reference")
+            self.assertTrue(deleted["deleted"])
+            self.assertFalse(deleted["files_deleted"])
+            self.assertTrue(deleted["runtime_deleted"])
+            self.assertTrue(external_root.exists())
+            self.assertTrue((external_root / "README.md").exists())
+            self.assertFalse(runtime_root.exists())
+            self.assertFalse(any(item["id"] == workspace["id"] for item in _list_ui_workspaces(state)))
+            self.assertEqual(sessions[0]["attached_workspace_ids"], [])
+
+    def test_ui_detach_read_only_workspace_removes_last_reference_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            catalog_root = tmp_path / "catalog-entry"
+            catalog_root.mkdir()
+            (catalog_root / "README.md").write_text("catalog source\n", encoding="utf-8")
+            state = UiState(cwd=tmp_path, catalog_roots=[catalog_root.parent], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Inspect Catalog Entry",
+                    "root": str(catalog_root),
+                    "mode": "read-only",
+                    "source_type": "catalog",
+                    "registration_enabled": False,
+                },
+            )
+            runtime_root = state.runtime_dir / workspace["id"]
+            runtime_root.mkdir(parents=True, exist_ok=True)
+            (runtime_root / "runtime.log").write_text("cached runtime state\n", encoding="utf-8")
+            session = _create_agent_session(state, {"title": "Catalog inspection"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            detached = _detach_agent_workspace(state, session["id"], workspace["id"])
+            sessions = _list_agent_sessions(state)
+
+            self.assertEqual(detached["attached_workspace_ids"], [])
+            self.assertEqual(sessions[0]["attached_workspace_ids"], [])
+            self.assertFalse(any(item["id"] == workspace["id"] for item in _list_ui_workspaces(state)))
+            self.assertTrue(catalog_root.exists())
+            self.assertTrue((catalog_root / "README.md").exists())
+            self.assertFalse(runtime_root.exists())
+
+    def test_ui_workspace_detach_keeps_read_only_reference_until_last_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            catalog_root = tmp_path / "catalog-entry"
+            catalog_root.mkdir()
+            state = UiState(cwd=tmp_path, catalog_roots=[catalog_root.parent], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Inspect Catalog Entry",
+                    "root": str(catalog_root),
+                    "mode": "read-only",
+                    "source_type": "catalog",
+                    "registration_enabled": False,
+                },
+            )
+            first = _create_agent_session(state, {"title": "First inspection"})
+            second = _create_agent_session(state, {"title": "Second inspection"})
+            _attach_agent_workspace(state, first["id"], workspace["id"], select=True)
+            _attach_agent_workspace(state, second["id"], workspace["id"], select=True)
+
+            kept = _detach_workspace(state, workspace["id"], first["id"])
+            removed = _detach_workspace(state, workspace["id"], second["id"])
+
+            self.assertFalse(kept.get("deleted", False))
+            self.assertEqual(kept["attached_sessions"], [second["id"]])
+            self.assertTrue(removed["deleted"])
+            self.assertFalse(removed["files_deleted"])
+            self.assertFalse(any(item["id"] == workspace["id"] for item in _list_ui_workspaces(state)))
+            self.assertTrue(catalog_root.exists())
+
+    def test_ui_list_prunes_unattached_read_only_workspace_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            catalog_root = tmp_path / "catalog-entry"
+            catalog_root.mkdir()
+            state = UiState(cwd=tmp_path, catalog_roots=[catalog_root.parent], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Detached Catalog Entry",
+                    "root": str(catalog_root),
+                    "mode": "read-only",
+                    "source_type": "catalog",
+                    "registration_enabled": False,
+                    "created_at": "2000-01-01T00:00:00Z",
+                },
+            )
+            runtime_root = state.runtime_dir / workspace["id"]
+            runtime_root.mkdir(parents=True, exist_ok=True)
+
+            listed = _list_ui_workspaces(state)
+
+            self.assertFalse(any(item["id"] == workspace["id"] for item in listed))
+            self.assertTrue(catalog_root.exists())
+            self.assertFalse(runtime_root.exists())
+
+    def test_ui_workspace_attachments_are_derived_from_agent_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(
+                state,
+                {
+                    "title": "Stale Attachment Cache",
+                    "attached_sessions": ["stale-session"],
+                },
+            )
+
+            indexed = _list_ui_workspaces(state)
+            normalized = next(item for item in indexed if item["id"] == workspace["id"])
+
+            self.assertEqual(normalized["attached_sessions"], [])
+
+    def test_ui_agent_session_can_attach_multiple_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            first = _create_ui_workspace(state, {"title": "First Draft"})
+            second = _create_ui_workspace(state, {"title": "Second Draft"})
+            session = _create_agent_session(state, {"title": "Multi workspace"})
+
+            attached_first = _attach_agent_workspace(state, session["id"], first["id"], select=True)
+            attached_second = _attach_agent_workspace(state, session["id"], second["id"], select=False)
+            reloaded = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            persisted = _agent_session_by_id(reloaded, session["id"])
+            context = _agent_context_packet(
+                reloaded,
+                persisted,
+                {
+                    "current_page": "workspace",
+                    "selected_workspace": {"id": first["id"]},
+                },
+            )
+
+        self.assertEqual(attached_first["attached_workspace_ids"], [first["id"]])
+        self.assertEqual(attached_second["attached_workspace_ids"], [first["id"], second["id"]])
+        self.assertEqual(attached_second["selected_workspace_id"], first["id"])
+        self.assertEqual(persisted["attached_workspace_ids"], [first["id"], second["id"]])
+        self.assertEqual(context["selected_workspace"]["id"], first["id"])
+        self.assertEqual([item["id"] for item in context["attached_workspaces"]], [first["id"], second["id"]])
+
+    def test_ui_agent_session_list_does_not_probe_workspace_runtimes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Runtime-heavy draft"})
+            session = _create_agent_session(state, {"title": "Fast session list"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            class FailingWorkspaceRuntime:
+                def status(self, workspace: JsonDict) -> JsonDict:
+                    raise AssertionError("agent session listing must not probe workspace runtimes")
+
+            state.workspace_runtime = FailingWorkspaceRuntime()  # type: ignore[assignment]
+            lock = _agent_session_operation_lock(state, session["id"])
+            lock_ready = threading.Event()
+            lock_release = threading.Event()
+
+            def hold_session_lock() -> None:
+                with lock:
+                    lock_ready.set()
+                    lock_release.wait(timeout=2)
+
+            thread = threading.Thread(target=hold_session_lock, daemon=True)
+            thread.start()
+            self.assertTrue(lock_ready.wait(timeout=0.5))
+            started_at = time.monotonic()
+            try:
+                sessions = _list_agent_sessions(state)
+                elapsed = time.monotonic() - started_at
+            finally:
+                lock_release.set()
+                thread.join(timeout=1)
+
+        listed = next(item for item in sessions if item["id"] == session["id"])
+        self.assertEqual(listed["attached_workspace_ids"], [workspace["id"]])
+        self.assertLess(elapsed, 0.5)
 
     def test_ui_agent_context_uses_user_facing_page_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2716,6 +3338,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 "selected_run": {"id": "default-run"},
                 "registration_menu": {"status": "draft"},
                 "code_editor": {"status": "ready", "folder": str(tmp_path)},
+                "workspace_preview": {"status": "ready", "port": 5173, "url": "http://127.0.0.1:18766/proxy/5173/"},
             }
             editor_context = _agent_context_packet(state, session, stale_tab_state)
             studies_context = _agent_context_packet(state, session, {"current_page": "experiments"})
@@ -2727,12 +3350,26 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIsNone(editor_context["selected_run"])
         self.assertIsNone(editor_context["registration_menu"])
         self.assertEqual(editor_context["code_editor"]["status"], "ready")
+        self.assertEqual(editor_context["workspace_preview"]["port"], 5173)
+        self.assertNotIn("studies", editor_context["catalog_counts"])
+        self.assertEqual(editor_context["study_plan_count"], 0)
         self.assertNotIn("current_page", editor_context["visible_state"])
+        self.assertNotIn("workspace_preview", editor_context["visible_state"])
 
     def test_ui_agent_tools_enforce_workspace_boundaries_and_approvals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19000,
+                ),
+            )
             workspace = _create_ui_workspace(
                 state,
                 {
@@ -2775,6 +3412,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 {"path": "configs/demo.yaml", "content": "config: changed\n"},
             )
             tree = _execute_agent_tool(state, session["id"], "optpilot_file_tree", {"path": ".", "max_files": 20})
+            tree_default = _execute_agent_tool(state, session["id"], "optpilot_file_tree", {"path": None, "max_files": 20})
             shell = _execute_agent_tool(
                 state,
                 session["id"],
@@ -2795,11 +3433,17 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(read["data"]["content"], "config: note\n")
             self.assertIn("-config: note", diff["data"]["diff"])
             self.assertTrue(any(item["path"] == "configs/demo.yaml" for item in tree["data"]["files"]))
+            self.assertTrue(any(item["path"] == "configs/demo.yaml" for item in tree_default["data"]["files"]))
             self.assertTrue(shell["ok"], shell)
             self.assertIn("assistant ok", shell["data"]["stdout"])
+            self.assertTrue(shell["data"]["runtime"]["containerized"])
+            self.assertEqual(shell["data"]["runtime"]["executor"], "container")
             self.assertFalse(approval["ok"])
             self.assertTrue(approval["data"]["approval_required"])
             self.assertEqual(rejected["approval"]["status"], "rejected")
+            calls = _fake_workspace_container_calls(tmp_path)
+            self.assertTrue(any(call and call[0] == "run" for call in calls), calls)
+            self.assertTrue(any(call and call[0] == "exec" and sys.executable in call for call in calls), calls)
             with self.assertRaises(PermissionError):
                 _execute_agent_tool(
                     state,
@@ -2822,26 +3466,106 @@ class MvpIntegrationTest(unittest.TestCase):
                     {"workspace_id": unattached["id"], "path": "README.md"},
                 )
 
+    def test_ui_agent_approval_dedupes_and_forwards_approved_tool_result(self) -> None:
+        forwarded: List[JsonDict] = []
+
+        class ForwardingAdapter:
+            def submit_tool_result(self, conversation_id: str, name: str, call_id: str, result: JsonDict) -> JsonDict:
+                forwarded.append({"conversation_id": conversation_id, "name": name, "call_id": call_id, "result": result})
+                return {"sent": True, "conversation_id": conversation_id, "tool_call_id": call_id}
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19100,
+                ),
+            )
+            state.agent_adapter = ForwardingAdapter()
+            workspace = _create_ui_workspace(state, {"title": "Approval workspace", "root": str(tmp_path / "approval")})
+            fake_pip = Path(workspace["root"]) / "pip"
+            fake_pip.write_text("#!/bin/sh\necho approved-pip\n", encoding="utf-8")
+            fake_pip.chmod(0o755)
+            session = _create_agent_session(
+                state,
+                {"title": "Approval forwarding", "openhands_conversation_id": "oh-approval-conversation"},
+            )
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            first = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-1"},
+            )
+            second = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-1"},
+            )
+            approvals = _read_agent_approvals(state, session["id"])
+            approved = _approve_agent_action(state, session["id"], approvals[0]["id"])
+            events = _read_agent_events(state, session["id"])
+            persisted = _agent_session_by_id(state, session["id"])
+
+        self.assertFalse(first["ok"])
+        self.assertFalse(second["ok"])
+        self.assertEqual(first["data"]["approval"]["id"], second["data"]["approval"]["id"])
+        self.assertEqual(len([approval for approval in approvals if approval["status"] == "pending"]), 1)
+        self.assertEqual(approved["approval"]["status"], "approved")
+        self.assertTrue(approved["result"]["ok"], approved)
+        self.assertEqual(forwarded[0]["conversation_id"], "oh-approval-conversation")
+        self.assertEqual(forwarded[0]["call_id"], "call-install-1")
+        self.assertIn("approved-pip", forwarded[0]["result"]["data"]["stdout"])
+        self.assertEqual(persisted["status"], "waiting_for_agent")
+        self.assertTrue(any(event["type"] == "openhands_tool_result_forwarded" for event in events))
+
     def test_ui_agent_docs_and_smoke_tools_are_available(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
-        session = _create_agent_session(state, {"title": "Docs and smoke"})
+        study_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=repo_root, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[])
+            state.sessions_dir = tmp_path / "sessions"
+            state.agent_sessions_dir = tmp_path / "agent_sessions"
+            state.jobs_dir = tmp_path / "jobs"
+            state.workspaces_dir = tmp_path / "workspaces"
+            state.runtime_dir = tmp_path / "runtime"
+            for isolated_dir in (state.sessions_dir, state.agent_sessions_dir, state.jobs_dir, state.workspaces_dir, state.runtime_dir):
+                isolated_dir.mkdir(parents=True, exist_ok=True)
+            session = _create_agent_session(state, {"title": "Docs and smoke"})
 
-        docs = _execute_agent_tool(
-            state,
-            session["id"],
-            "optpilot_docs_search",
-            {"query": "methodContext references", "limit": 3},
-        )
-        smoke = _execute_agent_tool(
-            state,
-            session["id"],
-            "optpilot_smoke_test_study",
-            {"study_path": str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"), "max_trials": 1},
-        )
+            docs = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_docs_search",
+                {"query": "methodContext references", "limit": 3},
+            )
+            study_detail = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_catalog_detail",
+                {"config_kind": "studies", "path": str(study_path)},
+            )
+            smoke = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_smoke_test_study",
+                {"study_path": str(study_path), "max_trials": 1},
+            )
 
         self.assertTrue(docs["ok"], docs)
         self.assertTrue(docs["data"]["results"])
+        self.assertTrue(study_detail["ok"], study_detail)
+        self.assertEqual(study_detail["data"]["entry"]["config"], "study")
+        self.assertTrue(study_detail["data"]["validation"]["valid"], study_detail)
         self.assertFalse(smoke["ok"], smoke)
         self.assertTrue(smoke["data"]["approval_required"])
 
@@ -2940,10 +3664,82 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(start_payload["agent"]["llm"]["model"], "openrouter/deepseek/deepseek-v4-flash")
         self.assertIn("OptPilot Assistant", start_payload["agent"]["agent_context"]["system_message_suffix"])
         self.assertTrue(any(tool["name"] == "optpilot_catalog_list" for tool in start_payload["client_tools"]))
+        preview_tool = next(tool for tool in start_payload["client_tools"] if tool["name"] == "optpilot_workspace_preview_open")
+        self.assertNotIn("extra_ports", preview_tool["parameters"]["properties"])
         for tool in start_payload["client_tools"]:
             self.assertNotIn("kind", tool.get("parameters", {}).get("properties", {}))
         self.assertIn("\"current_page\": \"catalog\"", event_payload["content"][0]["text"])
         self.assertIn("\"id\": \"toy-factory\"", event_payload["content"][0]["text"])
+
+    def test_ui_agent_session_reports_openhands_tool_schema_conflict_clearly(self) -> None:
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                if self.path == "/api/conversations":
+                    self._send_json(
+                        {
+                            "detail": (
+                                "Client tool 'optpilot_workspace_preview_open' is already registered "
+                                "with a different parameters schema. Client tool names must map to a "
+                                "single, stable schema within a process."
+                            )
+                        },
+                        status=422,
+                    )
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Schema conflict"})
+                result = _append_agent_message(
+                    state,
+                    session["id"],
+                    {
+                        "role": "user",
+                        "title": "User",
+                        "content": "Hello",
+                        "ui_context": {"current_page": "catalog"},
+                    },
+                )
+                persisted = _agent_session_by_id(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["session"]["status"], "error")
+        assistant_messages = [message for message in persisted["messages"] if message["role"] == "assistant"]
+        self.assertTrue(assistant_messages)
+        self.assertEqual(assistant_messages[-1]["title"], "OpenHands tool schema changed")
+        self.assertIn("Restart the OpenHands agent server", assistant_messages[-1]["content"])
+        self.assertTrue(any(event["type"] == "openhands_tool_schema_conflict" for event in persisted["events"]))
 
     def test_ui_agent_session_executes_openhands_client_tool_requests(self) -> None:
         requests = []
@@ -3318,6 +4114,45 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn('"config_kind": "method"', tool_payload["arguments_preview"])
         self.assertEqual(adapter._openhands_event_trace(tool_feedback_event)["payload"]["category"], "tool_result_feedback")
 
+    def test_ui_agent_openhands_prefers_finish_message_and_ignores_waiting_text(self) -> None:
+        adapter = OpenHandsAdapter(OpenHandsRuntimeConfig(enabled=False))
+        finish_event = {
+            "id": "evt-finish",
+            "kind": "ActionEvent",
+            "source": "agent",
+            "tool_name": "finish",
+            "tool_call_id": "functions.finish:1",
+            "action": {
+                "kind": "FinishAction",
+                "message": "Install failed in the workspace runtime because Python and Node are unavailable.",
+            },
+        }
+        waiting_event = {
+            "id": "evt-waiting",
+            "kind": "MessageEvent",
+            "source": "agent",
+            "llm_message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "The user still hasn't sent a new message. </think> (Waiting for your next message.)",
+                    }
+                ],
+            },
+        }
+
+        answer = adapter._best_user_facing_answer([waiting_event, finish_event], set(), set())
+
+        self.assertEqual(answer, "Install failed in the workspace runtime because Python and Node are unavailable.")
+        self.assertEqual(adapter._event_assistant_text(waiting_event), "")
+        self.assertEqual(
+            adapter._user_facing_assistant_text(
+                "The user did not send another message. </think> The task is complete on my side: waiting for the next request."
+            ),
+            "",
+        )
+
     def test_ui_agent_messages_hide_malformed_context_echoes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
@@ -3339,6 +4174,38 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertFalse(any("Visible OptPilot Studio context packet" in message["content"] for message in messages))
         self.assertTrue(any(message["content"] == "Real answer." for message in messages))
+
+    def test_ui_agent_session_recovers_finish_message_from_openhands_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Recovered finish"})
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "messages.jsonl",
+                {
+                    "role": "assistant",
+                    "title": "OpenHands",
+                    "content": "The user still hasn't sent a new message. </think> (Waiting for your next message.)",
+                },
+            )
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "id": "openhands-event-finish",
+                    "type": "openhands_event",
+                    "created_at": "2026-06-24T05:22:59Z",
+                    "payload": {
+                        "category": "tool_call",
+                        "tool": "finish",
+                        "arguments_preview": json.dumps({"message": "Use the host runtime for this project."}),
+                    },
+                },
+            )
+
+            persisted = _agent_session_by_id(state, session["id"])
+
+        contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
+        self.assertIn("Use the host runtime for this project.", contents)
+        self.assertFalse(any("Waiting for your next message" in content for content in contents))
 
     def test_ui_agent_events_hide_internal_context_packet_previews(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -3410,12 +4277,145 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(synced["status"], "idle")
         self.assertTrue(any(message["content"] == "Late OpenHands answer." for message in messages_after_sync))
 
+    def test_ui_agent_session_cancel_interrupts_and_ignores_late_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Cancel OpenHands"})
+
+            class CancellingAdapter:
+                def status(self) -> JsonDict:
+                    return {"runtime": "openhands", "dispatch": "openhands_http", "available_tools": []}
+
+                def context_packet(self, **kwargs: object) -> JsonDict:
+                    return dict(kwargs)
+
+                def dispatch_message(self, **kwargs: object) -> JsonDict:
+                    return {
+                        "status": "running",
+                        "dispatch": "openhands_http",
+                        "conversation_id": "slow-conversation",
+                        "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                        "events": [{"type": "openhands_dispatch_started", "payload": {"conversation_id": "slow-conversation"}}],
+                    }
+
+                def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                    _cancel_agent_session(state, session["id"])
+                    return {
+                        "status": "answered",
+                        "conversation_id": conversation_id,
+                        "assistant_message": {"role": "assistant", "title": "OpenHands", "content": "Late answer after cancel."},
+                        "events": [{"type": "openhands_dispatch_completed", "payload": {"conversation_id": conversation_id}}],
+                    }
+
+                def cancel_conversation(self, conversation_id: str) -> JsonDict:
+                    return {"cancelled": True, "action": "interrupt", "conversation_id": conversation_id}
+
+            state.agent_adapter = CancellingAdapter()
+            result = _append_agent_message(
+                state,
+                session["id"],
+                {"role": "user", "title": "User", "content": "Please do a slow task.", "ui_context": {"current_page": "workspace"}},
+            )
+            synced = _sync_agent_session(state, session["id"])
+            messages_after_sync = _read_agent_messages(state, session["id"])
+            events_after_sync = _read_agent_events(state, session["id"])
+
+        self.assertEqual(result["session"]["status"], "waiting_for_agent")
+        self.assertEqual(synced["status"], "idle")
+        self.assertFalse(any(message["content"] == "Late answer after cancel." for message in messages_after_sync))
+        self.assertTrue(any(event["type"] == "openhands_dispatch_cancelled" for event in events_after_sync))
+
+    def test_ui_agent_session_cancel_returns_before_remote_openhands_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Nonblocking cancel"})
+            remote_cancel_started = threading.Event()
+            remote_cancel_release = threading.Event()
+
+            class BlockingCancelAdapter:
+                def status(self) -> JsonDict:
+                    return {"runtime": "openhands", "dispatch": "openhands_http", "available_tools": []}
+
+                def context_packet(self, **kwargs: object) -> JsonDict:
+                    return dict(kwargs)
+
+                def dispatch_message(self, **kwargs: object) -> JsonDict:
+                    return {
+                        "status": "running",
+                        "dispatch": "openhands_http",
+                        "conversation_id": "blocking-conversation",
+                        "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                        "events": [{"type": "openhands_dispatch_started", "payload": {"conversation_id": "blocking-conversation"}}],
+                    }
+
+                def cancel_conversation(self, conversation_id: str) -> JsonDict:
+                    remote_cancel_started.set()
+                    remote_cancel_release.wait(timeout=2)
+                    return {"cancelled": True, "action": "interrupt", "conversation_id": conversation_id}
+
+            state.agent_adapter = BlockingCancelAdapter()
+            dispatched = _append_agent_message(
+                state,
+                session["id"],
+                {"role": "user", "title": "User", "content": "Please do a slow task.", "ui_context": {"current_page": "workspace"}},
+            )
+
+            started_at = time.monotonic()
+            try:
+                cancelled = _cancel_agent_session(state, session["id"])
+                elapsed = time.monotonic() - started_at
+
+                self.assertLess(elapsed, 0.5)
+                self.assertEqual(dispatched["session"]["status"], "waiting_for_agent")
+                self.assertEqual(cancelled["status"], "idle")
+                self.assertEqual(cancelled.get("cancelled_turn_id"), dispatched["session"].get("active_turn_id"))
+                self.assertTrue(remote_cancel_started.wait(timeout=0.5))
+                events = _read_agent_events(state, session["id"])
+                cancel_events = [event for event in events if event["type"] == "openhands_dispatch_cancelled"]
+                self.assertTrue(cancel_events)
+                self.assertTrue(cancel_events[-1]["payload"]["remote_cancel_scheduled"])
+            finally:
+                remote_cancel_release.set()
+
+            for _ in range(20):
+                events = _read_agent_events(state, session["id"])
+                if any(event["type"] == "openhands_cancel_acknowledged" for event in events):
+                    break
+                time.sleep(0.01)
+            self.assertTrue(any(event["type"] == "openhands_cancel_acknowledged" for event in events))
+
     def test_optpilot_assistant_prompt_is_loaded_from_agent_folder(self) -> None:
         prompt = load_assistant_system_prompt()
 
         self.assertIn("OptPilot Assistant", prompt)
         self.assertIn("evaluator.settings", prompt)
         self.assertIn("methodContext.references", prompt)
+
+    def test_packaged_release_assets_mirror_source_docs_and_agent_files(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        docs_root = repo_root / "docs"
+        docs_assets_root = repo_root / "src" / "optpilot" / "docs_assets"
+        source_docs = sorted(path for path in docs_root.glob("*.md") if path.is_file())
+        packaged_docs = sorted(path.name for path in docs_assets_root.glob("*.md"))
+
+        self.assertEqual([path.name for path in source_docs], packaged_docs)
+        for source in source_docs:
+            packaged = docs_assets_root / source.name
+            self.assertEqual(source.read_text(encoding="utf-8"), packaged.read_text(encoding="utf-8"), source.name)
+
+        agent_asset_pairs = [
+            (repo_root / ".agents" / "optpilot-assistant" / "README.md", repo_root / "src" / "optpilot" / "assistant_assets" / "README.md"),
+            (
+                repo_root / ".agents" / "optpilot-assistant" / "prompts" / "system.md",
+                repo_root / "src" / "optpilot" / "assistant_assets" / "prompts" / "system.md",
+            ),
+            (
+                repo_root / ".agents" / "optpilot-assistant" / "implementation" / "bridge.md",
+                repo_root / "src" / "optpilot" / "assistant_assets" / "implementation" / "bridge.md",
+            ),
+        ]
+        for source, packaged in agent_asset_pairs:
+            self.assertEqual(source.read_text(encoding="utf-8"), packaged.read_text(encoding="utf-8"), source.name)
 
     def test_openhands_status_reports_reachable_agent_server(self) -> None:
         class HealthHandler(BaseHTTPRequestHandler):
@@ -3447,6 +4447,46 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(status["dispatch"], "openhands_http")
         self.assertTrue(status["connected"])
+
+    def test_openhands_cancel_conversation_uses_interrupt_endpoint(self) -> None:
+        calls: List[str] = []
+
+        class CancelHandler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def do_POST(self):  # noqa: N802
+                calls.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{\"success\":true}")
+
+            def log_message(self, format, *args):  # noqa: A002
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), CancelHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            adapter = OpenHandsAdapter(
+                OpenHandsRuntimeConfig(
+                    enabled=True,
+                    base_url=f"http://127.0.0.1:{server.server_port}",
+                    session_endpoint="/api/conversations",
+                    model="gpt-test",
+                    api_key="sk-test",
+                )
+            )
+            result = adapter.cancel_conversation("12345678-1234-5678-1234-567812345678")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(result["action"], "interrupt")
+        self.assertEqual(calls, ["/api/conversations/12345678-1234-5678-1234-567812345678/interrupt"])
 
     def test_ui_agent_settings_store_openhands_config_without_echoing_key(self) -> None:
         with patch.dict(
@@ -3527,6 +4567,71 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(result["status"]["mode"], "missing API key")
         self.assertEqual(stored["assistant"]["openhands"]["api_key"], "")
 
+    def test_ui_agent_settings_persist_openhands_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Capabilities"})
+
+            result = _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    "capabilities": {
+                        "skills": [
+                            {
+                                "name": "connect-github-integration",
+                                "source": ".agents/skills/connect-github-integration",
+                                "triggers": ["github", "integration"],
+                                "enabled": True,
+                            }
+                        ],
+                        "mcp_servers": [
+                            {"name": "Notion", "url": "https://mcp.notion.com/mcp", "auth": "oauth"}
+                        ],
+                        "mcp_filter_regex": "^(notion|optpilot)_",
+                        "custom_tools": [
+                            {
+                                "name": "grep",
+                                "module": "optpilot.tools.grep",
+                                "factory": "GrepTool",
+                                "tool_name": "grep",
+                                "approval_required": True,
+                            }
+                        ],
+                    },
+                    "permissions": {
+                        "file_write": "approval_required",
+                        "shell_run": "disabled",
+                        "catalog_registration": "approval_required",
+                        "study_launch": "approval_required",
+                        "job_stop": "approval_required",
+                    },
+                },
+            )
+            list_result = _execute_agent_tool(state, session["id"], "optpilot_capability_list", {})
+            detail_result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_capability_detail",
+                {"capability_kind": "custom_tool", "id": "grep"},
+            )
+            context = _agent_context_packet(state, session, {"current_page": "workspace"})
+            stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
+
+        assistant = result["settings"]["assistant"]
+        self.assertEqual(assistant["capabilities"]["skills"][0]["source"], ".agents/skills/connect-github-integration")
+        self.assertEqual(assistant["capabilities"]["mcp_servers"][0]["url"], "https://mcp.notion.com/mcp")
+        self.assertEqual(assistant["capabilities"]["mcp_filter_regex"], "^(notion|optpilot)_")
+        self.assertEqual(assistant["capabilities"]["custom_tools"][0]["factory"], "GrepTool")
+        self.assertEqual(assistant["permissions"]["shell_run"], "disabled")
+        self.assertTrue(list_result["ok"])
+        self.assertIn("custom_tools", list_result["data"]["capabilities"])
+        self.assertEqual(detail_result["data"]["capability"]["module"], "optpilot.tools.grep")
+        self.assertEqual(context["assistant_capabilities"]["counts"]["skills"]["enabled"], 1)
+        self.assertEqual(context["assistant_capabilities"]["permissions"]["file_write"], "approval_required")
+        self.assertEqual(stored["assistant"]["capabilities"]["custom_tools"][0]["tool_name"], "grep")
+
     def test_ui_code_server_detects_standalone_install_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -3539,6 +4644,18 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(detected.resolve(), executable.resolve())
         self.assertEqual(Path(state.code_server.options.executable or "").resolve(), executable.resolve())
+
+    def test_ui_workspace_runtime_defaults_to_packaged_dev_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            status = state.workspace_runtime.global_status()
+
+        self.assertEqual(status["image"], "optpilot/workspace-dev:latest")
+        self.assertTrue(status["build_image"])
+        self.assertTrue(status["dockerfile"].endswith("workspace_runtime/Dockerfile"))
+        self.assertEqual(status["runtime"]["cpu_limit"], "2")
+        self.assertEqual(status["runtime"]["memory_limit"], "4g")
+        self.assertEqual(status["runtime"]["pids_limit"], 1024)
 
     def test_ui_code_server_status_rejects_non_code_server_port_conflict(self) -> None:
         class FakeOptPilotHandler(BaseHTTPRequestHandler):
@@ -3562,7 +4679,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     cwd=tmp_path,
                     catalog_roots=[],
                     run_roots=[],
-                    code_server=CodeServerOptions(executable="/bin/echo", host="127.0.0.1", port=port),
+                    workspace_runtime=WorkspaceRuntimeOptions(port_start=port),
                 )
                 status = state.code_server_status()
             finally:
@@ -3571,6 +4688,239 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertFalse(status["running"])
         self.assertTrue(status["port_conflict"])
+
+    def test_ui_code_server_starts_inside_workspace_container_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19100,
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Runtime workspace", "root": str(tmp_path / "runtime-ws")})
+
+            result = state.start_code_server(Path(workspace["root"]))
+            settings = json.loads((Path(result["user_data_dir"]) / "User" / "settings.json").read_text(encoding="utf-8"))
+            calls = _fake_workspace_container_calls(tmp_path)
+
+        self.assertTrue(result["managed"], result)
+        self.assertTrue(result["containerized"], result)
+        self.assertEqual(result["workspace_id"], workspace["id"])
+        self.assertEqual(result["runtime"]["executor"], "container")
+        self.assertIn("?folder=", result["open_url"])
+        self.assertTrue(result["layout_persistent"], result)
+        self.assertIn(workspace["id"], result["user_data_dir"])
+        self.assertEqual(settings["window.menuBarVisibility"], "classic")
+        self.assertEqual(settings["workbench.activityBar.location"], "hidden")
+        self.assertEqual(settings["workbench.panel.defaultLocation"], "bottom")
+        self.assertFalse(settings["workbench.statusBar.visible"])
+        self.assertTrue(any(call and call[0] == "run" and "fake-code-server:latest" in call for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "run" and any(item.endswith(":rw") for item in call) for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "run" and "--cpus" in call and "2" in call for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "run" and "--memory" in call and "4g" in call for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "run" and "--pids-limit" in call and "1024" in call for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "run" and "no-new-privileges" in call for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "exec" and "code-server" in " ".join(call) for call in calls), calls)
+        self.assertTrue(any(call and call[0] == "exec" and "--user-data-dir" in " ".join(call) for call in calls), calls)
+
+    def test_ui_code_server_stop_does_not_stop_workspace_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19120,
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Runtime workspace", "root": str(tmp_path / "runtime-ws")})
+
+            state.start_code_server(Path(workspace["root"]))
+            calls_after_start = _fake_workspace_container_calls(tmp_path)
+            state.stop_code_server()
+            calls = _fake_workspace_container_calls(tmp_path)
+
+        new_calls = calls[len(calls_after_start):]
+        self.assertFalse(any(call and call[0] == "rm" for call in new_calls), calls)
+
+    def test_ui_workspace_preview_uses_workspace_code_server_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19130,
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Preview workspace", "root": str(tmp_path / "preview-ws")})
+
+            result = state.workspace_preview_open(Path(workspace["root"]), 5173, extra_ports=[8000])
+            calls = _fake_workspace_container_calls(tmp_path)
+
+        self.assertEqual(result["workspace_id"], workspace["id"])
+        self.assertEqual(result["port"], 5173)
+        self.assertEqual(result["proxy"], "studio")
+        preview_url = urlparse(result["preview_url"])
+        self.assertEqual(preview_url.scheme, "http")
+        self.assertEqual(preview_url.hostname, "127.0.0.1")
+        self.assertIn("__optpilot_preview_token", parse_qs(preview_url.query))
+        self.assertIn("/proxy/5173/", result["proxy_target"])
+        self.assertEqual(result["allowed_ports"], [5173, 8000])
+        self.assertTrue(result["code_server"]["layout_persistent"])
+        self.assertTrue(any(call and call[0] == "exec" and "code-server" in " ".join(call) for call in calls), calls)
+
+    def test_ui_agent_tool_opens_workspace_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19160,
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Agent preview workspace", "root": str(tmp_path / "agent-preview-ws")})
+            session = _create_agent_session(state, {"title": "Preview agent"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_workspace_preview_open",
+                {"workspace_id": workspace["id"], "port": 3000, "extra_ports": [8000]},
+            )
+            calls = _fake_workspace_container_calls(tmp_path)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["tool"], "optpilot_workspace_preview_open")
+        self.assertEqual(result["data"]["workspace_id"], workspace["id"])
+        self.assertEqual(result["data"]["port"], 3000)
+        preview_url = urlparse(result["data"]["preview_url"])
+        self.assertEqual(preview_url.scheme, "http")
+        self.assertIn("__optpilot_preview_token", parse_qs(preview_url.query))
+        self.assertIn("/proxy/3000/", result["data"]["proxy_target"])
+        self.assertEqual(result["data"]["allowed_ports"], [3000, 8000])
+        self.assertTrue(any(call and call[0] == "exec" and "code-server" in " ".join(call) for call in calls), calls)
+
+    def test_workspace_runtime_rejects_images_outside_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="untrusted/workspace:latest",
+                    image_allowlist_patterns=["trusted/*"],
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Policy workspace", "root": str(tmp_path / "policy-ws")})
+
+            with self.assertRaisesRegex(RuntimeError, "not allowed"):
+                state.workspace_runtime.start(workspace)
+            health = state.workspace_runtime.health()
+
+        self.assertFalse(health["ok"])
+        self.assertIn("not allowed", health["error"])
+
+    def test_workspace_runtime_garbage_collects_idle_container(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    idle_timeout_seconds=1,
+                    port_start=19110,
+                ),
+            )
+            workspace = _create_ui_workspace(state, {"title": "Idle workspace", "root": str(tmp_path / "idle-ws")})
+            state.workspace_runtime.start(workspace)
+            record = state.workspace_runtime._read_record(workspace["id"])
+            record["last_used_at"] = "2000-01-01T00:00:00Z"
+            state.workspace_runtime._write_record(workspace["id"], record)
+
+            result = state.workspace_runtime.garbage_collect([workspace])
+            calls = _fake_workspace_container_calls(tmp_path)
+            record = state.workspace_runtime._read_record(workspace["id"])
+
+        self.assertEqual(len(result["stopped"]), 1, result)
+        self.assertTrue(any(call and call[0] == "rm" and "-f" in call for call in calls), calls)
+        self.assertEqual(record["status"], "stopped")
+        self.assertTrue(record["idle_stopped"])
+
+    def test_ui_workspace_runtime_marks_old_image_container_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            options = WorkspaceRuntimeOptions(
+                executable=str(fake_container),
+                image="old-runtime:latest",
+                port_start=19120,
+            )
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=options,
+            )
+            workspace = _create_ui_workspace(state, {"title": "Stale runtime", "root": str(tmp_path / "runtime-ws")})
+
+            state.workspace_runtime.start(workspace)
+            state.workspace_runtime.options.image = "new-runtime:latest"
+            status = state.workspace_runtime.status(workspace)
+
+        self.assertEqual(status["status"], "stale")
+        self.assertFalse(status["image_matches"])
+        self.assertEqual(status["current_image"], "old-runtime:latest")
+
+    def test_ui_workspace_runtime_reserves_ports_across_workspace_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19140,
+                ),
+            )
+            first = _create_ui_workspace(state, {"title": "First", "root": str(tmp_path / "first")})
+            second = _create_ui_workspace(state, {"title": "Second", "root": str(tmp_path / "second")})
+
+            first_status = state.workspace_runtime.start(first)
+            second_status = state.workspace_runtime.start(second)
+
+        self.assertEqual(first_status["port"], 19140)
+        self.assertEqual(second_status["port"], 19141)
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -3608,12 +4958,167 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(runs[0]["best_metric"], 10.0)
             self.assertEqual(runs[0]["status"], "completed")
 
+    def test_ui_agent_run_tools_return_compact_evidence_payloads(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        study_spec = load_study_spec(str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            store = LocalEvidenceStore(tmp_path, "assistant-run")
+            store.write_spec(study_spec.raw)
+            trial_workspace = store.create_trial_workspace("trial-ok")
+            metrics_file = trial_workspace / "metrics.json"
+            metrics_file.write_text(json.dumps({"throughput": 10.0}), encoding="utf-8")
+            store.record_candidate(
+                {
+                    "candidate_id": "candidate-ok",
+                    "method_id": "toy-random-search",
+                    "format": "parameters",
+                    "status": "success",
+                }
+            )
+            store.record_trial(
+                {
+                    "trial_id": "trial-ok",
+                    "candidate_id": "candidate-ok",
+                    "status": "success",
+                    "method_id": "toy-random-search",
+                }
+            )
+            store.record_observation(
+                {
+                    "trial_id": "trial-ok",
+                    "candidate_id": "candidate-ok",
+                    "status": "success",
+                    "metric_values": {"throughput": 10.0},
+                    "output_files": [{"name": "metrics", "path": str(metrics_file), "type": "json"}],
+                }
+            )
+            store.write_summary(
+                {
+                    "study_id": "study-ui",
+                    "run_dir": str(store.run_dir),
+                    "completed_trials": 1,
+                    "best_metric": 10.0,
+                    "best_trial_id": "trial-ok",
+                    "best_candidate_id": "candidate-ok",
+                    "failure_count": 0,
+                }
+            )
+            state = UiState(cwd=tmp_path, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[tmp_path])
+            session = _create_agent_session(state, {"title": "Run tools"})
+
+            detail = _execute_agent_tool(state, session["id"], "optpilot_run_detail", {"path": str(store.run_dir)})
+            read = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_run_file_read",
+                {"run_id": str(store.run_dir), "path": "observations.jsonl"},
+            )
+            missing = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_run_file_read",
+                {"run_id": str(store.run_dir), "path": "run_summary.json"},
+            )
+
+        self.assertTrue(detail["ok"], detail)
+        self.assertEqual(detail["data"]["summary"]["completed_trials"], 1)
+        self.assertEqual(detail["data"]["summary"]["failure_count"], 0)
+        self.assertEqual(detail["data"]["best"]["candidate_id"], "candidate-ok")
+        self.assertEqual(detail["data"]["observations"]["metric_keys"], ["throughput"])
+        evidence_paths = {item["relative_path"] for item in detail["data"]["evidence_files"]}
+        self.assertIn("summary.json", evidence_paths)
+        self.assertIn("observations.jsonl", evidence_paths)
+        self.assertIn("trials/trial-ok/metrics.json", evidence_paths)
+        self.assertNotIn("study_spec", detail["data"])
+        self.assertTrue(read["ok"], read)
+        self.assertIn('"metric_values"', read["data"]["content"])
+        self.assertFalse(missing["ok"], missing)
+        self.assertIn("summary.json", missing["data"]["suggested_paths"])
+        self.assertTrue(missing["data"]["available_files"])
+
+    def test_ui_agent_run_workspaces_use_unique_ids_and_auto_attach(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        study_spec = load_study_spec(str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            first_store = LocalEvidenceStore(tmp_path, "first-run")
+            second_store = LocalEvidenceStore(tmp_path, "second-run")
+            for store, candidate_id in ((first_store, "candidate-a"), (second_store, "candidate-b")):
+                store.write_spec(study_spec.raw)
+                store.record_observation(
+                    {
+                        "trial_id": f"trial-{candidate_id}",
+                        "candidate_id": candidate_id,
+                        "status": "success",
+                        "metric_values": {"throughput": 1.0},
+                    }
+                )
+                store.write_summary({"completed_trials": 1, "best_metric": 1.0, "best_candidate_id": candidate_id, "failure_count": 0})
+            state = UiState(cwd=tmp_path, catalog_roots=[repo_root / "tests" / "fixtures" / "catalog"], run_roots=[tmp_path])
+            session = _create_agent_session(state, {"title": "Run workspaces"})
+
+            first = _execute_agent_tool(state, session["id"], "optpilot_run_open_workspace", {"path": str(first_store.run_dir)})
+            second = _execute_agent_tool(state, session["id"], "optpilot_run_open_workspace", {"path": str(second_store.run_dir)})
+
+        self.assertTrue(first["ok"], first)
+        self.assertTrue(second["ok"], second)
+        first_id = first["data"]["workspace"]["id"]
+        second_id = second["data"]["workspace"]["id"]
+        self.assertNotEqual(first_id, second_id)
+        self.assertIn(first_id, second["data"]["session"]["attached_workspace_ids"])
+        self.assertIn(second_id, second["data"]["session"]["attached_workspace_ids"])
+
     def test_cli_parser_accepts_ui_command(self) -> None:
-        args = build_parser().parse_args(["ui", "--port", "9001", "--catalog", "examples"])
+        args = build_parser().parse_args(
+            [
+                "ui",
+                "--port",
+                "9001",
+                "--catalog",
+                "examples",
+                "--workspace-runtime-bin",
+                "podman",
+                "--workspace-runtime-image",
+                "custom/workspace:latest",
+                "--workspace-runtime-network",
+                "bridge",
+                "--workspace-runtime-port-start",
+                "19000",
+            ]
+        )
 
         self.assertEqual(args.command, "ui")
         self.assertEqual(args.port, 9001)
         self.assertEqual(args.catalog, ["examples"])
+        self.assertEqual(args.workspace_runtime_bin, "podman")
+        self.assertEqual(args.workspace_runtime_image, "custom/workspace:latest")
+        self.assertEqual(args.workspace_runtime_network, "bridge")
+        self.assertEqual(args.workspace_runtime_port_start, 19000)
+
+    def test_cli_ui_forwards_workspace_runtime_options(self) -> None:
+        with patch("optpilot.cli.run_ui") as run_ui_mock:
+            exit_code = cli_main(
+                [
+                    "ui",
+                    "--workspace-runtime-bin",
+                    "podman",
+                    "--workspace-runtime-image",
+                    "custom/workspace:latest",
+                    "--workspace-runtime-network",
+                    "bridge",
+                    "--workspace-runtime-port-start",
+                    "19000",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        run_ui_mock.assert_called_once()
+        kwargs = run_ui_mock.call_args.kwargs
+        self.assertEqual(kwargs["workspace_runtime_executable"], "podman")
+        self.assertEqual(kwargs["workspace_runtime_image"], "custom/workspace:latest")
+        self.assertEqual(kwargs["workspace_runtime_network"], "bridge")
+        self.assertEqual(kwargs["workspace_runtime_port_start"], 19000)
 
     @staticmethod
     def _read_jsonl(path: Path):

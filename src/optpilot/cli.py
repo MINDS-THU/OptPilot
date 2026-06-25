@@ -67,6 +67,10 @@ def main(argv=None) -> int:
             code_server_port=args.code_server_port,
             code_server_auth=args.code_server_auth,
             code_server_password=args.code_server_password,
+            workspace_runtime_executable=args.workspace_runtime_bin,
+            workspace_runtime_image=args.workspace_runtime_image,
+            workspace_runtime_network=args.workspace_runtime_network,
+            workspace_runtime_port_start=args.workspace_runtime_port_start,
             open_browser=args.open_browser,
         )
         return 0

@@ -1,0 +1,43 @@
+{
+  "state_checks": [
+    {
+      "time": 28800.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1,
+      "description": "T=0: 顾客到达，占用Reception"
+    },
+    {
+      "time": 28805.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 0,
+      "description": "T=5: 处理完成并成功移交，Reception立即释放"
+    }
+  ],
+  "message_checks": [
+    {
+      "time": 28805.0,
+      "model": "reception",
+      "port": "cust",
+      "content": "newcust",
+      "description": "Reception输出顾客给Checkhair"
+    }
+  ],
+  "timing_checks": [
+    {
+      "event": "customer_received",
+      "time": 28800.0
+    },
+    {
+      "event": "customer_sent",
+      "time": 28805.0,
+      "delay_from_previous": 5.0
+    }
+  ],
+  "summary_checks": {
+    "total_customers_received": 1,
+    "total_customers_processed_reception": 1,
+    "processing_duration": 32.0
+  }
+}

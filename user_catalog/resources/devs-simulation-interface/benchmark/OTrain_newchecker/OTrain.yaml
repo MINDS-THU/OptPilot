@@ -1,0 +1,141 @@
+root_model_name: OTrain
+requirements: 
+    general: |
+        ### General Implementation Requirements
+        1. Language & Environment:
+        - Target Language: Python 3.10+
+        - Standard Libraries: `argparse`, `sys`, `json`, `logging`, `collections`, `random`, `simpy`, `xdevs`.
+
+        2. Input Interface (Arguments):
+        - **CLI Arguments:** You MUST use the `argparse` library to handle configuration parameters.
+        - **Data Stream:** If dynamic input is required, read from `sys.stdin` line-by-line.
+
+        3. Output Interface:
+        - Stream 1: Final State (sys.stdout)
+            - You MUST print ONLY JSONL objects containing the required events.
+            - Schema: The objects MUST follow the structure described later. 
+            - Example: `print(json.dumps({...}))`
+        - Stream 2: Debug/Log data (sys.stderr)
+            - Print any other information (debug, progress, warnings) to Standard Error.
+        
+        4. Entry point: executable via `python run.py`
+
+        Do not use real time, use simulation time, and guarantee the simulation ends in 10 seconds in real time. 
+
+        Use system time to set the seed for random number generation (e.g. `import random, time, numpy`, `random.seed(time.time_ns())`, `numpy.random.seed(time.time_ns() % (2**32 - 1))`).
+
+    scenario: |
+        ### Scenario: O-Train Light Rail Simulation
+
+        #### 1. System Overview
+        Simulate the Ottawa O-Train light rail system consisting of a single train shuttling passengers between 5 fixed stations. The system is event-driven and stochastic, modeling train movement, passenger generation, FIFO queuing, and serial boarding/alighting processes.
+
+        **Station Configuration:**
+        * **IDs & Names:** 1=Bayview, 2=Carling, 3=Carleton, 4=Confed, 5=Greenboro.
+        * **Route:** Bidirectional single-track logic.
+        * **Directions:** 0=Southbound (Bayview→Greenboro), 1=Northbound (Greenboro→Bayview).
+
+        #### 2. System Logic & Component Behavior
+
+        **A. Train Operations (Scheduler)**
+        * **Role:** Controls the movement of the single train across the network.
+        * **Route Sequence:** Bayview(1, dir=0) → Carling(2, 0) → Carleton(3, 0) → Confed(4, 0) → Greenboro(5, 1) → Confed(4, 1) → Carleton(3, 1) → Carling(2, 1) → Bayview(1, 0) ... (Repeating).
+        * **Timing:**
+            * **Initial Arrival:** t=0.0 at Bayview (Station 1, Direction 0).
+            * **Travel Interval:** Exactly 225 seconds between consecutive stations.
+        * **Events:** Generates a `train_arrival` event at every stop.
+
+        **B. Passenger Generation**
+        * **Role:** Creates passengers at each of the 5 stations.
+        * **Initialization:** At t=0.5 seconds, a special "initialization passenger" (ID=0) is generated at every station.
+        * **Generation Logic:**
+            * Interval: Randomized using a Normal Distribution (Mean=5.0 min, Std=5.0 min).
+            * Constraint: Intervals are clamped to the range [1, 9] minutes, then converted to seconds and rounded to the nearest integer seconds.
+            * Destination: Uniformly selected from the other 4 stations (cannot be the same as origin).
+        * **Passenger Identity (Encoding):**
+            * Formula: `passenger_id = passenger_num * 100 + origin * 10 + destination`
+            * *Example:* ID 132 = 1st passenger, Origin 3 (Carleton), Destination 2 (Carling).
+            * *Exception:* The initial passenger at t=0.5 has `passenger_id=0`.
+        * **Events:** Generates a `passenger_generated` event upon creation.
+
+        **C. Station Boarding Logic (Station Queues)**
+        * **Role:** Manages passengers waiting at a station to board the train.
+        * **Queue Discipline:** Strictly FIFO (First-In-First-Out).
+        * **Validation:** Passengers only join the queue if their encoded origin matches the station and destination is different.
+        * **Boarding Process:**
+            1.  Triggered by `train_arrival` at the station.
+            2.  Passengers board one by one.
+            3.  Delay: The first passenger boards 0.025s after train arrival. Subsequent passengers board 0.025s after the previous one (serial processing).
+        * **Events:** Generates a `passenger_boarding` event for each successful board.
+
+        **D. In-Train Alighting Logic**
+        * **Role:** Manages passengers currently on the train and handles their exit at specific destinations.
+        * **Organization:** Passengers are logically grouped by their destination station.
+        * **Alighting Process:**
+            1.  Triggered by `train_arrival` at a specific station.
+            2.  Passengers destined for this station alight one by one.
+            3.  **Delay:** The first passenger alights 0.025s after train arrival. Subsequent passengers alight 0.025s after the previous one.
+        * **Events:** Generates a `passenger_exiting` event for each passenger leaving the train.
+
+    args_input_output: |
+        ### Arguments & Input/Output Specifications
+
+        #### 1. Command Line Arguments
+        The script must be executable via `python run.py` and accept:
+        * `--simulate_time` (str): Simulation duration in "HH:MM:SS:mmm". Default: "00:01:00:000".
+
+        #### 2. Standard Output (Stream 1)
+        * **Format:** JSONL (one JSON object per line).
+        * **Content:** Must contain the simulation events described below. More events are allowed but not encouraged. 
+
+        #### 3. Event JSON Schemas
+        
+        **Global Field Definitions (Common to All Events)**
+        Every JSON event object MUST contain these top-level fields:
+
+        | Field | Type | Description / Constraints |
+        | :--- | :--- | :--- |
+        | `time` | `float` | Simulation timestamp in seconds. Non-negative. Precision up to milliseconds. |
+        | `event` | `string` | The event type identifier. Must be one of: `passenger_generated`, `train_arrival`, `passenger_boarding`, `passenger_exiting`. |
+        | `entity_type` | `string` | The class of the object generating the event. See specific events for allowed values. |
+        | `station_id` | `int` | ID of the station where the event occurs. **Range: 1 to 5**. |
+        | `station` | `string` | Name of the station. Must match `station_id`: 1="Bayview", 2="Carling", 3="Carleton", 4="Confed", 5="Greenboro". |
+        | `payload` | `object` | Event-specific data dictionary. |
+
+        ---
+
+        **Event A: Passenger Generation**
+        Triggered when a new passenger arrives at a station.
+        * **`event`**: `"passenger_generated"`
+        * **`entity_type`**: `"passenger_generator"`
+        * **`payload`**:
+            * `passenger_id` (int): Unique ID. Formula: `num*100 + origin*10 + dest`. Exception: Initial passengers at t=0.5 have ID `0`.
+            * `passenger_num` (int): Sequential counter (0 for initial, >=1 for others).
+            * `origin` (int): Station ID (1-5). Must match the top-level `station_id`.
+            * `destination` (int): Station ID (1-5). **Constraint:** `destination != origin`.
+
+        **Event B: Train Arrival**
+        Triggered when the train arrives at a station.
+        * **`event`**: `"train_arrival"`
+        * **`entity_type`**: `"train"`
+        * **`payload`**:
+            * `station` (int): Station ID (1-5). Must match top-level `station_id`.
+            * `direction` (int): `0` for Southbound (Bayview→Greenboro), `1` for Northbound (Greenboro→Bayview).
+
+        **Event C: Passenger Boarding**
+        Triggered when a passenger moves from the station queue onto the train.
+        * **`event`**: `"passenger_boarding"`
+        * **`entity_type`**: `"station_queue"`
+        * **`payload`**:
+            * Same schema as Passenger Generation.
+
+        **Event D: Passenger Exiting**
+        Triggered when a passenger alights from the train at their destination.
+        * **`event`**: `"passenger_exiting"`
+        * **`entity_type`**: `"train_queue"`
+        * **`payload`**:
+            * Same schema as Passenger Generation.
+
+base_folder: otrain_model
+skip_simulation_check: false
+only_ensure_executable: false

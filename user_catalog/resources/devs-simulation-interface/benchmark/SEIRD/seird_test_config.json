@@ -1,0 +1,282 @@
+[
+    {
+        "name": "L0_Zero_All",
+        "description": "Basic stability test with all zero inputs",
+        "checker_args": {
+            "test_name": "L0_Zero_All"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L0_Zero_All",
+                    "--mortality": 0.0,
+                    "--infectivity_period": 1.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 1.0,
+                    "--total_population": 0,
+                    "--initial_infective": 0,
+                    "--transmission_rate": 0.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 0,
+                    "mortality": 0,
+                    "initial_infective": 0,
+                    "transmission_rate": 0,
+                    "expected_s": 0.0,
+                    "expected_e": 0.0,
+                    "expected_i": 0.0,
+                    "expected_r": 0.0,
+                    "expected_d": 0.0
+                },
+                "checker_extra_file": "./expected_outputs/L0_Zero_All.json"
+            }
+        ]
+    },
+    {
+        "name": "L1_High_Mortality",
+        "description": "Test Infective->Deceased/Recovered with 50% mortality rate",
+        "checker_args": {
+            "--test_name": "L1_High_Mortality"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L1_High_Mortality",
+                    "--mortality": 50.0,
+                    "--infectivity_period": 14.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 10000,
+                    "--initial_infective": 1000,
+                    "--transmission_rate": 0.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 10000,
+                    "mortality": 50.0,
+                    "initial_infective": 1000,
+                    "transmission_rate": 0.0,
+                    "expected_s": 9000.0,
+                    "expected_e": 0.0,
+                    "expected_i": 489.77,
+                    "expected_r": 255.12,
+                    "expected_d": 255.12
+                },
+                "checker_extra_file": "./expected_outputs/L1_High_Mortality.json"
+            }
+        ]
+    },
+    {
+        "name": "L1_Low_Mortality",
+        "description": "Test Infective->Deceased/Recovered with 1% mortality rate",
+        "checker_args": {
+            "--test_name": "L1_Low_Mortality"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L1_Low_Mortality",
+                    "--mortality": 1.0,
+                    "--infectivity_period": 14.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 10000,
+                    "--initial_infective": 500,
+                    "--transmission_rate": 0.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 10000,
+                    "mortality": 1.0,
+                    "initial_infective": 500,
+                    "transmission_rate": 0.0,
+                    "expected_s": 9500.0,
+                    "expected_e": 0.0,
+                    "expected_i": 244.89,
+                    "expected_r": 252.57,
+                    "expected_d": 2.55
+                },
+                "checker_extra_file": "./expected_outputs/L1_Low_Mortality.json"
+            }
+        ]
+    },
+    {
+        "name": "L1_Short_Infectivity",
+        "description": "Test faster recovery with short infectivity period (7 days)",
+        "checker_args": {
+            "test_name": "L1_Short_Infectivity"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L1_Short_Infectivity",
+                    "--mortality": 10.0,
+                    "--infectivity_period": 7.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 10000,
+                    "--initial_infective": 2000,
+                    "--transmission_rate": 0.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 10000,
+                    "mortality": 10.0,
+                    "initial_infective": 2000,
+                    "transmission_rate": 0.0,
+                    "expected_s": 8000.0,
+                    "expected_e": 0.0,
+                    "expected_i": 479.74,
+                    "expected_r": 1368.25,
+                    "expected_d": 152.02
+                },
+                "checker_extra_file": "./expected_outputs/L1_Short_Infectivity.json"
+            }
+        ]
+    },
+    {
+        "name": "L1_Long_Infectivity",
+        "description": "Test slower recovery with long infectivity period (21 days)",
+        "checker_args": {
+            "test_name": "L1_Long_Infectivity"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L1_Long_Infectivity",
+                    "--mortality": 10.0,
+                    "--infectivity_period": 21.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 10000,
+                    "--initial_infective": 100,
+                    "--transmission_rate": 0.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 10000,
+                    "mortality": 10.0,
+                    "initial_infective": 100,
+                    "transmission_rate": 0.0,
+                    "expected_s": 9900.0,
+                    "expected_e": 0.0,
+                    "expected_i": 62.14,
+                    "expected_r": 34.08,
+                    "expected_d": 3.79
+                },
+                "checker_extra_file": "./expected_outputs/L1_Long_Infectivity.json"
+            }
+        ]
+    },
+    {
+        "name": "L2_Small_Epidemic",
+        "description": "Full SEIRD cycle test with moderate transmission rate",
+        "checker_args": {
+            "test_name": "L2_Small_Epidemic"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L2_Small_Epidemic",
+                    "--mortality": 5.0,
+                    "--infectivity_period": 14.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 1000,
+                    "--initial_infective": 10,
+                    "--transmission_rate": 2.5,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 1000,
+                    "mortality": 5.0,
+                    "initial_infective": 10,
+                    "transmission_rate": 2.5,
+                    "expected_s": 34.57,
+                    "expected_e": 454.02,
+                    "expected_i": 415.63,
+                    "expected_r": 91.05,
+                    "expected_d": 4.79
+                },
+                "checker_extra_file": "./expected_outputs/L2_Small_Epidemic.json"
+            }
+        ]
+    },
+    {
+        "name": "L2_High_Transmission",
+        "description": "Full SEIRD cycle with high transmission rate (5.0)",
+        "checker_args": {
+            "test_name": "L2_High_Transmission"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L2_High_Transmission",
+                    "--mortality": 5.0,
+                    "--infectivity_period": 14.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 1000,
+                    "--initial_infective": 5,
+                    "--transmission_rate": 5.0,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 1000,
+                    "mortality": 5.0,
+                    "initial_infective": 5,
+                    "transmission_rate": 5.0,
+                    "expected_s": 0.05,
+                    "expected_e": 343.10,
+                    "expected_i": 515.52,
+                    "expected_r": 134.20,
+                    "expected_d": 7.06
+                },
+                "checker_extra_file": "./expected_outputs/L2_High_Transmission.json"
+            }
+        ]
+    },
+    {
+        "name": "L2_High_Mortality",
+        "description": "Full SEIRD cycle with high mortality rate (20%)",
+        "checker_args": {
+            "test_name": "L2_High_Mortality"
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--test_name": "L2_High_Mortality",
+                    "--mortality": 20.0,
+                    "--infectivity_period": 14.0,
+                    "--dt": 0.01,
+                    "--incubation_period": 5.0,
+                    "--total_population": 1000,
+                    "--initial_infective": 10,
+                    "--transmission_rate": 2.5,
+                    "--simulation_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "total_population": 1000,
+                    "mortality": 20.0,
+                    "initial_infective": 10,
+                    "transmission_rate": 2.5,
+                    "expected_s": 34.57,
+                    "expected_e": 454.02,
+                    "expected_i": 415.63,
+                    "expected_r": 76.67,
+                    "expected_d": 19.17
+                },
+                "checker_extra_file": "./expected_outputs/L2_High_Mortality.json"
+            }
+        ]
+    }
+]

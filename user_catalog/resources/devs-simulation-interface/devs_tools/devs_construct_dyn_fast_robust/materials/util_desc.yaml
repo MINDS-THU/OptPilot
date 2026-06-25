@@ -1,0 +1,65 @@
+distributions: |
+  - distributions: We implemented a set of distribution classes to handle random **number** generation. 
+    - Key Feature: All distribution objects inherit from Python's built-in dict. This means they can be passed directly to the logger's data argument to automatically record model configuration in a readable JSON format without manual conversion.
+    - Usage:
+      - Import: `from devs_project.devs_utils.distributions import Distribution, NormalDist, UniformDist, ...`
+      - Instantiate: `dist = NormalDist(mu=10.0, sigma=2.0)`
+      - Sample: `val = dist.sample()`
+      - You can use it in log like this: `self.logger.info(\"Model Setup\", data={\"gen_strategy\": self.dist})`
+      - `Distribution` is only an abstract type, when Instantiate, you should use the subclass like `NormalDist`, `UniformDist`, etc.
+    - **API Reference (Strictly follow these signatures):**
+      - `class Fixed(value: float)`: Always returns `value`.
+      - `class UniformDist(min_val: float, max_val: float)`: Continuous uniform [min, max].
+      - `class NormalDist(mu: float, sigma: float)`: Gaussian distribution.
+      - `class LogNormalDist(mu: float, sigma: float)`: Log-normal.
+      - `class ExponentialDist(lambd: float)`: Exp distribution. **Note: lambd = 1/mean**.
+      - `class PoissonDist(mu: float)`: Poisson (discrete).
+      - `class ChiSquaredDist(df: int)`: Chi-squared with degrees of freedom.
+      - `class StudentTDist(df: int)`: Student's t-distribution.
+      - `class Shifted(dist: Distribution, offset: float)`: Adds offset to base dist.
+        - Example: `Shifted(dist=ExponentialDist(lambd=0.5), offset=2.0)`
+    - How to Implement New Distributions:
+      - Inherit from the `Distribution` base class.
+      - In `__init__`, call `super().__init__(distribution=\"YourClassName\", param1=val1, ...)` first. This populates the dictionary data for the logger.
+      - Implement the `sample(self)` method to return the random value.
+
+set_global_clock: |
+  A function to set the global clock for the simulation. You should call it before creating any models.
+    - Import: `from devs_project.devs_utils.devs_context import set_global_clock`
+    - Usage: first `clock = SimulationClock()`, then `set_global_clock(clock)`
+
+logger: |
+  we implemented a customized logger to collect log messages in a standard way. All logs should be written using this logger. The usage is as below:
+    - import: `from devs_project.devs_utils.devs_logger import get_sim_logger`
+    - get logger: in the `__init__` method, call `self.logger = get_sim_logger(self)`. and you should make sure the attributes `parent: Coupled | None` and `name: str` are set. 
+    - log: `self.logger.info(<data_dict>, log_type=<log_type>)`, args:
+      - `data_dict`: MUST be a dict. Put any business logic keys here. Be careful not to miss keys.
+      - `log_type: str`: type of log, should be "PROCESS", "RESULT"(only for crucial results), or "ERROR"(only for errors)
+    - The actual log message will be printed to stdout, a flat JSON object containing your keys plus system keys. 
+      - Example: If you log `self.logger.info({"key1": "value1", "key2": "value2"}, log_type="PROCESS")`, The log message output to stdout would be `{"key1": "value1", "key2": "value2", "_log_type": "PROCESS"}`.  
+
+get_current_time: |
+  we implemented a function to get the current simulation time.
+    - import: `from devs_project.devs_utils.devs_context import get_current_time`
+    - get current time: call `get_current_time()`, return the current simulation time as a float. 
+
+injection_tools: |
+  We implemented a reliable injection system to feed external events into a model during simulation. This is the standard way to run scenario-based tests.
+    - Import: `from devs_project.devs_utils.inject import ReliableInjectionSystem`
+    - **Usage Pattern (Wrapper)**:
+      1. **Prepare Events**: Create a list of event dicts. Format: `[{"time": float, "port": str, "payload": any}, ...]`.
+         - Note: `time` is absolute simulation time. `port` must match the input port name of your core model.
+      2. **Instantiate Core**: Create your model instance (Atomic or Coupled) as usual. e.g., `core = MyModel("core", None)`.
+      3. **Wrap**: Create the injection system. `harness = ReliableInjectionSystem(name="harness", parent=None, core_model=core, events=events)`.
+      4. **Run**: Pass the `harness` (NOT the core) to the Coordinator. `sim = Coordinator(harness, clock)`.
+    - **Critical Constraint**: The `core_model` MUST have input ports corresponding to the `port` names specified in your event list.
+
+get_raw_input_content: |
+  A secure utility to read external input data (e.g., simulation scenarios) from Standard Input (Stdin). This is the **ONLY** allowed way to read external data to ensure container compatibility and security.
+    - Import: `from devs_project.devs_utils.inject import get_raw_input_content`
+    - **Prohibited**: Do NOT use built-in `open()` or `import sys` to read files.
+    - **Usage Pattern**:
+      1. **Read**: Call `raw_text = get_raw_input_content()` to get the entire input as a single string.
+      2. **Parse**: You MUST implement a specific parsing function (e.g., `parse_schedule(text)`) to convert this string into Python objects (like a list of event dicts).
+      3. **Use**: Pass the parsed objects to your model or the `ReliableInjectionSystem`.
+    - **Security Note**: When implementing the parsing logic, use `json.loads` or standard string manipulation. **NEVER** use `eval()` or `exec()`.

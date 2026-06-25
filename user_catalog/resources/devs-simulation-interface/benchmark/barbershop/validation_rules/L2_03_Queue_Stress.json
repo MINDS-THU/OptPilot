@@ -1,0 +1,36 @@
+{
+  "state_checks": [
+    {
+      "time": 28808.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 8,
+      "description": "队列达到最大值8"
+    },
+    {
+      "model": "cuthair",
+      "field": "total customer done",
+      "expected": 9,
+      "description": "最终检查：Cuthair 计数器最终停在8"
+    }
+  ],
+  "message_checks": [
+    {
+      "model": "checkhair",
+      "port": "to_reception",
+      "content": "done",
+      "count_at_least": 9,
+      "description": "At least 1 customer completed"
+    }
+  ],
+  "queue_checks": {
+    "max_capacity": 8,
+    "queue_full_triggered": true
+  },
+  "summary_checks": {
+    "total_customers_received": 11,
+    "completed_customers_at_least": 9,
+    "max_queue_size": 8,
+    "all_completed_successfully": false
+  }
+}

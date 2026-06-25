@@ -1,0 +1,91 @@
+{
+  "state_checks": [
+    {
+      "time": 28800.0,
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 1,
+      "description": "Rec: Start Busy"
+    },
+    {
+      "time": 28805.0, 
+      "model": "reception",
+      "field": "total customers num",
+      "expected": 0,
+      "description": "Rec: Finish & Release (Immediately, not wait for cut)"
+    },
+    {
+      "time": 28805.0,
+      "model": "checkhair",
+      "field": "customer",
+      "expected": "newcust",
+      "description": "Check: Start Processing"
+    },
+    {
+      "time": 28832.0,
+      "model": "cuthair",
+      "field": "total customer done",
+      "expected": 1,
+      "description": "Cut: Counter Increment"
+    },
+    {
+      "time": 28832.0,
+      "model": "checkhair",
+      "field": "customer",
+      "expected": "done",
+      "description": "Check: Status Done"
+    }
+  ],
+  "message_checks": [
+    {
+      "time": 28805.0,
+      "model": "reception",
+      "port": "cust",
+      "content": "newcust",
+      "description": "Rec -> Check"
+    },
+    {
+      "time": 28812.0,
+      "model": "checkhair",
+      "port": "to_cut",
+      "content": "newcust", 
+      "description": "Check -> Cut (After 7s)"
+    },
+    {
+      "time": 28832.0,
+      "model": "cuthair",
+      "port": "out",
+      "content": "done",
+      "description": "Cut -> Check (After 20s)"
+    },
+    {
+      "time": 28832.0,
+      "model": "checkhair",
+      "port": "to_reception",
+      "content": "done",
+      "description": "Check -> Rec (Final)"
+    }
+  ],
+  "timing_checks": [
+    {
+      "event": "reception_processing",
+      "time": 28805.0,
+      "delay_from_previous": 5.0
+    },
+    {
+      "event": "checkhair_processing",
+      "time": 28812.0,
+      "delay_from_previous": 7.0
+    },
+    {
+      "event": "cuthair_processing",
+      "time": 28832.0,
+      "delay_from_previous": 20.0
+    }
+  ],
+  "summary_checks": {
+    "processing_duration": 32.0,
+    "completed_customers": 1,
+    "all_completed_successfully": true
+  }
+}

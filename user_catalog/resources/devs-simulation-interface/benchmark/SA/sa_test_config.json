@@ -1,0 +1,251 @@
+[
+    {
+        "name": "L0_Zero_Load",
+        "description": "Baseline stability test with no cargo generation",
+        "checker_args": {
+            "test_name": "L0_Zero_Load",
+            "aircraft_count": 2,
+            "duration": 10.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 10.0,
+                    "--num_aircraft": 2,
+                    "--pallet_interval": 1000.0,
+                    "--pallet_expiration_time": 100.0,
+                    "--flight_time": 30.0,
+                    "--unload_time": 2.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 2,
+                    "duration": 10.0,
+                    "min_finished_pallets": 0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L0_Single_Pallet",
+        "description": "Basic test with one pallet transported by one aircraft",
+        "checker_args": {
+            "test_name": "L0_Single_Pallet",
+            "aircraft_count": 1,
+            "duration": 100.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 100.0,
+                    "--num_aircraft": 1,
+                    "--pallet_interval": 1000.0,
+                    "--pallet_expiration_time": 150.0,
+                    "--flight_time": 15.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 15.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 1,
+                    "duration": 100.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L0_Expiration_Congestion",
+        "description": "Force expiration by saturating the single aircraft. 1st pallet flies, 2nd pallet expires in queue.",
+        "checker_args": {
+            "test_name": "L0_Expiration_Congestion",
+            "aircraft_count": 1,
+            "duration": 100.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 100.0,
+                    "--num_aircraft": 1,
+                    "--pallet_interval": 5.0, 
+                    "--pallet_expiration_time": 10.0,
+                    "--flight_time": 30.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 30.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 1,
+                    "duration": 100.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L1_Two_Aircraft_Load_Balancing",
+        "description": "Test load balancing with two aircraft and two pallets",
+        "checker_args": {
+            "test_name": "L1_Two_Aircraft_Load_Balancing",
+            "aircraft_count": 2,
+            "duration": 200.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 200.0,
+                    "--num_aircraft": 2,
+                    "--pallet_interval": 20.0,
+                    "--pallet_expiration_time": 200.0,
+                    "--flight_time": 30.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 30.0,
+                    "--maintenance_time": 0.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 2,
+                    "duration": 200.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L1_Queue_Formation",
+        "description": "Test queue formation when both aircraft are busy",
+        "checker_args": {
+            "test_name": "L1_Queue_Formation",
+            "aircraft_count": 2,
+            "duration": 500.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 500.0,
+                    "--num_aircraft": 2,
+                    "--pallet_interval": 10.0,
+                    "--pallet_expiration_time": 250.0,
+                    "--flight_time": 30.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 30.0,
+                    "--maintenance_time": 5.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 2,
+                    "duration": 500.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L1_Maintenance_Blocking",
+        "description": "NEW: Verify that aircraft do not accept cargo during a long maintenance window.",
+        "checker_args": {
+            "test_name": "L1_Maintenance_Blocking",
+            "aircraft_count": 1,
+            "duration": 300.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 300.0,
+                    "--num_aircraft": 1,
+                    "--pallet_interval": 80.0,
+                    "--flight_time": 10.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 10.0,
+                    "--maintenance_time": 50.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 1,
+                    "duration": 300.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L2_Complete_System_Integration",
+        "description": "Full system test with multiple aircraft, continuous pallet generation, and realistic parameters",
+        "checker_args": {
+            "test_name": "L2_Complete_System_Integration",
+            "aircraft_count": 3,
+            "duration": 1000.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 1000.0,
+                    "--num_aircraft": 3,
+                    "--pallet_interval": 15.0,
+                    "--pallet_expiration_time": 180.0,
+                    "--flight_time": 35.0,
+                    "--unload_time": 3.0,
+                    "--return_time": 35.0,
+                    "--maintenance_time": 10.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 3,
+                    "duration": 1000.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L2_High_Load_Stress",
+        "description": "Stress test with high pallet generation rate and multiple aircraft",
+        "checker_args": {
+            "test_name": "L2_High_Load_Stress",
+            "aircraft_count": 4,
+            "duration": 500.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 500.0,
+                    "--num_aircraft": 4,
+                    "--pallet_interval": 5.0,
+                    "--pallet_expiration_time": 100.0,
+                    "--flight_time": 25.0,
+                    "--unload_time": 2.0,
+                    "--return_time": 25.0,
+                    "--maintenance_time": 3.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 4,
+                    "duration": 500.0
+                }
+            }
+        ]
+    },
+    {
+        "name": "L2_Rapid_Turnover_Stress",
+        "description": "Test queue active expiration while resources are unavailable. Aircraft have long cycle times, but pallets have short deadlines. Ensures queue does not accumulate indefinitely and expires items correctly during resource contention.",
+        "checker_args": {
+            "test_name": "L3_Rapid_Turnover_Stress",
+            "aircraft_count": 10,
+            "duration": 500.0
+        },
+        "cases": [
+            {
+                "sim_args": {
+                    "--duration": 500.0,
+                    "--num_aircraft": 10,
+                    "--pallet_interval": 10.0,
+                    "--pallet_expiration_time": 25.0,
+                    "--flight_time": 100.0,
+                    "--unload_time": 5.0,
+                    "--return_time": 100.0,
+                    "--maintenance_time": 0.0
+                },
+                "sim_stdin": "",
+                "checker_config": {
+                    "aircraft_count": 1,
+                    "duration": 500.0,
+                    "min_finished_pallets": 15
+                }
+            }
+        ]
+    }
+]

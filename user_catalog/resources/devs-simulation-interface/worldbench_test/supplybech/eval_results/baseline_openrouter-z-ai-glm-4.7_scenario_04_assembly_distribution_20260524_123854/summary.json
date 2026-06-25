@@ -1,0 +1,21 @@
+{
+  "num_runs": 1,
+  "num_success": 1,
+  "success_rate": 1.0,
+  "avg_total_cost": 7614658209.6724,
+  "avg_total_holding_cost": 264246.2706,
+  "avg_total_stockout_cost": 7614393963.4018,
+  "runs": [
+    {
+      "run_success": true,
+      "total_cost": 7614658209.672372,
+      "total_holding_cost": 264246.27055679366,
+      "total_stockout_cost": 7614393963.401815,
+      "error": null
+    }
+  ],
+  "framework": "baseline",
+  "scenario": "scenario_04_assembly_distribution",
+  "model_id": "openrouter/z-ai/glm-4.7",
+  "result_dir": "eval_results/baseline_openrouter-z-ai-glm-4.7_scenario_04_assembly_distribution_20260524_123854"
+}

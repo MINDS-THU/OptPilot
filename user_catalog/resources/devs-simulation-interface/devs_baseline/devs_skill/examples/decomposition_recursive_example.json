@@ -1,0 +1,53 @@
+{
+  "description": "Recursive decomposition example: Hospital system showing context passing for sub-agent",
+  "stages": [
+    {
+      "stage": 1,
+      "action": "Root decomposition: Hospital -> Departments",
+      "input": {
+        "requirements": "Build a hospital simulation with Emergency, Surgery, and Recovery departments..."
+      },
+      "output": {
+        "class_name": "Hospital",
+        "type": "coupled",
+        "children": [
+          {"class_name": "EmergencyDept", "type": "coupled"},
+          {"class_name": "SurgeryDept", "type": "coupled"},
+          {"class_name": "RecoveryDept", "type": "coupled"}
+        ]
+      }
+    },
+    {
+      "stage": 2,
+      "action": "Sub-agent decomposes EmergencyDept with full context",
+      "context_passed": {
+        "original_project_requirements": "Build a hospital simulation with Emergency, Surgery, and Recovery departments...",
+        "ancestors": [
+          {
+            "class_name": "Hospital",
+            "specification": {
+              "function": "Overall hospital management. Routes patients through departments.",
+              "input_ports": [{"name": "patient_in", "type": "dict", "structure": "{'id': int, 'severity': int, 'arrival_time': float}"}],
+              "output_ports": [{"name": "patient_out", "type": "dict", "structure": "{'id': int, 'status': str, 'total_time': float}"}]
+            }
+          }
+        ],
+        "siblings": [
+          {"class_name": "SurgeryDept", "specification": {"function": "Handles surgical procedures..."}},
+          {"class_name": "RecoveryDept", "specification": {"function": "Post-surgery recovery monitoring..."}}
+        ],
+        "logic_path": "Hospital.EmergencyDept"
+      },
+      "sub_agent_output": {
+        "class_name": "EmergencyDept",
+        "type": "coupled",
+        "children": [
+          {"class_name": "Triage", "type": "atomic"},
+          {"class_name": "Treatment", "type": "atomic"}
+        ],
+        "coupling_specification": "EIC: Hospital.patient_in -> Triage.patient_in. IC: Triage.priority_out -> Treatment.priority_in. EOC: Treatment.treated_out -> Hospital.internal_transfer"
+      }
+    }
+  ],
+  "key_insight": "In recursive mode, each sub-agent receives the FULL context: original requirements, all ancestors' specs, all siblings' specs, and its own logic_path. This ensures the sub-agent knows its position in the hierarchy and can make consistent decisions about ports, data types, and coupling."
+}
