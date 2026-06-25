@@ -185,6 +185,7 @@ class UiLaunchJob:
 class CodeServerOptions:
     executable: Optional[str] = None
     host: str = "127.0.0.1"
+    public_host: str = "127.0.0.1"
     port: int = 8766
     auth: str = "none"
     password: Optional[str] = None
@@ -201,7 +202,7 @@ class CodeServerState:
 
     @property
     def url(self) -> str:
-        return f"http://{self.options.host}:{self.options.port}/"
+        return f"http://{self.options.public_host}:{self.options.port}/"
 
     @property
     def running(self) -> bool:
@@ -241,6 +242,7 @@ class WorkspaceRuntimeOptions:
     build_image: bool = True
     dockerfile: Optional[str] = None
     host: str = "127.0.0.1"
+    public_host: str = "127.0.0.1"
     port_start: int = 18766
     container_port: int = 8766
     auth: str = "none"
@@ -266,6 +268,7 @@ class WorkspaceRuntimeOptions:
             build_image=_ui_env_flag("OPTPILOT_WORKSPACE_RUNTIME_BUILD", image == DEFAULT_WORKSPACE_RUNTIME_IMAGE),
             dockerfile=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_DOCKERFILE") or None,
             host=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_HOST") or cls.host,
+            public_host=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_PUBLIC_HOST") or cls.public_host,
             port_start=_int_env("OPTPILOT_WORKSPACE_RUNTIME_PORT_START", cls.port_start),
             container_port=_int_env("OPTPILOT_WORKSPACE_RUNTIME_CONTAINER_PORT", cls.container_port),
             auth=os.environ.get("OPTPILOT_WORKSPACE_CODE_SERVER_AUTH") or cls.auth,
@@ -403,7 +406,8 @@ class WorkspaceRuntimeManager:
         image_matches = (not current_image) or current_image == self.options.image
         host_port = int(record.get("host_port") or 0) or None
         code_url = self._code_server_base_url(host_port) if host_port else ""
-        code_reachable = bool(code_url and _code_server_reachable(code_url))
+        probe_url = self._code_server_probe_url(host_port) if host_port else ""
+        code_reachable = bool(probe_url and _code_server_reachable(probe_url))
         mount_mode = self._mount_mode(workspace)
         active_references = {
             "attached_sessions": len(list(workspace.get("attached_sessions", []) or [])),
@@ -445,7 +449,7 @@ class WorkspaceRuntimeManager:
             "mount_mode": mount_mode,
             "workspace_root": str(root),
             "runtime_dir": str(self._workspace_runtime_dir(workspace_id)),
-            "host": self.options.host,
+            "host": self.options.public_host,
             "port": host_port,
             "url": code_url,
             "started_at": record.get("started_at"),
@@ -470,7 +474,7 @@ class WorkspaceRuntimeManager:
             "port_conflict": port_conflict,
             "pid": None,
             "url": url,
-            "host": self.options.host,
+            "host": self.options.public_host,
             "port": host_port,
             "auth": self.options.auth,
             "started_at": active_status.get("started_at"),
@@ -591,7 +595,8 @@ class WorkspaceRuntimeManager:
         stdout_path = log_dir / "code-server.stdout.log"
         stderr_path = log_dir / "code-server.stderr.log"
         url = self._code_server_base_url(host_port)
-        if _code_server_reachable(url):
+        probe_url = self._code_server_probe_url(host_port)
+        if _code_server_reachable(probe_url):
             record.update(
                 {
                     "container_name": container_name,
@@ -644,7 +649,7 @@ class WorkspaceRuntimeManager:
         if completed.returncode != 0:
             raise RuntimeError(f"Code Server failed to start in workspace container: {completed.stderr.strip() or completed.stdout.strip()}")
         for _ in range(20):
-            if _code_server_reachable(url):
+            if _code_server_reachable(probe_url):
                 break
             time.sleep(0.25)
         record.update(
@@ -1016,6 +1021,9 @@ class WorkspaceRuntimeManager:
         return "ro" if mode in {"read-only", "analysis"} or source_type in {"catalog", "run"} else "rw"
 
     def _code_server_base_url(self, port: Optional[int]) -> str:
+        return f"http://{self.options.public_host}:{int(port or self.options.port_start)}/"
+
+    def _code_server_probe_url(self, port: Optional[int]) -> str:
         return f"http://{self.options.host}:{int(port or self.options.port_start)}/"
 
     def _workspace_runtime_dir(self, workspace_id: str) -> Path:
@@ -1262,17 +1270,18 @@ class UiState:
             return existing
         if existing:
             self._stop_workspace_preview_proxy(key)
-        host = self.workspace_runtime.options.host or "127.0.0.1"
+        bind_host = self.workspace_runtime.options.host or "127.0.0.1"
+        public_host = self.workspace_runtime.options.public_host or bind_host
         start_port = max(19000, int(self.workspace_runtime.options.port_start) + 1000)
         reserved = {proxy.port for proxy in self.preview_proxies.values() if proxy.running}
-        preview_port = _find_available_port(host, start_port, reserved=reserved)
+        preview_port = _find_available_port(bind_host, start_port, reserved=reserved)
         token = uuid.uuid4().hex
         handler = _preview_proxy_handler_factory(target_base_url, token=token, allowed_ports=allowed_ports)
-        server = ThreadingHTTPServer((host, preview_port), handler)
+        server = ThreadingHTTPServer((bind_host, preview_port), handler)
         thread = threading.Thread(target=server.serve_forever, name=f"optpilot-preview-{workspace_id}-{port}", daemon=True)
         proxy = WorkspacePreviewProxy(
             key=key,
-            host=host,
+            host=public_host,
             port=server.server_port,
             target_base_url=target_base_url,
             token=token,
@@ -1299,9 +1308,21 @@ class UiState:
             self._stop_workspace_preview_proxy(key)
 
     def _active_code_workspace(self) -> Optional[JsonDict]:
-        if not self.active_code_workspace_id:
-            return None
-        return _workspace_by_id(self, self.active_code_workspace_id)
+        if self.active_code_workspace_id:
+            current = _workspace_by_id(self, self.active_code_workspace_id)
+            if current:
+                runtime_status = self.workspace_runtime.status(current)
+                if runtime_status.get("code_server_running") or runtime_status.get("container_running"):
+                    return current
+        active_candidates = []
+        for workspace in _list_ui_workspaces(self):
+            runtime_status = self.workspace_runtime.status(workspace)
+            if runtime_status.get("code_server_running") or runtime_status.get("container_running"):
+                active_candidates.append(workspace)
+        if len(active_candidates) == 1:
+            self.active_code_workspace_id = str(active_candidates[0].get("id") or "")
+            return active_candidates[0]
+        return None
 
     def _ensure_code_workspace(self, workspace_root: Path) -> JsonDict:
         workspace_root = workspace_root.resolve()
@@ -1345,6 +1366,7 @@ def run_ui(
     *,
     host: str = "127.0.0.1",
     port: int = 8765,
+    public_host: Optional[str] = None,
     catalog_roots: Optional[List[str]] = None,
     run_roots: Optional[List[str]] = None,
     code_server_bin: Optional[str] = None,
@@ -1355,10 +1377,12 @@ def run_ui(
     workspace_runtime_executable: Optional[str] = None,
     workspace_runtime_image: Optional[str] = None,
     workspace_runtime_network: Optional[str] = None,
+    workspace_runtime_host: Optional[str] = None,
     workspace_runtime_port_start: Optional[int] = None,
     open_browser: bool = False,
 ) -> None:
     cwd = Path.cwd().resolve()
+    public_host = os.environ.get("OPTPILOT_UI_PUBLIC_HOST") or public_host or code_server_host or host
     runtime_options = WorkspaceRuntimeOptions.from_env()
     if workspace_runtime_executable:
         runtime_options.executable = workspace_runtime_executable
@@ -1367,9 +1391,10 @@ def run_ui(
         runtime_options.build_image = workspace_runtime_image == DEFAULT_WORKSPACE_RUNTIME_IMAGE
     if workspace_runtime_network:
         runtime_options.network = workspace_runtime_network
+    runtime_options.host = workspace_runtime_host or code_server_host
     if workspace_runtime_port_start:
         runtime_options.port_start = workspace_runtime_port_start
-    runtime_options.host = code_server_host
+    runtime_options.public_host = public_host
     runtime_options.auth = code_server_auth
     runtime_options.password = code_server_password or runtime_options.password
     state = UiState(
@@ -1379,6 +1404,7 @@ def run_ui(
         code_server=CodeServerOptions(
             executable=code_server_bin,
             host=code_server_host,
+            public_host=public_host,
             port=code_server_port,
             auth=code_server_auth,
             password=code_server_password,
@@ -1565,6 +1591,7 @@ def _preview_proxy_handler_factory(target_base_url: str, *, token: str, allowed_
 def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind")
     parser.add_argument("--port", type=int, default=8765, help="Port to bind")
+    parser.add_argument("--public-host", default=None, help="Browser-reachable host or DNS name used when generating external URLs.")
     parser.add_argument(
         "--catalog",
         action="append",
@@ -1597,6 +1624,7 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
         default=None,
         help="Container network policy for workspace containers. Use bridge/default for embedded Code Server.",
     )
+    parser.add_argument("--workspace-runtime-host", default=None, help="Host interface for per-workspace Code Server and preview listeners. Defaults to --code-server-host.")
     parser.add_argument(
         "--workspace-runtime-port-start",
         type=int,
@@ -1617,6 +1645,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_ui(
         host=args.host,
         port=args.port,
+        public_host=args.public_host,
         catalog_roots=args.catalog,
         run_roots=args.runs,
         code_server_bin=args.code_server_bin,
@@ -1627,6 +1656,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         workspace_runtime_executable=args.workspace_runtime_bin,
         workspace_runtime_image=args.workspace_runtime_image,
         workspace_runtime_network=args.workspace_runtime_network,
+        workspace_runtime_host=args.workspace_runtime_host,
         workspace_runtime_port_start=args.workspace_runtime_port_start,
         open_browser=args.open_browser,
     )

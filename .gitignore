@@ -20,3 +20,4 @@ frontier_pid_study.yaml
 workspace/
 .optpilot-ui/
 .venv/
+/_*.sh
