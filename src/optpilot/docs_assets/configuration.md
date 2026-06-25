@@ -633,13 +633,17 @@ interface:
   env:
     APP_MODE: demo
   extraPorts: [8000]
+  readyPath: /
+  readyTimeoutSeconds: 60
 ```
 
 Use `command` for the long-running frontend process and `port` for the main
 browser port. The command should bind to `0.0.0.0` inside the workspace runtime
 so Studio can proxy it. `cwd` is relative to the copied workspace root.
 `extraPorts` is only needed when the frontend calls another local backend port
-through the same Preview session.
+through the same Preview session. `readyPath` is the HTTP path Studio probes
+before showing the preview, and `readyTimeoutSeconds` controls how long launch
+waits for first-time installs or builds.
 
 Resources can declare the same block in an optional
 `optpilot.resource.yaml` file at the resource root:

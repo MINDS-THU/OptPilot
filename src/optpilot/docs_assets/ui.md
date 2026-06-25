@@ -79,9 +79,11 @@ workspace runtime.
 
 Catalog entries can automate that flow. If an environment, method, or resource
 declares an `interface` block, the Catalog page shows **Launch Interface** next
-to **Inspect** and **Edit copy**. Studio creates an editable draft copy, starts
-the declared command inside the workspace runtime, and switches to Preview for
-the declared port.
+to **Inspect** and **Edit Copy**. Studio creates an editable draft copy, starts
+the declared command inside the workspace runtime, waits for the declared
+readiness path to answer, and switches to Preview for the declared port. While
+the launch is running, Studio shows the current preparation step and recent
+stdout/stderr from the launch command.
 
 Expected local ports:
 

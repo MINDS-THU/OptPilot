@@ -86,13 +86,16 @@ interface:
   label: Demo UI
   command: [python, -m, http.server, "5173", --bind, 0.0.0.0]
   port: 5173
+  readyPath: /
+  readyTimeoutSeconds: 60
 ```
 
 Studio shows **Launch Interface** for catalog entries with this block. Clicking
 it creates an editable draft copy, starts the command inside that workspace's
-container runtime, and opens the port in the Preview panel. Keep the catalog
-source read-only; make changes in the launched copy and register them when they
-should become reusable.
+container runtime, shows preparation steps and recent command output while it
+waits for the configured readiness path, and opens the port in the Preview
+panel. Keep the catalog source read-only; make changes in the launched copy and
+register them when they should become reusable.
 
 ## Referencing Environment Code
 
