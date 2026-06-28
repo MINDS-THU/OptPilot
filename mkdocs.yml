@@ -78,11 +78,12 @@ nav:
       - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
   - Advanced Integrations:
-      - LLM Heuristic Repositories: llm-heuristic-methods.md
+      - Curated Packages: curated-packages.md
       - DEVS-Gen Simulation Environments: devs-gen-simulation-environments.md
   - Reference:
-      - Configuration: configuration.md
-      - User Catalog: user-catalog.md
+      - Configuration Model: configuration-model.md
+      - Configuration Reference: configuration.md
+      - Catalog: catalog.md
   - UI: ui.md
   - Development: development.md
 

@@ -76,37 +76,38 @@ This reference covers three authored config roles:
 
 ## Directory Layout
 
-The same organization is used for built-in examples and user-owned code:
+The same organization is used for built-in examples, local user-owned code, and
+future curated packages:
 
 ```text
-examples/
-  environments/
-    strategic_airlift_devs/
-      environment.yaml
-      evaluator.py
-      assets/
-      prompts/
-  methods/
-    baseline_file_copy/
-      method.yaml
-      method.py
-  studies/
-    sa_baseline.yaml
-
-user_catalog/
-  environments/
-    my_environment/
-      environment.yaml
-      evaluator.py
-      assets/
-  methods/
-    my_method/
-      method.yaml
-      method.py
-      assets/
-  resources/
-    my_reference_project/
-      README.md
+catalog/
+  example_package/
+    environments/
+      strategic_airlift_devs/
+        environment.yaml
+        evaluator.py
+        assets/
+        prompts/
+    methods/
+      baseline_file_copy/
+        method.yaml
+        method.py
+    studies/
+      sa_baseline.yaml
+  local_package/
+    environments/
+      my_environment/
+        environment.yaml
+        evaluator.py
+        assets/
+    methods/
+      my_method/
+        method.yaml
+        method.py
+        assets/
+    resources/
+      my_reference_project/
+        README.md
 ```
 
 Environment and method configs are reusable. A single environment
@@ -140,15 +141,15 @@ and evaluates for each candidate.
 
 Example:
 
-- `examples/studies/job_shop_rule_parameters_baseline.yaml` resolves `environmentConfig` relative to the study file
-- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative to the environment file
-- `examples/methods/fixed_rule_parameters/method.yaml` resolves any `pythonPath` entries relative to the method file
+- `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml` resolves `environmentConfig` relative to the study file
+- `catalog/example_package/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative to the environment file
+- `catalog/example_package/methods/fixed_rule_parameters/method.yaml` resolves any `pythonPath` entries relative to the method file
 
 ## Environment Config
 
 An environment config describes what can be evaluated and how the evaluation happens.
 
-The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [Getting Started](getting-started.md) and the files under `examples/`.
+The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [Getting Started](getting-started.md) and the files under `catalog/example_package/`.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -165,14 +166,14 @@ tags: [tutorial]
 evaluator:
   # Python import. Function signature:
   # evaluate(candidate_runtime, context) -> dict
-  python: user_catalog.environments.my_environment.evaluator:evaluate
+  python: catalog.local_package.environments.my_environment.evaluator:evaluate
 
   # Alternative command evaluator.
   # command: [python, run_eval.py, "{candidate_json}", "{settings_file}", "{metrics_file}"]
 
   # Alternative custom adapter class.
   # Use only when a direct Python function or command is not enough.
-  # adapter: user_catalog.environments.my_environment.adapter:MyAdapter
+  # adapter: catalog.local_package.environments.my_environment.adapter:MyAdapter
 
   # Optional evaluator controls.
   timeoutSeconds: 600
@@ -278,7 +279,7 @@ For example:
 
 ```yaml
 evaluator:
-  python: user_catalog.environments.my_environment.evaluator:evaluate
+  python: catalog.local_package.environments.my_environment.evaluator:evaluate
   settings:
     dataset: data/train.csv
     split: validation
@@ -291,7 +292,7 @@ For multi-case benchmarks, keep the same pattern:
 
 ```yaml
 evaluator:
-  adapter: user_catalog.environments.my_environment.adapter:BenchmarkAdapter
+  adapter: catalog.local_package.environments.my_environment.adapter:BenchmarkAdapter
   settings:
     cases:
       - id: small
@@ -416,7 +417,7 @@ Environment field fragments:
 
 ```yaml
 trialWorkspace:
-  - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
+  - from: ../../../../resource/devs_gen_gallery/simulators/SA/simulator
     to: simulator
 
 candidate:
@@ -460,7 +461,7 @@ description: My optimizer.
 
 entrypoint:
   # Python import. Class constructed as MyMethod(definition, study_spec, rng).
-  python: user_catalog.methods.my_method.method:MyMethod
+  python: catalog.local_package.methods.my_method.method:MyMethod
   protocol: batch        # enum: batch | session
   pythonPath: [.]
 
@@ -523,7 +524,7 @@ Command methods receive a JSON request on stdin unless `{input_file}` is present
 
 A study config binds one environment config to one method config.
 
-The block below is an annotated field template. [Getting Started](getting-started.md) shows a complete runnable study config from `examples/studies/`.
+The block below is an annotated field template. [Getting Started](getting-started.md) shows a complete runnable study config from `catalog/example_package/studies/`.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -597,7 +598,7 @@ For example, these are separate environment configs rather than different
 OptPilot study concepts:
 
 ```text
-user_catalog/environments/my_benchmark/
+catalog/local_package/environments/my_benchmark/
   environment_small.yaml
   environment_large.yaml
   evaluator.py

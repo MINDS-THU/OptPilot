@@ -184,7 +184,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_registration_apply",
-        "description": "Apply a validated registration manifest into user_catalog after approval.",
+        "description": "Apply a validated registration manifest into catalog/local_package after approval.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "registration_id": {"type": "string"}}, ["workspace_id", "registration_id"]),
     },
     {

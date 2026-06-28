@@ -42,5 +42,5 @@ Before publishing:
 - Confirm `.optpilot-ui/`, `.venv/`, `dist/`, `site/`, and `*.egg-info/` are absent from commits.
 - Confirm only intentional internal Markdown notes are committed under
   `resource/`; local external projects should stay uncommitted.
-- Confirm user-facing examples live under `examples/environments`, `examples/methods`, and `examples/studies`.
+- Confirm user-facing examples live under `catalog/example_package/environments`, `catalog/example_package/methods`, and `catalog/example_package/studies`.
 - Confirm test-only catalogs live under `tests/fixtures/catalog`.

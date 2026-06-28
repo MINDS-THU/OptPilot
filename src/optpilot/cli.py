@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run an OptPilot study config")
     run_parser.add_argument("spec", help="Path to the study YAML file")
-    run_parser.add_argument("--output-root", help="Directory to place study runs")
+    run_parser.add_argument("--output-root", help="Directory to place study runs (default: ./runs)")
     run_parser.add_argument("--resume-run-dir", help="Append more trials to an existing run directory")
     run_parser.add_argument("--branch-from-run-dir", help="Start a new run that records an existing run as its parent")
 

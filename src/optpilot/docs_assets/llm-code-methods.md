@@ -40,22 +40,22 @@ def score(operation, machine, state):
 Run the baseline before connecting an LLM:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
 Then run the OpenAI-compatible file editor binding:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_openai_dispatch_rule.yaml
-uv run optpilot run examples/studies/job_shop_openai_dispatch_rule.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
 ```
 
 That study uses:
 
 ```text
-examples/methods/openai_file_editor/method.yaml
-examples.methods.openai_file_editor.method:OpenAIFileEditMethod
+catalog/example_package/methods/openai_file_editor/method.yaml
+catalog.example_package.methods.openai_file_editor.method:OpenAIFileEditMethod
 ```
 
 The included study has `budget.maxTrials: 1` and `includeBaselineCandidate: true`, so it is executable without provider credentials and exercises the actual file-candidate method path. To request a real LLM edit, set a provider key such as `OPENROUTER_API_KEY`, increase the study budget, or set `includeBaselineCandidate: false`.
@@ -90,8 +90,8 @@ The evaluator independently checks schedule feasibility. Invalid solver output f
 Run the baseline first:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_solver_code_baseline.yaml
-uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_solver_code_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
 
 ## Method Shape
@@ -104,7 +104,7 @@ config: method
 id: my-llm-code-writer
 
 entrypoint:
-  python: user_catalog.methods.my_llm_code_writer.method:MyLLMCodeWriter
+  python: catalog.local_package.methods.my_llm_code_writer.method:MyLLMCodeWriter
   protocol: batch
 
 settings:
@@ -130,14 +130,14 @@ The method can read:
 
 It returns file candidates through `CandidateFileStore`.
 
-## Difference From LLM Heuristic Repositories
+## Difference From Curated Method Packages
 
 Use this page when you are writing the OptPilot method yourself. The repository includes a generic OpenAI-compatible file-editing method under:
 
 ```text
-examples/methods/openai_file_editor/
+catalog/example_package/methods/openai_file_editor/
 ```
 
 That method accepts file-candidate environments with `methodContext.instructions`, and the job-shop dispatch-rule binding above is a concrete runnable example.
 
-Use [LLM Heuristic Repositories](llm-heuristic-methods.md) when you already have a larger upstream repository that owns its own search loop and only needs OptPilot to launch a command and collect one generated file.
+Use [Curated Packages](curated-packages.md) when you already have a larger upstream repository that owns its own search loop and should be distributed with its adapters, configs, dependencies, and smoke tests outside the OptPilot framework repository.

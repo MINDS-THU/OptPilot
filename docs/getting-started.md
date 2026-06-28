@@ -38,8 +38,8 @@ uv run optpilot --help
 Useful first commands:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 uv run optpilot ui --open-browser
 ```
 
@@ -52,16 +52,16 @@ The first example evaluates weighted dispatch-rule parameters on two small job-s
 Validate it:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Run it:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-This baseline does not require an API key or external solver. It emits one parameter candidate, evaluates it, and writes run evidence under `examples/runs/` unless you pass `--output-root`.
+This baseline does not require an API key or external solver. It emits one parameter candidate, evaluates it, and writes run evidence under `runs/` in your current workspace unless you pass `--output-root`.
 
 ## Expected Output
 
@@ -78,9 +78,9 @@ If the command fails before printing a run summary, return to the install step a
 
 The study uses:
 
-- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml`
-- `examples/methods/fixed_rule_parameters/method.yaml`
-- `examples/studies/job_shop_rule_parameters_baseline.yaml`
+- `catalog/example_package/environments/job_shop_scheduling/environment_rule_parameters.yaml`
+- `catalog/example_package/methods/fixed_rule_parameters/method.yaml`
+- `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml`
 
 ## Environment Config
 
@@ -94,7 +94,7 @@ description: Evaluate weighted dispatch-rule parameters on small job-shop schedu
 tags: [job-shop, scheduling, parameters, tutorial]
 
 evaluator:
-  python: examples.environments.job_shop_scheduling.evaluator:evaluate
+  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
   timeoutSeconds: 60
   settings:
     cases:
@@ -162,7 +162,7 @@ description: Emits one fixed weighted dispatch-rule parameter candidate.
 tags: [baseline, parameters, job-shop, no-api]
 
 entrypoint:
-  python: examples.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
+  python: catalog.example_package.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
   protocol: batch
 
 settings:
@@ -263,13 +263,13 @@ The same job-shop evaluator also has file-candidate variants.
 Dispatch-rule file:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
 Solver-code file:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_solver_code_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
 
 See [Job-Shop Environment](job-shop-environment.md) for the candidate contracts.
@@ -295,7 +295,7 @@ See [How A Run Works](how-it-works.md) and [Evidence](evidence.md) for the full 
 uv run optpilot ui --open-browser
 ```
 
-The UI scans `examples/` and `user_catalog/` by default. It lets you browse
+The UI scans packages under `catalog/` by default. It lets you browse
 environments and methods, check compatibility, draft studies, launch runs, and
 inspect previous run evidence. The command starts a local server; stop it with
 `Ctrl-C` in the terminal when you are done.
@@ -305,10 +305,11 @@ per-workspace containers, see [UI](ui.md).
 
 ## Add Your Own Code
 
-Put user-owned integrations under `user_catalog/`:
+Put user-owned integrations under `catalog/local_package/`. Studio creates this
+package on demand when you register local files:
 
 ```text
-user_catalog/
+catalog/local_package/
   environments/my_environment/
     environment.yaml
     evaluator.py
@@ -324,7 +325,7 @@ are reusable reference projects or assets. Study YAML files are concrete run
 plans; save them where you draft or launch them instead of registering them as
 catalog entries.
 
-Use [User Catalog](user-catalog.md) for layout guidance and
+Use [Catalog](catalog.md) for layout guidance and
 [Configuration](configuration.md) for the full schema.
 
 ## Next Steps
@@ -334,4 +335,4 @@ After this first run:
 1. Read [Concepts](concepts.md) and [Methods](methods.md) to understand the environment/method/study boundary.
 2. Read [How A Run Works](how-it-works.md) and [Evidence](evidence.md) to understand trial workspaces, candidate materialization, and recorded outputs.
 3. Read [Examples](examples.md) and [Job-Shop Environment](job-shop-environment.md) to choose between the shared job-shop method tracks.
-4. Copy the pattern into `user_catalog/` when you are ready to bind your own environment and method.
+4. Copy the pattern into `catalog/local_package/` when you are ready to bind your own environment and method.

@@ -25,7 +25,7 @@ The bundled repository uses a Strategic Airlift simulator as the concrete sample
 The sample OptPilot environment lives under:
 
 ```text
-examples/environments/strategic_airlift_devs/
+catalog/example_package/environments/strategic_airlift_devs/
   environment.yaml
   evaluator.py
   assets/sa_default.yaml
@@ -35,7 +35,7 @@ examples/environments/strategic_airlift_devs/
 The sample studies are:
 
 ```text
-examples/studies/
+catalog/example_package/studies/
   sa_baseline.yaml
   sa_openai_file_editor.yaml
 ```
@@ -60,7 +60,7 @@ description: Evaluate edited SA simulator source copied from the external devs_g
 tags: [external-project, llm-code-edit, simulator, files]
 
 evaluator:
-  python: examples.environments.strategic_airlift_devs.evaluator:evaluate
+  python: catalog.example_package.environments.strategic_airlift_devs.evaluator:evaluate
   timeoutSeconds: 180
   settings:
     duration: 120.0
@@ -90,7 +90,7 @@ methodContext:
     - prompts/sa_file_edit_system_prompt.md
 
 trialWorkspace:
-  - from: ../../../resource/devs_gen_gallery/simulators/SA/simulator
+  - from: ../../../../resource/devs_gen_gallery/simulators/SA/simulator
     to: simulator
 
 metrics:
@@ -115,7 +115,7 @@ Evaluator field fragment from the environment config:
 
 ```yaml
 evaluator:
-  python: examples.environments.strategic_airlift_devs.evaluator:evaluate
+  python: catalog.example_package.environments.strategic_airlift_devs.evaluator:evaluate
 ```
 
 It runs the generated simulator from the copied trial workspace, reads the simulator outputs, and returns metrics. In the bundled sample, those metrics include:
@@ -142,7 +142,7 @@ description: OpenAI-compatible method that edits environment-provided file candi
 tags: [llm, code-edit, files]
 
 entrypoint:
-  python: examples.methods.openai_file_editor.method:OpenAIFileEditMethod
+  python: catalog.example_package.methods.openai_file_editor.method:OpenAIFileEditMethod
   protocol: batch
 
 settings:
@@ -217,8 +217,8 @@ Validate and run the baseline:
 
 ```bash
 uv sync --extra sa
-uv run optpilot validate examples/studies/sa_baseline.yaml
-uv run optpilot run examples/studies/sa_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/sa_baseline.yaml
+uv run optpilot run catalog/example_package/studies/sa_baseline.yaml
 ```
 
 The baseline does not require API keys or provider credentials.
@@ -259,7 +259,7 @@ Run the OpenAI-compatible file-editing study after the baseline path works:
 
 ```bash
 export OPENROUTER_API_KEY=...
-uv run optpilot run examples/studies/sa_openai_file_editor.yaml
+uv run optpilot run catalog/example_package/studies/sa_openai_file_editor.yaml
 ```
 
 ## Adapting The Pattern
@@ -268,7 +268,7 @@ For a new DEVS-Gen simulator:
 
 1. generate the simulator with DEVS-Gen
 2. put the generated simulator under a stable local path such as `resource/my_simulator`
-3. copy the bundled sample environment directory into `user_catalog/environments/my_simulator`
+3. copy the bundled sample environment directory into `catalog/local_package/environments/my_simulator`
 4. update `trialWorkspace[].from` to point at the generated simulator
 5. expose the generated file or files that methods may edit
 6. put simulator arguments, scenario knobs, or benchmark selections under `evaluator.settings`

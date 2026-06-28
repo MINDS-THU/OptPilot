@@ -5,7 +5,7 @@ This page explains the runtime sequence after you already have one successful Op
 This page follows what happens after:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
@@ -191,7 +191,7 @@ Evaluator field fragment:
 
 ```yaml
 evaluator:
-  python: user_catalog.environments.my_environment.evaluator:evaluate
+  python: catalog.local_package.environments.my_environment.evaluator:evaluate
 ```
 
 Alternative evaluator field fragment:
@@ -205,7 +205,7 @@ Alternative evaluator field fragment:
 
 ```yaml
 evaluator:
-  adapter: user_catalog.environments.my_environment.adapter:MyAdapter
+  adapter: catalog.local_package.environments.my_environment.adapter:MyAdapter
 ```
 
 The evaluator receives the materialized candidate and `context["settings"]`. It returns or writes:

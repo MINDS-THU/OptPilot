@@ -1,0 +1,44 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: job-shop-dispatch-rule
+description: Evaluate generated Python dispatching rules on small job-shop scheduling cases.
+tags: [job-shop, scheduling, files, tutorial]
+
+evaluator:
+  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  timeoutSeconds: 60
+  settings:
+    cases:
+      - id: ft06_small
+        path: cases/ft06_small.yaml
+      - id: la01_tiny
+        path: cases/la01_tiny.yaml
+
+trialWorkspace:
+  - from: template_dispatch_rule
+    to: candidate
+
+candidate:
+  format: files
+  description: Python dispatching rule used by the job-shop scheduling evaluator.
+  materialize:
+    root: candidate
+  files:
+    editable:
+      - path: dispatch_rule.py
+    required:
+      - dispatch_rule.py
+    allow:
+      - dispatch_rule.py
+
+methodContext:
+  instructions:
+    - prompts/dispatch_rule_system_prompt.md
+
+metrics:
+  source: return
+  keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
+
+outputFiles:
+  - schedule_*.json
+  - job_shop_metrics*.json

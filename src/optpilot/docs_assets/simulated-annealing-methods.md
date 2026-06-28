@@ -12,13 +12,13 @@ In upstream JobShopLib, simulated annealing lives under `job_shop_lib.metaheuris
 The included method is:
 
 ```text
-examples/methods/job_shop_lib_simulated_annealing/
+catalog/example_package/methods/job_shop_lib_simulated_annealing/
 ```
 
 It targets:
 
 ```text
-examples/environments/job_shop_scheduling/environment_schedule_solution.yaml
+catalog/example_package/environments/job_shop_scheduling/environment_schedule_solution.yaml
 ```
 
 ## Install Optional Dependency
@@ -33,8 +33,8 @@ uv sync --extra examples
 
 ```bash
 uv sync --extra examples
-uv run optpilot validate examples/studies/job_shop_simulated_annealing.yaml
-uv run optpilot run examples/studies/job_shop_simulated_annealing.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_simulated_annealing.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
 ```
 
 ## What The Method Produces

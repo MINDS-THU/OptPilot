@@ -25,15 +25,15 @@ OptPilot method receives job-shop case references from methodContext
 The repository now includes a runnable RL method:
 
 ```text
-examples/methods/job_shop_rl_stable_baselines/
+catalog/example_package/methods/job_shop_rl_stable_baselines/
 ```
 
 Run it with the shared job-shop validation cases:
 
 ```bash
 uv sync --extra examples
-uv run optpilot validate examples/studies/job_shop_rl_stable_baselines.yaml
-uv run optpilot run examples/studies/job_shop_rl_stable_baselines.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
 ```
 
 The study uses `environment_schedule_solution.yaml`, so it is evaluated on the same `ft06_small` and `la01_tiny` cases and the same `normalized_makespan` objective as the JobShopLib solver methods.
@@ -72,7 +72,7 @@ Method `settings` fragment:
 
 ```yaml
 settings:
-  policyPath: user_catalog/methods/job_shop_rl_policy/policy.zip
+  policyPath: catalog/local_package/methods/job_shop_rl_policy/policy.zip
   deterministic: true
   maxSteps: 10000
   renderMode: null

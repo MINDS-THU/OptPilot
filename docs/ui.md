@@ -17,13 +17,14 @@ This starts a local server and opens the browser. This basic mode is enough to
 browse the example catalog, validate compatibility, launch studies, and inspect
 run evidence. Stop the server with `Ctrl-C` in the terminal when you are done.
 
-Studio scans these folders by default when launched from the repository root:
+Studio scans packages under `catalog/` by default when launched from the repository root.
+The repository ships one package:
 
-- `examples/`
-- `user_catalog/`
+- `catalog/example_package/`
 
-Use `user_catalog/` for your own reusable environments, methods, and resources.
-Study YAML files are saved run plans; keep them where you draft or launch them.
+Studio creates `catalog/local_package/` on demand when you register your own
+reusable environments, methods, and resources. Study YAML files are saved run
+plans; keep them where you draft or launch them.
 
 ## Assistant-Enabled Startup
 
@@ -186,7 +187,7 @@ before actions such as launching studies or applying catalog registration.
 You can pass explicit catalog or run roots:
 
 ```bash
-uv run optpilot ui --catalog user_catalog --runs runs
+uv run optpilot ui --catalog catalog/local_package --runs runs
 ```
 
 ## Design Boundary

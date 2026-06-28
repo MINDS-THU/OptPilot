@@ -1,0 +1,44 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: job-shop-schedule-solution
+description: Evaluate complete job-shop schedules produced by external solvers or policies.
+tags: [job-shop, scheduling, parameters, schedule-solution, tutorial]
+
+evaluator:
+  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  timeoutSeconds: 60
+  settings:
+    cases:
+      - id: ft06_small
+        path: cases/ft06_small.yaml
+      - id: la01_tiny
+        path: cases/la01_tiny.yaml
+
+candidate:
+  format: parameters
+  description: Complete schedule solutions keyed by validation case id.
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}
+        description: Mapping from validation case id to a solution object with an operations list.
+
+methodContext:
+  references:
+    - name: ft06_small
+      path: cases/ft06_small.yaml
+      type: job_shop_case
+      description: Validation case used by the schedule-solution evaluator.
+    - name: la01_tiny
+      path: cases/la01_tiny.yaml
+      type: job_shop_case
+      description: Validation case used by the schedule-solution evaluator.
+
+metrics:
+  source: return
+  keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
+
+outputFiles:
+  - schedule_*.json
+  - job_shop_metrics*.json

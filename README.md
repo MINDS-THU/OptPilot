@@ -85,13 +85,13 @@ The job-shop examples are the main tutorial comparison set: environments declare
 Run the job-shop parameter baseline:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Validate a config without running it:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Open the local UI:
@@ -100,47 +100,42 @@ Open the local UI:
 uv run optpilot ui --open-browser
 ```
 
-The UI scans `examples/` and `user_catalog/` by default. Stop the local server
-with `Ctrl-C` in the terminal when you are done.
+The UI scans packages under `catalog/` by default. Stop the local server with
+`Ctrl-C` in the terminal when you are done.
 
 For the assistant-enabled Studio workflow with OpenHands, embedded Code Server,
 and per-workspace containers, see [UI](docs/ui.md).
 
-Some advanced examples and integration templates, such as Strategic Airlift and upstream `llm_heuristic_search` repository wrappers, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
+Some advanced examples, such as Strategic Airlift and future curated application packages, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
 
 ## Full Config Examples
 
 The first tutorial shows the full environment, method, and study YAML files for a runnable job-shop baseline:
 
-- `examples/environments/job_shop_scheduling/environment_rule_parameters.yaml`
-- `examples/methods/fixed_rule_parameters/method.yaml`
-- `examples/studies/job_shop_rule_parameters_baseline.yaml`
+- `catalog/example_package/environments/job_shop_scheduling/environment_rule_parameters.yaml`
+- `catalog/example_package/methods/fixed_rule_parameters/method.yaml`
+- `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml`
 
 Read [Getting Started](docs/getting-started.md) for the full configs and the explanation of how the three files fit together. Python evaluator references use `module:function`; Python method references use `module:Class`.
 
-## User-Owned Catalog
+## Catalog Packages
 
-Put reusable environments, methods, and resources under `user_catalog/`.
-Study YAML files are concrete run plans; keep them where you draft or launch
-them rather than registering them as reusable catalog entries:
+OptPilot ships one package at `catalog/example_package/`. When Studio registers
+user-owned files, it creates `catalog/local_package/` on demand. Future curated
+packages should be added as additional siblings under `catalog/`; they should
+not overwrite existing packages.
 
 ```text
-user_catalog/
-  environments/my_environment/
-    environment.yaml
-    evaluator.py
-    assets/
-  methods/my_method/
-    method.yaml
-    method.py
-    assets/
-  resources/my_resource/
-    README.md
+catalog/
+  example_package/
+  local_package/
+  another_curated_package/
 ```
 
-Environment and method directories own reusable implementation code and
-reusable config variants. Resources are reusable reference folders. Study
-configs are project-specific bindings.
+Each package can contain `environments/`, `methods/`, `resources/`, and
+`studies/`. Environment and method directories own reusable implementation code
+and reusable config variants. Resources are reusable reference folders or
+launchable apps. Study configs are concrete run plans.
 
 ## Container Runtime Example
 
@@ -188,7 +183,7 @@ runtime:
 - [Examples](docs/examples.md)
 - [Job-Shop Environment](docs/job-shop-environment.md)
 - [Configuration Reference](docs/configuration.md)
-- [User Catalog](docs/user-catalog.md)
+- [Catalog](docs/catalog.md)
 - [UI](docs/ui.md)
 
 Build the docs locally:

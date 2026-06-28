@@ -192,7 +192,7 @@ def _stable_baselines3_stack_importable() -> bool:
 
 class MvpIntegrationTest(unittest.TestCase):
     def test_openai_file_editor_rejects_empty_edit_payloads(self) -> None:
-        from examples.methods.openai_file_editor.method import _extract_edited_files
+        from catalog.example_package.methods.openai_file_editor.method import _extract_edited_files
 
         with self.assertRaisesRegex(ValueError, "non-empty `files` list"):
             _extract_edited_files({"summary": "No changes."}, ["dispatch_rule.py"])
@@ -291,11 +291,10 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_job_shop_example_baselines_run_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         study_paths = [
-            repo_root / "examples" / "studies" / "job_shop_rule_parameters_baseline.yaml",
-            repo_root / "examples" / "studies" / "job_shop_dispatch_rule_baseline.yaml",
-            repo_root / "examples" / "studies" / "job_shop_solver_code_baseline.yaml",
-            repo_root / "examples" / "studies" / "job_shop_openai_dispatch_rule.yaml",
-            repo_root / "examples" / "studies" / "job_shop_local_heuristic_search.yaml",
+            repo_root / "catalog" / "example_package" / "studies" / "job_shop_rule_parameters_baseline.yaml",
+            repo_root / "catalog" / "example_package" / "studies" / "job_shop_dispatch_rule_baseline.yaml",
+            repo_root / "catalog" / "example_package" / "studies" / "job_shop_solver_code_baseline.yaml",
+            repo_root / "catalog" / "example_package" / "studies" / "job_shop_openai_dispatch_rule.yaml",
         ]
         with tempfile.TemporaryDirectory() as tmp_dir:
             for study_path in study_paths:
@@ -311,7 +310,7 @@ class MvpIntegrationTest(unittest.TestCase):
     @unittest.skipUnless(_stable_baselines3_stack_importable(), "stable-baselines3 example stack is not importable")
     def test_job_shop_stable_baselines_example_runs_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        study_path = repo_root / "examples" / "studies" / "job_shop_rl_stable_baselines.yaml"
+        study_path = repo_root / "catalog" / "example_package" / "studies" / "job_shop_rl_stable_baselines.yaml"
         with tempfile.TemporaryDirectory() as tmp_dir:
             summary = run_study(str(study_path), output_root=tmp_dir)
             self.assertEqual(summary.completed_trials, 1)
@@ -399,7 +398,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_job_shop_case_settings_match_method_references(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        spec = compile_authoring_config(repo_root / "examples" / "studies" / "job_shop_ortools_cpsat.yaml")
+        spec = compile_authoring_config(repo_root / "catalog" / "example_package" / "studies" / "job_shop_ortools_cpsat.yaml")
 
         settings_cases = {
             case["id"]
@@ -883,56 +882,6 @@ class MvpIntegrationTest(unittest.TestCase):
                 "candidates/candidate-single-file/files/solver.py",
             )
 
-    def test_llm_heuristic_wrapper_stores_generated_file_candidate(self) -> None:
-        from examples.methods.llm_heuristic_search.method import LLMHeuristicSearchMethod
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            method_dir = tmp_path / "catalog" / "methods" / "llm_wrapper"
-            method_dir.mkdir(parents=True)
-            workdir = method_dir / "upstream"
-            workdir.mkdir()
-            study_spec = StudySpec(
-                path=tmp_path / "studies" / "study.yaml",
-                raw={"metadata": {"name": "llm-heuristic-wrapper-test"}},
-            )
-            definition = {
-                "id": "fake-llm-heuristic",
-                "configBaseDir": str(method_dir),
-                "settings": {
-                    "command": [
-                        sys.executable,
-                        "-c",
-                        "from pathlib import Path; Path('outputs').mkdir(exist_ok=True); Path('outputs/best.py').write_text('def priority(x):\\n    return x\\n', encoding='utf-8')",
-                    ],
-                    "repoRoot": "upstream",
-                    "workdir": "upstream",
-                    "generatedFile": "outputs/best.py",
-                },
-            }
-            method = LLMHeuristicSearchMethod(definition, study_spec)
-
-            candidates = method.propose(
-                1,
-                {
-                    "runtime_context": {"candidate_store_dir": str(tmp_path / "run" / "candidates")},
-                    "candidate_context": {
-                        "candidate": {
-                            "format": "files",
-                            "files": {"editable": [{"path": "priority.py"}]},
-                        }
-                    },
-                },
-            )
-
-            self.assertEqual(len(candidates), 1)
-            candidate = candidates[0]
-            self.assertEqual(candidate["format"], "files")
-            self.assertEqual(candidate["spec"]["files"][0]["path"], "priority.py")
-            content_ref = Path(candidate["spec"]["files"][0]["contentRef"])
-            self.assertTrue(content_ref.exists())
-            self.assertIn("def priority", content_ref.read_text(encoding="utf-8"))
-
     def test_candidate_file_store_rejects_unsafe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -1078,6 +1027,52 @@ class MvpIntegrationTest(unittest.TestCase):
                 sys.path[:] = original_sys_path
 
             self.assertEqual(exit_code, 0)
+
+    def test_run_study_defaults_to_current_workspace_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        environment_path = repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"
+        method_path = repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"
+        original_cwd = Path.cwd()
+        original_sys_path = list(sys.path)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package_studies = tmp_path / "external_package" / "studies"
+            workspace_root = tmp_path / "workspace"
+            package_studies.mkdir(parents=True)
+            workspace_root.mkdir()
+            spec_path = package_studies / "toy_default_runs.yaml"
+            spec_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "toy-default-runs",
+                        "environmentConfig": str(environment_path),
+                        "methodConfig": str(method_path),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                        "reproducibility": {"seed": 7},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            try:
+                os.chdir(workspace_root)
+                if str(repo_root) not in sys.path:
+                    sys.path.insert(0, str(repo_root))
+                summary = run_study(str(spec_path))
+            finally:
+                os.chdir(original_cwd)
+                sys.path[:] = original_sys_path
+
+            run_dir = Path(summary.run_dir)
+            self.assertEqual(run_dir.parent, (workspace_root / "runs").resolve())
+            self.assertTrue((run_dir / "observations.jsonl").exists())
+            self.assertFalse((tmp_path / "external_package" / "runs").exists())
 
     def test_cli_environment_adapter_runs_and_captures_process_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2206,7 +2201,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(observations[0]["provenance"]["resource_profile"]["timeoutSeconds"], 1)
 
     def test_sa_example_evaluator_timeout_kills_simulator_process_group(self) -> None:
-        from examples.environments.strategic_airlift_devs.evaluator import evaluate
+        from catalog.example_package.environments.strategic_airlift_devs.evaluator import evaluate
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -2536,10 +2531,10 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_ui_catalog_scans_authoring_configs_and_validates_study(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
 
         catalog = _catalog_payload(state)
-        validation = _validate_study(repo_root / "examples" / "studies" / "sa_baseline.yaml")
+        validation = _validate_study(repo_root / "catalog" / "example_package" / "studies" / "sa_baseline.yaml")
 
         sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
         job_shop_parameter_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
@@ -2563,14 +2558,12 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("job-shop-lib-simulated-annealing", method_ids)
         self.assertIn("job-shop-lib-ortools-cpsat", method_ids)
         self.assertIn("job-shop-rl-stable-baselines", method_ids)
-        self.assertIn("local-job-shop-heuristic-search", method_ids)
         self.assertIn("openai-file-editor", method_ids)
         self.assertTrue(any(item["label"] == "job-shop-lib-dispatching-rule" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-lib-simulated-annealing" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-lib-ortools-cpsat" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-rl-stable-baselines" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-openai-dispatch-rule" for item in catalog["studies"]))
-        self.assertTrue(any(item["label"] == "job-shop-local-heuristic-search" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-rule-parameters-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-dispatch-rule-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-solver-code-baseline" for item in catalog["studies"]))
@@ -2580,7 +2573,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(validation["valid"], validation)
         self.assertEqual(validation["environment_id"], "sa-simulator-code-edit")
 
-    def test_ui_default_catalog_roots_are_examples_and_user_catalog(self) -> None:
+    def test_ui_default_catalog_roots_are_catalog_packages(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         roots = _default_catalog_roots(repo_root)
         state = UiState(cwd=repo_root, catalog_roots=[], run_roots=[])
@@ -2589,7 +2582,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(
             roots,
-            [repo_root / "examples", repo_root / "user_catalog"],
+            [repo_root / "catalog" / "example_package"],
         )
         self.assertEqual(state.catalog_roots, roots)
         environment_ids = {item["id"] for item in catalog["environments"]}
@@ -2608,14 +2601,14 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_ui_catalog_scans_user_resources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            resource = tmp_path / "user_catalog" / "resources" / "devs_display_new"
+            resource = tmp_path / "catalog" / "local_package" / "resources" / "devs_display_new"
             resource.mkdir(parents=True)
             (resource / "README.md").write_text(
                 "# DEVS Display Generator\n\nReusable simulation codebase for DEVS displays.\n",
                 encoding="utf-8",
             )
             (resource / "tool.py").write_text("print('ready')\n", encoding="utf-8")
-            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
 
             catalog = _catalog_payload(state)
 
@@ -2627,7 +2620,7 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_resource_manifest_declares_launchable_interface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            resource = tmp_path / "user_catalog" / "resources" / "ui_tool"
+            resource = tmp_path / "catalog" / "local_package" / "resources" / "ui_tool"
             resource.mkdir(parents=True)
             (resource / "README.md").write_text("# UI Tool\n\nReusable graphical helper.\n", encoding="utf-8")
             (resource / "optpilot.resource.yaml").write_text(
@@ -2650,7 +2643,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
 
             catalog = _catalog_payload(state)
 
@@ -2667,7 +2660,7 @@ class MvpIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             fake_container = _write_fake_workspace_container(tmp_path)
-            resource = tmp_path / "user_catalog" / "resources" / "preview_tool"
+            resource = tmp_path / "catalog" / "local_package" / "resources" / "preview_tool"
             resource.mkdir(parents=True)
             (resource / "README.md").write_text("# Preview Tool\n\nHas a local frontend.\n", encoding="utf-8")
             (resource / "index.html").write_text("<h1>Preview</h1>\n", encoding="utf-8")
@@ -2691,7 +2684,7 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             state = UiState(
                 cwd=tmp_path,
-                catalog_roots=[tmp_path / "user_catalog"],
+                catalog_roots=[tmp_path / "catalog" / "local_package"],
                 run_roots=[],
                 workspace_runtime=WorkspaceRuntimeOptions(
                     executable=str(fake_container),
@@ -2730,7 +2723,7 @@ class MvpIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             fake_container = _write_fake_workspace_container(tmp_path)
-            resource = tmp_path / "user_catalog" / "resources" / "preview_tool"
+            resource = tmp_path / "catalog" / "local_package" / "resources" / "preview_tool"
             resource.mkdir(parents=True)
             (resource / "README.md").write_text("# Preview Tool\n\nHas a local frontend.\n", encoding="utf-8")
             (resource / "index.html").write_text("<h1>Preview</h1>\n", encoding="utf-8")
@@ -2753,7 +2746,7 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             state = UiState(
                 cwd=tmp_path,
-                catalog_roots=[tmp_path / "user_catalog"],
+                catalog_roots=[tmp_path / "catalog" / "local_package"],
                 run_roots=[],
                 workspace_runtime=WorkspaceRuntimeOptions(
                     executable=str(fake_container),
@@ -2855,14 +2848,14 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(no_failure_limit_draft["validation"]["valid"], no_failure_limit_draft)
             self.assertNotIn("maxFailures", no_failure_limit_draft["draft"]["budget"])
 
-            examples_state = UiState(cwd=repo_root, catalog_roots=[repo_root / "examples"], run_roots=[])
+            examples_state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
             examples_state.jobs_dir = Path(tmp_dir) / "example-jobs"
             examples_state.jobs_dir.mkdir(parents=True, exist_ok=True)
             sa_draft = _draft_study(
                 examples_state,
                 {
-                    "environment_path": str(repo_root / "examples" / "environments" / "strategic_airlift_devs" / "environment.yaml"),
-                    "method_path": str(repo_root / "examples" / "methods" / "openai_file_editor" / "method.yaml"),
+                    "environment_path": str(repo_root / "catalog" / "example_package" / "environments" / "strategic_airlift_devs" / "environment.yaml"),
+                    "method_path": str(repo_root / "catalog" / "example_package" / "methods" / "openai_file_editor" / "method.yaml"),
                     "name": "ui-draft-sa",
                     "metric": "service_score",
                     "direction": "maximize",
@@ -2878,8 +2871,8 @@ class MvpIntegrationTest(unittest.TestCase):
             incompatible_schedule_draft = _draft_study(
                 examples_state,
                 {
-                    "environment_path": str(repo_root / "examples" / "environments" / "job_shop_scheduling" / "environment_rule_parameters.yaml"),
-                    "method_path": str(repo_root / "examples" / "methods" / "ortools_cpsat_solver" / "method.yaml"),
+                    "environment_path": str(repo_root / "catalog" / "example_package" / "environments" / "job_shop_scheduling" / "environment_rule_parameters.yaml"),
+                    "method_path": str(repo_root / "catalog" / "example_package" / "methods" / "ortools_cpsat_solver" / "method.yaml"),
                     "name": "bad-schedule-draft",
                     "metric": "makespan",
                     "direction": "maximize",
@@ -2959,7 +2952,7 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_ui_registration_skips_studies_and_registers_resources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
-            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "user_catalog"], run_roots=[])
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
             workspace = _create_ui_workspace(
                 state,
                 {
@@ -2984,11 +2977,14 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             applied = _apply_registration_manifest(state, workspace["id"], created["registration"]["id"])
 
-            destination = tmp_path / "user_catalog" / "resources" / "reusable-tool"
+            destination = tmp_path / "catalog" / "local_package" / "resources" / "reusable-tool"
+            catalog = _catalog_payload(state)
             indexed = _list_ui_workspaces(state)
 
             self.assertTrue(applied["applied"])
             self.assertTrue((destination / "README.md").exists())
+            self.assertIn((tmp_path / "catalog" / "local_package").resolve(), state.catalog_roots)
+            self.assertTrue(any(entry["id"] == "reusable-tool" for entry in catalog["resources"]))
             self.assertTrue(any(entry["kind"] == "resource" for entry in applied["workspace"]["registered_entries"]))
             self.assertTrue(any(item["id"] == workspace["id"] and item["registered_entries"] for item in indexed))
 
@@ -5076,7 +5072,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 "--port",
                 "9001",
                 "--catalog",
-                "examples",
+                "catalog/example_package",
                 "--workspace-runtime-bin",
                 "podman",
                 "--workspace-runtime-image",
@@ -5090,7 +5086,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(args.command, "ui")
         self.assertEqual(args.port, 9001)
-        self.assertEqual(args.catalog, ["examples"])
+        self.assertEqual(args.catalog, ["catalog/example_package"])
         self.assertEqual(args.workspace_runtime_bin, "podman")
         self.assertEqual(args.workspace_runtime_image, "custom/workspace:latest")
         self.assertEqual(args.workspace_runtime_network, "bridge")

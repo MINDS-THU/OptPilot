@@ -125,8 +125,8 @@ See [Candidate Contracts](candidate-contracts.md) for the full model and example
 Use the CLI when you want a simple validate/run loop:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Use OptPilot Studio when you want a local GUI for browsing reusable components,
@@ -137,7 +137,7 @@ assistant for help:
 uv run optpilot ui --open-browser
 ```
 
-Studio scans `examples/` and `user_catalog/` by default. It also has an
+Studio scans packages under `catalog/` by default. It also has an
 assistant-enabled mode backed by OpenHands and per-workspace Code Server
 containers; see [UI](ui.md) for setup.
 
@@ -148,8 +148,8 @@ containers; see [UI](ui.md) for setup.
 3. Read [Concepts](concepts.md) for the vocabulary.
 4. Read [How A Run Works](how-it-works.md) and [Evidence](evidence.md) when you want the runtime model.
 5. Use [Examples](examples.md) and [Job-Shop Environment](job-shop-environment.md) to choose a method track.
-6. Use [User Catalog](user-catalog.md) and [Configuration](configuration.md) when you start writing your own integrations.
+6. Use [Catalog](catalog.md) and [Configuration](configuration.md) when you start writing your own integrations.
 
 For personal or team use, put reusable environments, methods, and resources
-under `user_catalog/`. Keep study YAML files where you draft or launch them;
+under `catalog/local_package/`. Keep study YAML files where you draft or launch them;
 they are run plans rather than reusable catalog entries.

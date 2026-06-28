@@ -21,7 +21,7 @@ config: method
 id: my-method
 
 entrypoint:
-  python: user_catalog.methods.my_method.method:MyMethod
+  python: catalog.local_package.methods.my_method.method:MyMethod
   protocol: batch
 
 settings:
@@ -155,7 +155,7 @@ Method `entrypoint` fragment:
 
 ```yaml
 entrypoint:
-  python: user_catalog.methods.my_agent.method:MyAgent
+  python: catalog.local_package.methods.my_agent.method:MyAgent
   protocol: session
 ```
 

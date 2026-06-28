@@ -1960,7 +1960,7 @@ function buildRegistrationDraft(session, discoveredConfigs = null) {
     note: alreadyRegistered
       ? "This workspace is already registered in the catalog. Create an editable copy if you want to modify and register a new version."
       : configs.length
-      ? "Select one or more configs, validate them, then register selected files to user_catalog."
+      ? "Select one or more configs, validate them, then register selected files to catalog/local_package."
       : "No environment or method config was found. You can add one in Code Server or register this workspace as a reusable resource.",
   };
 }
@@ -2003,7 +2003,7 @@ function resourceRegistrationHtml(draft) {
     <div class="registration-resource">
       <div>
         <strong>Register as Resource</strong>
-        <p>Copy this draft into <code>user_catalog/resources/</code> as a reusable reference workspace.</p>
+        <p>Copy this draft into <code>catalog/local_package/resources/</code> as a reusable reference workspace.</p>
       </div>
       <label class="control-field">
         <span>Resource id</span>
@@ -2157,7 +2157,7 @@ function bindRegistrationMenu() {
       }
       draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
       await loadCatalogAndCompatibility();
-      pushAssistantMessage(["assistant", applied.applied ? "Resource registered" : "Resource registration blocked", applied.applied ? "The draft was copied into user_catalog/resources." : "Validation must pass before registration can be applied."]);
+      pushAssistantMessage(["assistant", applied.applied ? "Resource registered" : "Resource registration blocked", applied.applied ? "The draft was copied into catalog/local_package/resources." : "Validation must pass before registration can be applied."]);
       renderCatalog();
       renderWorkspace();
     } catch (error) {

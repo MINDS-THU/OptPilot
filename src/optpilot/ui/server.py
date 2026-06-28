@@ -57,6 +57,10 @@ RUN_SENTINEL_FILES = {
 # methods are reusable catalog configs that can be registered through Studio.
 INDEXED_CONFIGS = {"environment", "method", "study"}
 REGISTERABLE_CONFIGS = {"environment", "method"}
+CATALOG_DIR_NAME = "catalog"
+EXAMPLE_PACKAGE_NAME = "example_package"
+LOCAL_PACKAGE_NAME = "local_package"
+CATALOG_PACKAGE_DIRS = {"environments", "methods", "resources", "studies"}
 EXCLUDED_SCAN_DIRS = {
     ".git",
     ".mypy_cache",
@@ -1090,7 +1094,7 @@ class UiState:
         workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
     ):
         self.cwd = cwd.resolve()
-        self.catalog_roots = _dedupe_paths(catalog_roots or _default_catalog_roots(self.cwd))
+        self.catalog_roots = _expand_catalog_roots(catalog_roots) if catalog_roots else _default_catalog_roots(self.cwd)
         self.run_roots = _dedupe_paths(run_roots or _default_run_roots(self.cwd))
         self.jobs: Dict[str, UiJob] = {}
         self.interface_launches: Dict[str, UiLaunchJob] = {}
@@ -1569,7 +1573,7 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
         "--catalog",
         action="append",
         default=[],
-        help="Catalog root to scan. Defaults to examples and user_catalog when present.",
+        help="Catalog root to scan. Defaults to packages under catalog/.",
     )
     parser.add_argument("--runs", action="append", default=[], help="Run root to scan")
     parser.add_argument("--code-server-bin", default=None, help="Path to the coder/code-server executable")
@@ -2072,6 +2076,7 @@ def _handler_factory(state: UiState):
 
 
 def _catalog_payload(state: UiState) -> JsonDict:
+    _refresh_catalog_package_roots(state)
     entries = _scan_catalog(state.catalog_roots)
     grouped = {config: [] for config in INDEXED_CONFIGS}
     for entry in entries:
@@ -4166,7 +4171,7 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         return _tool_result(tool, data.get("registration", {}).get("status") == "validated", "Registration validated.", data=data)
     if tool == "optpilot_registration_apply":
         if not arguments.get("approved"):
-            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="registration_apply", title="Apply catalog registration", summary="Apply selected workspace files into user_catalog.", targets=[str(arguments.get("registration_id") or "")])
+            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="registration_apply", title="Apply catalog registration", summary="Apply selected workspace files into catalog/local_package.", targets=[str(arguments.get("registration_id") or "")])
         data = _apply_registration_manifest(state, str(arguments.get("workspace_id") or ""), str(arguments.get("registration_id") or ""))
         return _tool_result(tool, bool(data.get("applied")), "Registration applied." if data.get("applied") else "Registration was not applied.", data=data)
     if tool == "optpilot_study_draft":
@@ -5963,7 +5968,7 @@ def _create_resource_registration_manifest(state: UiState, workspace: JsonDict, 
         "kind": "resource",
         "config_path": "",
         "catalog_id": resource_id,
-        "destination": str(state.cwd / "user_catalog" / "resources" / resource_id),
+        "destination": str(_local_catalog_package_root(state) / "resources" / resource_id),
         "focus_paths": [item for item in ("README.md", "readme.md") if (root / item).exists()],
         "include": include,
         "exclude": [".git/**", ".venv/**", "runs/**", "__pycache__/**", "node_modules/**"],
@@ -6087,9 +6092,8 @@ def _copy_ignore(directory: str, names: List[str]) -> set[str]:
     return ignored
 
 
-def _is_user_catalog_path(state: UiState, path: Path) -> bool:
-    user_catalog = (state.cwd / "user_catalog").resolve()
-    return _is_relative_to(path.resolve(), user_catalog)
+def _is_local_catalog_path(state: UiState, path: Path) -> bool:
+    return _is_relative_to(path.resolve(), _local_catalog_package_root(state).resolve())
 
 
 def _relative_path(path: Path, root: Path) -> str:
@@ -6159,9 +6163,9 @@ def _command_focus_paths(root: Path, config_path: Path, command: List[Any]) -> L
 def _default_registration_destination(state: UiState, kind: str, catalog_id: str) -> Path:
     safe_id = _slug_text(catalog_id)
     if kind == "environment":
-        return state.cwd / "user_catalog" / "environments" / safe_id
+        return _local_catalog_package_root(state) / "environments" / safe_id
     if kind == "method":
-        return state.cwd / "user_catalog" / "methods" / safe_id
+        return _local_catalog_package_root(state) / "methods" / safe_id
     raise ValueError(f"{kind} configs are not catalog registration targets.")
 
 
@@ -6195,9 +6199,13 @@ def _write_registration_manifest(state: UiState, workspace_id: str, manifest: Js
 
 
 def _require_catalog_destination(state: UiState, destination: Path) -> None:
-    user_catalog = (state.cwd / "user_catalog").resolve()
-    if not _is_relative_to(destination.resolve(), user_catalog):
-        raise PermissionError("Registration can only write into user_catalog.")
+    local_catalog = _local_catalog_package_root(state).resolve()
+    if not _is_relative_to(destination.resolve(), local_catalog):
+        raise PermissionError("Registration can only write into catalog/local_package.")
+
+
+def _local_catalog_package_root(state: UiState) -> Path:
+    return state.cwd / CATALOG_DIR_NAME / LOCAL_PACKAGE_NAME
 
 
 def _match_workspace_pattern(root: Path, pattern: str) -> List[Path]:
@@ -6241,19 +6249,54 @@ def _find_run_dirs(roots: Iterable[Path]) -> List[Path]:
 
 def _default_run_roots(cwd: Path) -> List[Path]:
     roots = [cwd / "runs"]
-    examples = cwd / "examples"
-    if examples.exists():
-        roots.extend(path for path in examples.rglob("runs") if path.is_dir())
+    catalog_root = cwd / CATALOG_DIR_NAME
+    if catalog_root.exists():
+        roots.extend(path for path in catalog_root.rglob("runs") if path.is_dir())
     return _dedupe_paths([path for path in roots if path.exists()])
 
 
 def _default_catalog_roots(cwd: Path) -> List[Path]:
-    roots = [
-        cwd / "examples",
-        cwd / "user_catalog",
-    ]
-    existing = [path for path in roots if path.exists()]
-    return existing or [cwd]
+    catalog_root = cwd / CATALOG_DIR_NAME
+    if catalog_root.exists():
+        package_roots = _expand_catalog_roots([catalog_root])
+        if package_roots:
+            return package_roots
+    return [cwd]
+
+
+def _refresh_catalog_package_roots(state: UiState) -> None:
+    catalog_root = state.cwd / CATALOG_DIR_NAME
+    if not catalog_root.exists():
+        return
+    state.catalog_roots = _dedupe_paths([*state.catalog_roots, *_expand_catalog_roots([catalog_root])])
+
+
+def _expand_catalog_roots(roots: Iterable[Path]) -> List[Path]:
+    expanded: List[Path] = []
+    for root in roots:
+        root = root.resolve()
+        packages = _catalog_package_roots(root)
+        if packages and not _looks_like_catalog_package(root):
+            expanded.extend(packages)
+        else:
+            expanded.append(root)
+    return _dedupe_paths(expanded)
+
+
+def _catalog_package_roots(catalog_root: Path) -> List[Path]:
+    if _looks_like_catalog_package(catalog_root):
+        return [catalog_root]
+    if not catalog_root.exists() or not catalog_root.is_dir():
+        return []
+    return sorted(
+        path
+        for path in catalog_root.iterdir()
+        if path.is_dir() and _looks_like_catalog_package(path)
+    )
+
+
+def _looks_like_catalog_package(path: Path) -> bool:
+    return any((path / name).exists() for name in CATALOG_PACKAGE_DIRS)
 
 
 def _newest_run_dir(root: Path, *, exclude: set[Path]) -> Optional[Path]:

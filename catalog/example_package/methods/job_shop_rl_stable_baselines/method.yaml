@@ -1,0 +1,34 @@
+apiVersion: optpilot.io/v1
+config: method
+id: job-shop-rl-stable-baselines
+description: Trains a small RL policy on training cases and emits schedule solutions for validation cases.
+tags: [job-shop, reinforcement-learning, stable-baselines, schedule-solution]
+
+entrypoint:
+  python: catalog.example_package.methods.job_shop_rl_stable_baselines.method:StableBaselinesJobShopMethod
+  protocol: batch
+
+settings:
+  batchSize: 1
+  algorithm: PPO
+  trainInstances:
+    - ../../environments/job_shop_scheduling/cases/train_tiny_a.yaml
+    - ../../environments/job_shop_scheduling/cases/train_tiny_b.yaml
+  maxJobs: 6
+  totalTimesteps: 128
+  discountFactor: 0.95
+  seed: 0
+
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema
+
+produces:
+  format: parameters
+  parameters:
+    schema:
+      solutions:
+        valueType: object
+        properties: {}

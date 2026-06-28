@@ -30,7 +30,7 @@ class StudyRunner:
     ):
         self.study_spec = study_spec
         evidence_output_dir = study_spec.evidence.get("outputDir")
-        self.output_root = output_root or (Path(evidence_output_dir).resolve() if evidence_output_dir else study_spec.base_dir.parent / "runs")
+        self.output_root = output_root or (Path(evidence_output_dir).resolve() if evidence_output_dir else (Path.cwd() / "runs").resolve())
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.resume_run_dir = Path(resume_run_dir).resolve() if resume_run_dir else None
         self.branch_from_run_dir = Path(branch_from_run_dir).resolve() if branch_from_run_dir else None

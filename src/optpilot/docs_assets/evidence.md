@@ -19,7 +19,7 @@ The run directory shows what actually happened: which candidates were proposed, 
 
 ## Run Directory
 
-By default, runs are written to a `runs/` directory next to the directory that contains the study config. The built-in job-shop studies live under `examples/studies/`, so their default output root is `examples/runs/`. You can override this with `--output-root` or `evidence.outputDir`.
+By default, runs are written to `runs/` under the current workspace. Studio uses this workspace-level run root, and direct CLI runs do the same unless you override it with `--output-root` or `evidence.outputDir`. Catalog packages should stay focused on authored methods, environments, resources, and studies; generated run evidence is user-local runtime data.
 
 Common files:
 
@@ -133,13 +133,13 @@ def propose(self, n_candidates, study_state, evidence_view):
 Resume appends more trials to an existing run:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml \
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
   --resume-run-dir path/to/existing-run
 ```
 
 Branch starts a new run that records a previous run as its parent:
 
 ```bash
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml \
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
   --branch-from-run-dir path/to/existing-run
 ```

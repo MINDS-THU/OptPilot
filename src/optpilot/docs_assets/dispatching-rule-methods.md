@@ -9,24 +9,24 @@ Dispatching rules are the simplest natural method family for job-shop scheduling
 
 | Example | Method config | Environment config | Dependency |
 | --- | --- | --- | --- |
-| Fixed weighted rule | `examples/methods/fixed_rule_parameters/method.yaml` | `environment_rule_parameters.yaml` | none |
-| Baseline Python rule file | `examples/methods/baseline_file_copy/method.yaml` | `environment_dispatch_rule.yaml` | none |
-| JobShopLib dispatching rule | `examples/methods/job_shop_lib_dispatching_rule/method.yaml` | `environment_schedule_solution.yaml` | `job-shop-lib` |
+| Fixed weighted rule | `catalog/example_package/methods/fixed_rule_parameters/method.yaml` | `environment_rule_parameters.yaml` | none |
+| Baseline Python rule file | `catalog/example_package/methods/baseline_file_copy/method.yaml` | `environment_dispatch_rule.yaml` | none |
+| JobShopLib dispatching rule | `catalog/example_package/methods/job_shop_lib_dispatching_rule/method.yaml` | `environment_schedule_solution.yaml` | `job-shop-lib` |
 
 ## Dependency-Free Baselines
 
 Run the parameter baseline:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run examples/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
 Run the file-candidate baseline:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run examples/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
 These two studies are useful sanity checks before adding external method dependencies.
@@ -42,8 +42,8 @@ uv sync --extra examples
 Then run:
 
 ```bash
-uv run optpilot validate examples/studies/job_shop_lib_dispatching_rule.yaml
-uv run optpilot run examples/studies/job_shop_lib_dispatching_rule.yaml
+uv run optpilot validate catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
 ```
 
 The JobShopLib method reads the job-shop case references exposed through `methodContext.references`, calls JobShopLib for each case, and emits a schedule-solution candidate:
