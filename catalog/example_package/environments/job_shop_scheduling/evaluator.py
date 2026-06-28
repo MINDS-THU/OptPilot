@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-from .simulator import (
+from simulator import (
     load_instance,
     schedule_by_dispatch_rule,
     summarize_schedule,

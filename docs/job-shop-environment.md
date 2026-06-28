@@ -77,7 +77,7 @@ flowchart TB
 
   P --> M1["fixed-rule-parameters baseline\nschema-general parameter methods"]
   S --> M2["JobShopLib dispatching\nsimulated annealing\nOR-Tools\nRL rollout"]
-  D --> M3["baseline file copy\nOpenAI file editor\nLLM heuristic repositories"]
+  D --> M3["baseline file copy\nOpenAI file editor\nfuture heuristic packages"]
   C --> M4["solver-code writers"]
 ```
 
@@ -248,7 +248,9 @@ The keys `ft06_small` and `la01_tiny` come from the environment config's case id
 
 This contract is suitable for any method that produces finished schedules: JobShopLib, OR-Tools, Gurobi, a trained RL policy, or an internal company solver. The environment only validates and scores schedules. It does not know which method or library produced them.
 
-Schedule-producing methods declare the same output shape on their side:
+Schedule-producing methods declare the format and context they need, and may
+require the environment capability that says complete schedule solutions are
+accepted:
 
 Method compatibility fragment:
 
@@ -258,17 +260,14 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
+    capabilities:
+      - schedule-solution-candidate
 ```
 
-The important part is the structural match: the method produces a `solutions` parameter shaped like the environment's accepted candidate schema. The environment does not need to know whether that schedule came from OR-Tools, JobShopLib simulated annealing, Stable-Baselines, Gurobi, or something else.
+The important part is that the environment owns the accepted candidate schema.
+The method can come from OR-Tools, JobShopLib simulated annealing,
+Stable-Baselines, Gurobi, or something else; OptPilot validates the submitted
+candidate against the environment contract during the run.
 
 ## Dispatch-Rule File Contract
 

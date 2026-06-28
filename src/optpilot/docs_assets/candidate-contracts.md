@@ -1,6 +1,6 @@
 ---
 title: Candidate Contracts
-description: How environments say what they can evaluate and methods say what they can produce.
+description: How environments say what they can evaluate and methods say what they can target.
 ---
 
 # Candidate Contracts
@@ -12,7 +12,7 @@ An environment does not call OR-Tools, Stable-Baselines, an LLM, or a Bayesian o
 ```mermaid
 flowchart LR
   Env["Environment\ncandidate: what can be evaluated"]
-  Method["Method\naccepts: what it can target\nproduces: optional fixed output shape"]
+  Method["Method\naccepts: what it can target"]
   Study["Study\nbinds one environment + one method"]
   Candidate["Candidate\nparameters | files | opaque"]
   Eval["Evaluator\nreturns metrics + artifacts"]
@@ -69,7 +69,8 @@ A matching method submits:
 }
 ```
 
-A schema-general method can read `candidate.parameters.schema` and produce any parameter shape the environment asks for. It should omit `produces`.
+A schema-general method can read `candidate.parameters.schema` and submit any
+parameter shape the environment asks for.
 
 ## File Candidates
 
@@ -100,9 +101,10 @@ runner copies files into the trial workspace
 environment evaluates the trial workspace
 ```
 
-## `accepts` Versus `produces`
+## Method Compatibility
 
-`accepts` is required. It says what kind of environment surface the method knows how to use.
+`accepts` is required. It says what kind of environment surface the method
+knows how to use.
 
 Method compatibility fragment:
 
@@ -115,24 +117,6 @@ accepts:
 ```
 
 This example says: "I can work with parameter-candidate environments, but I need to see the parameter schema."
-
-`produces` is optional. It says what candidate shape the method promises to return.
-
-Use `produces` when the method has a known output shape before the run starts. Do not use it when the method is intentionally schema-general and can adapt to the environment contract it receives at runtime.
-
-Method output-contract fragment:
-
-```yaml
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
-```
-
-This example says: "I will return a parameter candidate whose `spec` contains a top-level field named `solutions`."
 
 ### A Small Example
 
@@ -160,58 +144,31 @@ A schema-general method can read this schema and return:
 {"x": 0.42, "mode": "safe"}
 ```
 
-The same method could also work with a different environment that asks for `learning_rate` and `batch_size`, because it discovers the field names and types from `candidate.parameters.schema`. That method should omit `produces`; its output shape is chosen after it reads the environment contract.
+The same method could also work with a different environment that asks for
+`learning_rate` and `batch_size`, because it discovers the field names and
+types from `candidate.parameters.schema`.
 
-A specific method is different. Its code already knows what it will return. For example, a route solver might always return:
+A specific solver wrapper can still be method-specific. For example, a route
+solver might always return:
 
 ```json
 {"route": ["depot", "A", "B", "depot"]}
 ```
 
-That method can declare:
-
-Method output-contract fragment:
-
-```yaml
-produces:
-  format: parameters
-  parameters:
-    schema:
-      route:
-        valueType: array
-        items:
-          valueType: string
-```
-
-OptPilot can then reject the route solver if the selected environment accepts only `{x, mode}`. The environment still does not know how the route was produced; OptPilot only checks whether the candidate shapes match.
+That method should list the candidate format and any needed context or
+capabilities in `accepts`. During the run, OptPilot validates each submitted
+candidate against the selected environment's candidate contract before
+evaluation. The environment still does not know how the route was produced.
 
 ### Common Patterns
 
 | Method kind | Example | Why |
 | --- | --- | --- |
-| Schema-general parameter method | Reads the environment's parameter names, types, and bounds, then chooses values for those fields. | Omit `produces`; the method adapts to the environment schema. |
-| Specific solver wrapper | Always returns one known field such as `route`, `assignment`, or `solutions`. | Declare `produces`; OptPilot can reject environments that do not accept that field. |
-| Trained policy rollout method | Uses a trained policy internally, but always returns the same external candidate shape, such as a schedule or route. | Declare `produces` when the rollout output shape is fixed. |
-| File editor | Reads `candidate.files.editable` and edits whichever files the environment exposes. | Usually omit `produces`; the editable file set is environment-provided. |
-| Heuristic-search repository wrapper | Runs an upstream search repository and returns a known generated file, such as `dispatch_rule.py`. | Declare `produces` only if the wrapper always returns the same file contract; otherwise rely on `accepts` and path validation. |
-
-When `produces` is present, OptPilot compares it structurally with the environment candidate contract. It does not compare environment names, method names, or solver libraries.
-
-In the job-shop tutorial, this method promise:
-
-Method output-contract fragment:
-
-```yaml
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
-```
-
-means "this method returns finished schedules under `spec.solutions`." It is compatible with an environment that accepts a `solutions` parameter, but incompatible with an environment that accepts only dispatch-rule weights such as `processing_time_weight` and `remaining_work_weight`. The method and environment remain decoupled: the check is about candidate shape, not whether the environment knows about OR-Tools, JobShopLib, RL, or an LLM.
+| Schema-general parameter method | Reads the environment's parameter names, types, and bounds, then chooses values for those fields. | Require `candidate.parameters.schema` in `accepts`. |
+| Specific solver wrapper | Always returns one known field such as `route`, `assignment`, or `solutions`. | Require the environment capability or context it needs; candidate validation checks submitted values. |
+| Trained policy rollout method | Uses a trained policy internally, but returns an environment-facing schedule or route. | Require method-readable cases or capabilities through `accepts`. |
+| File editor | Reads `candidate.files.editable` and edits whichever files the environment exposes. | Require `candidate.files.editable` and optional `methodContext` entries. |
+| Heuristic-search repository wrapper | Runs an upstream search repository and returns generated files such as `dispatch_rule.py`. | Rely on `accepts` and file validation against the environment candidate contract. |
 
 ## Context For Methods
 
@@ -252,7 +209,7 @@ The main tutorial uses one scheduling problem with several candidate contracts.
 | --- | --- | --- |
 | `environment_rule_parameters.yaml` | weighted dispatch-rule parameters | fixed parameter baseline, schema-general parameter methods |
 | `environment_schedule_solution.yaml` | `parameters.spec.solutions` keyed by validation case id | OR-Tools, simulated annealing, JobShopLib dispatching, Stable-Baselines rollout |
-| `environment_dispatch_rule.yaml` | `files` containing `dispatch_rule.py` | baseline file copy, OpenAI file editor, LLM heuristic repositories |
+| `environment_dispatch_rule.yaml` | `files` containing `dispatch_rule.py` | baseline file copy, OpenAI file editor, future heuristic packages |
 | `environment_solver_code.yaml` | `files` containing `solver.py` | solver-code writers |
 
 The environment implementation and metrics stay stable. The candidate contract changes to let different method families connect cleanly.

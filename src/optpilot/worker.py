@@ -26,6 +26,9 @@ def main(argv=None) -> int:
     )
     store = LocalEvidenceStore.open_run_dir(Path(payload["run_dir"]))
 
+    for path in reversed(study_spec.environment["adapter"].get("pythonPath", []) or []):
+        if path and path not in sys.path:
+            sys.path.insert(0, str(path))
     environment_cls = resolve_component("adapter", study_spec.environment["adapter"]["implementation"])
     environment_adapter = environment_cls(study_spec.environment["adapter"], study_spec)
 

@@ -61,6 +61,7 @@ class ConfiguredEnvironmentAdapter:
         candidate_path = _configured_candidate_path(workspace, candidate_root, candidate_runtime, config)
         stdout_path = _workspace_path(workspace, "stdout.log")
         stderr_path = _workspace_path(workspace, "stderr.log")
+        component_python = _component_python_executable(self.study_spec.environment.get("runtime", {}))
 
         settings = dict(evaluate.get("config", {}) or {})
         _write_json(settings_path, settings)
@@ -73,7 +74,7 @@ class ConfiguredEnvironmentAdapter:
         python_result = None
         cwd = _workspace_path(workspace, evaluate.get("cwd", "."))
         placeholders = {
-            "python": sys.executable,
+            "python": component_python,
             "workspace": str(workspace),
             "candidate_root": str(candidate_root),
             "candidate_file": str(candidate_path),
@@ -266,7 +267,7 @@ class CLIEnvironmentAdapter:
         context = {**context, "settings": settings, "settings_file": str(settings_path)}
 
         placeholders = {
-            "python": sys.executable,
+            "python": _component_python_executable(self.study_spec.environment.get("runtime", {})),
             "candidate_path": str(candidate_path),
             "settings_path": str(settings_path),
             "output_path": str(output_path),
@@ -397,6 +398,10 @@ def _format_command(command: Any, placeholders: Dict[str, str]) -> List[str]:
     if isinstance(command, str):
         return [_format_string(part, placeholders) for part in shlex.split(command)]
     return [_format_string(str(part), placeholders) for part in command]
+
+
+def _component_python_executable(runtime: Dict[str, Any]) -> str:
+    return str(runtime.get("pythonExecutable") or sys.executable)
 
 
 def _reject_mutating_sql(statement: str) -> None:

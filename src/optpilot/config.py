@@ -21,6 +21,7 @@ AUTHORING_API_VERSION = "optpilot.io/v1"
 
 CONFIG_ENVIRONMENT = "environment"
 CONFIG_METHOD = "method"
+CONFIG_RESOURCE = "resource"
 CONFIG_STUDY = "study"
 
 METHOD_PROTOCOLS = {"batch", "session"}
@@ -28,8 +29,8 @@ CANDIDATE_FORMATS = {"parameters", "files", "opaque"}
 METRIC_SOURCES = {"custom", "return", "file", "stdout", "sqlite"}
 OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
 AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
-BACKENDS = {"local", "local_subprocess"}
-RUNTIME_SANDBOXES = {"host", "container"}
+RUNTIME_SANDBOXES = {"process", "container"}
+SETUP_STEP_TYPES = {"uv", "python-venv", "npm", "command"}
 EVIDENCE_LEVELS = {"minimal", "standard", "full"}
 OUTPUT_FILE_STORAGE_MODES = {"reference", "copy"}
 RECORD_SOURCES = {"custom", "jsonl", "csv", "sqlite_table", "sqlite_query"}
@@ -122,8 +123,10 @@ def validate_authoring_config(path: str | Path) -> Dict[str, Any]:
             _validate_environment_semantics(raw, config_path)
         elif config == CONFIG_METHOD:
             _validate_method_semantics(raw, config_path)
+        elif config == CONFIG_RESOURCE:
+            _validate_resource_semantics(raw, config_path)
         else:
-            raise ValueError("config must be environment, method, or study.")
+            raise ValueError("config must be environment, method, resource, or study.")
     except Exception as exc:
         return {"valid": False, "path": str(config_path), "errors": [str(exc)]}
     return {"valid": True, "path": str(config_path), "errors": []}
@@ -187,6 +190,8 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
 
     runtime = environment.get("runtime", {}) or {}
     _validate_runtime(runtime, f"{location} runtime")
+    if environment.get("interface") is not None:
+        _validate_interface(environment["interface"], f"{location} interface")
 
     if candidate["format"] == "parameters":
         _validate_parameter_schema(candidate.get("parameters", {}).get("schema", {}), location)
@@ -199,8 +204,12 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
     metric_source = metrics.get("source")
     if metric_source not in METRIC_SOURCES:
         raise ValueError(f"{location} metrics.source must be one of {sorted(METRIC_SOURCES)}.")
+    if metric_source == "return" and not (evaluator.get("python") or evaluator.get("adapter")):
+        raise ValueError(f"{location} metrics.source return requires evaluator.python or evaluator.adapter.")
     if metric_source == "file":
         _require_field(metrics, "path", f"{location} metrics")
+    if metric_source == "stdout" and not (evaluator.get("command") or evaluator.get("adapter")):
+        raise ValueError(f"{location} metrics.source stdout requires evaluator.command or evaluator.adapter.")
     if metric_source == "sqlite":
         _require_field(metrics, "database", f"{location} metrics")
         _require_field(metrics, "query", f"{location} metrics")
@@ -265,18 +274,16 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
     for key in ("context", "capabilities"):
         if requires.get(key) is not None:
             _require_string_list(requires[key], f"{location} accepts.requires.{key}")
-    if method.get("produces") is not None:
-        produced = _normalize_candidate(_require_mapping(method, "produces", location))
-        if produced["format"] not in formats:
-            raise ValueError(
-                f"{location} produces.format {produced['format']!r} must be listed in accepts.formats {formats!r}."
-            )
-        if produced["format"] == "parameters":
-            _validate_parameter_schema(produced.get("parameters", {}).get("schema", {}), f"{location} produces")
-            _validate_parameter_constraints(produced.get("parameters", {}).get("constraints", []), f"{location} produces")
-        if produced["format"] == "files":
-            _validate_file_candidate(produced, f"{location} produces")
+    if method.get("interface") is not None:
+        _validate_interface(method["interface"], f"{location} interface")
     _validate_runtime(method.get("runtime", {}) or {}, f"{location} runtime")
+
+
+def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) -> None:
+    location = str(path or "<inline resource>")
+    _require_field(resource, "id", location)
+    if resource.get("interface") is not None:
+        _validate_interface(resource["interface"], f"{location} interface")
 
 
 def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
@@ -296,10 +303,6 @@ def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     execution = study.get("execution", {}) or {}
     if not isinstance(execution, dict):
         raise ValueError(f"{location} execution must be an object.")
-    backend = execution.get("backend", "local")
-    if backend not in BACKENDS:
-        raise ValueError(f"{location} execution.backend must be one of {sorted(BACKENDS)}.")
-    _validate_runtime(execution.get("runtime", {}) or {}, f"{location} execution.runtime")
     evidence = study.get("evidence", {}) or {}
     if evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
@@ -344,20 +347,12 @@ def _validate_method_environment_compatibility(
                 f"required capability {required!r} is not provided."
             )
 
-    if method.get("produces") is not None:
-        error = candidate_contract_mismatch(candidate, method["produces"])
-        if error:
-            raise ValueError(
-                f"{method_location} is incompatible with {environment_location}: {error}"
-            )
-
 
 def candidate_contract_mismatch(environment_candidate: Dict[str, Any], produced_candidate: Dict[str, Any]) -> str | None:
     """Return a structural candidate-contract mismatch message, if any.
 
-    Methods may declare the candidate shape they produce with ``produces``. This
-    helper compares that produced shape against the environment candidate
-    contract without relying on environment-specific context path names.
+    This helper is kept for legacy catalog/UI diagnostics. The public method
+    config model no longer includes a ``produces`` field.
     """
 
     return _candidate_contract_mismatch(
@@ -605,9 +600,13 @@ def _validate_runtime(runtime: Any, location: str) -> None:
         return
     if not isinstance(runtime, dict):
         raise ValueError(f"{location} must be an object.")
-    sandbox = runtime.get("sandbox", "host")
+    sandbox = runtime.get("sandbox", "process")
     if sandbox not in RUNTIME_SANDBOXES:
         raise ValueError(f"{location}.sandbox must be one of {sorted(RUNTIME_SANDBOXES)}.")
+    if runtime.get("setup") is not None:
+        if sandbox == "container":
+            raise ValueError(f"{location}.setup is supported only for sandbox process.")
+        _validate_setup(runtime["setup"], f"{location}.setup")
     if sandbox == "container":
         container = runtime.get("container", {}) or {}
         if not isinstance(container, dict):
@@ -615,14 +614,59 @@ def _validate_runtime(runtime: Any, location: str) -> None:
         build = container.get("build", {}) if isinstance(container.get("build", {}), dict) else {}
         if not (container.get("image") or build.get("tag")):
             raise ValueError(f"{location}.container requires image or build.tag.")
+        network = container.get("network", "disabled")
+        if network not in {"enabled", "disabled"}:
+            raise ValueError(f"{location}.container.network must be enabled or disabled.")
+    elif runtime.get("container") is not None:
+        raise ValueError(f"{location}.container requires sandbox container.")
     for key in ("env",):
         value = runtime.get(key, {})
         if value is not None and not isinstance(value, dict):
             raise ValueError(f"{location}.{key} must be an object.")
-    for key in ("envFromHost", "readOnlyMounts", "writableMounts"):
+    for key in ("envFromHost",):
         value = runtime.get(key, [])
         if value is not None:
             _require_string_list(value, f"{location}.{key}")
+
+
+def _validate_interface(interface: Any, location: str) -> None:
+    if not isinstance(interface, dict):
+        raise ValueError(f"{location} must be an object.")
+    if interface.get("setup") is not None:
+        _validate_setup(interface["setup"], f"{location}.setup")
+    if interface.get("envFromHost") is not None:
+        _require_string_list(interface["envFromHost"], f"{location}.envFromHost")
+    if interface.get("env") is not None and not isinstance(interface["env"], dict):
+        raise ValueError(f"{location}.env must be an object.")
+
+
+def _validate_setup(setup: Any, location: str) -> None:
+    if not isinstance(setup, dict):
+        raise ValueError(f"{location} must be an object.")
+    steps = setup.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError(f"{location}.steps must be a non-empty list.")
+    if setup.get("env") is not None and not isinstance(setup["env"], dict):
+        raise ValueError(f"{location}.env must be an object.")
+    if setup.get("envFromHost") is not None:
+        _require_string_list(setup["envFromHost"], f"{location}.envFromHost")
+    timeout = setup.get("timeoutSeconds")
+    if timeout is not None and int(timeout) < 1:
+        raise ValueError(f"{location}.timeoutSeconds must be a positive integer.")
+    for index, step in enumerate(steps):
+        step_location = f"{location}.steps[{index}]"
+        if not isinstance(step, dict):
+            raise ValueError(f"{step_location} must be an object.")
+        kind = step.get("uses")
+        if kind not in SETUP_STEP_TYPES:
+            raise ValueError(f"{step_location}.uses must be one of {sorted(SETUP_STEP_TYPES)}.")
+        if kind == "command":
+            _require_string_list(step.get("command"), f"{step_location}.command", non_empty=True)
+        if step.get("env") is not None and not isinstance(step["env"], dict):
+            raise ValueError(f"{step_location}.env must be an object.")
+        for key in ("extras", "groups", "requirements"):
+            if step.get(key) is not None:
+                _require_string_list(step[key], f"{step_location}.{key}")
 
 
 def _build_candidate_context(
@@ -706,6 +750,7 @@ def _compile_environment(environment: Dict[str, Any], environment_path: Path | N
         "adapter": adapter,
         "accessPolicy": "CodeAwareReadOnly" if candidate["format"] == "files" else "SchemaAware",
         "mutationPolicy": "TrialWorkspaceOnly" if candidate["format"] in {"files", "opaque"} else "NoMutation",
+        "runtime": _compile_runtime(environment.get("runtime", {}) or {}, environment_path or Path.cwd()),
         "runtimeContract": {
             "timeoutSeconds": int(evaluator.get("timeoutSeconds", 600) or 600),
         },
@@ -762,6 +807,8 @@ def _compile_record_rules(records: Iterable[Dict[str, Any]]) -> list:
     compiled = []
     for record in records:
         item = deepcopy(record)
+        if item.get("source") in {"sqlite_table", "sqlite_query"} and item.get("database"):
+            item["path"] = item["database"]
         if item.get("source") == "custom" and item.get("extractor"):
             item["implementation"] = _component_ref(item.pop("extractor"))
         if "settings" in item:
@@ -891,8 +938,6 @@ def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate:
         "config": settings,
         "settings": deepcopy(method.get("settings", {})),
         "compatibility": _compile_accepts(method.get("accepts", {})),
-        "produces": deepcopy(method.get("produces")),
-        "resourceProfile": dict(method.get("resourceProfile", {})),
         "sandboxSpec": {},
     }
 
@@ -910,8 +955,8 @@ def _compile_method_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[st
     compiled = _compile_runtime(runtime, base_path)
     if not compiled:
         return {}
-    sandbox = runtime.get("sandbox", "host")
-    compiled["type"] = "container" if sandbox == "container" else "host"
+    sandbox = runtime.get("sandbox", "process")
+    compiled["type"] = "container" if sandbox == "container" else "process"
     return compiled
 
 
@@ -933,24 +978,17 @@ def _compile_execution(
     environment_path: Path | None,
 ) -> Dict[str, Any]:
     execution = dict(study.get("execution", {}) or {})
-    backend = execution.get("backend", "local")
-    runtime = _merge_runtime(environment.get("runtime", {}) or {}, execution.get("runtime", {}) or {})
-    sandbox = runtime.get("sandbox", "host")
-    if sandbox == "container" and backend != "local":
-        raise ValueError("runtime.sandbox container is currently supported only with execution.backend local.")
+    runtime = deepcopy(environment.get("runtime", {}) or {})
+    sandbox = runtime.get("sandbox", "process")
 
     if sandbox == "container":
         backend_type = "container"
         backend_impl = "builtin.container_backend"
         backend_config = _compile_container_backend_config(runtime, environment_path or study_path)
-    elif backend == "local_subprocess":
-        backend_type = "local_subprocess"
-        backend_impl = "builtin.local_subprocess_backend"
-        backend_config = {}
     else:
         backend_type = "local"
-        backend_impl = "builtin.local_backend"
-        backend_config = {}
+        backend_impl = "builtin.local_subprocess_backend"
+        backend_config = _compile_runtime(runtime, environment_path or study_path)
 
     timeout = int(execution.get("timeoutSeconds") or environment.get("evaluator", {}).get("timeoutSeconds") or 600)
     parallelism = int(execution.get("parallelism", 1) or 1)
@@ -958,18 +996,22 @@ def _compile_execution(
     sandbox_spec = _runtime_to_sandbox_spec(runtime)
     if sandbox == "container":
         sandbox_spec["runtimeType"] = "container"
+    max_retries = int(retry.get("maxRetries", 0) or 0)
     return {
         "backend": {
             "type": backend_type,
             "implementation": backend_impl,
             "config": backend_config,
-            "publicBackend": backend,
-            "publicRuntime": deepcopy(runtime),
         },
         "scheduler": {
             "type": "local",
             "implementation": "builtin.local_scheduler",
-            "config": {},
+            "config": {
+                "retryPolicy": {
+                    "maxAttempts": max_retries + 1,
+                    "retryStatuses": ["failed", "timeout"],
+                }
+            },
         },
         "defaults": {
             "resourceProfile": {
@@ -980,7 +1022,7 @@ def _compile_execution(
             },
             "sandboxSpec": sandbox_spec,
             "retryPolicy": {
-                "maxRetries": int(retry.get("maxRetries", 0) or 0),
+                "maxRetries": max_retries,
             },
         },
         "parallelism": {
@@ -1008,7 +1050,9 @@ def _compile_evidence(study: Dict[str, Any], study_path: Path) -> Dict[str, Any]
         },
     }
     if evidence.get("outputDir"):
-        compiled["outputDir"] = str(_resolve_path(str(evidence["outputDir"]), study_path))
+        output_dir = _resolve_launch_path(str(evidence["outputDir"]))
+        _reject_catalog_run_root(output_dir, f"{study_path} evidence.outputDir")
+        compiled["outputDir"] = str(output_dir)
     return compiled
 
 
@@ -1063,32 +1107,19 @@ def _internal_parameter_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     return converted
 
 
-def _merge_runtime(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    merged = deepcopy(base or {})
-    for key, value in (override or {}).items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            nested = deepcopy(merged[key])
-            nested.update(value)
-            merged[key] = nested
-        else:
-            merged[key] = deepcopy(value)
-    return merged
-
-
 def _compile_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
     if not runtime:
         return {}
+    container = runtime.get("container", {}) or {}
     compiled = {
         "env": dict(runtime.get("env", {}) or {}),
         "environmentVariables": dict(runtime.get("env", {}) or {}),
         "envFromHost": list(runtime.get("envFromHost", []) or []),
-        "readOnlyMounts": [str(_resolve_path(path, base_path)) for path in runtime.get("readOnlyMounts", []) or []],
-        "writableMounts": [str(_resolve_path(path, base_path)) for path in runtime.get("writableMounts", []) or []],
-        "networkPolicy": runtime.get("network", "disabled"),
+        "setup": deepcopy(runtime.get("setup")),
+        "networkPolicy": container.get("network", "disabled") if runtime.get("sandbox") == "container" else "disabled",
     }
     if runtime.get("workdir"):
         compiled["workdir"] = str(_resolve_path(runtime["workdir"], base_path))
-    container = runtime.get("container", {}) or {}
     if container:
         if container.get("image"):
             compiled["image"] = container["image"]
@@ -1105,9 +1136,10 @@ def _compile_container_backend_config(runtime: Dict[str, Any], base_path: Path) 
 
 
 def _runtime_to_sandbox_spec(runtime: Dict[str, Any]) -> Dict[str, Any]:
+    container = runtime.get("container", {}) or {}
     return {
-        "runtimeType": runtime.get("sandbox", "host"),
-        "networkPolicy": runtime.get("network", "disabled"),
+        "runtimeType": runtime.get("sandbox", "process"),
+        "networkPolicy": container.get("network", "disabled") if runtime.get("sandbox") == "container" else "disabled",
         "environmentVariables": dict(runtime.get("env", {}) or {}),
         "cleanupPolicy": "always",
     }
@@ -1143,6 +1175,22 @@ def _resolve_path(value: Any, base_path: Path) -> Path:
         return path.resolve()
     base_dir = base_path.parent if base_path.is_file() else base_path
     return (base_dir / path).resolve()
+
+
+def _resolve_launch_path(value: Any) -> Path:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (Path.cwd() / path).resolve()
+
+
+def _reject_catalog_run_root(path: Path, location: str) -> None:
+    if _is_catalog_source_path(path):
+        raise ValueError(f"{location} must not resolve inside catalog source: {path}")
+
+
+def _is_catalog_source_path(path: Path) -> bool:
+    return any(part == "catalog" for part in path.resolve().parts)
 
 
 def _require_field(data: Dict[str, Any], field: str, location: str) -> Any:

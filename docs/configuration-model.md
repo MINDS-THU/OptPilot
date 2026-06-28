@@ -6,12 +6,12 @@ field belongs in this model only when we are willing to implement schema
 validation, runner behavior, Studio behavior when relevant, and at least one
 runnable example.
 
-Status: this is a target design, not a description of the current released
-implementation. Some current schemas, docs, Studio screens, and catalog
-examples still use older fields such as `execution.backend` and
-`runtime.sandbox: host`. Do not treat the target examples below as
-copy-pasteable until the implementation checklist near the end of this document
-is complete.
+Status: the initial implementation is in place. The public JSON schemas,
+compiler, Studio-generated study drafts, bundled example-package configs,
+per-run source copies, setup reuse, process/container runtime execution, retry
+attempt folders, and package-qualified catalog ids have been implemented. The
+implementation checklist at the end of this document is the current source of
+truth for remaining follow-up work.
 
 The goal is clarity:
 
@@ -134,7 +134,7 @@ runs/
         .optpilot/               # method setup status and logs
     trials/
       trial-001/                 # one candidate evaluation
-        attempt-001/             # candidate materialization and evaluator work
+        attempt-1/               # candidate materialization and evaluator work
     candidates/                  # retained candidate file bundles, when used
     method_calls/
       method-call-001/           # request, response, stdout, stderr
@@ -203,9 +203,12 @@ copies.
 
 Setup order:
 
-- for an environment or method install, run `runtime.setup` when declared
-- for an environment or method interface launch, run `runtime.setup` first, then
-  `interface.setup` when declared
+- for a process-runtime environment or method install, run `runtime.setup` when
+  declared
+- for a process-runtime environment or method interface launch, run
+  `runtime.setup` first, then `interface.setup` when declared
+- for a container-runtime environment or method, do not run `runtime.setup`;
+  prepare the declared image or build instead
 - for a resource install or launch, run `interface.setup` when declared
 
 Studio may reuse a completed setup when the setup fingerprint is unchanged.
@@ -548,7 +551,7 @@ Allowed `candidate.files` fields:
 
 | Field | Required | Type or values | Meaning |
 | --- | --- | --- | --- |
-| `editable` | No | Array of objects with `path` string | Files the method may edit. |
+| `editable` | Yes | Non-empty array of objects with `path` string | Files the method may edit. |
 | `required` | No | Array of strings | Files that must be present after materialization. |
 | `allow` | No | Array of strings | Allowed file globs. |
 | `deny` | No | Array of strings | Denied file globs. |
@@ -583,9 +586,9 @@ Metrics have source-specific required fields:
 
 | `metrics.source` | Required fields | Evaluator requirement | Expected payload |
 | --- | --- | --- | --- |
-| `return` | None beyond `source` | `evaluator.python` | Python dict. Metric values may be top-level or under `metric_values` or `metrics`. |
+| `return` | None beyond `source` | `evaluator.python` or `evaluator.adapter` | Python dict. Metric values may be top-level or under `metric_values` or `metrics`. |
 | `file` | `path` | Any evaluator | JSON object in a trial-workspace file. Metric values may be top-level or under `metric_values` or `metrics`. |
-| `stdout` | None beyond `source` | `evaluator.command` | Evaluator stdout containing one JSON object. Metric values may be top-level or under `metric_values` or `metrics`. |
+| `stdout` | None beyond `source` | `evaluator.command` or `evaluator.adapter` | Evaluator stdout containing one JSON object. Metric values may be top-level or under `metric_values` or `metrics`. |
 | `sqlite` | `database`, `query` | Any evaluator | First SQLite query row as a JSON object of metric names to values. |
 | `custom` | `extractor` | Any evaluator | Custom extractor returns a dict with the same metric payload shape. |
 
@@ -751,7 +754,7 @@ Allowed `evidence` fields:
 | --- | --- | --- | --- |
 | `level` | No | `minimal`, `standard`, or `full` | Evidence detail level. |
 | `outputFileStorage` | No | `reference` or `copy` | Whether output files are referenced or copied into the evidence store. |
-| `outputDir` | No | String | Run output root. Relative paths resolve against the launch working directory, not catalog source. When omitted, OptPilot writes under `./runs` from the launch working directory. |
+| `outputDir` | No | String | Run output root. Relative paths resolve against the launch working directory, not catalog source. When omitted, OptPilot writes under `./runs` from the launch working directory. Studio and CLI launchers must reject or redirect any resolved run root inside catalog source. |
 
 Allowed `reproducibility` fields:
 
@@ -818,6 +821,11 @@ All component paths should remain copy-safe.
 | `outputFiles[].path` | Trial workspace | Trial workspace. |
 | `evidence.outputDir` | Launch working directory | User-selected run root outside catalog source. |
 
+Run roots must never be inside catalog source. If a relative `outputDir` or the
+default `./runs` would resolve inside `catalog/`, OptPilot should fail with a
+clear message or redirect to a configured non-catalog run root such as
+`.optpilot-ui/runs/` for Studio launches.
+
 Run preparation follows a copy-then-rebase rule: OptPilot first copies
 environment and method source into the run directory, then resolves executable
 paths against those copied configs. Compiled run specs should not point
@@ -873,9 +881,8 @@ Setup may recreate needed generated folders inside the copied source.
 
 ## Target Environment Example
 
-This example shows the intended public model after the implementation checklist
-is complete. It may not validate against the current schemas until the runtime
-and setup changes land.
+This example shows the intended public model and should validate against the
+current schemas.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -1122,46 +1129,51 @@ interface:
 
 Before publishing this model as stable, implementation must match it:
 
-- Update JSON schemas so every field above is accepted and every excluded field
-  is rejected.
-- Replace public `runtime.sandbox: host` with `runtime.sandbox: process`.
-- Add `runtime.setup` for environment and method configs.
-- Add `interface.setup` and `interface.envFromHost` for launchable interfaces.
-- Add setup fingerprints and `.optpilot/setup-status.json` so Studio can decide
-  when setup can be reused.
-- Remove public `execution.backend`, `execution.runtime`,
+- Done: update JSON schemas so every field above is accepted and every excluded
+  field is rejected.
+- Done: replace public `runtime.sandbox: host` with
+  `runtime.sandbox: process`.
+- Done: add `runtime.setup` for environment and method configs.
+- Done: add `interface.setup` and `interface.envFromHost` for launchable
+  interfaces.
+- Done: remove public `execution.backend`, `execution.runtime`,
   `execution.resources`, `method.resourceProfile`, and public
   `method.produces`.
-- Validate source-specific metric and record requirements with schema
+- Done: validate source-specific metric and record requirements with schema
   discriminators or equivalent semantic validation.
-- Map public `records[].database` to the adapter path used for SQLite record
-  extraction, or update the adapter to read `database` directly.
-- Wire `execution.retry.maxRetries` to scheduler attempts as
+- Done: map public `records[].database` to the adapter path used for SQLite
+  record extraction.
+- Done: wire `execution.retry.maxRetries` to scheduler attempts as
   `maxAttempts = maxRetries + 1`.
-- Resolve relative `evidence.outputDir` against the launch working directory or
-  explicit output root, not the catalog study file.
-- Enforce the runtime schema split: process runtimes may use `runtime.setup`;
-  container runtimes use images/builds and container-only network policy.
-- Copy environment and method source into each run directory before execution.
-- Run setup inside copied source and persist setup status/logs under
-  `.optpilot/` in that copied source.
-- Store retry attempt artifacts under `trials/<trial>/attempt-*` and never
-  overwrite earlier attempts.
-- Rebase component-relative executable paths after source copy, and keep opaque
-  settings such as `evaluator.settings` under component control.
-- Run Python methods through a method worker process or container instead of
-  importing them directly into the main OptPilot runner.
-- Run environment evaluation through the declared environment runtime.
-- Implement the documented `batch` and `session` method worker protocols.
-- Enforce package-qualified catalog ids and reject duplicate component ids inside
-  one package.
-- Ensure Studio uses the same copy and setup behavior for **Create Editable
-  Copy and Install** and **Launch Interface**.
-- Update Studio study YAML generation so it no longer emits public
+- Done: resolve relative `evidence.outputDir` against the launch working
+  directory or explicit output root, not the catalog study file.
+- Done: enforce the runtime schema split: process runtimes may use
+  `runtime.setup`; container runtimes use images/builds and container-only
+  network policy.
+- Done: ensure Studio's editable-copy and interface-launch paths can run
+  declared setup on editable copies.
+- Done: update Studio study YAML generation so it no longer emits public
   `execution.backend` or `execution.runtime` fields.
-- Migrate the example package, package README, and older docs away from
-  package-qualified imports, `runtime.sandbox: host`, and public
-  `execution.backend`.
+- Done: migrate the bundled example-package configs away from public
+  `execution.backend` and public `method.produces`.
+- Done: copy environment and method source into each run directory before
+  execution.
+- Done: run setup inside copied source and persist setup status under
+  `.optpilot/setup-status.json` in that copied source for study launches.
+- Done: rebase component-relative executable paths after source copy, while
+  keeping opaque settings such as `evaluator.settings` under component control.
+- Done: use setup fingerprints and `.optpilot/setup-status.json` to decide when
+  setup can be reused instead of rerun.
+- Done: store retry attempt artifacts under `trials/<trial>/attempt-*` and never
+  overwrite earlier attempts.
+- Done: run Python methods through a method worker process or container instead
+  of importing them directly into the main OptPilot runner.
+- Done: run environment evaluation through the declared environment runtime.
+- Done: implement the documented `batch` and `session` method worker protocols.
+- Done: enforce package-qualified catalog ids and reject duplicate component ids
+  inside one package.
+- Done: migrate older docs away from package-qualified imports,
+  `runtime.sandbox: host`, and public `execution.backend`.
 
 ## Design Checklist
 

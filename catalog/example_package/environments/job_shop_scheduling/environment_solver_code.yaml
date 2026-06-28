@@ -5,7 +5,8 @@ description: Evaluate generated Python solver code on small job-shop scheduling 
 tags: [job-shop, scheduling, files, solver-code, tutorial]
 
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 60
   settings:
     cases:

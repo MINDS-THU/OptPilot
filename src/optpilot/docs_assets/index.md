@@ -114,9 +114,16 @@ accepts:
     context: [candidate.parameters.schema]
 ```
 
-Some methods are schema-general: their code first reads the environment's schema, then decides what candidate to return. For example, if one environment asks for `{x, mode}` and another asks for `{learning_rate, batch_size}`, the same method can read the schema and fill in either set of fields. A random sampler, Bayesian optimizer, or LLM parameter proposer can be written this way.
+Some methods are schema-general: their code first reads the environment's
+schema, then decides what candidate to return. For example, if one environment
+asks for `{x, mode}` and another asks for `{learning_rate, batch_size}`, the
+same method can read the schema and fill in either set of fields. A random
+sampler, Bayesian optimizer, or LLM parameter proposer can be written this way.
 
-Other methods are specific: their code is written to return one known candidate shape. For example, a route solver might always return `{route: [...]}` and a schedule solver might always return `{solutions: ...}`. These methods can declare `produces`, which means "this is the candidate shape my method promises to return." OptPilot then checks that promised shape against the environment's candidate contract before the run starts.
+Other methods are specific: their code is written to submit one known candidate
+shape, such as `{route: [...]}` or `{solutions: ...}`. They still declare only
+what environment surface they accept. OptPilot validates each submitted
+candidate against the selected environment's candidate contract during the run.
 
 See [Candidate Contracts](candidate-contracts.md) for the full model and examples.
 

@@ -94,7 +94,7 @@ description: Evaluate weighted dispatch-rule parameters on small job-shop schedu
 tags: [job-shop, scheduling, parameters, tutorial]
 
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
   timeoutSeconds: 60
   settings:
     cases:
@@ -162,7 +162,8 @@ description: Emits one fixed weighted dispatch-rule parameter candidate.
 tags: [baseline, parameters, job-shop, no-api]
 
 entrypoint:
-  python: catalog.example_package.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
+  python: method:FixedRuleParametersMethod
+  pythonPath: [.]
   protocol: batch
 
 settings:
@@ -177,34 +178,18 @@ accepts:
   formats: [parameters]
   requires:
     context: []
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      remaining_work_weight:
-        valueType: float
-        min: -5.0
-        max: 5.0
-      processing_time_weight:
-        valueType: float
-        min: -5.0
-        max: 5.0
-      machine_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0
-      job_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0
 ```
 
 `accepts` is the method-side compatibility declaration. It tells OptPilot which environment candidate formats the method can target. If a method lists `candidate.parameters.schema` under `accepts.requires.context`, it means the method wants OptPilot to provide the environment's parameter schema in the method request context.
 
-This baseline method is not schema-general. Its method settings contain four fixed values, and the method always returns those four parameter names. Its `produces` block is therefore a method output promise: this method returns a parameter candidate with these fields. It is not an environment-specific block; it is useful for any environment whose candidate contract accepts the same four fields.
+This baseline method is not schema-general. Its method settings contain four
+fixed values, and the method always returns those four parameter names. OptPilot
+validates the submitted parameter candidate against the selected environment's
+candidate schema during the run.
 
-A schema-general method would look different: it would request `candidate.parameters.schema`, inspect whatever fields the selected environment declares, and generate values for those fields at runtime. That kind of method usually omits `produces` because its output shape depends on the environment schema it receives.
+A schema-general method would look different: it would request
+`candidate.parameters.schema`, inspect whatever fields the selected environment
+declares, and generate values for those fields at runtime.
 
 ## Study Config
 
@@ -229,7 +214,6 @@ budget:
   maxTrials: 1
 
 execution:
-  backend: local
   parallelism: 1
   timeoutSeconds: 60
 

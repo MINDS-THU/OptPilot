@@ -5,7 +5,8 @@ description: Emits the unmodified files declared by a file-candidate environment
 tags: [baseline, file-candidate, no-api]
 
 entrypoint:
-  python: catalog.example_package.methods.baseline_file_copy.method:BaselineFileCopyMethod
+  python: method:BaselineFileCopyMethod
+  pythonPath: [.]
   protocol: batch
 
 settings:

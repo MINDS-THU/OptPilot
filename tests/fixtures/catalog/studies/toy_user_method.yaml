@@ -15,7 +15,6 @@ budget:
   maxTrials: 3
 
 execution:
-  backend: local
   parallelism: 3
   timeoutSeconds: 120
 

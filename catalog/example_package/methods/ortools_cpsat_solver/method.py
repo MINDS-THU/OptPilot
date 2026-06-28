@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, List
 
-from catalog.example_package.methods.job_shop_lib_solvers import solve_job_shop_cases
+from job_shop_lib_solvers import solve_job_shop_cases
 
 
 JsonDict = Dict[str, Any]

@@ -88,7 +88,7 @@ config: environment
 id: my-environment
 
 evaluator:
-  python: catalog.local_package.environments.my_environment.evaluator:evaluate
+  python: evaluator:evaluate
   settings:
     target: 0.5
 
@@ -129,7 +129,7 @@ config: method
 id: my-method
 
 entrypoint:
-  python: catalog.local_package.methods.my_method.method:MyMethod
+  python: method:MyMethod
   protocol: batch
 
 accepts:

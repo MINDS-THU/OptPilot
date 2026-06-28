@@ -5,7 +5,8 @@ description: Emits one fixed weighted dispatch-rule parameter candidate.
 tags: [baseline, parameters, job-shop, no-api]
 
 entrypoint:
-  python: catalog.example_package.methods.fixed_rule_parameters.method:FixedRuleParametersMethod
+  python: method:FixedRuleParametersMethod
+  pythonPath: [.]
   protocol: batch
 
 settings:
@@ -20,24 +21,3 @@ accepts:
   formats: [parameters]
   requires:
     context: []
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      remaining_work_weight:
-        valueType: float
-        min: -5.0
-        max: 5.0
-      processing_time_weight:
-        valueType: float
-        min: -5.0
-        max: 5.0
-      machine_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0
-      job_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0

@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 from .candidate_materialization import MaterializationRecord, ValidationReport
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import Observation, ResourceProfile, SandboxSpec, TrialSpec, utc_now_iso
+from .setup import apply_prepared_env
 
 
 class Evaluator:
@@ -30,10 +31,15 @@ class Evaluator:
         self.candidate_validator = candidate_validator
 
     def run_trial(self, trial_spec: TrialSpec) -> List[Observation]:
-        workspace = self.evidence_store.create_trial_workspace(trial_spec.trial_id)
+        parent_trial_id = str(trial_spec.metadata.get("parent_trial_id") or trial_spec.trial_id)
+        attempt_index = int(trial_spec.metadata.get("attempt_index", 1) or 1)
+        workspace = self.evidence_store.create_trial_workspace(parent_trial_id, attempt_index=attempt_index)
+        trial_spec.metadata["trial_workspace"] = str(workspace)
         started = time.monotonic()
         candidate_context = {
             "trial_id": trial_spec.trial_id,
+            "parent_trial_id": parent_trial_id,
+            "attempt_index": attempt_index,
             "study_id": trial_spec.study_id,
             "workspace": str(workspace),
             "resource_profile": trial_spec.resource_profile.to_dict(),
@@ -92,6 +98,8 @@ class Evaluator:
         self._record_candidate(trial_spec, validation_report, materialization_record)
         context = {
             "trial_id": trial_spec.trial_id,
+            "parent_trial_id": parent_trial_id,
+            "attempt_index": attempt_index,
             "study_id": trial_spec.study_id,
             "workspace": str(workspace),
             "resource_profile": {
@@ -160,6 +168,9 @@ class Evaluator:
                 "backend_identity": trial_spec.metadata.get("backend_identity", {}),
                 "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
+                "attempt_index": trial_spec.metadata.get("attempt_index", 1),
+                "parent_trial_id": trial_spec.metadata.get("parent_trial_id", trial_spec.trial_id),
+                "workspace": trial_spec.metadata.get("trial_workspace", ""),
                 "created_at": utc_now_iso(),
             }
         )
@@ -203,6 +214,8 @@ class Evaluator:
                 "backend_identity": trial_spec.metadata.get("backend_identity", {}),
                 "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
+                "attempt_index": trial_spec.metadata.get("attempt_index", 1),
+                "parent_trial_id": trial_spec.metadata.get("parent_trial_id", trial_spec.trial_id),
                 "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
                 "generator": dict(trial_spec.candidate.get("generator", {})),
             },
@@ -307,6 +320,8 @@ class Evaluator:
                 "backend_identity": trial_spec.metadata.get("backend_identity", {}),
                 "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
                 "backend_worker": trial_spec.metadata.get("backend_worker", {}),
+                "attempt_index": trial_spec.metadata.get("attempt_index", 1),
+                "parent_trial_id": trial_spec.metadata.get("parent_trial_id", trial_spec.trial_id),
                 "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
                 "generator": dict(trial_spec.candidate.get("generator", {})),
             },
@@ -316,6 +331,7 @@ class Evaluator:
 class LocalExecutionBackend:
     def __init__(self, definition: Dict[str, Any], evaluator: Evaluator, max_workers: int = 1):
         self.definition = definition
+        self.config = dict(definition.get("config", {}) or {})
         self.evaluator = evaluator
         self.max_workers = max_workers
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
@@ -366,6 +382,7 @@ class LocalSubprocessExecutionBackend:
 
     def __init__(self, definition: Dict[str, Any], evaluator: Evaluator, max_workers: int = 1):
         self.definition = definition
+        self.config = dict(definition.get("config", {}) or {})
         self.evaluator = evaluator
         self.max_workers = max_workers
         self.run_dir = evaluator.evidence_store.run_dir
@@ -375,6 +392,7 @@ class LocalSubprocessExecutionBackend:
         self._metadata: Dict[str, Dict[str, Any]] = {}
         self._trial_specs: Dict[str, TrialSpec] = {}
         self._paths: Dict[str, Dict[str, Path]] = {}
+        self._started_monotonic: Dict[str, float] = {}
         self._lock = threading.Lock()
 
     def submit(self, trial_spec: TrialSpec) -> str:
@@ -405,12 +423,13 @@ class LocalSubprocessExecutionBackend:
             "output_path": str(output_path),
         }
         input_path.write_text(json.dumps(input_payload, indent=2, sort_keys=True), encoding="utf-8")
-        env = os.environ.copy()
+        env = _worker_process_env(self.config)
+        python_executable = str(self.config.get("workerPythonExecutable") or sys.executable)
         stdout_handle = stdout_path.open("w", encoding="utf-8")
         stderr_handle = stderr_path.open("w", encoding="utf-8")
         try:
             process = subprocess.Popen(
-                [sys.executable, "-m", "optpilot.worker", str(input_path)],
+                [python_executable, "-m", "optpilot.worker", str(input_path)],
                 cwd=str(Path.cwd()),
                 env=env,
                 stdout=stdout_handle,
@@ -430,6 +449,7 @@ class LocalSubprocessExecutionBackend:
                 "stdout": stdout_path,
                 "stderr": stderr_path,
             }
+            self._started_monotonic[handle] = time.monotonic()
         return handle
 
     def status(self, handle: str) -> Dict[str, Any]:
@@ -459,9 +479,12 @@ class LocalSubprocessExecutionBackend:
         trial_spec = self._trial_specs[handle]
         paths = self._paths[handle]
         timeout_seconds = max(1, int(trial_spec.resource_profile.timeout_seconds))
-        started = time.monotonic()
+        started = self._started_monotonic.get(handle, time.monotonic())
+        remaining = timeout_seconds - (time.monotonic() - started)
         try:
-            returncode = process.wait(timeout=timeout_seconds)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+            returncode = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             process.kill()
             process.wait()
@@ -577,6 +600,7 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
                 "stdout": stdout_path,
                 "stderr": stderr_path,
             }
+            self._started_monotonic[handle] = time.monotonic()
         return handle
 
     def _ensure_container_image(self, image: str, trial_spec: TrialSpec) -> Dict[str, Any]:
@@ -614,9 +638,12 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
         trial_spec = self._trial_specs[handle]
         paths = self._paths[handle]
         timeout_seconds = max(1, int(trial_spec.resource_profile.timeout_seconds))
-        started = time.monotonic()
+        started = self._started_monotonic.get(handle, time.monotonic())
+        remaining = timeout_seconds - (time.monotonic() - started)
         try:
-            returncode = process.wait(timeout=timeout_seconds)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout_seconds)
+            returncode = process.wait(timeout=remaining)
         except subprocess.TimeoutExpired as exc:
             self._force_remove_container(handle)
             process.kill()
@@ -673,6 +700,10 @@ class LocalContainerExecutionBackend(LocalSubprocessExecutionBackend):
             "PYTHONDONTWRITEBYTECODE": "1",
             **{str(key): str(value) for key, value in trial_spec.sandbox_spec.environment_variables.items()},
         }
+        for key in self.config.get("envFromHost", []) or []:
+            key = str(key)
+            if key in os.environ:
+                env[key] = os.environ[key]
         for key, value in env.items():
             command.extend(["-e", f"{key}={value}"])
         if trial_spec.resource_profile.cpu:
@@ -864,9 +895,9 @@ def _worker_output_files(paths: Dict[str, Path]) -> List[Dict[str, Any]]:
 
 def _container_image(config: Dict[str, Any], trial_spec: TrialSpec) -> str:
     build = config.get("build", {}) if isinstance(config.get("build", {}), dict) else {}
-    image = config.get("image") or build.get("tag") or trial_spec.resource_profile.runtime_image
+    image = config.get("image") or build.get("tag")
     if not image:
-        raise ValueError("Container backend requires execution.config.image, execution.config.build.tag, or resourceProfile.runtimeImage.")
+        raise ValueError("Container backend requires runtime.container.image or runtime.container.build.tag.")
     return str(image)
 
 
@@ -957,6 +988,8 @@ def _backend_terminal_observation(
             "backend_identity": trial_spec.metadata.get("backend_identity", {}),
             "scheduler_identity": trial_spec.metadata.get("scheduler_identity", {}),
             "backend_worker": trial_spec.metadata.get("backend_worker", {}),
+            "attempt_index": trial_spec.metadata.get("attempt_index", 1),
+            "parent_trial_id": trial_spec.metadata.get("parent_trial_id", trial_spec.trial_id),
             "candidate_lineage": dict(trial_spec.candidate.get("lineage", {})),
             "generator": dict(trial_spec.candidate.get("generator", {})),
         },
@@ -981,6 +1014,22 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
         sandbox_spec=SandboxSpec.from_dict(payload.get("sandbox_spec")),
         metadata=dict(payload.get("metadata", {})),
     )
+
+
+def _worker_process_env(config: Dict[str, Any]) -> Dict[str, str]:
+    env = apply_prepared_env(os.environ.copy(), config.get("preparedEnv", {}))
+    env.update({str(key): str(value) for key, value in config.get("env", {}).items()})
+    env.update({str(key): str(value) for key, value in config.get("environmentVariables", {}).items()})
+    for key in config.get("envFromHost", []) or []:
+        key = str(key)
+        if key in os.environ:
+            env[key] = os.environ[key]
+    pythonpath_entries = [str(Path(__file__).resolve().parents[1]), str(Path.cwd().resolve())]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpath_entries.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
+    return env
 
 
 def _safe_output_file_copy_name(name: str, index: int) -> str:

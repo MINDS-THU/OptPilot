@@ -46,8 +46,8 @@ Method `settings` fragment:
 settings:
   algorithm: PPO
   trainInstances:
-    - ../../environments/job_shop_scheduling/cases/train_tiny_a.yaml
-    - ../../environments/job_shop_scheduling/cases/train_tiny_b.yaml
+    - training_cases/train_tiny_a.yaml
+    - training_cases/train_tiny_b.yaml
   maxJobs: 6
   totalTimesteps: 128
   seed: 0

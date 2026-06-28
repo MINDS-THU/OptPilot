@@ -161,6 +161,5 @@ def _retry_trial_spec(trial_spec: TrialSpec, attempt_index: int) -> TrialSpec:
     metadata.setdefault("parent_trial_id", trial_spec.metadata.get("parent_trial_id", trial_spec.trial_id))
     return replace(
         trial_spec,
-        trial_id=f"{metadata['parent_trial_id']}-attempt-{attempt_index}",
         metadata=metadata,
     )

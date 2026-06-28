@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import List
@@ -239,7 +240,9 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("platform", environment_snapshot)
             self.assertIn("packages", environment_snapshot)
             self.assertIn("dependency_files", environment_snapshot)
-            self.assertEqual(environment_snapshot["study_spec"]["sha256"], self._sha256(spec_path))
+            self.assertEqual(environment_snapshot["study_spec"]["sha256"], self._sha256(run_dir / "study_spec.json"))
+            self.assertTrue((run_dir / "source" / "environment").exists())
+            self.assertTrue((run_dir / "source" / "method").exists())
             self.assertTrue(any(item["name"] == "pyproject.toml" for item in environment_snapshot["dependency_files"]))
 
             observations = self._read_jsonl(run_dir / "observations.jsonl")
@@ -255,7 +258,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(candidates), 12)
             self.assertEqual(run_policy["environment"]["candidateWriteScope"], "none")
             self.assertEqual(run_policy["execution"]["parallelism"]["candidateEvaluations"], 4)
-            self.assertEqual(run_policy["execution"]["backend"]["implementation"], "builtin.local_backend")
+            self.assertEqual(run_policy["execution"]["backend"]["implementation"], "builtin.local_subprocess_backend")
             self.assertEqual(run_policy["execution"]["scheduler"]["implementation"], "builtin.local_scheduler")
             self.assertEqual(scheduler_events[0]["event"], "batch_submitted")
             self.assertEqual(scheduler_events[1]["event"], "batch_collected")
@@ -277,7 +280,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 self.assertEqual(observation["provenance"]["seed"], 7)
                 self.assertEqual(
                     observation["provenance"]["backend_identity"]["implementation"],
-                    "builtin.local_backend",
+                    "builtin.local_subprocess_backend",
                 )
                 self.assertEqual(
                     observation["provenance"]["scheduler_identity"]["implementation"],
@@ -1052,7 +1055,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "methodConfig": str(method_path),
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
-                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                        "execution": {"parallelism": 1, "timeoutSeconds": 120},
                         "reproducibility": {"seed": 7},
                     },
                     sort_keys=False,
@@ -1074,6 +1077,146 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue((run_dir / "observations.jsonl").exists())
             self.assertFalse((tmp_path / "external_package" / "runs").exists())
 
+    def test_run_uses_copied_component_sources_and_runs_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            env_pkg = tmp_path / "demo_env_pkg"
+            method_pkg = tmp_path / "demo_method_pkg"
+            env_dir = env_pkg / "env"
+            method_dir = method_pkg / "method"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            for path in [env_pkg / "__init__.py", env_dir / "__init__.py", method_pkg / "__init__.py", method_dir / "__init__.py"]:
+                path.write_text("", encoding="utf-8")
+            (env_dir / "helper.py").write_text("VALUE = 17.0\n", encoding="utf-8")
+            (env_dir / "evaluator.py").write_text(
+                "\n".join(
+                    [
+                        "from pathlib import Path",
+                        "from .helper import VALUE",
+                        "",
+                        "def evaluate(candidate_runtime, context):",
+                        "    root = Path(__file__).resolve().parent",
+                        "    marker = root.parent / 'setup-marker.txt'",
+                        "    copied = '/source/environment/' in str(root)",
+                        "    ready = marker.exists() and marker.read_text(encoding='utf-8') == 'ready'",
+                        "    score = VALUE if copied and ready else -1.0",
+                        "    return {",
+                        "        'metric_values': {'score': score},",
+                        "        'event_summary': {'module_file': str(__file__), 'marker': str(marker)},",
+                        "    }",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.py").write_text(
+                "\n".join(
+                    [
+                        "class FixedMethod:",
+                        "    def __init__(self, definition, study_spec, rng=None):",
+                        "        self.definition = definition",
+                        "        self._done = False",
+                        "",
+                        "    def propose(self, n_candidates, study_state):",
+                        "        if self._done:",
+                        "            return []",
+                        "        self._done = True",
+                        "        return [{'candidate_id': 'copy-test-candidate', 'format': 'parameters', 'spec': {'x': 1.0}}]",
+                        "",
+                        "    def observe(self, observations):",
+                        "        return None",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            env_config = env_dir / "environment.yaml"
+            env_config.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "copy-source-env",
+                        "evaluator": {"python": "demo_env_pkg.env.evaluator:evaluate"},
+                        "runtime": {
+                            "sandbox": "process",
+                            "setup": {
+                                "steps": [
+                                    {
+                                        "uses": "command",
+                                        "command": [
+                                            sys.executable,
+                                            "-c",
+                                            "from pathlib import Path; import sys; p = Path('setup-marker.txt'); sys.exit(7) if p.exists() else p.write_text('ready', encoding='utf-8')",
+                                        ],
+                                    }
+                                ]
+                            },
+                        },
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 2.0}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            method_config = method_dir / "method.yaml"
+            method_config.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "copy-source-method",
+                        "entrypoint": {"python": "demo_method_pkg.method.method:FixedMethod", "protocol": "batch"},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            study_path = tmp_path / "study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "copy-source-study",
+                        "environmentConfig": str(env_config),
+                        "methodConfig": str(method_config),
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_study(str(study_path), output_root=str(tmp_path / "runs"))
+            run_dir = Path(summary.run_dir)
+            status = json.loads(
+                (run_dir / "source" / "environment" / "demo_env_pkg" / ".optpilot" / "setup-status.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            observation = self._read_jsonl(run_dir / "observations.jsonl")[0]
+            compiled = json.loads((run_dir / "study_spec.json").read_text(encoding="utf-8"))
+            first_setup_reused = compiled["extensions"]["runSource"]["environment"]["setupReused"]
+            method_copied = (run_dir / "source" / "method" / "demo_method_pkg" / "method" / "method.py").exists()
+            resumed = run_study(str(study_path), output_root=str(tmp_path / "runs"), resume_run_dir=str(run_dir))
+            resumed_compiled = json.loads((run_dir / "study_spec.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(summary.best_metric, 17.0)
+        self.assertEqual(resumed.completed_trials, 1)
+        self.assertEqual(status["status"], "ready")
+        self.assertIn("/source/environment/", observation["event_summary"]["module_file"])
+        self.assertTrue(method_copied)
+        self.assertIn("/source/environment", compiled["environment"]["adapter"]["config"]["evaluate"]["pythonPath"][0])
+        self.assertIn("/source/method", compiled["method"]["implementation"]["pythonPath"][0])
+        self.assertFalse(first_setup_reused)
+        self.assertTrue(resumed_compiled["extensions"]["runSource"]["environment"]["setupReused"])
+
     def test_cli_environment_adapter_runs_and_captures_process_evidence(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         spec_path = repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_cli_random_search.yaml"
@@ -1094,7 +1237,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(len(observations), 4)
             self.assertEqual(len(candidates), 4)
             first_observation = observations[0]
-            self.assertEqual(first_observation["provenance"]["backend_identity"]["implementation"], "builtin.local_backend")
+            self.assertEqual(first_observation["provenance"]["backend_identity"]["implementation"], "builtin.local_subprocess_backend")
             output_file_names = {candidate["name"]: candidate for candidate in first_observation["output_files"] if "name" in candidate}
             self.assertIn("candidate_payload", output_file_names)
             self.assertIn("settings", output_file_names)
@@ -1160,7 +1303,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "methodConfig": "command_stdin_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 2},
-                        "execution": {"backend": "local", "parallelism": 2, "timeoutSeconds": 120},
+                        "execution": {"parallelism": 2, "timeoutSeconds": 120},
                     },
                     sort_keys=False,
                 ),
@@ -1236,7 +1379,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "methodConfig": "command_file_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
-                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                        "execution": {"parallelism": 1, "timeoutSeconds": 120},
                     },
                     sort_keys=False,
                 ),
@@ -1360,7 +1503,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "methodConfig": "container_method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
-                        "execution": {"backend": "local", "parallelism": 1, "timeoutSeconds": 120},
+                        "execution": {"parallelism": 1, "timeoutSeconds": 120},
                     },
                     sort_keys=False,
                 ),
@@ -1378,10 +1521,10 @@ class MvpIntegrationTest(unittest.TestCase):
                         },
                         "runtime": {
                             "sandbox": "container",
-                            "network": "disabled",
                             "container": {
                                 "image": "optpilot-method-test-image",
                                 "executable": str(fake_container),
+                                "network": "disabled",
                                 "build": {
                                     "context": str(tmp_path),
                                     "dockerfile": "Dockerfile.method",
@@ -1707,26 +1850,20 @@ class MvpIntegrationTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, error):
                         compile_authoring_config(study_path)
 
-    def test_study_config_rejects_unimplemented_or_incomplete_runtime_shapes(self) -> None:
+    def test_study_config_rejects_removed_execution_fields(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         cases = [
             (
                 {
-                    "execution": {"backend": "local", "runtime": {"sandbox": "container"}},
+                    "execution": {"backend": "local", "parallelism": 1},
                 },
-                "execution.runtime.container requires image",
+                "Additional properties.*backend",
             ),
             (
                 {
-                    "execution": {"backend": "remote", "parallelism": 1},
+                    "execution": {"runtime": {"sandbox": "process"}},
                 },
-                "execution.backend",
-            ),
-            (
-                {
-                    "execution": {"backend": "local", "runtime": {"sandbox": "external"}},
-                },
-                "execution.runtime.sandbox",
+                "Additional properties.*runtime",
             ),
         ]
         for overrides, error in cases:
@@ -1747,6 +1884,133 @@ class MvpIntegrationTest(unittest.TestCase):
 
                     with self.assertRaisesRegex(ValueError, error):
                         compile_authoring_config(study_path)
+
+    def test_method_config_rejects_removed_public_contract_fields(self) -> None:
+        base_method = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "method",
+            "id": "removed-fields-method",
+            "entrypoint": {"python": "tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod"},
+            "accepts": {"formats": ["parameters"]},
+        }
+        cases = [
+            {"produces": {"format": "parameters", "parameters": {"schema": {"x": {"valueType": "float"}}}}},
+            {"resourceProfile": {"cpu": 2}},
+        ]
+        for override in cases:
+            raw = {**base_method, **override}
+            result = validate_public_config_schema(raw)
+            self.assertFalse(result.valid)
+            self.assertTrue(any("Additional properties" in issue.message for issue in result.errors))
+
+    def test_runtime_schema_uses_process_sandbox_and_setup(self) -> None:
+        environment = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "environment",
+            "id": "process-runtime-env",
+            "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+            "runtime": {
+                "sandbox": "process",
+                "setup": {
+                    "steps": [
+                        {"uses": "command", "command": ["python", "--version"]},
+                    ],
+                    "timeoutSeconds": 30,
+                },
+            },
+            "candidate": {
+                "format": "parameters",
+                "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 1.0}}},
+            },
+            "metrics": {"source": "return", "keys": ["throughput"]},
+        }
+        self.assertTrue(validate_public_config_schema(environment).valid)
+
+        host_runtime = deepcopy(environment)
+        host_runtime["runtime"] = {"sandbox": "host"}
+        self.assertFalse(validate_public_config_schema(host_runtime).valid)
+
+        container_on_process = deepcopy(environment)
+        container_on_process["runtime"] = {"sandbox": "process", "container": {"image": "python:3.12"}}
+        self.assertFalse(validate_public_config_schema(container_on_process).valid)
+
+    def test_public_schema_rejects_unimplemented_runtime_and_candidate_shapes(self) -> None:
+        environment = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "environment",
+            "id": "schema-contract-env",
+            "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+            "candidate": {
+                "format": "files",
+                "files": {
+                    "editable": [{"path": "solver.py"}],
+                },
+            },
+            "metrics": {"source": "return", "keys": ["throughput"]},
+        }
+        self.assertTrue(validate_public_config_schema(environment).valid)
+
+        missing_editable = deepcopy(environment)
+        missing_editable["candidate"]["files"] = {"required": ["solver.py"]}
+        self.assertFalse(validate_public_config_schema(missing_editable).valid)
+
+        empty_editable = deepcopy(environment)
+        empty_editable["candidate"]["files"]["editable"] = []
+        self.assertFalse(validate_public_config_schema(empty_editable).valid)
+
+        container_build = deepcopy(environment)
+        container_build["runtime"] = {
+            "sandbox": "container",
+            "container": {
+                "build": {
+                    "tag": "optpilot-test-env:latest",
+                    "args": {"PYTHON_VERSION": "3.12"},
+                }
+            },
+        }
+        self.assertTrue(validate_public_config_schema(container_build).valid)
+
+        missing_tag = deepcopy(container_build)
+        del missing_tag["runtime"]["container"]["build"]["tag"]
+        self.assertFalse(validate_public_config_schema(missing_tag).valid)
+
+        non_string_build_arg = deepcopy(container_build)
+        non_string_build_arg["runtime"]["container"]["build"]["args"]["PYTHON_VERSION"] = 3.12
+        self.assertFalse(validate_public_config_schema(non_string_build_arg).valid)
+
+        command_session_method = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "method",
+            "id": "command-session-method",
+            "entrypoint": {"command": ["python", "method.py"], "protocol": "session"},
+            "accepts": {"formats": ["parameters"]},
+        }
+        self.assertFalse(validate_public_config_schema(command_session_method).valid)
+
+    def test_compile_maps_public_retry_to_scheduler_attempts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            study_path = Path(tmp_dir) / "retry.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "retry-policy",
+                        "environmentConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
+                        "methodConfig": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                        "execution": {"retry": {"maxRetries": 2}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            compiled = compile_authoring_config(study_path)
+
+        self.assertEqual(compiled["execution"]["scheduler"]["config"]["retryPolicy"]["maxAttempts"], 3)
+        self.assertEqual(compiled["execution"]["defaults"]["retryPolicy"]["maxRetries"], 2)
 
     def test_run_can_resume_existing_evidence_store(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2391,13 +2655,21 @@ class MvpIntegrationTest(unittest.TestCase):
             spec_path.write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
 
             summary = run_expanded_study_spec(str(spec_path), output_root=tmp_dir)
-            observations = self._read_jsonl(Path(summary.run_dir) / "observations.jsonl")
-            scheduler_events = self._read_jsonl(Path(summary.run_dir) / "scheduler_events.jsonl")
+            run_dir = Path(summary.run_dir)
+            observations = self._read_jsonl(run_dir / "observations.jsonl")
+            scheduler_events = self._read_jsonl(run_dir / "scheduler_events.jsonl")
+            logical_trial_id = observations[0]["trial_id"]
 
             self.assertEqual(summary.completed_trials, 1)
             self.assertEqual(summary.best_metric, 9.0)
             self.assertEqual([observation["status"] for observation in observations], ["failed", "success"])
+            self.assertEqual([observation["trial_id"] for observation in observations], [logical_trial_id, logical_trial_id])
+            self.assertEqual([observation["provenance"]["attempt_index"] for observation in observations], [1, 2])
+            self.assertTrue((run_dir / "trials" / logical_trial_id / "attempt-1").exists())
+            self.assertTrue((run_dir / "trials" / logical_trial_id / "attempt-2").exists())
             self.assertTrue(any(event["event"] == "trial_retried" for event in scheduler_events))
+            retry_event = next(event for event in scheduler_events if event["event"] == "trial_retried")
+            self.assertEqual(retry_event["next_trial_id"], logical_trial_id)
             collected_event = scheduler_events[-1]
             self.assertEqual(collected_event["handles"][0]["attempt_count"], 2)
             self.assertEqual(observations[-1]["provenance"]["backend_worker"]["backend"], "local_thread")
@@ -2542,6 +2814,8 @@ class MvpIntegrationTest(unittest.TestCase):
         job_shop_file_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-dispatch-rule")
         method_ids = {item["id"] for item in catalog["methods"]}
         self.assertEqual(sa_environment["summary"]["candidate_format"], "files")
+        self.assertEqual(sa_environment["package"], "example_package")
+        self.assertEqual(sa_environment["qualified_id"], "example_package/environment/sa-simulator-code-edit")
         self.assertEqual(job_shop_parameter_environment["summary"]["candidate_format"], "parameters")
         self.assertEqual(job_shop_solution_environment["summary"]["candidate_format"], "parameters")
         self.assertEqual(job_shop_file_environment["summary"]["candidate_format"], "files")
@@ -2614,8 +2888,40 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(len(catalog["resources"]), 1)
         self.assertEqual(catalog["resources"][0]["id"], "devs-display-new")
+        self.assertEqual(catalog["resources"][0]["qualified_id"], "local_package/resource/devs-display-new")
         self.assertEqual(catalog["resources"][0]["label"], "DEVS Display Generator")
         self.assertIn("simulation", catalog["resources"][0]["tags"])
+
+    def test_ui_catalog_rejects_duplicate_ids_inside_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package = tmp_path / "catalog" / "local_package"
+            first = package / "environments" / "first"
+            second = package / "environments" / "second"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            for path in [first / "environment.yaml", second / "environment.yaml"]:
+                path.write_text(
+                    yaml.safe_dump(
+                        {
+                            "apiVersion": "optpilot.io/v1",
+                            "config": "environment",
+                            "id": "duplicate-env",
+                            "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                            "candidate": {
+                                "format": "parameters",
+                                "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                            },
+                            "metrics": {"source": "return", "keys": ["throughput"]},
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+            state = UiState(cwd=tmp_path, catalog_roots=[package], run_roots=[])
+
+            with self.assertRaisesRegex(ValueError, "Duplicate catalog id"):
+                _catalog_payload(state)
 
     def test_resource_manifest_declares_launchable_interface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -2885,11 +3191,11 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertFalse(incompatible_schedule_draft["compatibility"]["compatible"])
             self.assertFalse(incompatible_schedule_draft["validation"]["valid"])
             self.assertIn(
-                "produced parameter 'solutions' is not accepted by environment candidate.parameters.schema",
+                "required capability 'schedule-solution-candidate' is not provided",
                 " ".join(incompatible_schedule_draft["validation"]["errors"]),
             )
             self.assertIn(
-                "produced parameter 'solutions' is not accepted by environment candidate.parameters.schema",
+                "required capability 'schedule-solution-candidate' is missing",
                 " ".join(incompatible_schedule_draft["compatibility"]["reasons"]),
             )
 
@@ -2910,10 +3216,8 @@ class MvpIntegrationTest(unittest.TestCase):
                 },
             )
             self.assertTrue(container_draft["validation"]["valid"], container_draft)
-            self.assertEqual(container_draft["draft"]["execution"]["backend"], "local")
-            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["sandbox"], "container")
-            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["image"], "python:3.11-slim")
-            self.assertEqual(container_draft["draft"]["execution"]["runtime"]["container"]["executable"], "docker")
+            self.assertNotIn("backend", container_draft["draft"]["execution"])
+            self.assertNotIn("runtime", container_draft["draft"]["execution"])
 
     def test_ui_study_plan_workspace_is_persisted(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

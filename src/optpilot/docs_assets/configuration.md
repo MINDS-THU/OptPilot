@@ -45,7 +45,7 @@ Candidate compatibility is based on the candidate format plus required contract 
 | Free string | You choose the value. Used for ids, names, labels, descriptions, tags, or method-specific settings. |
 | Enum | Must be one of the listed values. JSON Schema validates it. |
 | Path | A filesystem path. Relative paths are resolved from the YAML file that contains the path unless noted otherwise. |
-| Python import | `package.module:function` or `package.module:Class`. |
+| Python import | `module:function` or `module:Class`, resolved through the config's `pythonPath`. Config-local imports such as `evaluator:evaluate` are preferred for catalog packages. |
 | Command | A list of strings passed to a subprocess, for example `[python, script.py, "{input_file}", "{output_file}"]`. |
 | Object | JSON/YAML object. Some objects are passed through to user code as settings. |
 
@@ -124,10 +124,10 @@ catalog entries.
 
 | Field | Relative to |
 | --- | --- |
-| `study.environmentConfig`, `study.methodConfig`, `evidence.outputDir` | The study config file. |
+| `study.environmentConfig`, `study.methodConfig` | The study config file. |
+| `evidence.outputDir` | The launch working directory or explicit CLI/UI output root. |
 | `environment.evaluator.pythonPath`, `environment.trialWorkspace[].from`, `environment.methodContext.instructions`, `environment.methodContext.references[].path` | The environment config file. |
 | `method.entrypoint.pythonPath`, `method.runtime.container.build.context` | The method config file. |
-| `study.execution.runtime.container.build.context` | The study config file. |
 | `environment.evaluator.cwd` | The trial workspace created for the candidate evaluation. |
 | `environment.outputFiles[].path` and string `environment.outputFiles` entries | The trial workspace after evaluator execution. |
 | `environment.records[].path` for file-backed records | The trial workspace after evaluator execution. |
@@ -166,14 +166,14 @@ tags: [tutorial]
 evaluator:
   # Python import. Function signature:
   # evaluate(candidate_runtime, context) -> dict
-  python: catalog.local_package.environments.my_environment.evaluator:evaluate
+  python: evaluator:evaluate
 
   # Alternative command evaluator.
   # command: [python, run_eval.py, "{candidate_json}", "{settings_file}", "{metrics_file}"]
 
   # Alternative custom adapter class.
   # Use only when a direct Python function or command is not enough.
-  # adapter: catalog.local_package.environments.my_environment.adapter:MyAdapter
+  # adapter: adapter:MyAdapter
 
   # Optional evaluator controls.
   timeoutSeconds: 600
@@ -189,11 +189,11 @@ evaluator:
 
 # Optional runtime for the environment evaluator.
 runtime:
-  sandbox: host          # enum: host | container
-  # network: disabled    # enum: enabled | disabled
+  sandbox: process       # enum: process | container
   # container:
   #   image: python:3.11-slim
   #   executable: docker
+  #   network: disabled  # enum: enabled | disabled
 
 # Optional files copied into each trial workspace before evaluation.
 trialWorkspace:
@@ -279,7 +279,7 @@ For example:
 
 ```yaml
 evaluator:
-  python: catalog.local_package.environments.my_environment.evaluator:evaluate
+  python: evaluator:evaluate
   settings:
     dataset: data/train.csv
     split: validation
@@ -292,7 +292,8 @@ For multi-case benchmarks, keep the same pattern:
 
 ```yaml
 evaluator:
-  adapter: catalog.local_package.environments.my_environment.adapter:BenchmarkAdapter
+  adapter: adapter:BenchmarkAdapter
+  pythonPath: [.]
   settings:
     cases:
       - id: small
@@ -461,7 +462,7 @@ description: My optimizer.
 
 entrypoint:
   # Python import. Class constructed as MyMethod(definition, study_spec, rng).
-  python: catalog.local_package.methods.my_method.method:MyMethod
+  python: method:MyMethod
   protocol: batch        # enum: batch | session
   pythonPath: [.]
 
@@ -480,20 +481,15 @@ accepts:
       - candidate.parameters.schema
     capabilities: []
 
-# Optional: use only when this method submits a known candidate shape.
-produces:
-  format: parameters
-  parameters:
-    schema:
-      x:
-        valueType: float
-
-# Optional method runtime. Useful for command methods with their own dependencies.
+# Optional method runtime. Useful for methods with their own dependencies.
 runtime:
-  sandbox: host          # enum: host | container
+  sandbox: process       # enum: process | container
 ```
 
-For a first runnable method config, the minimum important fields are usually `id`, `entrypoint`, and `accepts`. Add `produces` when the method always submits a known candidate shape; OptPilot compares it structurally with the environment candidate contract. Omit `produces` for schema-general methods that read `candidate.parameters.schema` and generate candidates for whatever parameter schema the environment declares.
+For a first runnable method config, the minimum important fields are usually
+`id`, `entrypoint`, and `accepts`. The environment owns the candidate contract;
+OptPilot validates every submitted candidate against that environment contract
+during the run.
 
 Batch Python methods can implement:
 
@@ -549,7 +545,6 @@ budget:
   maxFailures: 5
 
 execution:
-  backend: local         # enum: local | local_subprocess
   parallelism: 2
   timeoutSeconds: 600
 
@@ -565,26 +560,23 @@ A study config does not describe domain inputs directly. If the selected
 environment needs a scenario, dataset, query, simulator argument set, or
 benchmark case list, put that in the environment config's `evaluator.settings`
 or create another environment config variant. This keeps studies small: they
-choose the environment, method, objective, budget, runtime, evidence policy,
-and seed.
+choose the environment, method, objective, budget, evidence policy, and seed.
 
-Containerized environment execution:
+Containerized environment runtime:
 
-Study `execution.runtime` fragment:
+Environment `runtime` fragment:
 
 ```yaml
-execution:
-  backend: local
-  runtime:
-    sandbox: container
+runtime:
+  sandbox: container
+  container:
+    image: python:3.11-slim
+    executable: docker
     network: disabled
-    container:
-      image: python:3.11-slim
-      executable: docker
-      build:
-        context: .
-        dockerfile: Dockerfile.environment
-        tag: my-env:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.environment
+      tag: my-env:latest
 ```
 
 ### Environment Variants And Inputs

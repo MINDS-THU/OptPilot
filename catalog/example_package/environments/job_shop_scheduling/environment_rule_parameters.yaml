@@ -5,7 +5,8 @@ description: Evaluate weighted dispatch-rule parameters on small job-shop schedu
 tags: [job-shop, scheduling, parameters, tutorial]
 
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 60
   settings:
     cases:

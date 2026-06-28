@@ -5,7 +5,8 @@ description: Uses JobShopLib ORToolsSolver to emit complete schedule solutions.
 tags: [job-shop, job-shop-lib, cp-sat, ortools, schedule-solution]
 
 entrypoint:
-  python: catalog.example_package.methods.ortools_cpsat_solver.method:OrToolsCpSatSolverMethod
+  python: method:OrToolsCpSatSolverMethod
+  pythonPath: [., ..]
   protocol: batch
 
 settings:
@@ -17,11 +18,5 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
+    capabilities:
+      - schedule-solution-candidate

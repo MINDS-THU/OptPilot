@@ -81,7 +81,7 @@ Some field names change during compilation because public YAML is optimized for 
 | `objective.metric` | `objective.primaryMetric.name` | Runtime can also hold secondary metrics and aggregation details. |
 | `objective.direction` | `objective.primaryMetric.direction` | The runner compares metrics using the compiled primary metric. |
 | `budget.maxTrials` | `stopping.maxTrials` | Budget becomes a stopping policy. |
-| `evaluator.settings` | `environment.evaluator.config.settings` | Environment-owned inputs remain attached to the evaluator. |
+| `evaluator.settings` | `environment.adapter.config.evaluate.config` | Environment-owned inputs remain attached to the evaluator. |
 | `method.settings` | `method.config` and `method.settings` | Method implementations read runtime config; original settings remain available for audit. |
 | `environment.candidate` | `candidate.context.candidate` plus validation/materialization specs | The runner needs both the public contract and executable validation/materialization rules. |
 
@@ -191,7 +191,7 @@ Evaluator field fragment:
 
 ```yaml
 evaluator:
-  python: catalog.local_package.environments.my_environment.evaluator:evaluate
+  python: evaluator:evaluate
 ```
 
 Alternative evaluator field fragment:
@@ -205,7 +205,8 @@ Alternative evaluator field fragment:
 
 ```yaml
 evaluator:
-  adapter: catalog.local_package.environments.my_environment.adapter:MyAdapter
+  adapter: adapter:MyAdapter
+  pythonPath: [.]
 ```
 
 The evaluator receives the materialized candidate and `context["settings"]`. It returns or writes:
@@ -220,25 +221,25 @@ The configured adapter normalizes those values into observations.
 
 ## Parallelism And Runtimes
 
-Study execution controls environment trials:
+Study execution controls the experiment loop:
 
 Study `execution` fragment:
 
 ```yaml
 execution:
-  backend: local          # local | local_subprocess
   parallelism: 2
-  runtime:
-    sandbox: host         # host | container
 ```
 
-Current runner support:
+Environment and method runtime belongs to the component configs:
 
-| Setting | Status |
-| --- | --- |
-| `backend: local` with `sandbox: host` | Implemented. |
-| `backend: local_subprocess` with `sandbox: host` | Implemented. |
-| `backend: local` with `sandbox: container` | Implemented for Docker/Podman-compatible CLIs. |
+```yaml
+runtime:
+  sandbox: process        # process | container
+```
+
+`process` runs component code in local subprocess workers. `container` runs it
+through a Docker/Podman-compatible runtime when the component declares a
+container image or build.
 
 Method runtime is separate from environment execution:
 

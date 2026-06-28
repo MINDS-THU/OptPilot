@@ -19,7 +19,6 @@ class ResourceProfile:
     timeout_seconds: int = 600
     disk_gib: Optional[int] = None
     network_required: bool = False
-    runtime_image: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Optional[JsonDict]) -> "ResourceProfile":
@@ -32,7 +31,6 @@ class ResourceProfile:
             timeout_seconds=int(data.get("timeoutSeconds", data.get("timeout_seconds", 600))),
             disk_gib=data.get("diskGiB") or data.get("disk_gib"),
             network_required=bool(data.get("networkRequired", data.get("network_required", False))),
-            runtime_image=data.get("runtimeImage") or data.get("runtime_image"),
         )
 
     def to_dict(self) -> JsonDict:
@@ -44,7 +42,6 @@ class ResourceProfile:
             "timeoutSeconds": self.timeout_seconds,
             "diskGiB": self.disk_gib,
             "networkRequired": self.network_required,
-            "runtimeImage": self.runtime_image,
         }
         return {key: value for key, value in payload.items() if value is not None}
 

@@ -5,7 +5,8 @@ description: OpenAI-compatible method that edits environment-provided file candi
 tags: [llm, code-edit, files]
 
 entrypoint:
-  python: catalog.example_package.methods.openai_file_editor.method:OpenAIFileEditMethod
+  python: method:OpenAIFileEditMethod
+  pythonPath: [.]
   protocol: batch
 
 settings:

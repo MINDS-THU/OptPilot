@@ -17,7 +17,65 @@
         "query": {"type": "string"},
         "extractor": {"$ref": "common.schema.json#/definitions/pythonImport"},
         "settings": {"type": "object"}
-      }
+      },
+      "oneOf": [
+        {
+          "properties": {"source": {"const": "return"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["database"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]},
+              {"required": ["settings"]}
+            ]
+          }
+        },
+        {
+          "required": ["path"],
+          "properties": {"source": {"const": "file"}},
+          "not": {
+            "anyOf": [
+              {"required": ["database"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "properties": {"source": {"const": "stdout"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["database"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]},
+              {"required": ["settings"]}
+            ]
+          }
+        },
+        {
+          "required": ["database", "query"],
+          "properties": {"source": {"const": "sqlite"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "required": ["extractor"],
+          "properties": {"source": {"const": "custom"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["database"]},
+              {"required": ["query"]}
+            ]
+          }
+        }
+      ]
     },
     "record": {
       "type": "object",
@@ -32,7 +90,67 @@
         "query": {"type": "string"},
         "extractor": {"$ref": "common.schema.json#/definitions/pythonImport"},
         "settings": {"type": "object"}
-      }
+      },
+      "oneOf": [
+        {
+          "required": ["path"],
+          "properties": {"source": {"const": "jsonl"}},
+          "not": {
+            "anyOf": [
+              {"required": ["database"]},
+              {"required": ["table"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "required": ["path"],
+          "properties": {"source": {"const": "csv"}},
+          "not": {
+            "anyOf": [
+              {"required": ["database"]},
+              {"required": ["table"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "required": ["database", "table"],
+          "properties": {"source": {"const": "sqlite_table"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["query"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "required": ["database", "query"],
+          "properties": {"source": {"const": "sqlite_query"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["table"]},
+              {"required": ["extractor"]}
+            ]
+          }
+        },
+        {
+          "required": ["extractor"],
+          "properties": {"source": {"const": "custom"}},
+          "not": {
+            "anyOf": [
+              {"required": ["path"]},
+              {"required": ["database"]},
+              {"required": ["table"]},
+              {"required": ["query"]}
+            ]
+          }
+        }
+      ]
     },
     "outputFile": {
       "oneOf": [

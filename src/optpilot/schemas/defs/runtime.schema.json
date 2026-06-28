@@ -7,8 +7,9 @@
       "additionalProperties": false,
       "properties": {
         "sandbox": {
-          "enum": ["host", "container"]
+          "enum": ["process", "container"]
         },
+        "setup": {"$ref": "common.schema.json#/definitions/setup"},
         "container": {
           "type": "object",
           "additionalProperties": false,
@@ -17,55 +18,53 @@
             "executable": {"type": "string"},
             "build": {
               "type": "object",
-              "additionalProperties": true,
+              "additionalProperties": false,
+              "required": ["tag"],
               "properties": {
                 "context": {"type": "string"},
                 "dockerfile": {"type": "string"},
                 "tag": {"type": "string"},
                 "target": {"type": "string"},
                 "platform": {"type": "string"},
-                "args": {"type": "object"},
+                "args": {
+                  "type": "object",
+                  "additionalProperties": {"type": "string"}
+                },
                 "extraArgs": {
                   "type": "array",
                   "items": {"type": "string"}
                 },
                 "timeoutSeconds": {"type": "integer", "minimum": 1}
               }
+            },
+            "network": {
+              "enum": ["enabled", "disabled"]
             }
-          }
+          },
+          "anyOf": [
+            {"required": ["image"]},
+            {"required": ["build"]}
+          ]
         },
         "workdir": {"type": "string"},
-        "env": {"type": "object"},
-        "envFromHost": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "readOnlyMounts": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "writableMounts": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "network": {
-          "enum": ["enabled", "disabled"]
+        "env": {"$ref": "common.schema.json#/definitions/envObject"},
+        "envFromHost": {"$ref": "common.schema.json#/definitions/stringList"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["sandbox"],
+            "properties": {"sandbox": {"const": "container"}}
+          },
+          "then": {
+            "required": ["container"],
+            "not": {"required": ["setup"]}
+          },
+          "else": {
+            "not": {"required": ["container"]}
+          }
         }
-      }
-    },
-    "resourceProfile": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "cpu": {"type": "integer", "minimum": 1},
-        "memoryGiB": {"type": "number", "exclusiveMinimum": 0},
-        "gpu": {"type": "integer", "minimum": 0},
-        "gpuClass": {"type": "string"},
-        "timeoutSeconds": {"type": "integer", "minimum": 1},
-        "diskGiB": {"type": "number", "exclusiveMinimum": 0},
-        "networkRequired": {"type": "boolean"},
-        "runtimeImage": {"type": "string"}
-      }
+      ]
     }
   }
 }

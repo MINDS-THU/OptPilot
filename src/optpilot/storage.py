@@ -62,8 +62,11 @@ class LocalEvidenceStore:
     def write_summary(self, summary: Dict[str, Any]) -> None:
         self._write_json(self.run_dir / "summary.json", summary)
 
-    def create_trial_workspace(self, trial_id: str) -> Path:
-        workspace = self.run_dir / "trials" / trial_id
+    def create_trial_workspace(self, trial_id: str, *, attempt_index: int | None = None) -> Path:
+        if attempt_index is None:
+            workspace = self.run_dir / "trials" / trial_id
+        else:
+            workspace = self.run_dir / "trials" / trial_id / f"attempt-{int(attempt_index)}"
         workspace.mkdir(parents=True, exist_ok=True)
         return workspace
 

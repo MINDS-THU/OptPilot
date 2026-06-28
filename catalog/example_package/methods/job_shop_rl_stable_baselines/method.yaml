@@ -5,15 +5,16 @@ description: Trains a small RL policy on training cases and emits schedule solut
 tags: [job-shop, reinforcement-learning, stable-baselines, schedule-solution]
 
 entrypoint:
-  python: catalog.example_package.methods.job_shop_rl_stable_baselines.method:StableBaselinesJobShopMethod
+  python: method:StableBaselinesJobShopMethod
+  pythonPath: [., ..]
   protocol: batch
 
 settings:
   batchSize: 1
   algorithm: PPO
   trainInstances:
-    - ../../environments/job_shop_scheduling/cases/train_tiny_a.yaml
-    - ../../environments/job_shop_scheduling/cases/train_tiny_b.yaml
+    - training_cases/train_tiny_a.yaml
+    - training_cases/train_tiny_b.yaml
   maxJobs: 6
   totalTimesteps: 128
   discountFactor: 0.95
@@ -24,11 +25,5 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
+    capabilities:
+      - schedule-solution-candidate

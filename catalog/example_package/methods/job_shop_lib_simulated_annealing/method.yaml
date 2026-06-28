@@ -5,7 +5,8 @@ description: Uses JobShopLib SimulatedAnnealingSolver to emit complete schedule 
 tags: [job-shop, job-shop-lib, simulated-annealing, schedule-solution]
 
 entrypoint:
-  python: catalog.example_package.methods.job_shop_lib_simulated_annealing.method:JobShopLibSimulatedAnnealingMethod
+  python: method:JobShopLibSimulatedAnnealingMethod
+  pythonPath: [., ..]
   protocol: batch
 
 settings:
@@ -21,11 +22,5 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
+    capabilities:
+      - schedule-solution-candidate

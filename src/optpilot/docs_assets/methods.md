@@ -21,7 +21,7 @@ config: method
 id: my-method
 
 entrypoint:
-  python: catalog.local_package.methods.my_method.method:MyMethod
+  python: method:MyMethod
   protocol: batch
 
 settings:
@@ -36,20 +36,9 @@ accepts:
 
 `entrypoint` points to the method implementation. `settings` is a free object passed to that implementation. `accepts` declares the environment surface the method needs to run.
 
-If a method always produces a known candidate shape, add a `produces` field to the method config:
-
-Method output-contract fragment:
-
-```yaml
-produces:
-  format: parameters
-  parameters:
-    schema:
-      x:
-        valueType: float
-```
-
-For example, an OR-Tools job-shop method can declare that it produces a `solutions` parameter. A schema-general method, such as an LLM method that reads `candidate.parameters.schema` and directly emits whatever parameter candidate that environment asks for, should omit `produces`.
+The environment owns the candidate contract. A method declares the candidate
+formats and context it can use, then OptPilot validates every proposed candidate
+against the selected environment before evaluation.
 
 ## Compatibility Contract
 
@@ -57,11 +46,9 @@ Method and environment compatibility is intentionally explicit.
 
 `accepts` answers three questions:
 
-- which candidate formats can this method produce?
+- which candidate formats can this method submit?
 - which environment context fields does it require?
 - which environment capabilities does it depend on?
-
-`produces` is optional. Use it when the method has a fixed output contract or a known subset of possible outputs. Leave it unset when the method is intentionally schema-general. When present, OptPilot compares it structurally with the environment candidate contract. For parameter candidates, each produced parameter must be accepted by the environment schema with a compatible `valueType`, nested item/object shape, and categorical value set. This comparison is by schema shape, not by environment-specific method names or context path names.
 
 A general parameter-producing method can be compatible with any parameter-candidate environment:
 
@@ -77,7 +64,7 @@ accepts:
 
 In that case, compatibility says the method can run because it supports `parameters` and receives the schema. The runner still validates every submitted candidate against the environment contract during evaluation.
 
-File-candidate methods use the same pattern. This is a compatibility fragment showing the `accepts` and `produces` fields inside a method config:
+File-candidate methods use the same pattern:
 
 ```yaml
 accepts:
@@ -87,12 +74,6 @@ accepts:
       - candidate.files.editable
       - methodContext.instructions
     capabilities: []
-
-produces:
-  format: files
-  files:
-    editable:
-      - path: heuristic.py
 ```
 
 This avoids vague domain tags. Compatibility is defined by the actual candidate contract and method-visible environment surface.
@@ -155,7 +136,7 @@ Method `entrypoint` fragment:
 
 ```yaml
 entrypoint:
-  python: catalog.local_package.methods.my_agent.method:MyAgent
+  python: method:MyAgent
   protocol: session
 ```
 
@@ -179,7 +160,7 @@ Both protocols can submit multiple candidates. `settings.batchSize` controls how
 
 ## Runtime Isolation
 
-Python methods run in the host process. Existing agents or optimizers that need isolated dependencies can be exposed as command methods and launched in a container.
+Python methods run through an OptPilot method worker process or container, not inside the main runner process. Use `runtime.setup` for process-runtime dependencies and `runtime.container` for container images.
 
 Method runtime fragment:
 
@@ -190,10 +171,10 @@ entrypoint:
 
 runtime:
   sandbox: container
-  network: disabled
   container:
     image: my-agent-image:latest
     executable: docker
+    network: disabled
     build:
       context: .
       dockerfile: Dockerfile.agent
@@ -201,4 +182,4 @@ runtime:
   envFromHost: [OPENAI_API_KEY]
 ```
 
-Method runtime containers are independent from environment execution containers. Use method containers for optimizer or agent dependencies. Use study execution runtime for simulator or evaluator dependencies.
+Method runtime containers are independent from environment runtime containers. Use method runtime for optimizer or agent dependencies, and environment runtime for simulator or evaluator dependencies.

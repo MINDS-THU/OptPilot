@@ -5,7 +5,8 @@ description: Evaluate complete job-shop schedules produced by external solvers o
 tags: [job-shop, scheduling, parameters, schedule-solution, tutorial]
 
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 60
   settings:
     cases:
@@ -42,3 +43,7 @@ metrics:
 outputFiles:
   - schedule_*.json
   - job_shop_metrics*.json
+
+capabilities:
+  - id: schedule-solution-candidate
+    description: Accepts complete schedule solutions keyed by validation case id.

@@ -5,7 +5,8 @@ description: Evaluate edited SA simulator source copied from the external devs_g
 tags: [external-project, llm-code-edit, simulator, files]
 
 evaluator:
-  python: catalog.example_package.environments.strategic_airlift_devs.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 180
   settings:
     duration: 120.0

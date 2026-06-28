@@ -72,9 +72,11 @@
     "files": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["editable"],
       "properties": {
         "editable": {
           "type": "array",
+          "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,

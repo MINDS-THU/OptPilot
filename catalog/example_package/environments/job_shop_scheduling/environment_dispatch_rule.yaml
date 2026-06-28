@@ -5,7 +5,8 @@ description: Evaluate generated Python dispatching rules on small job-shop sched
 tags: [job-shop, scheduling, files, tutorial]
 
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 60
   settings:
     cases:

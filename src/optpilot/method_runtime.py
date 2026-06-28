@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import utc_now_iso
+from .setup import apply_prepared_env
 
 
 TERMINAL_STATES = {"completed", "failed", "finished", "succeeded", "cancelled"}
@@ -30,10 +31,13 @@ class MethodRuntime:
         self.study_spec = study_spec
         self.method_id = definition["id"]
         self._built_container_images = set()
+        self._python_worker: Optional[_PythonMethodWorkerClient] = None
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any], evidence_view=None) -> List[Dict[str, Any]]:
         implementation = self.definition.get("implementation", {})
         protocol = implementation.get("protocol", "optpilot.method.batch.v1")
+        if implementation.get("type") == "python" and self.method is None:
+            return self._python_worker_propose(n_candidates, study_state, evidence_view)
         if protocol == "optpilot.method.session.v1":
             return self._session_propose(n_candidates, study_state, evidence_view)
         if protocol != "optpilot.method.batch.v1":
@@ -96,6 +100,16 @@ class MethodRuntime:
         return candidates
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
+        implementation = self.definition.get("implementation", {})
+        if implementation.get("type") == "python" and self.method is None:
+            response = self._ensure_python_worker().request(
+                {
+                    "op": "observe",
+                    "observations": observations,
+                }
+            )
+            self._record_worker_response(response)
+            return
         if self.method is not None and hasattr(self.method, "observe"):
             self.method.observe(observations)
         elif self.method is not None and hasattr(self.method, "intervene"):
@@ -114,9 +128,56 @@ class MethodRuntime:
             },
         )
 
+    def close(self) -> None:
+        if self._python_worker is not None:
+            self._python_worker.close()
+            self._python_worker = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def _python_worker_propose(self, n_candidates: int, study_state: Dict[str, Any], evidence_view=None) -> List[Dict[str, Any]]:
+        response = self._ensure_python_worker().request(
+            {
+                "op": "propose",
+                "n_candidates": n_candidates,
+                "study_state": dict(study_state),
+                "evidence": evidence_view.decision_context() if evidence_view else {},
+            }
+        )
+        self._record_worker_response(response)
+        return [dict(candidate) for candidate in response.get("candidates", []) or []]
+
+    def _ensure_python_worker(self) -> "_PythonMethodWorkerClient":
+        if self._python_worker is not None:
+            return self._python_worker
+        runtime = _runtime_with_default_workdir(self.definition.get("runtime", {}) or {}, self.definition)
+        build_metadata = self._ensure_container_runtime(runtime)
+        self._python_worker = _PythonMethodWorkerClient(
+            definition=self.definition,
+            runtime=runtime,
+            evidence_store=self.evidence_store,
+            study_spec=self.study_spec,
+            build_metadata=build_metadata,
+        )
+        self._python_worker.start()
+        return self._python_worker
+
+    def _record_worker_response(self, response: Dict[str, Any]) -> None:
+        for event in response.get("method_events", []) or []:
+            if isinstance(event, dict):
+                self._record_event(dict(event))
+        for call in response.get("calls", []) or []:
+            if not isinstance(call, dict):
+                continue
+            self._record_call(str(call.get("event", "completed")), dict(call.get("payload", {}) or {}))
+
     def _command_batch_propose(self, n_candidates: int, study_state: Dict[str, Any], evidence_view) -> List[Dict[str, Any]]:
         implementation = self.definition.get("implementation", {})
-        runtime = self.definition.get("runtime", {}) or {}
+        runtime = _runtime_with_default_workdir(self.definition.get("runtime", {}) or {}, self.definition)
         call_id = f"method-call-{uuid.uuid4().hex[:12]}"
         call_dir = self.evidence_store.run_dir / "method_calls" / call_id
         call_dir.mkdir(parents=True, exist_ok=False)
@@ -327,6 +388,117 @@ class MethodRuntime:
         )
 
 
+class _PythonMethodWorkerClient:
+    def __init__(
+        self,
+        *,
+        definition: Dict[str, Any],
+        runtime: Dict[str, Any],
+        evidence_store,
+        study_spec,
+        build_metadata: Optional[Dict[str, Any]] = None,
+    ):
+        self.definition = definition
+        self.runtime = runtime
+        self.evidence_store = evidence_store
+        self.study_spec = study_spec
+        self.build_metadata = build_metadata or {}
+        self.worker_id = f"method-worker-{uuid.uuid4().hex[:12]}"
+        self.worker_dir = evidence_store.run_dir / "method_runtime" / self.worker_id
+        self.worker_dir.mkdir(parents=True, exist_ok=False)
+        self.init_path = self.worker_dir / "init.json"
+        self.stderr_path = self.worker_dir / "stderr.log"
+        self.process: Optional[subprocess.Popen] = None
+        self._stderr_handle = None
+
+    def start(self) -> None:
+        seed = int(self.study_spec.reproducibility.get("seedPolicy", {}).get("globalSeed", 0) or 0)
+        self.init_path.write_text(
+            json.dumps(
+                {
+                    "method_definition": self.definition,
+                    "study_spec_path": str(self.study_spec.path),
+                    "study_spec_raw": self.study_spec.raw,
+                    "run_dir": str(self.evidence_store.run_dir),
+                    "seed": seed,
+                    "build_metadata": self.build_metadata,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        runtime_type = str(self.runtime.get("type", "process") or "process")
+        cwd = _runtime_cwd(self.runtime, Path(str(self.definition.get("configBaseDir") or self.study_spec.base_dir)))
+        if runtime_type == "container":
+            command = _python_method_worker_container_command(
+                self.runtime,
+                self.study_spec,
+                self.worker_id,
+                self.init_path,
+                cwd,
+                self.definition.get("implementation", {}),
+            )
+            env = os.environ.copy()
+            popen_cwd = Path.cwd()
+        elif runtime_type in {"process", "host", "local"}:
+            python_executable = str(self.runtime.get("workerPythonExecutable") or sys.executable)
+            command = [python_executable, "-m", "optpilot.method_worker", str(self.init_path)]
+            env = _python_method_worker_env(self.runtime, self.definition.get("implementation", {}))
+            popen_cwd = cwd
+        else:
+            raise ValueError(f"Unsupported Python method runtime.type: {runtime_type!r}")
+        self._stderr_handle = self.stderr_path.open("w", encoding="utf-8")
+        self.process = subprocess.Popen(
+            command,
+            cwd=str(popen_cwd),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=self._stderr_handle,
+            text=True,
+            bufsize=1,
+        )
+
+    def request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self.process is None or self.process.stdin is None or self.process.stdout is None:
+            raise RuntimeError("Python method worker is not running.")
+        self.process.stdin.write(json.dumps(payload, sort_keys=True) + "\n")
+        self.process.stdin.flush()
+        line = self.process.stdout.readline()
+        if not line:
+            returncode = self.process.poll()
+            stderr = self.stderr_path.read_text(encoding="utf-8") if self.stderr_path.exists() else ""
+            raise RuntimeError(f"Python method worker stopped unexpectedly with code {returncode}: {stderr.strip()}")
+        response = json.loads(line)
+        if not response.get("ok"):
+            error = response.get("error", {})
+            raise RuntimeError(f"Python method worker failed: {error.get('type', 'Error')}: {error.get('message', '')}")
+        return response
+
+    def close(self) -> None:
+        if self.process is None:
+            return
+        try:
+            if self.process.poll() is None:
+                try:
+                    self.request({"op": "shutdown"})
+                except Exception:
+                    self.process.kill()
+                self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait()
+        finally:
+            if self.process.stdin is not None:
+                self.process.stdin.close()
+            if self.process.stdout is not None:
+                self.process.stdout.close()
+            if self._stderr_handle is not None:
+                self._stderr_handle.close()
+            self.process = None
+
+
 class MethodSession:
     """Small active proposal surface for Python session methods."""
 
@@ -427,7 +599,7 @@ def _command_uses_placeholders(command: List[str]) -> bool:
 def _runtime_cwd(runtime: Dict[str, Any], base_dir: Path) -> Path:
     workdir = runtime.get("workdir") or runtime.get("project")
     if not workdir:
-        return Path.cwd()
+        return base_dir.resolve()
     path = Path(str(workdir))
     if path.is_absolute():
         return path.resolve()
@@ -471,6 +643,68 @@ def _run_method_command(
             check=False,
         )
     raise ValueError(f"Unsupported method runtime.type: {runtime_type!r}")
+
+
+def _runtime_with_default_workdir(runtime: Dict[str, Any], definition: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(runtime or {})
+    result.setdefault("type", "process")
+    if not result.get("workdir") and definition.get("configBaseDir"):
+        result["workdir"] = str(definition["configBaseDir"])
+    return result
+
+
+def _python_method_worker_env(runtime: Dict[str, Any], implementation: Dict[str, Any]) -> Dict[str, str]:
+    env = _host_method_env(runtime)
+    entries = []
+    entries.extend(str(path) for path in implementation.get("pythonPath", []) or [] if path)
+    entries.append(str(Path(__file__).resolve().parents[1]))
+    entries.append(str(Path.cwd().resolve()))
+    existing = env.get("PYTHONPATH")
+    if existing:
+        entries.append(existing)
+    env["PYTHONPATH"] = os.pathsep.join(entries)
+    return env
+
+
+def _python_method_worker_container_command(
+    runtime: Dict[str, Any],
+    study_spec,
+    worker_id: str,
+    init_path: Path,
+    cwd: Path,
+    implementation: Dict[str, Any],
+) -> List[str]:
+    image = _method_container_image(runtime, study_spec)
+    container_executable = str(runtime.get("containerExecutable", "docker"))
+    container_name = _safe_container_name(f"optpilot-{worker_id}")
+    python_executable = str(runtime.get("pythonExecutable", "python"))
+    command = [python_executable, "-m", "optpilot.method_worker", str(init_path)]
+    docker_command = [
+        container_executable,
+        "run",
+        "--rm",
+        "-i",
+        "--name",
+        container_name,
+    ]
+    docker_command.extend(network_args(str(runtime.get("networkPolicy", "disabled"))))
+    for host_path, mode in _method_container_mounts(runtime, study_spec, init_path.parent, cwd, command):
+        docker_command.extend(["-v", f"{host_path}:{host_path}:{mode}"])
+    docker_command.extend(["-w", str(cwd)])
+    pythonpath_entries = [container_pythonpath()]
+    pythonpath_entries.extend(str(path) for path in implementation.get("pythonPath", []) or [] if path)
+    env = {
+        "PYTHONPATH": os.pathsep.join(pythonpath_entries),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        **{str(key): str(value) for key, value in runtime.get("env", {}).items()},
+        **{str(key): str(value) for key, value in runtime.get("environmentVariables", {}).items()},
+        **_host_env_passthrough(runtime),
+    }
+    for key, value in env.items():
+        docker_command.extend(["-e", f"{key}={value}"])
+    docker_command.extend([str(item) for item in runtime.get("extraArgs", []) or []])
+    docker_command.extend([str(image), *command])
+    return docker_command
 
 
 def _method_container_command(
@@ -521,6 +755,7 @@ def _method_container_mounts(
     command: List[str],
 ) -> List[tuple[str, str]]:
     mounts: List[tuple[Path, str]] = [
+        (Path(__file__).resolve().parents[1], "ro"),
         (Path.cwd().resolve(), "ro"),
         (study_spec.base_dir.resolve(), "ro"),
         (cwd.resolve(), "ro"),
@@ -542,7 +777,7 @@ def _container_pythonpath() -> str:
 
 
 def _host_method_env(runtime: Dict[str, Any]) -> Dict[str, str]:
-    env = os.environ.copy()
+    env = apply_prepared_env(os.environ.copy(), runtime.get("preparedEnv", {}))
     env.update({str(key): str(value) for key, value in runtime.get("env", {}).items()})
     env.update({str(key): str(value) for key, value in runtime.get("environmentVariables", {}).items()})
     env.update(_host_env_passthrough(runtime))
@@ -566,12 +801,10 @@ def _method_container_image(runtime: Dict[str, Any], study_spec) -> str:
     build = runtime.get("build", {}) if isinstance(runtime.get("build", {}), dict) else {}
     image = (
         runtime.get("image")
-        or runtime.get("runtimeImage")
         or build.get("tag")
-        or study_spec.method.get("resourceProfile", {}).get("runtimeImage")
     )
     if not image:
-        raise ValueError("Container method runtime requires runtime.image, runtime.build.tag, or method.resourceProfile.runtimeImage.")
+        raise ValueError("Container method runtime requires runtime.image or runtime.build.tag.")
     return str(image)
 
 
@@ -583,7 +816,7 @@ def _runtime_summary(runtime: Dict[str, Any], build_metadata: Optional[Dict[str,
         summary.update(
             {
                 "container_executable": runtime.get("containerExecutable", "docker"),
-                "container_image": runtime.get("image") or runtime.get("runtimeImage") or build.get("tag"),
+                "container_image": runtime.get("image") or build.get("tag"),
                 "network_policy": runtime.get("networkPolicy", "disabled"),
             }
         )

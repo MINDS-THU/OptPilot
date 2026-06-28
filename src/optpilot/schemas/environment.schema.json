@@ -21,7 +21,7 @@
         "timeoutSeconds": {"type": "integer", "minimum": 1},
         "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
         "cwd": {"type": "string"},
-        "env": {"type": "object"},
+        "env": {"$ref": "defs/common.schema.json#/definitions/envObject"},
         "settings": {"type": "object"}
       },
       "oneOf": [

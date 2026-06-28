@@ -15,6 +15,7 @@ from .execution import Evaluator
 from .method_runtime import MethodRuntime
 from .models import RunSummary, SandboxSpec, TrialSpec, ResourceProfile, utc_now_iso
 from .registry import resolve_component
+from .run_sources import prepare_run_sources
 from .spec import StudySpec, load_study_spec
 from .spec import load_expanded_study_spec
 from .storage import LocalEvidenceStore
@@ -31,6 +32,7 @@ class StudyRunner:
         self.study_spec = study_spec
         evidence_output_dir = study_spec.evidence.get("outputDir")
         self.output_root = output_root or (Path(evidence_output_dir).resolve() if evidence_output_dir else (Path.cwd() / "runs").resolve())
+        _reject_catalog_run_root(self.output_root, "run output root")
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.resume_run_dir = Path(resume_run_dir).resolve() if resume_run_dir else None
         self.branch_from_run_dir = Path(branch_from_run_dir).resolve() if branch_from_run_dir else None
@@ -41,12 +43,17 @@ class StudyRunner:
         seed = int(self.study_spec.reproducibility.get("seedPolicy", {}).get("globalSeed", 0))
         rng = random.Random(seed)
         store = self._open_store()
+        self.study_spec = prepare_run_sources(self.study_spec, store.run_dir)
         previous_summary = store.read_summary() if self.resume_run_dir else {}
         study_id = previous_summary.get("study_id") or f"study-{uuid.uuid4().hex[:12]}"
         store.write_spec(self.study_spec.raw)
         run_policy = _build_run_policy(self.study_spec)
         store.write_run_policy(run_policy)
-        environment_snapshot = build_environment_snapshot(study_spec_path=self.study_spec.path, run_dir=store.run_dir)
+        environment_snapshot = build_environment_snapshot(
+            study_spec_path=self.study_spec.path,
+            run_dir=store.run_dir,
+            dependency_roots=_dependency_roots_for_snapshot(self.study_spec),
+        )
         store.write_environment_snapshot(environment_snapshot)
         store.write_run_lineage(
             _build_run_lineage(
@@ -71,6 +78,7 @@ class StudyRunner:
             ),
         }
 
+        _prepend_python_paths(self.study_spec.environment["adapter"].get("pythonPath", []) or [])
         environment_cls = resolve_component("adapter", self.study_spec.environment["adapter"]["implementation"])
         environment_adapter = environment_cls(self.study_spec.environment["adapter"], self.study_spec)
 
@@ -85,11 +93,6 @@ class StudyRunner:
         method_def = self.study_spec.method
         method_impl = method_def.get("implementation", {})
         method_instance = None
-        if method_impl.get("type") == "python":
-            _prepend_python_paths(method_impl.get("pythonPath", []) or [])
-            method_ref = method_impl.get("callable") or method_impl.get("implementation")
-            method_cls = resolve_component("method", method_ref)
-            method_instance = method_cls(method_def, self.study_spec, rng)
         method_runtime = MethodRuntime(method_def, method_instance, store, self.study_spec)
 
         backend_def = self.study_spec.execution["backend"]
@@ -116,66 +119,69 @@ class StudyRunner:
         failure_count = int(prior["failure_count"])
         max_failures = int(self.study_spec.stopping.get("maxFailures", 0) or 0)
 
-        while True:
-            if max_trials and completed_trials >= max_trials:
-                break
-            if max_failures and failure_count >= max_failures:
-                break
-            elapsed = time.monotonic() - start_monotonic
-            if max_wall_clock and elapsed >= max_wall_clock:
-                break
+        try:
+            while True:
+                if max_trials and completed_trials >= max_trials:
+                    break
+                if max_failures and failure_count >= max_failures:
+                    break
+                elapsed = time.monotonic() - start_monotonic
+                if max_wall_clock and elapsed >= max_wall_clock:
+                    break
 
-            study_state = {
-                "completed_trials": completed_trials,
-                "failure_count": failure_count,
-                "best_metric": best_metric,
-                "best_trial_id": best_trial_id,
-                "candidate_context": runtime_context["candidate_context"],
-                "runtime_context": runtime_context,
-            }
-            configured_batch_size = int(method_def.get("config", {}).get("batchSize", 1) or 1)
-            remaining = max_trials - completed_trials if max_trials else configured_batch_size
-            batch_size = min(configured_batch_size, remaining) if max_trials else configured_batch_size
-            proposed_candidates = method_runtime.propose(batch_size, study_state, evidence_view)
-            if not proposed_candidates:
-                break
-            trial_specs = []
-            for candidate in proposed_candidates:
-                normalized_candidate = normalize_candidate(candidate, self.study_spec, method_def["id"])
-                trial_spec = TrialSpec(
-                    trial_id=f"trial-{uuid.uuid4().hex[:12]}",
-                    study_id=study_id,
-                    method_id=method_def["id"],
-                    candidate=normalized_candidate,
-                    objective=self.study_spec.objective,
-                    resource_profile=_resolve_resource_profile(self.study_spec.execution, method_def),
-                    sandbox_spec=_resolve_sandbox_spec(self.study_spec.execution, method_def),
-                    metadata={
-                        "seed": seed,
-                        "backend_identity": _backend_identity(backend_def),
-                        "scheduler_identity": _scheduler_identity(scheduler_def),
-                    },
-                )
-                trial_specs.append(trial_spec)
-            batch_observations = scheduler.run_batch(trial_specs)
-            method_runtime.observe([observation.to_dict() for observation in batch_observations])
-            for observation in batch_observations:
-                if _is_failure_status(observation.status):
-                    failure_count += 1
-                if self.study_spec.primary_metric_name not in observation.metric_values:
-                    no_improvement_count += 1
-                    continue
-                metric = float(observation.metric_values[self.study_spec.primary_metric_name])
-                if _is_better(metric, best_metric, self.study_spec.primary_metric_direction, min_delta):
-                    best_metric = metric
-                    best_trial_id = observation.trial_id
-                    best_candidate_id = observation.candidate_id
-                    no_improvement_count = 0
-                else:
-                    no_improvement_count += 1
-            completed_trials += len(batch_observations)
-            if patience_trials and no_improvement_count >= patience_trials:
-                break
+                study_state = {
+                    "completed_trials": completed_trials,
+                    "failure_count": failure_count,
+                    "best_metric": best_metric,
+                    "best_trial_id": best_trial_id,
+                    "candidate_context": runtime_context["candidate_context"],
+                    "runtime_context": runtime_context,
+                }
+                configured_batch_size = int(method_def.get("config", {}).get("batchSize", 1) or 1)
+                remaining = max_trials - completed_trials if max_trials else configured_batch_size
+                batch_size = min(configured_batch_size, remaining) if max_trials else configured_batch_size
+                proposed_candidates = method_runtime.propose(batch_size, study_state, evidence_view)
+                if not proposed_candidates:
+                    break
+                trial_specs = []
+                for candidate in proposed_candidates:
+                    normalized_candidate = normalize_candidate(candidate, self.study_spec, method_def["id"])
+                    trial_spec = TrialSpec(
+                        trial_id=f"trial-{uuid.uuid4().hex[:12]}",
+                        study_id=study_id,
+                        method_id=method_def["id"],
+                        candidate=normalized_candidate,
+                        objective=self.study_spec.objective,
+                        resource_profile=_resolve_resource_profile(self.study_spec.execution, method_def),
+                        sandbox_spec=_resolve_sandbox_spec(self.study_spec.execution, method_def),
+                        metadata={
+                            "seed": seed,
+                            "backend_identity": _backend_identity(backend_def),
+                            "scheduler_identity": _scheduler_identity(scheduler_def),
+                        },
+                    )
+                    trial_specs.append(trial_spec)
+                batch_observations = scheduler.run_batch(trial_specs)
+                method_runtime.observe([observation.to_dict() for observation in batch_observations])
+                for observation in batch_observations:
+                    if _is_failure_status(observation.status):
+                        failure_count += 1
+                    if self.study_spec.primary_metric_name not in observation.metric_values:
+                        no_improvement_count += 1
+                        continue
+                    metric = float(observation.metric_values[self.study_spec.primary_metric_name])
+                    if _is_better(metric, best_metric, self.study_spec.primary_metric_direction, min_delta):
+                        best_metric = metric
+                        best_trial_id = observation.trial_id
+                        best_candidate_id = observation.candidate_id
+                        no_improvement_count = 0
+                    else:
+                        no_improvement_count += 1
+                completed_trials += len(batch_observations)
+                if patience_trials and no_improvement_count >= patience_trials:
+                    break
+        finally:
+            method_runtime.close()
 
         summary = RunSummary(
             study_id=study_id,
@@ -223,6 +229,27 @@ def _prepend_python_paths(paths: List[str]) -> None:
     for path in reversed([str(Path(item).resolve()) for item in paths if item]):
         if path not in sys.path:
             sys.path.insert(0, path)
+
+
+def _reject_catalog_run_root(path: Path, location: str) -> None:
+    if any(part == "catalog" for part in path.resolve().parts):
+        raise ValueError(f"{location} must not be inside catalog source: {path}")
+
+
+def _dependency_roots_for_snapshot(study_spec: StudySpec) -> List[Path]:
+    roots = [Path.cwd().resolve(), study_spec.path.parent.resolve()]
+    run_source = study_spec.raw.get("extensions", {}).get("runSource", {})
+    if isinstance(run_source, dict):
+        for item in run_source.values():
+            if isinstance(item, dict) and item.get("copiedSourceRoot"):
+                roots.append(Path(str(item["copiedSourceRoot"])).resolve())
+    deduped: List[Path] = []
+    seen = set()
+    for root in roots:
+        if root not in seen:
+            seen.add(root)
+            deduped.append(root)
+    return deduped
 
 
 def run_expanded_study_spec(

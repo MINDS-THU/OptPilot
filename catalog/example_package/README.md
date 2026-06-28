@@ -54,16 +54,17 @@ code. Resource folders hold reusable reference material, simulator interfaces,
 datasets, or launchable apps. Study files are concrete run plans that bind one
 environment, one method, objective, budget, and runtime.
 
-Python import strings should match the package path. For this package, imports
-look like:
+Python import strings should be local to the config folder, with `pythonPath`
+pointing at that folder. For this package, imports look like:
 
 ```yaml
 evaluator:
-  python: catalog.example_package.environments.job_shop_scheduling.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
 ```
 
 For user-owned registrations, Studio creates `catalog/local_package/` on
-demand and uses imports such as `catalog.local_package.methods.my_method`.
+demand. Registered configs should use the same local-import pattern.
 
 ## Quick Runs
 

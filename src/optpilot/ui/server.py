@@ -42,6 +42,8 @@ from ..config import (
     validate_authoring_config,
 )
 from ..registry import BUILTIN_COMPONENTS
+from ..run_sources import _choose_source_root
+from ..setup import setup_commands_for_step, setup_cwd
 
 
 JsonDict = Dict[str, Any]
@@ -64,6 +66,8 @@ CATALOG_PACKAGE_DIRS = {"environments", "methods", "resources", "studies"}
 EXCLUDED_SCAN_DIRS = {
     ".git",
     ".mypy_cache",
+    ".optpilot",
+    ".optpilot-ui",
     ".pytest_cache",
     ".ruff_cache",
     ".venv",
@@ -1968,7 +1972,7 @@ def _handler_factory(state: UiState):
                 self._send_json(_start_catalog_interface_launch(state, kind, uid), status=HTTPStatus.ACCEPTED)
                 return
             payload = self._read_json_body()
-            workspace = _open_catalog_workspace(state, kind, uid, editable=action == "edit-copy")
+            workspace = _open_catalog_workspace(state, kind, uid, editable=action == "edit-copy", install=action == "edit-copy")
             session_id = str(payload.get("session_id") or "")
             if session_id:
                 _attach_agent_workspace(state, session_id, str(workspace["id"]), select=True)
@@ -2097,9 +2101,11 @@ def _catalog_payload(state: UiState) -> JsonDict:
 def _scan_catalog(roots: Iterable[Path]) -> List[JsonDict]:
     entries: List[JsonDict] = []
     seen = set()
+    ids_by_package: Dict[tuple[str, str, str], Path] = {}
     for root in roots:
         if not root.exists():
             continue
+        package_id = _catalog_package_id(root)
         for path in _iter_yaml_files(root):
             if path in seen:
                 continue
@@ -2108,17 +2114,25 @@ def _scan_catalog(roots: Iterable[Path]) -> List[JsonDict]:
             config = raw.get("config")
             if config not in INDEXED_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
                 continue
-            entries.append(_catalog_entry(path, raw))
+            entry_id = str(raw.get("id") or raw.get("name") or path.stem)
+            if config in REGISTERABLE_CONFIGS:
+                _reject_duplicate_catalog_id(ids_by_package, package_id, config, entry_id, path)
+            entries.append(_catalog_entry(path, raw, package_id=package_id))
     return sorted(entries, key=lambda item: (item["config"], item["label"], item["path"]))
 
 
-def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
+def _catalog_entry(path: Path, raw: JsonDict, *, package_id: str = "") -> JsonDict:
     config = raw["config"]
     label = raw.get("name") or raw.get("id") or path.stem
     interface = _normalize_interface_config(raw.get("interface"))
+    entry_id = str(raw.get("id") or raw.get("name") or path.stem)
     entry: JsonDict = {
         "uid": _encode_id(path),
-        "id": str(raw.get("id") or raw.get("name") or path.stem),
+        "id": entry_id,
+        "package": package_id,
+        "package_id": package_id,
+        "qualified_id": _qualified_catalog_id(package_id, config, entry_id),
+        "catalog_key": _qualified_catalog_id(package_id, config, entry_id),
         "label": str(label),
         "kind": config,
         "config": config,
@@ -2187,7 +2201,9 @@ def _catalog_entry(path: Path, raw: JsonDict) -> JsonDict:
 def _scan_catalog_resources(state: UiState) -> List[JsonDict]:
     resources: List[JsonDict] = []
     seen: set[Path] = set()
+    ids_by_package: Dict[tuple[str, str, str], Path] = {}
     for catalog_root in state.catalog_roots:
+        package_id = _catalog_package_id(catalog_root)
         resources_root = catalog_root / "resources"
         if not resources_root.exists() or not resources_root.is_dir():
             continue
@@ -2196,11 +2212,13 @@ def _scan_catalog_resources(state: UiState) -> List[JsonDict]:
             if resolved in seen:
                 continue
             seen.add(resolved)
-            resources.append(_resource_catalog_entry(resolved))
+            entry = _resource_catalog_entry(resolved, package_id=package_id)
+            _reject_duplicate_catalog_id(ids_by_package, package_id, "resource", entry["id"], resolved)
+            resources.append(entry)
     return sorted(resources, key=lambda item: (item["label"], item["path"]))
 
 
-def _resource_catalog_entry(path: Path) -> JsonDict:
+def _resource_catalog_entry(path: Path, *, package_id: str = "") -> JsonDict:
     manifest_path, manifest = _resource_manifest(path)
     readme = _first_existing_file(path, ["README.md", "readme.md", "README.txt"])
     manifest_label = str(manifest.get("name") or manifest.get("id") or "").strip()
@@ -2234,6 +2252,10 @@ def _resource_catalog_entry(path: Path) -> JsonDict:
     entry: JsonDict = {
         "uid": _encode_id(path),
         "id": resource_id,
+        "package": package_id,
+        "package_id": package_id,
+        "qualified_id": _qualified_catalog_id(package_id, "resource", resource_id),
+        "catalog_key": _qualified_catalog_id(package_id, "resource", resource_id),
         "label": label,
         "kind": "resource",
         "config": "resource",
@@ -2245,6 +2267,32 @@ def _resource_catalog_entry(path: Path) -> JsonDict:
     if interface:
         entry["interface"] = interface
     return entry
+
+
+def _catalog_package_id(root: Path) -> str:
+    return root.resolve().name
+
+
+def _qualified_catalog_id(package_id: str, kind: str, entry_id: str) -> str:
+    package = package_id or "workspace"
+    return f"{package}/{kind}/{entry_id}"
+
+
+def _reject_duplicate_catalog_id(
+    seen: Dict[tuple[str, str, str], Path],
+    package_id: str,
+    kind: str,
+    entry_id: str,
+    path: Path,
+) -> None:
+    key = (package_id, kind, entry_id)
+    previous = seen.get(key)
+    if previous is not None and previous.resolve() != path.resolve():
+        raise ValueError(
+            f"Duplicate catalog id {entry_id!r} for {kind!r} in package {package_id!r}: "
+            f"{previous} and {path}"
+        )
+    seen[key] = path
 
 
 def _resource_manifest(path: Path) -> tuple[Optional[Path], JsonDict]:
@@ -2336,17 +2384,21 @@ def _normalize_interface_config(raw: Any) -> JsonDict:
         for key, value in (raw.get("env") or {}).items()
         if str(key)
     } if isinstance(raw.get("env"), dict) else {}
+    env_from_host = [str(item) for item in (raw.get("envFromHost") or raw.get("env_from_host") or []) if str(item)]
     interface: JsonDict = {
         "command": command,
         "port": port,
         "cwd": str(raw.get("cwd") or "."),
         "env": env,
+        "envFromHost": env_from_host,
         "extraPorts": sorted(set(extra_ports)),
         "readyPath": _normalize_interface_ready_path(raw.get("readyPath") or raw.get("ready_path") or "/"),
         "readyTimeoutSeconds": _normalize_interface_ready_timeout(
             raw.get("readyTimeoutSeconds", raw.get("ready_timeout_seconds", 90))
         ),
     }
+    if isinstance(raw.get("setup"), dict):
+        interface["setup"] = deepcopy(raw["setup"])
     if raw.get("label"):
         interface["label"] = str(raw.get("label"))
     if raw.get("description"):
@@ -2363,6 +2415,8 @@ def _interface_summary(interface: JsonDict) -> JsonDict:
         "port": interface.get("port"),
         "cwd": interface.get("cwd") or ".",
         "command": list(interface.get("command") or []),
+        "envFromHost": list(interface.get("envFromHost") or []),
+        "setup": deepcopy(interface.get("setup")) if isinstance(interface.get("setup"), dict) else None,
         "extraPorts": list(interface.get("extraPorts") or []),
         "readyPath": interface.get("readyPath") or "/",
         "readyTimeoutSeconds": int(interface.get("readyTimeoutSeconds") or 0),
@@ -3106,8 +3160,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         secondary_metrics = []
     max_trials = int(payload.get("maxTrials", payload.get("max_trials", 12)) or 12)
     max_failures_raw = payload.get("maxFailures", payload.get("max_failures"))
-    requested_backend = str(payload.get("backend") or "local")
-    backend = "local" if requested_backend == "container" else requested_backend
     parallelism = int(payload.get("parallelism", 1) or 1)
     timeout = int(payload.get("timeoutSeconds", payload.get("timeout_seconds", 120)) or 120)
     evidence_level = str(payload.get("evidenceLevel", payload.get("evidence_level", "standard")) or "standard")
@@ -3125,7 +3177,7 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
             "secondaryMetrics": [str(item) for item in secondary_metrics if item],
         },
         "budget": {"maxTrials": max_trials},
-        "execution": {"backend": backend, "parallelism": parallelism, "timeoutSeconds": timeout},
+        "execution": {"parallelism": parallelism, "timeoutSeconds": timeout},
         "evidence": {"level": evidence_level, "outputFileStorage": evidence_storage},
     }
     if max_failures_raw not in (None, ""):
@@ -3134,16 +3186,6 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
             raise ValueError("maxFailures must be >= 1 when provided, or blank/0 for no limit.")
         if max_failures > 0:
             draft["budget"]["maxFailures"] = max_failures
-    execution_config = _draft_execution_config({**payload, "backend": requested_backend})
-    if requested_backend == "container" and execution_config:
-        container = {}
-        if execution_config.get("image"):
-            container["image"] = execution_config["image"]
-        if execution_config.get("containerExecutable"):
-            container["executable"] = execution_config["containerExecutable"]
-        if execution_config.get("build"):
-            container["build"] = execution_config["build"]
-        draft["execution"]["runtime"] = {"sandbox": "container", "container": container}
     if payload.get("seed") not in (None, ""):
         draft["reproducibility"] = {"seed": int(payload.get("seed"))}
     draft_yaml = yaml.safe_dump(draft, sort_keys=False)
@@ -3199,36 +3241,6 @@ def _open_study_workspace(state: UiState, payload: JsonDict) -> JsonDict:
     )
 
 
-def _draft_execution_config(payload: JsonDict) -> JsonDict:
-    backend = str(payload.get("backend") or "local")
-    config = payload.get("executionConfig")
-    if isinstance(config, dict):
-        result = deepcopy(config)
-    else:
-        result = {}
-    if backend == "container":
-        for source, target in (
-            ("containerImage", "image"),
-            ("containerExecutable", "containerExecutable"),
-            ("containerNetworkPolicy", "networkPolicy"),
-        ):
-            value = payload.get(source)
-            if value not in (None, ""):
-                result[target] = str(value)
-        build = result.get("build") if isinstance(result.get("build"), dict) else {}
-        for source, target in (
-            ("containerBuildContext", "context"),
-            ("containerBuildDockerfile", "dockerfile"),
-            ("containerBuildTag", "tag"),
-        ):
-            value = payload.get(source)
-            if value not in (None, ""):
-                build[target] = str(value)
-        if build:
-            result["build"] = build
-    return result
-
-
 def _study_ref_matches(value: Any, study_path: Path, expected_path: Path) -> bool:
     if not value:
         return False
@@ -3271,17 +3283,18 @@ def _environment_runtime_summary(raw: JsonDict) -> JsonDict:
         "evaluate_type": _evaluator_mode(evaluator),
         "timeoutSeconds": evaluator.get("timeoutSeconds"),
         "has_python_path": bool(evaluator.get("pythonPath")),
-        "sandbox": runtime.get("sandbox", "host"),
+        "sandbox": runtime.get("sandbox", "process"),
     }
 
 
 def _method_runtime_summary(raw: JsonDict) -> JsonDict:
     runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    container = runtime.get("container", {}) if isinstance(runtime.get("container", {}), dict) else {}
     return {
-        "type": runtime.get("sandbox", "host"),
-        "image": (runtime.get("container", {}) or {}).get("image") if isinstance(runtime.get("container", {}), dict) else None,
-        "has_build": bool((runtime.get("container", {}) or {}).get("build")) if isinstance(runtime.get("container", {}), dict) else False,
-        "networkPolicy": runtime.get("network", "disabled"),
+        "type": runtime.get("sandbox", "process"),
+        "image": container.get("image"),
+        "has_build": bool(container.get("build")),
+        "networkPolicy": container.get("network", "disabled") if runtime.get("sandbox") == "container" else "disabled",
     }
 
 
@@ -5433,7 +5446,9 @@ def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
         "registered_entries": list(payload.get("registered_entries", []) or []),
         "focus_paths": list(payload.get("focus_paths", []) or []),
         "registration_enabled": bool(payload.get("registration_enabled", True)),
+        "setup": dict(payload.get("setup", {}) or {}),
         "source_path": str(payload.get("source_path") or ""),
+        "source_root": str(payload.get("source_root") or payload.get("root") or ""),
         "created_at": str(payload.get("created_at") or _now_iso()),
     }
     workspace["ownership"] = str(payload.get("ownership") or _workspace_ownership(state, workspace))
@@ -5561,7 +5576,125 @@ def _is_managed_draft_root(state: UiState, workspace_id: str, root: Path) -> boo
     return root == expected and _is_relative_to(root, state.workspaces_dir.resolve())
 
 
-def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bool, title_prefix: str = "Edit") -> JsonDict:
+def _component_setup_specs(raw: JsonDict, *, interface: Optional[JsonDict] = None) -> List[tuple[str, JsonDict]]:
+    specs: List[tuple[str, JsonDict]] = []
+    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    runtime_setup = runtime.get("setup") if isinstance(runtime.get("setup"), dict) else None
+    if runtime_setup:
+        specs.append(("Runtime setup", runtime_setup))
+    interface_setup = interface.get("setup") if isinstance(interface, dict) and isinstance(interface.get("setup"), dict) else None
+    if interface_setup:
+        specs.append(("Interface setup", interface_setup))
+    return specs
+
+
+def _run_component_setup_in_workspace_runtime(
+    state: UiState,
+    workspace: JsonDict,
+    raw: JsonDict,
+    root: Path,
+    interface: JsonDict,
+    report: Any,
+) -> JsonDict:
+    results = []
+    for label, setup in _component_setup_specs(raw, interface=interface):
+        timeout = int(setup.get("timeoutSeconds", 600) or 600)
+        base_env = _workspace_runtime_setup_env(setup)
+        step_results = []
+        for index, step in enumerate(setup.get("steps") or []):
+            for command in setup_commands_for_step(step, root):
+                cwd = setup_cwd(step, root)
+                env = dict(base_env)
+                env.update({str(key): str(value) for key, value in (step.get("env") or {}).items()})
+                report(
+                    f"{label} {index + 1}",
+                    " ".join(command),
+                )
+                completed, _runtime = state.workspace_runtime.exec(
+                    workspace,
+                    command,
+                    cwd=cwd,
+                    env=env,
+                    timeout=timeout,
+                )
+                step_result = {
+                    "command": command,
+                    "cwd": str(cwd),
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout[-4000:] if completed.stdout else "",
+                    "stderr": completed.stderr[-4000:] if completed.stderr else "",
+                }
+                step_results.append(step_result)
+                if completed.returncode != 0:
+                    raise RuntimeError(
+                        f"{label} step {index + 1} failed with exit code {completed.returncode}: "
+                        f"{completed.stderr.strip() or completed.stdout.strip()}"
+                    )
+        results.append({"label": label, "ran": True, "steps": step_results})
+    return {"ran": bool(results), "results": results}
+
+
+def _workspace_runtime_setup_env(setup: JsonDict) -> Dict[str, str]:
+    env: Dict[str, str] = {}
+    for key in setup.get("envFromHost", []) or []:
+        key = str(key)
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.update({str(key): str(value) for key, value in (setup.get("env") or {}).items()})
+    return env
+
+
+def _workspace_source_root(workspace: JsonDict) -> Path:
+    return Path(str(workspace.get("source_root") or workspace.get("root") or ".")).resolve()
+
+
+def _catalog_component_source_root(kind: str, config_path: Path, raw: JsonDict) -> Path:
+    if kind == "study":
+        return config_path.parent.resolve()
+    refs: List[str] = []
+    hints: List[Path] = []
+    if kind == "environment":
+        evaluator = raw.get("evaluator", {}) if isinstance(raw.get("evaluator"), dict) else {}
+        for key in ("python", "adapter"):
+            if evaluator.get(key):
+                refs.append(str(evaluator[key]))
+        hints.extend(_resolve_public_hint_path(path, config_path) for path in evaluator.get("pythonPath", []) or [])
+    elif kind == "method":
+        entrypoint = raw.get("entrypoint", {}) if isinstance(raw.get("entrypoint"), dict) else {}
+        if entrypoint.get("python"):
+            refs.append(str(entrypoint["python"]))
+        hints.extend(_resolve_public_hint_path(path, config_path) for path in entrypoint.get("pythonPath", []) or [])
+    return _choose_source_root(config_path, refs, hints)
+
+
+def _resolve_public_hint_path(value: Any, config_path: Path) -> Path:
+    path = Path(str(value)).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (config_path.parent / path).resolve()
+
+
+def _copy_catalog_source_to_workspace(source_root: Path, workspace_root: Path) -> Path:
+    source_root = source_root.resolve()
+    workspace_root.parent.mkdir(parents=True, exist_ok=True)
+    if (source_root / "__init__.py").exists():
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        copied_source_root = workspace_root / source_root.name
+        shutil.copytree(source_root, copied_source_root, ignore=_copy_ignore)
+        return copied_source_root.resolve()
+    shutil.copytree(source_root, workspace_root, ignore=_copy_ignore)
+    return workspace_root.resolve()
+
+
+def _open_catalog_workspace(
+    state: UiState,
+    kind: str,
+    uid: str,
+    *,
+    editable: bool,
+    title_prefix: str = "Edit",
+    install: bool = False,
+) -> JsonDict:
     if kind == "resource":
         resource_root = _decode_id(uid).resolve()
         if not resource_root.exists() or not resource_root.is_dir():
@@ -5572,22 +5705,25 @@ def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bo
             workspace_id = f"ws_{uuid.uuid4().hex[:10]}"
             root = state.workspaces_dir / workspace_id / "workspace"
             shutil.copytree(resource_root, root, ignore=_copy_ignore)
+            source_root = root
             mode = "editable"
             source_type = "catalog-copy"
             title = f"{title_prefix} {label}"
         else:
             workspace_id = f"ws_{slug_path(resource_root)}_resource"
             root = resource_root
+            source_root = resource_root
             mode = "read-only"
             source_type = "catalog"
             title = f"Inspect {label}"
         readme = entry.get("summary", {}).get("readme") or "README.md"
-        return _create_ui_workspace(
+        workspace = _create_ui_workspace(
             state,
             {
                 "id": workspace_id,
                 "title": title,
                 "root": str(root),
+                "source_root": str(source_root),
                 "source_type": source_type,
                 "mode": mode,
                 "description": "resource catalog entry",
@@ -5602,37 +5738,47 @@ def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bo
                 "registration_enabled": editable,
             },
         )
+        if editable and install:
+            interface = dict(entry.get("interface") or {})
+            setup_result = _run_component_setup_in_workspace_runtime(state, workspace, {}, source_root, interface, lambda *_args, **_kwargs: None)
+            workspace = dict(_require_ui_workspace(state, str(workspace["id"])))
+            workspace["setup"] = setup_result
+            workspace = _upsert_ui_workspace(state, workspace)
+        return workspace
     config_path = _decode_id(uid)
     raw = _read_yaml(config_path)
     if raw.get("config") != kind or raw.get("apiVersion") != AUTHORING_API_VERSION:
         raise FileNotFoundError(f"{kind} config not found: {config_path}")
     label = str(raw.get("name") or raw.get("id") or config_path.stem)
-    source_root = config_path.parent.resolve()
+    original_source_root = _catalog_component_source_root(kind, config_path, raw)
     if editable:
         workspace_id = f"ws_{uuid.uuid4().hex[:10]}"
         root = state.workspaces_dir / workspace_id / "workspace"
-        shutil.copytree(source_root, root, ignore=_copy_ignore)
+        source_root = _copy_catalog_source_to_workspace(original_source_root, root)
         mode = "editable"
         source_type = "catalog-copy"
         title = f"{title_prefix} {label}"
     else:
-        root = source_root
+        root = original_source_root
+        source_root = original_source_root
         mode = "read-only"
         source_type = "catalog"
         title = f"Inspect {label}"
-    focus_paths = _focus_paths_for_config(root, root / config_path.name if editable else config_path, raw)
+    copied_config_path = source_root / config_path.relative_to(original_source_root)
+    focus_paths = _focus_paths_for_config(root, copied_config_path if editable else config_path, raw)
     registered_entry = {
         "kind": kind,
         "id": str(raw.get("id") or raw.get("name") or config_path.stem),
-        "config_path": _relative_path(config_path if not editable else root / config_path.name, root),
+        "config_path": _relative_path(copied_config_path if editable else config_path, root),
         "source_config_path": str(config_path),
     }
-    return _create_ui_workspace(
+    workspace = _create_ui_workspace(
         state,
         {
-            "id": workspace_id if editable else f"ws_{slug_path(source_root)}_{kind}_{slug_path(config_path)}",
+            "id": workspace_id if editable else f"ws_{slug_path(original_source_root)}_{kind}_{slug_path(config_path)}",
             "title": title,
             "root": str(root),
+            "source_root": str(source_root),
             "source_type": source_type,
             "mode": mode,
             "description": f"{kind} catalog entry",
@@ -5642,6 +5788,12 @@ def _open_catalog_workspace(state: UiState, kind: str, uid: str, *, editable: bo
             "registration_enabled": editable or mode != "read-only",
         },
     )
+    if editable and install:
+        setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw, source_root, {}, lambda *_args, **_kwargs: None)
+        workspace = dict(_require_ui_workspace(state, str(workspace["id"])))
+        workspace["setup"] = setup_result
+        workspace = _upsert_ui_workspace(state, workspace)
+    return workspace
 
 
 def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
@@ -5797,8 +5949,10 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
     report("Creating editable workspace", "Copying the catalog entry into a draft workspace.")
     workspace = _open_catalog_workspace(state, kind, uid, editable=True, title_prefix="Launch")
     root = Path(str(workspace["root"])).resolve()
-    cwd = (root / str(interface.get("cwd") or ".")).resolve()
-    if not _is_relative_to(cwd, root):
+    source_root = _workspace_source_root(workspace)
+    raw = _read_yaml(_decode_id(uid)) if kind != "resource" else {}
+    cwd = (source_root / str(interface.get("cwd") or ".")).resolve()
+    if not _is_relative_to(cwd, source_root):
         raise ValueError("Interface cwd must stay inside the launched workspace copy.")
     port = int(interface.get("port") or 0)
     command = list(interface.get("command") or [])
@@ -5811,10 +5965,15 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
     env.setdefault("PORT", str(port))
     env["OPTPILOT_INTERFACE_PORT"] = str(port)
     env["OPTPILOT_WORKSPACE_ROOT"] = str(root)
+    for key in interface.get("envFromHost") or []:
+        key = str(key)
+        if key in os.environ:
+            env[key] = os.environ[key]
     report(
         "Starting workspace runtime",
         "Ensuring the per-workspace container is running, then starting the interface command.",
     )
+    setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw, source_root, interface, report)
     launch = state.workspace_runtime.exec_detached(
         workspace,
         command,
@@ -5844,6 +6003,7 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
     return {
         "workspace": workspace,
         "interface": _interface_summary(interface),
+        "setup": setup_result,
         "launch": launch,
         "preview": preview,
     }
@@ -6249,9 +6409,6 @@ def _find_run_dirs(roots: Iterable[Path]) -> List[Path]:
 
 def _default_run_roots(cwd: Path) -> List[Path]:
     roots = [cwd / "runs"]
-    catalog_root = cwd / CATALOG_DIR_NAME
-    if catalog_root.exists():
-        roots.extend(path for path in catalog_root.rglob("runs") if path.is_dir())
     return _dedupe_paths([path for path in roots if path.exists()])
 
 

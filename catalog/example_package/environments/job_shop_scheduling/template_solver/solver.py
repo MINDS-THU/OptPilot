@@ -1,6 +1,6 @@
 """Baseline solver for the job-shop example."""
 
-from catalog.example_package.environments.job_shop_scheduling.simulator import load_instance, schedule_by_dispatch_rule, weighted_dispatch_score
+from simulator import load_instance, schedule_by_dispatch_rule, weighted_dispatch_score
 
 
 def solve(instance, time_limit_seconds, context):

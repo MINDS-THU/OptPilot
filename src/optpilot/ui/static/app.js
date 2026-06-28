@@ -1818,7 +1818,6 @@ function buildPlans() {
       secondaryMetrics: objective.secondaryMetrics || [],
       maxTrials: budget.maxTrials || "",
       maxFailures: budget.maxFailures || "",
-      backend: execution.backend || "local",
       parallelism: execution.parallelism || "",
       timeoutSeconds: execution.timeoutSeconds || "",
       evidenceLevel: evidence.level || "",
@@ -2948,8 +2947,8 @@ function renderComponentDetail() {
     els.componentDetail.innerHTML = `
       ${entityHeader(item, component.kind)}
       <div class="action-row">
-        <button class="ghost-button component-inspect" type="button">Inspect</button>
-        <button class="ghost-button component-edit" type="button">Edit Copy</button>
+        <button class="ghost-button component-inspect" type="button">Inspect Read-Only Source Code</button>
+        <button class="ghost-button component-edit" type="button">Create Editable Copy and Install</button>
         ${interfaceAction}
       </div>
       ${launchStatus}
@@ -2978,8 +2977,8 @@ function renderComponentDetail() {
   els.componentDetail.innerHTML = `
     ${entityHeader(item, component.kind)}
     <div class="action-row">
-      <button class="ghost-button component-inspect" type="button">Inspect</button>
-      <button class="ghost-button component-edit" type="button">Edit Copy</button>
+      <button class="ghost-button component-inspect" type="button">Inspect Read-Only Source Code</button>
+      <button class="ghost-button component-edit" type="button">Create Editable Copy and Install</button>
       ${interfaceAction}
     </div>
     ${launchStatus}
@@ -3172,7 +3171,6 @@ function studyConfigEditor(plan, locked) {
       <div class="control-grid">
         ${inputField("Max trials", "maxTrials", plan.maxTrials || "", "number", locked, "1")}
         ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "1")}
-        ${selectField("Backend", "backend", plan.backend || "local", ["local", "local_subprocess"], locked)}
         ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1")}
         ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1")}
       </div>
@@ -3897,7 +3895,6 @@ function planPayload(plan) {
     secondaryMetrics: plan.secondaryMetrics || [],
     maxTrials: Number(plan.maxTrials || 8),
     maxFailures: positiveOptionalNumber(plan.maxFailures),
-    backend: plan.backend || "local",
     parallelism: Number(plan.parallelism || 1),
     timeoutSeconds: Number(plan.timeoutSeconds || 120),
     evidenceLevel: plan.evidenceLevel || "standard",
@@ -3990,7 +3987,6 @@ function planFromPair(pair) {
     secondaryMetrics,
     maxTrials: 8,
     maxFailures: "",
-    backend: "local",
     parallelism: 1,
     timeoutSeconds,
     evidenceLevel: "standard",
@@ -4040,7 +4036,6 @@ function planYamlPreview(plan) {
   lines.push(
     "",
     "execution:",
-    `  backend: ${plan.backend || "local"}`,
     `  parallelism: ${Number(plan.parallelism || 1)}`,
   );
   if (plan.timeoutSeconds !== "" && plan.timeoutSeconds !== null && plan.timeoutSeconds !== undefined) {

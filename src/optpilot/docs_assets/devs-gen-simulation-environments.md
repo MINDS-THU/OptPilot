@@ -60,7 +60,7 @@ description: Evaluate edited SA simulator source copied from the external devs_g
 tags: [external-project, llm-code-edit, simulator, files]
 
 evaluator:
-  python: catalog.example_package.environments.strategic_airlift_devs.evaluator:evaluate
+  python: evaluator:evaluate
   timeoutSeconds: 180
   settings:
     duration: 120.0
@@ -115,7 +115,7 @@ Evaluator field fragment from the environment config:
 
 ```yaml
 evaluator:
-  python: catalog.example_package.environments.strategic_airlift_devs.evaluator:evaluate
+  python: evaluator:evaluate
 ```
 
 It runs the generated simulator from the copied trial workspace, reads the simulator outputs, and returns metrics. In the bundled sample, those metrics include:
@@ -142,7 +142,7 @@ description: OpenAI-compatible method that edits environment-provided file candi
 tags: [llm, code-edit, files]
 
 entrypoint:
-  python: catalog.example_package.methods.openai_file_editor.method:OpenAIFileEditMethod
+  python: method:OpenAIFileEditMethod
   protocol: batch
 
 settings:
@@ -202,7 +202,6 @@ budget:
   maxTrials: 1
 
 execution:
-  backend: local
   parallelism: 1
   timeoutSeconds: 180
 
@@ -244,7 +243,6 @@ budget:
   maxTrials: 4
 
 execution:
-  backend: local
   parallelism: 1
   timeoutSeconds: 180
 

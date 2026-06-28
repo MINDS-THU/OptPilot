@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 import yaml
 
-from catalog.example_package.methods.job_shop_lib_solvers import load_job_shop_cases, schedule_to_operations, to_job_shop_lib_instance
+from job_shop_lib_solvers import load_job_shop_cases, schedule_to_operations, to_job_shop_lib_instance
 
 try:
     import gymnasium as gym

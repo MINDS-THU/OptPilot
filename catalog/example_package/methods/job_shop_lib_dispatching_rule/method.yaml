@@ -5,7 +5,8 @@ description: Uses JobShopLib DispatchingRuleSolver to emit complete schedule sol
 tags: [job-shop, job-shop-lib, dispatching-rule, schedule-solution]
 
 entrypoint:
-  python: catalog.example_package.methods.job_shop_lib_dispatching_rule.method:JobShopLibDispatchingRuleMethod
+  python: method:JobShopLibDispatchingRuleMethod
+  pythonPath: [., ..]
   protocol: batch
 
 settings:
@@ -17,11 +18,5 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
-
-produces:
-  format: parameters
-  parameters:
-    schema:
-      solutions:
-        valueType: object
-        properties: {}
+    capabilities:
+      - schedule-solution-candidate

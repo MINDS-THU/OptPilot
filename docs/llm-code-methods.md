@@ -55,7 +55,7 @@ That study uses:
 
 ```text
 catalog/example_package/methods/openai_file_editor/method.yaml
-catalog.example_package.methods.openai_file_editor.method:OpenAIFileEditMethod
+method:OpenAIFileEditMethod
 ```
 
 The included study has `budget.maxTrials: 1` and `includeBaselineCandidate: true`, so it is executable without provider credentials and exercises the actual file-candidate method path. To request a real LLM edit, set a provider key such as `OPENROUTER_API_KEY`, increase the study budget, or set `includeBaselineCandidate: false`.
@@ -104,7 +104,7 @@ config: method
 id: my-llm-code-writer
 
 entrypoint:
-  python: catalog.local_package.methods.my_llm_code_writer.method:MyLLMCodeWriter
+  python: method:MyLLMCodeWriter
   protocol: batch
 
 settings:

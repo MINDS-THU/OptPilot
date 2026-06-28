@@ -23,10 +23,19 @@
       "oneOf": [
         {"required": ["python"]},
         {"required": ["command"]}
+      ],
+      "allOf": [
+        {
+          "if": {"required": ["command"]},
+          "then": {
+            "properties": {
+              "protocol": {"enum": ["batch"]}
+            }
+          }
+        }
       ]
     },
     "settings": {"type": "object"},
-    "produces": {"$ref": "defs/candidate.schema.json#/definitions/candidate"},
     "accepts": {
       "type": "object",
       "additionalProperties": false,
@@ -53,7 +62,6 @@
         }
       }
     },
-    "runtime": {"$ref": "defs/runtime.schema.json#/definitions/runtime"},
-    "resourceProfile": {"$ref": "defs/runtime.schema.json#/definitions/resourceProfile"}
+    "runtime": {"$ref": "defs/runtime.schema.json#/definitions/runtime"}
   }
 }
