@@ -23,7 +23,7 @@ does not optimize by itself.
 | Fixed weighted rule | `environment_rule_parameters.yaml` | one parameter dictionary | none |
 | Tune weighted rule parameters | `environment_rule_parameters.yaml` | several parameter dictionaries | none |
 | Baseline Python rule file | `environment_dispatch_rule.yaml` | unmodified `dispatch_rule.py` | none |
-| JobShopLib dispatching rule | `environment_schedule_solution.yaml` | `spec.solutions` schedules | `uv sync --extra examples` |
+| JobShopLib dispatching rule | `environment_schedule_solution.yaml` | `spec.solutions` schedules | `uv sync --all-packages --group examples` |
 
 ## Dependency-Free Parameter Methods
 
@@ -70,7 +70,7 @@ larger heuristic-code generator.
 Install the optional example dependencies:
 
 ```bash
-uv sync --extra examples
+uv sync --all-packages --group examples
 ```
 
 Then run:

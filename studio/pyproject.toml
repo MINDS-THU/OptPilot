@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optpilot-studio"
+version = "0.1.0"
+description = "Local Studio UI for OptPilot"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+  {name = "OptPilot contributors"},
+]
+dependencies = [
+  "optpilot==0.1.0",
+]
+
+[project.scripts]
+optpilot-studio = "optpilot_studio.ui.server:main"
+
+[project.entry-points."optpilot.commands"]
+ui = "optpilot_studio.cli:add_ui_subcommand"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"optpilot_studio.ui" = ["static/*", "workspace_runtime/*"]
+"optpilot_studio.assistant_assets" = ["README.md", "prompts/*.md", "implementation/*.md"]
+"optpilot_studio.docs_assets" = ["*.md"]

@@ -25,7 +25,7 @@ class StableBaselinesJobShopEnv(gym.Env if gym is not None else object):
 
     def __init__(self, payloads: List[JsonDict], max_jobs: int | None = None):
         if gym is None:
-            raise RuntimeError("This example requires Gymnasium. Install it with `uv sync --extra examples`.")
+            raise RuntimeError("This example requires Gymnasium. Install it with `uv sync --group examples`.")
         super().__init__()
         try:
             import numpy as np
@@ -33,7 +33,7 @@ class StableBaselinesJobShopEnv(gym.Env if gym is not None else object):
             from job_shop_lib.graphs import build_resource_task_graph
             from job_shop_lib.reinforcement_learning import SingleJobShopGraphEnv
         except ImportError as exc:
-            raise RuntimeError("This example requires `uv sync --extra examples`.") from exc
+            raise RuntimeError("This example requires `uv sync --group examples`.") from exc
 
         self._gym = gym
         self._np = np

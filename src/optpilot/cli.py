@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
-from pathlib import Path
 
 from .config import validate_authoring_config
+from .package_validation import validate_package
 from .runner import run_study
-from .ui.server import add_ui_arguments, run_ui
-
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,61 +20,92 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--output-root", help="Directory to place study runs (default: ./runs)")
     run_parser.add_argument("--resume-run-dir", help="Append more trials to an existing run directory")
     run_parser.add_argument("--branch-from-run-dir", help="Start a new run that records an existing run as its parent")
+    run_parser.set_defaults(handler=_run_command)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an OptPilot public config")
     validate_parser.add_argument("spec", help="Path to an environment, method, or study YAML file")
     validate_parser.add_argument("--json", action="store_true", help="Print machine-readable validation output")
+    validate_parser.set_defaults(handler=_validate_command)
 
-    ui_parser = subparsers.add_parser("ui", help="Start the lightweight local web UI")
-    add_ui_arguments(ui_parser)
+    package_parser = subparsers.add_parser("package", help="Work with OptPilot package folders")
+    package_subparsers = package_parser.add_subparsers(dest="package_command", required=True)
+    package_validate_parser = package_subparsers.add_parser("validate", help="Validate an OptPilot package folder")
+    package_validate_parser.add_argument("package", help="Path to a package folder")
+    package_validate_parser.add_argument("--json", action="store_true", help="Print machine-readable validation output")
+    package_validate_parser.add_argument("--check-imports", action="store_true", help="Best-effort import checks for Python callables")
+    package_validate_parser.set_defaults(handler=_package_validate_command)
+
+    _load_command_providers(subparsers)
 
     return parser
-
 
 
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "run":
-        summary = run_study(
-            args.spec,
-            output_root=args.output_root,
-            resume_run_dir=args.resume_run_dir,
-            branch_from_run_dir=args.branch_from_run_dir,
-        )
-        print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
-        return 0
-    if args.command == "validate":
-        result = validate_authoring_config(args.spec)
-        if args.json:
-            print(json.dumps(result, indent=2, sort_keys=True))
-        elif result["valid"]:
-            print(f"Valid: {result['path']}")
-        else:
-            print(f"Invalid: {result['path']}")
-            for error in result["errors"]:
-                print(f"- {error}")
-        return 0 if result["valid"] else 1
-    if args.command == "ui":
-        run_ui(
-            host=args.host,
-            port=args.port,
-            catalog_roots=args.catalog,
-            run_roots=args.runs,
-            code_server_bin=args.code_server_bin,
-            code_server_host=args.code_server_host,
-            code_server_port=args.code_server_port,
-            code_server_auth=args.code_server_auth,
-            code_server_password=args.code_server_password,
-            workspace_runtime_executable=args.workspace_runtime_bin,
-            workspace_runtime_image=args.workspace_runtime_image,
-            workspace_runtime_network=args.workspace_runtime_network,
-            workspace_runtime_port_start=args.workspace_runtime_port_start,
-            open_browser=args.open_browser,
-        )
-        return 0
-    parser.error(f"Unsupported command: {args.command}")
-    return 2
+    handler = getattr(args, "handler", None)
+    if handler is None:
+        parser.error(f"Unsupported command: {args.command}")
+        return 2
+    return int(handler(args) or 0)
+
+
+def _run_command(args) -> int:
+    summary = run_study(
+        args.spec,
+        output_root=args.output_root,
+        resume_run_dir=args.resume_run_dir,
+        branch_from_run_dir=args.branch_from_run_dir,
+    )
+    print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _validate_command(args) -> int:
+    result = validate_authoring_config(args.spec)
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif result["valid"]:
+        print(f"Valid: {result['path']}")
+    else:
+        print(f"Invalid: {result['path']}")
+        for error in result["errors"]:
+            print(f"- {error}")
+    return 0 if result["valid"] else 1
+
+
+def _package_validate_command(args) -> int:
+    result = validate_package(args.package, check_imports=args.check_imports)
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif result["valid"]:
+        print(f"Valid package: {result['package']}")
+        print(f"Configs: {result['counts']}")
+    else:
+        print(f"Invalid package: {result['package']}")
+        for error in result.get("errors", []):
+            print(f"- {error}")
+        for entry in result.get("entries", []):
+            if entry.get("valid"):
+                continue
+            print(f"- {entry['path']}")
+            for error in entry.get("errors", []):
+                print(f"  - {error}")
+    return 0 if result["valid"] else 1
+
+
+def _load_command_providers(subparsers) -> None:
+    try:
+        entry_points = importlib.metadata.entry_points()
+    except Exception:
+        return
+    if hasattr(entry_points, "select"):
+        providers = entry_points.select(group="optpilot.commands")
+    else:
+        providers = entry_points.get("optpilot.commands", [])
+    for entry_point in providers:
+        provider = entry_point.load()
+        provider(subparsers)
 
 
 if __name__ == "__main__":

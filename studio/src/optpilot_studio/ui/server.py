@@ -8,6 +8,7 @@ import calendar
 import difflib
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import mimetypes
 import os
@@ -33,18 +34,19 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from ..agent import OpenHandsAdapter, OpenHandsRuntimeConfig
-from ..container_utils import network_args
-from ..config import (
+from optpilot.container_utils import network_args
+from optpilot.config import (
     AUTHORING_API_VERSION,
     candidate_contract_mismatch,
     compile_authoring_config,
     validate_authoring_config,
 )
-from ..registry import BUILTIN_COMPONENTS
-from ..run_sources import _choose_source_root
-from ..schema_validation import validate_public_config_schema
-from ..setup import minimal_host_env, setup_commands_for_step, setup_cwd
+from optpilot.registry import BUILTIN_COMPONENTS
+from optpilot.run_sources import _choose_source_root
+from optpilot.schema_validation import validate_public_config_schema
+from optpilot.setup import minimal_host_env, setup_commands_for_step, setup_cwd
+
+from ..agent import OpenHandsAdapter, OpenHandsRuntimeConfig
 
 
 JsonDict = Dict[str, Any]
@@ -2692,13 +2694,40 @@ def _interface_launch_env_requirements(raw: JsonDict, interface: JsonDict) -> Li
 def _study_subprocess_env(state: UiState, study_path: Path) -> Dict[str, str]:
     declared_env = _require_declared_env_from_host(state, _study_env_requirements(study_path), action="study launch")
     env = minimal_host_env()
-    pythonpath_entries = [str(Path(__file__).resolve().parents[2]), str(state.cwd.resolve())]
+    pythonpath_entries = [
+        str(path)
+        for path in [
+            _pythonpath_root_for_package("optpilot"),
+            state.cwd.resolve(),
+        ]
+        if path
+    ]
     existing_pythonpath = os.environ.get("PYTHONPATH")
     if existing_pythonpath:
         pythonpath_entries.append(existing_pythonpath)
     env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(item for item in pythonpath_entries if item))
     env.update(declared_env)
     return env
+
+
+def _pythonpath_root_for_package(package: str) -> Optional[Path]:
+    spec = importlib.util.find_spec(package)
+    if spec is None or not spec.origin or spec.origin in {"built-in", "namespace"}:
+        return None
+    path = Path(spec.origin).resolve()
+    if path.name == "__init__.py":
+        return path.parent.parent
+    return path.parent
+
+
+def _package_dir(package: str) -> Optional[Path]:
+    spec = importlib.util.find_spec(package)
+    if spec is None or not spec.origin or spec.origin in {"built-in", "namespace"}:
+        return None
+    path = Path(spec.origin).resolve()
+    if path.name == "__init__.py":
+        return path.parent
+    return path.parent
 
 
 def _normalize_assistant_permissions(raw: Optional[JsonDict]) -> JsonDict:
@@ -4817,15 +4846,17 @@ def _docs_search(state: UiState, query: str, *, limit: int = 5) -> List[JsonDict
     terms = [term.lower() for term in query.split() if term.strip()]
     if not terms:
         return []
-    package_root = Path(__file__).resolve().parents[1]
+    studio_package_root = _package_dir("optpilot_studio")
+    core_package_root = _package_dir("optpilot")
     roots = [
         state.cwd / "docs",
         state.cwd / ".agents" / "optpilot-assistant",
         state.cwd / "src" / "optpilot" / "schemas",
-        package_root / "docs_assets",
-        package_root / "assistant_assets",
-        package_root / "schemas",
     ]
+    if studio_package_root is not None:
+        roots.extend([studio_package_root / "docs_assets", studio_package_root / "assistant_assets"])
+    if core_package_root is not None:
+        roots.append(core_package_root / "schemas")
     matches: List[JsonDict] = []
     suffixes = {".md", ".yaml", ".yml", ".json", ".py"}
     for root in roots:

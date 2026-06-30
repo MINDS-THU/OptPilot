@@ -11,6 +11,12 @@ resolution-markers = [
     "python_full_version < '3.11'",
 ]
 
+[manifest]
+members = [
+    "optpilot",
+    "optpilot-studio",
+]
+
 [[package]]
 name = "absl-py"
 version = "2.4.0"
@@ -1453,9 +1459,20 @@ source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
     { name = "pyyaml" },
+    { name = "referencing" },
 ]
 
 [package.optional-dependencies]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+]
+examples = [
+    { name = "job-shop-lib" },
+    { name = "stable-baselines3" },
+]
+
+[package.dev-dependencies]
 docs = [
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -1472,9 +1489,31 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "referencing", specifier = ">=0.30" },
     { name = "stable-baselines3", marker = "extra == 'examples'", specifier = ">=2.3,<3" },
 ]
 provides-extras = ["docs", "examples"]
+
+[package.metadata.requires-dev]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6" },
+    { name = "mkdocs-material", specifier = ">=9.5" },
+]
+examples = [
+    { name = "job-shop-lib", specifier = ">=1.7.0" },
+    { name = "stable-baselines3", specifier = ">=2.3,<3" },
+]
+
+[[package]]
+name = "optpilot-studio"
+version = "0.1.0"
+source = { editable = "studio" }
+dependencies = [
+    { name = "optpilot" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "optpilot", editable = "." }]
 
 [[package]]
 name = "ortools"

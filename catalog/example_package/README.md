@@ -86,7 +86,7 @@ uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baselin
 JobShopLib and Stable-Baselines examples:
 
 ```bash
-uv sync --extra examples
+uv sync --group examples
 uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml

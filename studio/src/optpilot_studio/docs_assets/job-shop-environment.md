@@ -159,7 +159,7 @@ uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameter
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-Then use the method pages for the track you want: [Dispatching Rule Methods](dispatching-rule-methods.md), [Simulated Annealing Methods](simulated-annealing-methods.md), [OR-Tools CP-SAT Methods](cp-sat-methods.md), [Reinforcement Learning Methods](reinforcement-learning-methods.md), or [LLM Code-Writing Methods](llm-code-methods.md). Dependency-free baseline and tuning studies run from a fresh checkout. JobShopLib, CP-SAT, simulated annealing, and Stable-Baselines examples require `uv sync --extra examples`.
+Then use the method pages for the track you want: [Dispatching Rule Methods](dispatching-rule-methods.md), [Simulated Annealing Methods](simulated-annealing-methods.md), [OR-Tools CP-SAT Methods](cp-sat-methods.md), [Reinforcement Learning Methods](reinforcement-learning-methods.md), or [LLM Code-Writing Methods](llm-code-methods.md). Dependency-free baseline and tuning studies run from a fresh checkout. JobShopLib, CP-SAT, simulated annealing, and Stable-Baselines examples require `uv sync --all-packages --group examples`.
 
 ## Weighted-Rule Parameter Contract
 
@@ -331,4 +331,4 @@ After you understand the environment configs, choose the method page that matche
 - [OR-Tools CP-SAT Methods](cp-sat-methods.md)
 - [Reinforcement Learning Methods](reinforcement-learning-methods.md)
 - [LLM Code-Writing Methods](llm-code-methods.md)
-- [Catalog](catalog.md)
+- [Packages and Catalogs](catalog.md)

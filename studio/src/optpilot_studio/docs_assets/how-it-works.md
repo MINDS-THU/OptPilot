@@ -1,6 +1,6 @@
 # How A Run Works
 
-This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [Getting Started](getting-started.md).
+This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [First Job-Shop Run](getting-started.md).
 
 At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
 
@@ -167,7 +167,7 @@ For parameter candidates:
 - the candidate `spec` is passed directly as runtime input
 - no environment source tree is required unless the evaluator itself needs copied files
 
-The parameter baseline from [Getting Started](getting-started.md) follows this
+The parameter baseline from [First Job-Shop Run](getting-started.md) follows this
 simpler path.
 
 For file candidates:

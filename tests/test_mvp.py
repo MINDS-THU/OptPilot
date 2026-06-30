@@ -24,7 +24,7 @@ import yaml
 
 from optpilot.candidate_materialization import BoundsCandidateValidator, FileCandidateManifestValidator, WorkspaceBundleMaterializer
 from optpilot.adapters import ReadOnlySQLiteQuery
-from optpilot.agent import OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
+from optpilot_studio.agent import OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
 from optpilot.cli import build_parser, main as cli_main
 from optpilot.candidate_files import CandidateFileStore, store_candidate_file
 from optpilot.config import compile_authoring_config
@@ -32,12 +32,14 @@ from optpilot.evidence import EvidenceView
 from optpilot.environment import build_environment_snapshot
 from optpilot.execution import _aggregate_metric_values, _worker_process_env
 from optpilot.method_runtime import _host_method_env
+from optpilot.package_index import expand_package_roots
+from optpilot.package_validation import validate_package
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.schema_validation import validate_public_config_schema
 from optpilot.spec import StudySpec, load_expanded_study_spec, load_study_spec
 from optpilot.storage import LocalEvidenceStore
-from optpilot.ui.server import (
+from optpilot_studio.ui.server import (
     CodeServerOptions,
     UiState,
     WorkspaceRuntimeOptions,
@@ -2914,6 +2916,42 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(validation["valid"], validation)
         self.assertEqual(validation["environment_id"], "job-shop-rule-parameters")
 
+    def test_core_package_validate_indexes_example_package(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        package = repo_root / "catalog" / "example_package"
+
+        result = validate_package(package)
+        entry_ids = {(entry["config"], entry["id"]) for entry in result["entries"]}
+
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["package_id"], "example_package")
+        self.assertGreaterEqual(result["counts"]["environment"], 3)
+        self.assertGreaterEqual(result["counts"]["method"], 6)
+        self.assertGreaterEqual(result["counts"]["study"], 6)
+        self.assertIn(("environment", "job-shop-rule-parameters"), entry_ids)
+        self.assertIn(("method", "tune-dispatch-weights"), entry_ids)
+        self.assertIn(("resource", "devs-simulation-interface"), entry_ids)
+
+    def test_core_package_roots_expand_catalog_folder_to_packages(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        roots = expand_package_roots([repo_root / "catalog"])
+
+        self.assertEqual(roots, [repo_root / "catalog" / "example_package"])
+
+    def test_cli_package_validate_json_output(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = cli_main(["package", "validate", str(repo_root / "catalog" / "example_package"), "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["valid"], payload)
+        self.assertEqual(payload["package_id"], "example_package")
+        self.assertIn("entries", payload)
+
     def test_ui_catalog_exposes_complete_component_config_yaml(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
@@ -4815,7 +4853,7 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_packaged_release_assets_mirror_source_docs_and_agent_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         docs_root = repo_root / "docs"
-        docs_assets_root = repo_root / "src" / "optpilot" / "docs_assets"
+        docs_assets_root = repo_root / "studio" / "src" / "optpilot_studio" / "docs_assets"
         source_docs = sorted(path for path in docs_root.glob("*.md") if path.is_file())
         packaged_docs = sorted(path.name for path in docs_assets_root.glob("*.md"))
 
@@ -4825,14 +4863,14 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(source.read_text(encoding="utf-8"), packaged.read_text(encoding="utf-8"), source.name)
 
         agent_asset_pairs = [
-            (repo_root / ".agents" / "optpilot-assistant" / "README.md", repo_root / "src" / "optpilot" / "assistant_assets" / "README.md"),
+            (repo_root / ".agents" / "optpilot-assistant" / "README.md", repo_root / "studio" / "src" / "optpilot_studio" / "assistant_assets" / "README.md"),
             (
                 repo_root / ".agents" / "optpilot-assistant" / "prompts" / "system.md",
-                repo_root / "src" / "optpilot" / "assistant_assets" / "prompts" / "system.md",
+                repo_root / "studio" / "src" / "optpilot_studio" / "assistant_assets" / "prompts" / "system.md",
             ),
             (
                 repo_root / ".agents" / "optpilot-assistant" / "implementation" / "bridge.md",
-                repo_root / "src" / "optpilot" / "assistant_assets" / "implementation" / "bridge.md",
+                repo_root / "studio" / "src" / "optpilot_studio" / "assistant_assets" / "implementation" / "bridge.md",
             ),
         ]
         for source, packaged in agent_asset_pairs:
@@ -5568,7 +5606,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(args.workspace_runtime_port_start, 19000)
 
     def test_cli_ui_forwards_workspace_runtime_options(self) -> None:
-        with patch("optpilot.cli.run_ui") as run_ui_mock:
+        with patch("optpilot_studio.cli.run_ui") as run_ui_mock:
             exit_code = cli_main(
                 [
                     "ui",

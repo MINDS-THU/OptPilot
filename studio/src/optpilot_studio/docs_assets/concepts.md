@@ -1,13 +1,16 @@
 ---
-title: Concepts
+title: OptPilot Core
 description: Core OptPilot concepts and boundaries.
 ---
 
-# Concepts
+# OptPilot Core
 
-Use this page for the mental model behind OptPilot. For a runnable first
-example, start with [Getting Started](getting-started.md). For every YAML field,
-use [Configuration](configuration.md).
+OptPilot Core is the schema, runner, runtime, and evidence layer. It is the part
+installed by the PyPI `optpilot` package and used by both the CLI and Studio.
+
+Use this page for the mental model. For installation choices, start with
+[Installation](installation.md). For every YAML field, use
+[Configuration Reference](configuration.md).
 
 OptPilot is built around one loop:
 
@@ -22,7 +25,7 @@ method can use the evidence in the next proposal
 The method and the environment stay user-owned. OptPilot owns the contract,
 orchestration, workspace preparation, and evidence around them.
 
-## Three Things You Author
+## Three Configs You Author
 
 Most OptPilot projects start with three public config files.
 
@@ -206,11 +209,25 @@ Every run may record:
 Methods can inspect prior results through `EvidenceView`. For the file layout
 and resume/branch behavior, see [Evidence](evidence.md).
 
+## Core Is Separate From Studio
+
+The core CLI can validate packages and run studies without the Studio UI:
+
+```bash
+optpilot package validate path/to/package
+optpilot run path/to/package/studies/my_study.yaml
+```
+
+Studio uses the same core model, but adds a browser interface, editable
+workspace copies, Code Server, and the optional assistant. If a package is valid
+under the core CLI, Studio can browse and launch it from a catalog root.
+
 ## What To Read Next
 
 - Read [Candidate Contracts](candidate-contracts.md) when designing the
   method/environment boundary.
 - Read [Methods](methods.md) when writing a candidate-producing method.
+- Read [Packages and Catalogs](catalog.md) when organizing reusable code.
 - Read [How A Run Works](how-it-works.md) when you need the runtime sequence.
 - Read [Configuration](configuration.md) when you need allowed fields and YAML
   examples.

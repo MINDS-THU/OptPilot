@@ -1,16 +1,19 @@
 ---
-title: Examples
+title: Job-Shop Tutorial
 description: Built-in OptPilot examples and the integration patterns they teach.
 ---
 
-# Examples
+# Job-Shop Tutorial
 
-`catalog/example_package/` is the built-in tutorial package. It is designed to
-teach one idea: keep the environment boundary clear, then connect different
-method families through explicit candidate contracts.
+`catalog/example_package/` is the built-in tutorial package. It is a normal
+OptPilot package: it contains reusable environment configs, method configs,
+resources, and study files.
 
-Start with [Getting Started](getting-started.md) for the first successful run.
-Use this page to choose the next tutorial page.
+The package teaches one idea: keep the environment boundary clear, then connect
+different method families through explicit candidate contracts.
+
+Start with [First Job-Shop Run](getting-started.md) for the first successful
+run. Use this page to choose the next tutorial track.
 
 ## Shared Job-Shop Comparison Set
 
@@ -45,10 +48,10 @@ OpenAI-compatible file editor without changing the evaluation problem.
 | Tune weighted rule parameters | Yes | None |
 | Baseline file candidates | Yes | None |
 | OpenAI-compatible file editor baseline path | Yes | Provider key only for real LLM edits |
-| JobShopLib dispatching rule | No | `uv sync --extra examples` |
-| Simulated annealing | No | `uv sync --extra examples` |
-| OR-Tools CP-SAT | No | `uv sync --extra examples` |
-| Stable-Baselines3 RL | No | `uv sync --extra examples` and a working PyTorch stack |
+| JobShopLib dispatching rule | No | `uv sync --all-packages --group examples` |
+| Simulated annealing | No | `uv sync --all-packages --group examples` |
+| OR-Tools CP-SAT | No | `uv sync --all-packages --group examples` |
+| Stable-Baselines3 RL | No | `uv sync --all-packages --group examples` and a working PyTorch stack |
 
 ## Built-In Studies
 
@@ -73,7 +76,7 @@ catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
 
 ## Package Layout
 
-Built-in examples use the same package layout recommended for user packages:
+The tutorial uses the same package layout recommended for user packages:
 
 ```text
 catalog/example_package/
@@ -95,6 +98,7 @@ catalog/example_package/
 Environment and method directories own reusable implementation code and config
 variants. Study files are concrete run plans: each study chooses one
 environment config, one method config, objective, budget, and execution policy.
+See [Packages and Catalogs](catalog.md) for the general package model.
 
 ## Adapting An Example
 
@@ -109,6 +113,6 @@ When adapting an example to your own project:
 6. Inspect `candidates.jsonl`, `observations.jsonl`, and `method_calls.jsonl`
    after the first run.
 
-For package layout guidance, see [Catalog](catalog.md). For field-level
+For package layout guidance, see [Packages and Catalogs](catalog.md). For field-level
 details, see [Configuration](configuration.md). For runtime storage and
 evidence, see [How A Run Works](how-it-works.md) and [Evidence](evidence.md).

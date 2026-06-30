@@ -31,9 +31,20 @@ classifiers = [
 dependencies = [
   "jsonschema>=4",
   "PyYAML>=6.0",
+  "referencing>=0.30",
 ]
 
 [project.optional-dependencies]
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+]
+examples = [
+  "job-shop-lib>=1.7.0",
+  "stable-baselines3>=2.3,<3",
+]
+
+[dependency-groups]
 docs = [
   "mkdocs>=1.6",
   "mkdocs-material>=9.5",
@@ -58,7 +69,10 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"optpilot.ui" = ["static/*", "workspace_runtime/*"]
 "optpilot.schemas" = ["*.json", "defs/*.json"]
-"optpilot.assistant_assets" = ["README.md", "prompts/*.md", "implementation/*.md"]
-"optpilot.docs_assets" = ["*.md"]
+
+[tool.uv.workspace]
+members = ["studio"]
+
+[tool.uv.sources]
+optpilot = { workspace = true }

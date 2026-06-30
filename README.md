@@ -38,16 +38,20 @@ Users author three public YAML config files:
 
 OptPilot validates those YAML files with packaged JSON Schemas, compiles them into an internal `StudySpec`, and writes the compiled spec into every run directory.
 
-Included in the current release:
+Included in the core CLI/SDK:
 
 - JSON Schema validation for public environment, method, and study configs
+- package validation for folders that contain environments, methods, resources, and studies
 - parameter, file, and opaque candidate contracts
 - Python and command environment evaluators
 - Python and command methods with batch protocol, plus Python session protocol
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
-- runnable job-shop scheduling tutorial environment with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
+
+Included in a source checkout:
+
+- runnable job-shop scheduling tutorial package with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
 - OptPilot Studio, a local UI for browsing reusable catalogs, opening workspaces, checking compatibility, launching studies, inspecting runs, and optionally using an OpenHands-backed assistant
 
 Not included:
@@ -55,7 +59,7 @@ Not included:
 - production Bayesian optimization, RL, LLM, or metaheuristic frameworks
 - remote execution backends
 - automatic dependency inference for study runtimes
-- multi-user UI authentication
+- multi-user Studio authentication
 
 ## Prerequisites
 
@@ -66,18 +70,35 @@ Before running the examples below, install:
 - Python 3.10+
 - `uv`
 
-## Install
+## Install Options
 
-OptPilot uses `uv`.
+Use the PyPI package when you want the Python SDK and CLI in your own project.
+This path does not install OptPilot Studio, OpenHands, Code Server, or the
+bundled example catalog.
 
 ```bash
-uv sync
+python -m pip install optpilot
+optpilot --help
+optpilot package validate path/to/package
+optpilot validate path/to/package/studies/my_study.yaml
+optpilot run path/to/package/studies/my_study.yaml
+```
+
+Use a source checkout when you want the full local Studio, bundled tutorial
+package, docs, and contributor workflow:
+
+```bash
+git clone https://github.com/MINDS-THU/OptPilot.git
+cd OptPilot
+uv sync --all-packages --group examples --group docs
 uv run optpilot --help
 ```
 
 ## Quickstart
 
-Start with the job-shop parameter baseline. It is the recommended first run, works from a fresh checkout, and does not require API keys or external solvers.
+Start with the job-shop parameter baseline from a source checkout. It is the
+recommended first run, works after the full source sync above, and does not
+require API keys or external solvers.
 
 The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, objective, budget, and execution policy.
 
@@ -93,17 +114,17 @@ Validate a config without running it:
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-Open the local UI:
+Open Studio:
 
 ```bash
 uv run optpilot ui --open-browser
 ```
 
-The UI scans packages under `catalog/` by default. Stop the local server with
+Studio scans packages under `catalog/` by default. Stop the local server with
 `Ctrl-C` in the terminal when you are done.
 
 For the assistant-enabled Studio workflow with OpenHands, embedded Code Server,
-and per-workspace containers, see [UI](docs/ui.md).
+and per-workspace containers, see [OptPilot Studio](docs/ui.md).
 
 Some examples, such as the JobShopLib and Stable-Baselines method wrappers, require optional dependencies. Use the dependency-free job-shop baseline first, then continue with the example-specific docs.
 
@@ -115,7 +136,7 @@ The first tutorial shows the full environment, method, and study YAML files for 
 - `catalog/example_package/methods/fixed_rule_parameters/method.yaml`
 - `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml`
 
-Read [Getting Started](docs/getting-started.md) for the full configs and the explanation of how the three files fit together. Python evaluator references use `module:function`; Python method references use `module:Class`.
+Read [First Job-Shop Run](docs/getting-started.md) for the full configs and the explanation of how the three files fit together. Python evaluator references use `module:function`; Python method references use `module:Class`.
 
 ## Catalog Packages
 
@@ -180,22 +201,25 @@ runtime:
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md)
-- [Concepts](docs/concepts.md)
+- [Installation](docs/installation.md)
+- [OptPilot Core](docs/concepts.md)
 - [Candidate Contracts](docs/candidate-contracts.md)
 - [Methods](docs/methods.md)
+- [Packages and Catalogs](docs/catalog.md)
+- [Configuration Reference](docs/configuration.md)
 - [How A Run Works](docs/how-it-works.md)
 - [Evidence](docs/evidence.md)
-- [Examples](docs/examples.md)
+- [Job-Shop Tutorial](docs/examples.md)
+- [First Job-Shop Run](docs/getting-started.md)
 - [Job-Shop Environment](docs/job-shop-environment.md)
-- [Configuration Reference](docs/configuration.md)
-- [Catalog](docs/catalog.md)
-- [UI](docs/ui.md)
+- [OptPilot Studio](docs/ui.md)
+- [Workspace Management](docs/studio-workspaces.md)
+- [OptPilot Assistant](docs/assistant.md)
 
 Build the docs locally:
 
 ```bash
-uv run --extra docs mkdocs serve
+uv run --group docs mkdocs serve
 ```
 
 ## Development Checks
@@ -203,6 +227,7 @@ uv run --extra docs mkdocs serve
 ```bash
 uv run python -m unittest discover -s tests -p 'test_*.py'
 uv run python -m compileall src/optpilot
+uv run python -m compileall studio/src/optpilot_studio
 ./scripts/smoke_test.sh
 ```
 

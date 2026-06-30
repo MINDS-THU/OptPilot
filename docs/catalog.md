@@ -1,13 +1,16 @@
 ---
-title: Catalog
+title: Packages and Catalogs
 description: How OptPilot organizes packages of environments, methods, resources, and studies.
 ---
 
-# Catalog
+# Packages and Catalogs
 
-`catalog/` is the local shelf of OptPilot packages. Each direct child is a
-package: a folder that can contain environments, methods, resources, studies,
-code, prompts, fixtures, and package-specific docs.
+A package is a reusable bundle of OptPilot-ready code and configs. It can
+contain environments, methods, resources, studies, prompts, fixtures, and
+package-specific docs.
+
+A catalog is a collection of packages. In the source checkout, `catalog/` is the
+default catalog root and each direct child is a package.
 
 The repository ships one package:
 
@@ -16,11 +19,34 @@ catalog/
   example_package/
 ```
 
-Studio scans packages under `catalog/` when launched from the repository root:
+The core CLI can validate a package folder:
+
+```bash
+optpilot package validate path/to/package
+```
+
+Studio scans packages under `catalog/` when launched from a source checkout:
 
 ```bash
 uv run optpilot ui --open-browser
 ```
+
+## Why Packages Matter
+
+Packages are the bridge between the core CLI and Studio:
+
+- With the core CLI, users validate and run package study files directly.
+- With Studio, users browse package entries, inspect read-only source, create
+  editable copies, launch interfaces, and launch studies.
+
+The bundled job-shop tutorial is just one package:
+
+```text
+catalog/example_package/
+```
+
+It is useful as a template, but user packages should live beside it rather than
+overwriting it.
 
 ## Catalog vs Package
 
@@ -46,7 +72,11 @@ renaming the entry inside one package.
 
 Use a new package when you want to bring a project, case study, or team example
 into OptPilot without mixing it into the bundled examples. Place the folder
-under `catalog/`, or launch Studio with an extra catalog path:
+under `catalog/`, validate it, or launch Studio with an extra catalog path:
+
+```bash
+uv run optpilot package validate catalog/my_package
+```
 
 ```bash
 uv run optpilot ui --catalog catalog/example_package --catalog path/to/my_package

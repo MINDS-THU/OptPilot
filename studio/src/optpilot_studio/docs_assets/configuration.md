@@ -1,11 +1,19 @@
 # Configuration Reference
 
-<!-- This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run OptPilot yet. -->
+<!-- This page is a field reference. Start with [First Job-Shop Run](getting-started.md) if you have not run OptPilot yet. -->
 
-OptPilot public configs are YAML files validated by JSON Schema. The schemas are packaged in `src/optpilot/schemas/` and are used by:
+OptPilot public configs are YAML files validated by packaged JSON Schemas. In a
+source checkout, those schemas live under `src/optpilot/schemas/`. They are used
+by:
 
 ```bash
-uv run optpilot validate path/to/study.yaml
+optpilot validate path/to/study.yaml
+```
+
+To validate a whole package folder, use:
+
+```bash
+optpilot package validate path/to/package
 ```
 
 It covers the three public experiment config roles: `environment`, `method`,
@@ -158,7 +166,7 @@ Example:
 
 An environment config describes what can be evaluated and how the evaluation happens.
 
-The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [Getting Started](getting-started.md) and the files under `catalog/example_package/`.
+The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [First Job-Shop Run](getting-started.md) and the files under `catalog/example_package/`.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -530,7 +538,7 @@ Command methods receive a JSON request on stdin unless `{input_file}` is present
 
 A study config binds one environment config to one method config.
 
-The block below is an annotated field template. [Getting Started](getting-started.md) shows a complete runnable study config from `catalog/example_package/studies/`.
+The block below is an annotated field template. [First Job-Shop Run](getting-started.md) shows a complete runnable study config from `catalog/example_package/studies/`.
 
 ```yaml
 apiVersion: optpilot.io/v1

@@ -121,4 +121,4 @@ environment.
 Use this page when the OptPilot method itself owns the code-writing loop. If you
 already have a larger upstream repository with its own search loop, adapters,
 dependencies, and smoke tests, add it as a separate package instead. See
-[Catalog](catalog.md).
+[Packages and Catalogs](catalog.md).

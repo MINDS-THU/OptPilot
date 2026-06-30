@@ -1,0 +1,9 @@
+prune studio
+prune .optpilot-ui
+prune .pytest_cache
+prune .venv
+prune dist
+prune site
+prune runs
+prune workspace
+global-exclude .DS_Store

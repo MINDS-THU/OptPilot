@@ -8,8 +8,9 @@ OptPilot Studio.
 - `implementation/bridge.md` records the first HTTP bridge contract between
   OptPilot Studio and an OpenHands-compatible runtime.
 
-The executable implementation lives in `src/optpilot/agent.py` and
-`src/optpilot/ui/server.py` so it can be tested with the rest of OptPilot.
+The executable implementation lives in `studio/src/optpilot_studio/agent.py`
+and `studio/src/optpilot_studio/ui/server.py` so it can be tested with the
+rest of OptPilot Studio.
 
 ## Local OpenHands Runtime
 
@@ -24,7 +25,7 @@ uv pip install -U openhands-sdk openhands-tools openhands-workspace openhands-ag
 mkdir -p .optpilot-ui/openhands-agent-server
 (
   cd .optpilot-ui/openhands-agent-server
-  OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. agent-server --host 127.0.0.1 --port 8781
+  OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server --host 127.0.0.1 --port 8781
 )
 ```
 
@@ -45,7 +46,7 @@ For an assistant-enabled GUI session, keep these services running:
    mkdir -p .optpilot-ui/openhands-agent-server
    (
      cd .optpilot-ui/openhands-agent-server
-     OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. agent-server --host 127.0.0.1 --port 8781
+     OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server --host 127.0.0.1 --port 8781
    )
    ```
 

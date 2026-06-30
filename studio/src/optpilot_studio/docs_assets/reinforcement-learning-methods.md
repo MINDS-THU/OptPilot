@@ -63,7 +63,7 @@ training algorithm method-owned.
 Install optional example dependencies:
 
 ```bash
-uv sync --extra examples
+uv sync --all-packages --group examples
 ```
 
 Run the study:
