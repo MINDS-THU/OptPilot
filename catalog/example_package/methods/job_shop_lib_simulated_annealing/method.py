@@ -29,7 +29,7 @@ class JobShopLibSimulatedAnnealingMethod:
         try:
             from job_shop_lib.metaheuristics import SimulatedAnnealingSolver
         except ImportError as exc:
-            raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --group examples`.") from exc
+            raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --all-packages --group examples`.") from exc
         solutions = solve_job_shop_cases(
             study_state,
             lambda: SimulatedAnnealingSolver(

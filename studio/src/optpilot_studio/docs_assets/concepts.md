@@ -25,6 +25,36 @@ method can use the evidence in the next proposal
 The method and the environment stay user-owned. OptPilot owns the contract,
 orchestration, workspace preparation, and evidence around them.
 
+```mermaid
+flowchart TB
+  subgraph "environment config"
+    E1["candidate contract"]
+    E2["evaluator"]
+    E3["metrics + records"]
+    E4["methodContext"]
+  end
+
+  subgraph "method config"
+    M1["entrypoint"]
+    M2["settings"]
+    M3["accepts"]
+    M4["runtime"]
+  end
+
+  subgraph "study config"
+    S1["environmentConfig"]
+    S2["methodConfig"]
+    S3["objective"]
+    S4["budget + execution + evidence"]
+  end
+
+  S1 --> E1
+  S2 --> M1
+  E1 --> M3
+  E4 --> M3
+  S3 --> E3
+```
+
 ## Three Configs You Author
 
 Most OptPilot projects start with three public config files.
@@ -222,13 +252,20 @@ Studio uses the same core model, but adds a browser interface, editable
 workspace copies, Code Server, and the optional assistant. If a package is valid
 under the core CLI, Studio can browse and launch it from a catalog root.
 
+The split is intentional:
+
+| Surface | What it should be used for |
+| --- | --- |
+| Core CLI/SDK | Validate configs, run studies, and integrate packages in your own project or CI. |
+| Studio | Browse packages, create editable copies, launch studies through forms, inspect runs, and manage local workspace/assistant workflows. |
+
 ## What To Read Next
 
 - Read [Candidate Contracts](candidate-contracts.md) when designing the
   method/environment boundary.
 - Read [Methods](methods.md) when writing a candidate-producing method.
 - Read [Packages and Catalogs](catalog.md) when organizing reusable code.
-- Read [How A Run Works](how-it-works.md) when you need the runtime sequence.
+- Read [How a Run Works](how-it-works.md) when you need the runtime sequence.
 - Read [Configuration](configuration.md) when you need allowed fields and YAML
   examples.
 - Read [Job-Shop Environment](job-shop-environment.md) for the main tutorial

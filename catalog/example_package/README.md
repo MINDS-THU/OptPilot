@@ -1,16 +1,19 @@
 # Example Package
 
-This package contains runnable OptPilot example environments, methods,
-resources, and studies. It is both a tutorial package and a reference for how
-new packages should be organized under `catalog/`.
+This package contains runnable OptPilot example environments, methods, case
+data, and studies. It is both a tutorial package and a reference for how new
+packages should be organized under `catalog/`.
 
 For explanations, use the public docs:
 
-- `docs/getting-started.md` for the first local run
-- `docs/catalog.md` for the package layout and local package model
-- `docs/candidate-contracts.md` for the environment/method boundary
-- `docs/examples.md` for the full example catalog
-- `docs/job-shop-environment.md` for the main tutorial environment
+- [First Job-Shop Run](../../docs/getting-started.md) for the first local run
+- [Packages and Catalogs](../../docs/catalog.md) for the package layout and
+  local package model
+- [Candidate Contracts](../../docs/candidate-contracts.md) for the
+  environment/method boundary
+- [Job-Shop Tutorial Map](../../docs/examples.md) for the full example package
+- [Job-Shop Environment](../../docs/job-shop-environment.md) for the main
+  tutorial environment
 
 ## Catalog Model
 
@@ -46,19 +49,15 @@ catalog/example_package/
     tune_dispatch_weights/
       method.yaml
       method.py
-  resources/
-    devs-simulation-interface/
-      README.md
-      optpilot.resource.yaml
   studies/
     job_shop_rule_parameters_baseline.yaml
     job_shop_tune_dispatch_weights.yaml
 ```
 
 Environment and method folders own reusable config variants and implementation
-code. Resource folders hold reusable reference material, simulator interfaces,
-datasets, or launchable apps. Study files are concrete run plans that bind one
-environment, one method, objective, budget, and execution policy.
+code. Study files are concrete run plans that bind one environment, one method,
+objective, budget, and execution policy. Other packages may also include
+resource folders for reusable reference material, datasets, or launchable apps.
 
 Python import strings should be local to the config folder, with `pythonPath`
 pointing at that folder. For this package, imports look like:
@@ -86,7 +85,7 @@ uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baselin
 JobShopLib and Stable-Baselines examples:
 
 ```bash
-uv sync --group examples
+uv sync --all-packages --group examples
 uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml

@@ -7,22 +7,34 @@ description: Choose between the core CLI/SDK install and the full OptPilot Studi
 
 OptPilot has two intended installation modes.
 
-Use the **Core CLI/SDK** when you want to integrate your own environment and
-method code with OptPilot's public YAML schema and run studies from a terminal.
+Most new users should start with the **source checkout for the tutorial and
+Studio**. It includes the bundled tutorial package and the local GUI, so it is
+the fastest way to see the complete workflow.
 
-Use the **full OptPilot Studio source checkout** when you want the local GUI,
-workspace editor, assistant, and bundled tutorial package.
+Use the **Core CLI/SDK** when you already have an OptPilot package or want to
+integrate your own environment and method code with the public YAML schema from
+a terminal.
 
 ## Which Install Should I Use?
 
 | Install mode | Best for | Includes | Does not include |
 | --- | --- | --- | --- |
 | Core CLI/SDK | Users building or running OptPilot packages in their own project. | Python package, JSON Schema validation, `optpilot run`, `optpilot validate`, `optpilot package validate`, local and container runtimes declared in configs. | Studio UI, OpenHands assistant, embedded Code Server, bundled `catalog/example_package/`. |
-| Full Studio source checkout | Users self-hosting OptPilot Studio or exploring the built-in tutorial. | Everything in core, the bundled job-shop example package, Studio UI, workspace management, assistant integration, docs and contributor workflow. | A production multi-user deployment. |
+| Source checkout: tutorial and Studio | Users exploring the built-in tutorial or self-hosting OptPilot Studio. | Everything in core, the bundled job-shop example package, Studio UI, workspace management, assistant integration, docs, and contributor workflow. | A production multi-user deployment. |
 
 Both modes use the same public config model. A package that validates and runs
 with the core CLI should also be browsable in Studio when you put it under a
 Studio catalog root.
+
+## Prerequisites
+
+| Capability | Required for | Requirement |
+| --- | --- | --- |
+| Python | Core CLI/SDK and Studio | Python 3.10 or newer. |
+| `uv` | Source checkout, examples, docs, and Studio | Recommended for the full local workflow. |
+| Docker or Podman | Container runtimes, embedded Code Server, workspace previews, and assistant tools that execute in workspaces | Optional until you use those features. |
+| Python 3.12 environment for OpenHands | OpenHands agent-server runtime | The local bridge has been checked with `openhands-agent-server==1.29.0`; OpenHands currently expects Python 3.12. |
+| API key for a model provider | LLM methods or assistant model chat | Optional; configure only for workflows that declare or use it. |
 
 ## Core CLI/SDK
 
@@ -46,6 +58,10 @@ must be available on the machine running the command. If a config asks for a
 local process runtime, its dependencies must be installable in that local
 workspace.
 
+For direct CLI runs, `envFromHost` reads from the shell process environment.
+Values saved in Studio settings are local to Studio-managed setup, interface,
+assistant, and study-launch paths; they are not read by plain `optpilot run`.
+
 The core install is the right distribution target for package authors. A package
 can contain:
 
@@ -59,7 +75,7 @@ my_package/
 
 See [Packages and Catalogs](catalog.md) for the package layout.
 
-## Full OptPilot Studio
+## Source Checkout: Tutorial And Studio
 
 Clone the repository when you want the full local Studio:
 
@@ -74,14 +90,27 @@ Verify the CLI and bundled example package:
 ```bash
 uv run optpilot --help
 uv run optpilot package validate catalog/example_package
-uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
+
+Continue with [First Job-Shop Run](getting-started.md) for the first runnable
+study, expected output, and evidence inspection commands.
 
 Launch Studio:
 
 ```bash
 uv run optpilot ui --open-browser
+```
+
+The default Studio URL is:
+
+```text
+http://127.0.0.1:8765/
+```
+
+Use `--port` when you want a specific port:
+
+```bash
+uv run optpilot ui --host 127.0.0.1 --port 8866 --open-browser
 ```
 
 Studio scans packages under `catalog/` by default. The repository ships the

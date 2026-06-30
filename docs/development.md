@@ -1,9 +1,9 @@
 ---
-title: Development
+title: Contributor Guide
 description: Local checks and release-readiness notes for OptPilot contributors.
 ---
 
-# Development
+# Contributor Guide
 
 ## Install
 
@@ -34,7 +34,7 @@ Build in strict mode:
 uv run --group docs mkdocs build --strict
 ```
 
-## Release Hygiene
+## Maintainer Release Hygiene
 
 Before publishing:
 

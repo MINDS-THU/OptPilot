@@ -49,6 +49,16 @@ settings, and lets OptPilot evaluate each candidate against the same cases.
 This is the smallest useful optimizer in the tutorial because improvement comes
 from multiple OptPilot trials, not from a hidden solver loop.
 
+Expected result:
+
+- the fixed baseline should complete one trial with `failure_count: 0`
+- the tuner should complete up to 12 trials and record one observation per
+  evaluated parameter setting
+- `candidates.jsonl` should show `parameters` candidates with the four weight
+  fields
+- `observations.jsonl` should show whether the tuned grid found a lower
+  `normalized_makespan` than the first fixed setting
+
 ## File-Candidate Smoke Test
 
 Run:
@@ -64,6 +74,15 @@ store, and OptPilot materializes it into the trial workspace before evaluation.
 
 Use this to verify file-candidate materialization before trying an LLM or a
 larger heuristic-code generator.
+
+Expected result:
+
+- the run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain a `files` candidate with `dispatch_rule.py`
+- the trial workspace should contain a materialized candidate file under the
+  environment's configured candidate root
+- this smoke test is not expected to optimize; it proves the file-candidate
+  handoff works
 
 ## JobShopLib Dispatching Rule
 
@@ -103,6 +122,14 @@ from job_shop_lib.dispatching.rules import DispatchingRuleSolver
 
 The environment does not import JobShopLib. It validates the returned schedule
 and computes the same metrics used by every other job-shop method.
+
+Expected result:
+
+- the run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain a `parameters` candidate whose `spec`
+  contains `solutions`
+- `observations.jsonl` should report the same job-shop metrics as the
+  dependency-free studies
 
 To use a different built-in rule, change the method setting:
 

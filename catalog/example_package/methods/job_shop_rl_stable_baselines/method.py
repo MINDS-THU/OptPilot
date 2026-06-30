@@ -39,7 +39,7 @@ class StableBaselinesJobShopMethod:
                 "generator": {
                     "method_id": self.definition["id"],
                     "strategy": "stable_baselines_policy_rollout",
-                    "algorithm": str(self.settings.get("algorithm", "PPO")),
+                    "algorithm": "PPO",
                     "training_instances": len(train_payloads),
                 },
                 "metadata": {"summary": "Schedules produced by a Stable-Baselines3 policy rollout."},
@@ -103,7 +103,7 @@ class StableBaselinesJobShopMethod:
         except ImportError as exc:
             raise RuntimeError(
                 "This example requires a working Stable-Baselines3/PyTorch stack. "
-                "Install it with `uv sync --group examples` and ensure PyTorch can be imported."
+                "Install it with `uv sync --all-packages --group examples` and ensure PyTorch can be imported."
             ) from exc
 
         total_timesteps = int(self.settings.get("totalTimesteps", 256))

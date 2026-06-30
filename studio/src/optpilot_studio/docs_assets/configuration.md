@@ -1,6 +1,15 @@
+---
+title: Configuration Reference
+description: Field-by-field reference for OptPilot environment, method, study, and resource configs.
+---
+
 # Configuration Reference
 
-<!-- This page is a field reference. Start with [First Job-Shop Run](getting-started.md) if you have not run OptPilot yet. -->
+!!! tip "New to OptPilot?"
+
+    Start with [First Job-Shop Run](getting-started.md) if you have not run
+    OptPilot yet. Use this page as a field reference once you have seen one
+    successful run.
 
 OptPilot public configs are YAML files validated by packaged JSON Schemas. In a
 source checkout, those schemas live under `src/optpilot/schemas/`. They are used
@@ -18,9 +27,11 @@ optpilot package validate path/to/package
 
 It covers the three public experiment config roles: `environment`, `method`,
 and `study`. Catalog packages may also include optional `resource` manifests
-for support material and launchable helper interfaces.
+for support material and launchable helper interfaces. Resources are secondary
+catalog entries, not part of the core environment-method-study experiment
+contract.
 
-For the conceptual model behind those roles, use [Concepts](concepts.md). For the runtime procedure after these files are loaded and validated, use [How A Run Works](how-it-works.md).
+For the conceptual model behind those roles, use [Concepts](concepts.md). For the runtime procedure after these files are loaded and validated, use [How a Run Works](how-it-works.md).
 
 If you are deciding how to connect a new method to a new environment, read [Candidate Contracts](candidate-contracts.md) before using this field reference. The reference tells you which fields exist; the contract guide explains how the fields fit together.
 
@@ -138,7 +149,7 @@ catalog entries.
 | Field | Relative to |
 | --- | --- |
 | `study.environmentConfig`, `study.methodConfig` | The study config file. |
-| `evidence.outputDir` | The launch working directory or explicit CLI/UI output root. |
+| `evidence.outputDir` | The launch working directory. An explicit CLI or Studio output root takes precedence over this field. |
 | `environment.evaluator.pythonPath`, `environment.trialWorkspace[].from`, `environment.methodContext.instructions`, `environment.methodContext.references[].path` | The environment config file. |
 | `method.entrypoint.pythonPath`, `method.runtime.container.build.context` | The method config file. |
 | `environment.evaluator.cwd` | The trial workspace created for the candidate evaluation. |

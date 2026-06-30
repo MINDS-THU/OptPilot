@@ -11,7 +11,6 @@ entrypoint:
 
 settings:
   batchSize: 1
-  algorithm: PPO
   maxJobs: 6
   totalTimesteps: 128
   discountFactor: 0.95

@@ -1,19 +1,19 @@
 ---
-title: Job-Shop Tutorial
-description: Built-in OptPilot examples and the integration patterns they teach.
+title: Job-Shop Tutorial Map
+description: How the built-in job-shop tutorial package is organized and what each track teaches.
 ---
 
-# Job-Shop Tutorial
+# Job-Shop Tutorial Map
 
 `catalog/example_package/` is the built-in tutorial package. It is a normal
 OptPilot package: it contains reusable environment configs, method configs,
-resources, and study files.
+small case data, and study files.
 
 The package teaches one idea: keep the environment boundary clear, then connect
 different method families through explicit candidate contracts.
 
-Start with [First Job-Shop Run](getting-started.md) for the first successful
-run. Use this page to choose the next tutorial track.
+After [First Job-Shop Run](getting-started.md), use this page to understand how
+the package is organized and choose the next tutorial track.
 
 ## Shared Job-Shop Comparison Set
 
@@ -28,6 +28,24 @@ The studies differ in candidate contract and method implementation. That lets
 you compare a parameter tuner, generated file candidates, JobShopLib solver
 wrappers, OR-Tools CP-SAT, simulated annealing, reinforcement learning, and an
 OpenAI-compatible file editor without changing the evaluation problem.
+
+`normalized_makespan` is the average per-case ratio between the schedule
+makespan and the case reference bound. The tutorial minimizes it; smaller values
+mean better schedules relative to the reference cases.
+
+```mermaid
+flowchart TB
+  Env["job_shop_scheduling environment"]
+  Params["parameters\nweighted rule values"]
+  Files["files\ndispatch_rule.py or solver.py"]
+  Solutions["parameters candidate\nspec.solutions schedules"]
+  Metrics["metrics\nnormalized_makespan + makespan + tardiness + utilization"]
+
+  Params --> Env
+  Files --> Env
+  Solutions --> Env
+  Env --> Metrics
+```
 
 ## What Each Page Teaches
 
@@ -115,4 +133,4 @@ When adapting an example to your own project:
 
 For package layout guidance, see [Packages and Catalogs](catalog.md). For field-level
 details, see [Configuration](configuration.md). For runtime storage and
-evidence, see [How A Run Works](how-it-works.md) and [Evidence](evidence.md).
+evidence, see [How a Run Works](how-it-works.md) and [Evidence](evidence.md).

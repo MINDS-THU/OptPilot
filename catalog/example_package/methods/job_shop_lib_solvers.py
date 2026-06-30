@@ -47,7 +47,7 @@ def to_job_shop_lib_instance(payload: JsonDict):
     try:
         from job_shop_lib import JobShopInstance, Operation
     except ImportError as exc:
-        raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --group examples`.") from exc
+        raise RuntimeError("This example requires JobShopLib. Install it with `uv sync --all-packages --group examples`.") from exc
 
     jobs = [
         [Operation(machines=int(item["machine"]), duration=int(item["duration"])) for item in job]

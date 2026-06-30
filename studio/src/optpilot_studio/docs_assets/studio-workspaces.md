@@ -27,9 +27,14 @@ state and should not be committed.
 
 ## Setup And Runtime
 
-Environment, method, and resource configs can declare setup steps through their
-runtime or interface sections. Studio uses those declarations when it creates an
-editable copy or launches an interface.
+Environment and method configs can declare process-runtime setup steps under
+`runtime.setup`. Resource interfaces and component helper UIs declare launch
+setup under `interface.setup`.
+
+Studio uses these declarations when it creates an editable copy or launches an
+interface. Container runtimes use their image or build configuration instead of
+`runtime.setup`; the public schema rejects `runtime.setup` on container
+runtimes.
 
 Typical setup work includes:
 
@@ -40,6 +45,21 @@ Typical setup work includes:
 
 Studio does not infer dependencies automatically. The package author should
 declare the setup commands needed for the component to run.
+
+```mermaid
+flowchart LR
+  Catalog["catalog source\nimmutable"]
+  Copy["editable workspace copy"]
+  Setup["runtime.setup or interface.setup\nprocess setup"]
+  Runtime["workspace runtime\nCode Server + preview + tools"]
+  Run["study run or interface"]
+
+  Catalog --> Copy
+  Copy --> Setup
+  Copy --> Runtime
+  Setup --> Run
+  Runtime --> Run
+```
 
 ## Embedded Code Server
 

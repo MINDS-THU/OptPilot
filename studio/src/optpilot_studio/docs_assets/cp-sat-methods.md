@@ -56,6 +56,16 @@ uv run optpilot validate catalog/example_package/studies/job_shop_ortools_cpsat.
 uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml
 ```
 
+Expected result:
+
+- the run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain a `parameters` candidate whose `spec`
+  contains `solutions`
+- `observations.jsonl` should contain the shared job-shop metrics, including
+  `normalized_makespan`
+- import failures usually mean the optional examples dependency group has not
+  been installed in the current source checkout
+
 ## Method Settings
 
 The bundled method exposes a time limit:

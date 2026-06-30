@@ -25,6 +25,11 @@ The core CLI can validate a package folder:
 optpilot package validate path/to/package
 ```
 
+Package validation checks recognized OptPilot config files and their schemas.
+It does not install dependencies or prove that every study can complete. For a
+release-quality package, validate the package, validate the study files you
+intend to advertise, and smoke-run at least one small study.
+
 Studio scans packages under `catalog/` when launched from a source checkout:
 
 ```bash
@@ -47,6 +52,37 @@ catalog/example_package/
 
 It is useful as a template, but user packages should live beside it rather than
 overwriting it.
+
+## Where Things Are Stored
+
+OptPilot keeps authored source, editable drafts, and generated evidence in
+different places:
+
+```text
+catalog/example_package/     bundled package source
+catalog/local_package/       user registrations created by Studio
+catalog/my_package/          user-owned package source
+.optpilot-ui/workspaces/     editable Studio draft copies
+runs/                         study evidence from CLI or Studio launches
+```
+
+Do not write generated runs into catalog packages. Catalog folders should stay
+reviewable source; run evidence belongs under `runs/` or another explicit
+workspace-level output root.
+
+```mermaid
+flowchart LR
+  Package["catalog package\nread-only source"]
+  Inspect["Inspect\nread-only"]
+  Draft["editable copy\n.optpilot-ui/workspaces"]
+  Run["study run\nruns/"]
+  Register["optional registration\ncatalog/local_package"]
+
+  Package --> Inspect
+  Package --> Draft
+  Draft --> Run
+  Draft --> Register
+```
 
 ## Catalog vs Package
 
@@ -94,6 +130,29 @@ Keep new packages additive. Do not copy them into `example_package` unless you
 are intentionally editing the example package itself. One folder per package
 makes it easy to inspect where entries came from, update or remove a package,
 and keep user-owned work separate from bundled examples.
+
+## First User Package Recipe
+
+For a first local package:
+
+1. Create `catalog/my_package/`.
+2. Add one environment config under `environments/`.
+3. Add one method config under `methods/`.
+4. Add one study under `studies/` that binds them.
+5. Run `uv run optpilot package validate catalog/my_package`.
+6. Run `uv run optpilot validate catalog/my_package/studies/my_study.yaml`.
+7. Run `uv run optpilot run catalog/my_package/studies/my_study.yaml`.
+8. Confirm the summary reports completed trials, zero unexpected failures, and
+   a `run_dir` you can inspect.
+9. Launch Studio with the package visible:
+
+```bash
+uv run optpilot ui --catalog catalog/example_package --catalog catalog/my_package
+```
+
+Package validation proves that recognized config files are structurally valid.
+The smoke run proves that dependencies, runtime setup, candidate generation,
+and evaluation work together for at least one small study.
 
 ## Package Layout
 
@@ -245,4 +304,4 @@ panel.
 
 For the complete field-by-field schema, see [Configuration](configuration.md).
 For the runtime sequence from candidate proposal to evidence files, see
-[How A Run Works](how-it-works.md).
+[How a Run Works](how-it-works.md).

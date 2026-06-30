@@ -1,4 +1,9 @@
-# How A Run Works
+---
+title: How a Run Works
+description: Runtime sequence from public YAML configs to candidates, trials, observations, and evidence.
+---
+
+# How a Run Works
 
 This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [First Job-Shop Run](getting-started.md).
 
@@ -87,17 +92,36 @@ Environment evaluator inputs are normal configuration, carried as `evaluator.set
 
 ## Method Execution
 
-The method owns the search algorithm. It can be a small Python class, a command-line optimizer, an LLM agent, or a wrapper around a full upstream repository.
+The method owns the search algorithm. It can be a small Python class, a
+command-line optimizer, an LLM agent, or a wrapper around a full upstream
+repository.
 
-For each proposal request, OptPilot provides:
+Python and command methods receive the same conceptual information, but the
+transport shape is different.
 
-- `study_state`: completed trials, failure count, best metric, and related run state
-- `candidate_context`: the environment candidate contract and method-visible context
-- `evidence`: previous observations, candidates, trials, records, calls, and events
-- `settings`: the free object from the method config
-- `runtime_context`: per-call paths, including method workspace and candidate store
+Python methods implement a `propose` method. The common signature is:
 
-For Python methods, the canonical path is `study_state["candidate_context"]` plus the optional `evidence_view` argument. For command methods, the request JSON also breaks out `candidate`, `methodContext`, and `candidate_context` for convenience; they describe the same environment-provided contract.
+```python
+def propose(self, n_candidates, study_state, evidence_view=None):
+    ...
+```
+
+For Python methods:
+
+- `study_state` contains completed trials, failure count, best metric, and the
+  compiled `candidate_context`.
+- `study_state["candidate_context"]` contains the environment candidate
+  contract and method-visible `methodContext`.
+- `evidence_view`, when accepted by the method, provides previous observations,
+  candidates, trials, records, calls, events, and artifacts.
+- method settings are available through the method definition passed to the
+  class constructor.
+
+Command methods receive request and response JSON files. Their request JSON
+breaks out fields such as `candidate`, `methodContext`,
+`candidate_context`, `settings`, and `runtime_context` for convenience. Those
+fields describe the same environment-provided contract and per-call paths, but
+they are transported as files because the method runs as a subprocess.
 
 Parameter candidates look like:
 

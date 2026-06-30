@@ -4,7 +4,7 @@ name: job-shop-rl-stable-baselines
 description: Train a small RL policy on training cases and evaluate it on the shared job-shop validation cases.
 tags: [job-shop, reinforcement-learning, stable-baselines, schedule-solution]
 
-environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution.yaml
+environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution_rl.yaml
 methodConfig: ../methods/job_shop_rl_stable_baselines/method.yaml
 
 objective:

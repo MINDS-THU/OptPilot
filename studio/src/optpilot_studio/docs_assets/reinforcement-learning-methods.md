@@ -18,7 +18,7 @@ and does not know that reinforcement learning was used.
 The RL study uses:
 
 ```text
-catalog/example_package/environments/job_shop_scheduling/environment_schedule_solution.yaml
+catalog/example_package/environments/job_shop_scheduling/environment_schedule_solution_rl.yaml
 catalog/example_package/methods/job_shop_rl_stable_baselines/method.yaml
 ```
 
@@ -30,11 +30,17 @@ methodContext:
     - name: ft06_small
       path: cases/ft06_small.yaml
       type: job_shop_case
+    - name: la01_tiny
+      path: cases/la01_tiny.yaml
+      type: job_shop_case
     - name: ft06_standard
       path: cases/ft06_standard.yaml
       type: job_shop_case
     - name: train_tiny_a
       path: training_cases/train_tiny_a.yaml
+      type: job_shop_training_case
+    - name: train_tiny_b
+      path: training_cases/train_tiny_b.yaml
       type: job_shop_training_case
     - name: rl_env_adapter
       path: rl_env_adapter.py
@@ -76,6 +82,17 @@ uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines
 The bundled run is intentionally small. It is meant to demonstrate the OptPilot
 boundary, not to produce a strong benchmark policy.
 
+Expected result:
+
+- the run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain one `parameters` candidate whose `spec`
+  contains `solutions`
+- `observations.jsonl` should contain `normalized_makespan` and the secondary
+  job-shop metrics
+- if the run fails before training starts, the usual cause is missing optional
+  dependencies such as Stable-Baselines3, Gymnasium, or a compatible PyTorch
+  stack
+
 ## What Happens Inside The Method
 
 The method:
@@ -86,11 +103,11 @@ The method:
 4. rolls the policy out on the validation cases
 5. returns schedule-solution parameters
 
-Method settings control the training wrapper:
+The tutorial implementation always trains a small Stable-Baselines3 `PPO`
+policy. Method settings control the size of the wrapper run:
 
 ```yaml
 settings:
-  algorithm: PPO
   maxJobs: 6
   totalTimesteps: 128
   discountFactor: 0.95

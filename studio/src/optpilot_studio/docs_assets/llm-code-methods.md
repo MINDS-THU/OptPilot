@@ -53,6 +53,15 @@ credentials. To request a real LLM edit, set a provider key such as
 `OPENROUTER_API_KEY`, increase the study budget, or set
 `includeBaselineCandidate: false`.
 
+Expected result:
+
+- the baseline file-copy run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain a `files` candidate with `dispatch_rule.py`
+- with the default OpenAI-compatible study settings, the baseline candidate can
+  run even without provider credentials
+- a real LLM edit requires the provider key requested by the method config and
+  enough budget to propose the edited candidate
+
 ## Solver-Code Writing
 
 Use this contract when the method should write a complete solver wrapper:
@@ -77,6 +86,13 @@ Run the baseline first:
 uv run optpilot validate catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
+
+Expected result:
+
+- the run should complete one trial with `failure_count: 0`
+- `candidates.jsonl` should contain a `files` candidate with `solver.py`
+- evaluator failures usually mean the generated solver returned an infeasible
+  or malformed schedule
 
 ## What The Method Can See
 

@@ -53,16 +53,32 @@ objective:
   direction: minimize
 ```
 
+For each case:
+
+```text
+normalized_makespan = makespan / reference bound
+```
+
+The evaluator reports numeric metrics as the arithmetic mean across the cases
+listed in `evaluator.settings.cases`. Lower `normalized_makespan` is better.
+
+![Compact Gantt chart for the ft06_small baseline schedule](assets/job-shop-schedule-example.svg)
+
+The figure is generated from the baseline evaluator output for one tutorial
+case. The docs use it only as a visual cue: the actual run evidence is written
+under each run's `trials/<trial-id>/attempt-1/` directory.
+
 ## Job-Shop Contract Matrix
 
-The same environment implementation has four reusable config variants. Each one
-keeps the same job-shop problem and metrics, but exposes a different candidate
-contract so different method families can connect cleanly.
+The same environment implementation has reusable config variants. They keep the
+same job-shop problem and metrics, but expose different candidate contracts so
+different method families can connect cleanly.
 
 | Environment config | Candidate contract | Method examples |
 | --- | --- | --- |
 | `environment_rule_parameters.yaml` | weighted dispatch-rule `parameters` | fixed parameter baseline, tune-dispatch-weights, schema-general parameter methods |
-| `environment_schedule_solution.yaml` | `parameters.spec.solutions` keyed by validation case id | JobShopLib dispatching, simulated annealing, OR-Tools CP-SAT, Stable-Baselines rollout |
+| `environment_schedule_solution.yaml` | `parameters.spec.solutions` keyed by validation case id | JobShopLib dispatching, simulated annealing, OR-Tools CP-SAT |
+| `environment_schedule_solution_rl.yaml` | same schedule-solution candidate, plus RL training references | Stable-Baselines training and rollout |
 | `environment_dispatch_rule.yaml` | `files` containing `dispatch_rule.py` | baseline file copy, OpenAI file editor, method packages that write priority rules |
 | `environment_solver_code.yaml` | `files` containing `solver.py` | solver-code writers |
 
@@ -71,16 +87,19 @@ flowchart TB
   Problem["Same validation cases\nsame metrics\nsame evaluator package"]
   P["Parameters\nweighted dispatch rule"]
   S["Parameters\nsolutions by case id"]
+  R["Parameters\nsolutions + RL context"]
   D["Files\ndispatch_rule.py"]
   C["Files\nsolver.py"]
 
   Problem --> P
   Problem --> S
+  Problem --> R
   Problem --> D
   Problem --> C
 
   P --> M1["fixed-rule-parameters baseline\ntune-dispatch-weights optimizer\nschema-general parameter methods"]
-  S --> M2["JobShopLib dispatching\nsimulated annealing\nOR-Tools\nRL rollout"]
+  S --> M2["JobShopLib dispatching\nsimulated annealing\nOR-Tools"]
+  R --> M5["Stable-Baselines\ntraining + rollout"]
   D --> M3["baseline file copy\nOpenAI file editor\nmethod packages"]
   C --> M4["solver-code writers"]
 ```
@@ -101,7 +120,9 @@ proposal time:
 - `environment_rule_parameters.yaml` exposes the parameter schema through the
   compiled candidate context and the validation cases through
   `methodContext.references`.
-- `environment_schedule_solution.yaml` exposes validation cases, RL training
+- `environment_schedule_solution.yaml` exposes validation cases through
+  `methodContext.references`.
+- `environment_schedule_solution_rl.yaml` exposes validation cases, RL training
   cases, and the RL adapter through `methodContext.references`.
 - `environment_dispatch_rule.yaml` and `environment_solver_code.yaml` expose
   prompt instructions through `methodContext.instructions` and validation cases
@@ -121,12 +142,19 @@ allowed context, but they do not own the environment inputs.
 | `constraint_programming` | `ORToolsSolver` for CP-SAT based job-shop solving. | Turnkey `job-shop-lib-ortools-cpsat` method emits schedule-solution candidates. |
 | `reinforcement_learning` | Gymnasium-style single-instance and multi-instance graph environments, reward observers, and rollout utilities. | Runnable Stable-Baselines3 method emits schedule-solution candidates. |
 
-The environment does not import JobShopLib and does not know which of these produced a schedule. JobShopLib imports live in `catalog/example_package/methods/...`, and each wrapper translates the JobShopLib schedule into the neutral `solutions` candidate expected by `environment_schedule_solution.yaml`.
+The environment does not import JobShopLib and does not know which of these
+produced a schedule. JobShopLib imports live in
+`catalog/example_package/methods/...`, and each wrapper translates the
+JobShopLib schedule into the neutral `solutions` candidate expected by the
+schedule-solution environment config it targets.
 
 ## Connect Another Schedule Method
 
 Use `environment_schedule_solution.yaml` when the method can produce a complete
-schedule. The method wrapper should:
+schedule from validation-case references alone. Use
+`environment_schedule_solution_rl.yaml` when the method also needs
+environment-owned RL training cases and the Gymnasium adapter. The method
+wrapper should:
 
 1. read job-shop case references from `methodContext.references`
 2. convert each case payload into the solver's preferred representation
@@ -185,8 +213,10 @@ candidate:
 The evaluator converts these weights into a priority dispatching rule. The
 fixed-rule baseline emits one parameter setting. The `tune-dispatch-weights`
 method reads the same schema from the candidate context, proposes several
-bounded settings, observes the returned metrics through the normal batch
-protocol, and keeps the environment unchanged.
+bounded settings from a deterministic grid, and keeps the environment
+unchanged. It is intentionally simple: the improvement comes from evaluating
+multiple valid parameter candidates through OptPilot, not from a hidden solver
+inside the method.
 
 ## Schedule-Solution Contract
 
@@ -206,7 +236,8 @@ candidate:
 
 For `parameters` candidates, `schema` is a map from parameter name to parameter definition. Here `solutions` is the single top-level parameter. Its value is an object that contains one schedule per validation case. Other environments might define different top-level parameters such as `rule`, `weights`, or `solver_settings`; this environment chooses `solutions` because a schedule-producing method submits a bundle of finished schedules.
 
-Candidate `spec` payload fragment produced by a schedule-solving method:
+Candidate proposal `spec` payload fragment produced by a schedule-solving
+method:
 
 ```yaml
 solutions:
@@ -234,6 +265,10 @@ solutions:
 ```
 
 The keys `ft06_small`, `la01_tiny`, and `ft06_standard` come from the environment config's case ids. The environment also exposes those case files to methods through `methodContext.references`, so a solver method can solve the exact benchmark set used by the evaluator.
+
+During evaluation, OptPilot passes the proposal `spec` into the evaluator as
+candidate runtime data. For this environment, the evaluator reads the
+top-level `solutions` object from that runtime data.
 
 This contract is suitable for any method that produces finished schedules: JobShopLib, OR-Tools, Gurobi, a trained RL policy, or an internal company solver. The environment only validates and scores schedules. It does not know which method or library produced them.
 

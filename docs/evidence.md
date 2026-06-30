@@ -17,11 +17,28 @@ OptPilot records evidence
 
 The run directory shows what actually happened: which candidates were proposed, how they were materialized, which trials succeeded or failed, which metrics were returned, and where evaluator output files were written.
 
+```mermaid
+flowchart LR
+  Method["method call"]
+  Candidate["candidate record\ncandidates.jsonl"]
+  Trial["trial workspace\ntrials/<trial>/attempt-1"]
+  Observation["observation\nobservations.jsonl"]
+  Summary["summary.json"]
+  EvidenceView["EvidenceView\nlater method calls"]
+
+  Method --> Candidate
+  Candidate --> Trial
+  Trial --> Observation
+  Observation --> Summary
+  Observation --> EvidenceView
+  Candidate --> EvidenceView
+```
+
 ## Run Directory
 
 By default, runs are written to `runs/` under the current workspace. Studio uses this workspace-level run root, and direct CLI runs do the same unless you override it with `--output-root` or `evidence.outputDir`. Catalog packages should stay focused on authored methods, environments, resources, and studies; generated run evidence is user-local runtime data.
 
-Common files:
+Common files written by the local evidence store:
 
 | File | Meaning |
 | --- | --- |
@@ -37,9 +54,30 @@ Common files:
 | `run_policy.json` | Budget, retry, parallelism, and timeout policy. |
 | `run_lineage.json` | Resume and branch lineage metadata. |
 
-The exact set can vary by evidence level and by which parts of the runtime are used.
+The exact set can vary by runtime path and by which events, method calls,
+output files, and records a run actually produces. `evidence.level` is compiled
+into the run policy and kept in the audit trail; the common JSON and JSONL files
+above are still written by normal local runs.
 
 A typical local run looks like:
+
+```mermaid
+flowchart TB
+  Summary["summary.json\nbest metric + status"]
+  Observations["observations.jsonl\ntrial metrics"]
+  Candidates["candidates.jsonl\ncandidate manifests"]
+  Calls["method_calls.jsonl\nproposal requests + responses"]
+  Trial["trials/<trial>/attempt-1/\nmaterialized candidate + evaluator outputs"]
+  Outputs["schedule_*.json\njob_shop_metrics*.json\nlogs or artifacts"]
+  EvidenceFiles["evidence_files/\noptional copied outputs"]
+
+  Calls --> Candidates
+  Candidates --> Trial
+  Trial --> Outputs
+  Trial --> Observations
+  Observations --> Summary
+  Outputs -. "when copied" .-> EvidenceFiles
+```
 
 ```text
 runs/my-study-2026-06-20T.../

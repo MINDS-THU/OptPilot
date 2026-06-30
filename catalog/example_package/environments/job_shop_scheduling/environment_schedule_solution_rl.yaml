@@ -1,8 +1,8 @@
 apiVersion: optpilot.io/v1
 config: environment
-id: job-shop-schedule-solution
-description: Evaluate complete job-shop schedules produced by external solvers or policies.
-tags: [job-shop, scheduling, parameters, schedule-solution, tutorial]
+id: job-shop-schedule-solution-rl
+description: Evaluate complete job-shop schedules and expose RL training context to compatible methods.
+tags: [job-shop, scheduling, parameters, schedule-solution, reinforcement-learning, tutorial]
 
 evaluator:
   python: evaluator:evaluate
@@ -41,6 +41,18 @@ methodContext:
       path: cases/ft06_standard.yaml
       type: job_shop_case
       description: Larger validation case used by the schedule-solution evaluator.
+    - name: train_tiny_a
+      path: training_cases/train_tiny_a.yaml
+      type: job_shop_training_case
+      description: Training case for RL policy learning.
+    - name: train_tiny_b
+      path: training_cases/train_tiny_b.yaml
+      type: job_shop_training_case
+      description: Training case for RL policy learning.
+    - name: rl_env_adapter
+      path: rl_env_adapter.py
+      type: python_module
+      description: Environment-owned Gymnasium adapter for job-shop RL methods.
 
 metrics:
   source: return
@@ -53,3 +65,5 @@ outputFiles:
 capabilities:
   - id: schedule-solution-candidate
     description: Accepts complete schedule solutions keyed by validation case id.
+  - id: job-shop-rl-training-context
+    description: Provides training cases and a Gymnasium adapter for RL methods.

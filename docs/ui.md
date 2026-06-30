@@ -31,11 +31,32 @@ uv run optpilot ui --open-browser
 The default URL is usually:
 
 ```text
-http://127.0.0.1:8866/
+http://127.0.0.1:8765/
 ```
 
 Studio scans packages under `catalog/` by default. The bundled tutorial package
 is `catalog/example_package/`.
+
+## First 10 Minutes In Studio
+
+Start with this path:
+
+1. Open **Catalog** and inspect the bundled job-shop environments and methods.
+2. Open **Studies** and select `job_shop_rule_parameters_baseline.yaml`.
+3. Inspect the environment, method, and study forms.
+4. Launch the dependency-free baseline study.
+5. Open **Runs** and watch the metric, trials, candidates, events, runtime logs,
+   and files update.
+6. Open the run as a workspace when you want to inspect evidence files in the
+   embedded editor.
+7. Use **Create Editable Copy and Install** when you want to modify package
+   source without changing catalog source.
+8. Use **Settings** to configure assistant runtime and Studio-managed
+   environment variables.
+
+![Studio catalog workflow](assets/studio-catalog.png)
+
+_Captured from the current Studio source checkout with `catalog/example_package/` loaded._
 
 ## Main Views
 

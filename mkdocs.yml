@@ -63,17 +63,18 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - Getting Started:
+      - First Job-Shop Run: getting-started.md
   - OptPilot Core:
       - Core Model: concepts.md
       - Candidate Contracts: candidate-contracts.md
       - Methods: methods.md
       - Packages and Catalogs: catalog.md
       - Configuration Reference: configuration.md
-      - How A Run Works: how-it-works.md
+      - How a Run Works: how-it-works.md
       - Evidence: evidence.md
   - Job-Shop Tutorial:
-      - Tutorial Package: examples.md
-      - First Run: getting-started.md
+      - Tutorial Map: examples.md
       - Job-Shop Environment: job-shop-environment.md
       - Dispatching Rule Methods: dispatching-rule-methods.md
       - Simulated Annealing Methods: simulated-annealing-methods.md
@@ -81,10 +82,10 @@ nav:
       - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
   - OptPilot Studio:
-      - Studio Overview: ui.md
+      - OptPilot Studio: ui.md
       - Workspace Management: studio-workspaces.md
       - OptPilot Assistant: assistant.md
-  - Development: development.md
+  - Contributor Guide: development.md
 
 extra:
   generator: false

@@ -15,6 +15,7 @@ flowchart LR
   Method["Method\naccepts: what it can target"]
   Study["Study\nbinds one environment + one method"]
   Candidate["Candidate\nparameters | files | opaque"]
+  Runner["OptPilot Runner\nvalidate + materialize"]
   Eval["Evaluator\nreturns metrics + artifacts"]
   Evidence["EvidenceView\nprior results for next proposals"]
 
@@ -22,7 +23,8 @@ flowchart LR
   Method --> Study
   Study --> Method
   Method --> Candidate
-  Candidate --> Eval
+  Candidate --> Runner
+  Runner --> Eval
   Eval --> Evidence
   Evidence --> Method
 ```

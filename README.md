@@ -84,8 +84,8 @@ optpilot validate path/to/package/studies/my_study.yaml
 optpilot run path/to/package/studies/my_study.yaml
 ```
 
-Use a source checkout when you want the full local Studio, bundled tutorial
-package, docs, and contributor workflow:
+Use a source checkout when you want the bundled tutorial package, full local
+Studio, docs, and contributor workflow:
 
 ```bash
 git clone https://github.com/MINDS-THU/OptPilot.git
@@ -94,7 +94,7 @@ uv sync --all-packages --group examples --group docs
 uv run optpilot --help
 ```
 
-## Quickstart
+## First Run
 
 Start with the job-shop parameter baseline from a source checkout. It is the
 recommended first run, works after the full source sync above, and does not
@@ -114,11 +114,13 @@ Validate a config without running it:
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-Open Studio:
+After the first run succeeds, open Studio:
 
 ```bash
 uv run optpilot ui --open-browser
 ```
+
+![OptPilot Studio catalog and assistant](docs/assets/studio-assistant-catalog.png)
 
 Studio scans packages under `catalog/` by default. Stop the local server with
 `Ctrl-C` in the terminal when you are done.
@@ -202,15 +204,15 @@ runtime:
 ## Documentation
 
 - [Installation](docs/installation.md)
+- [First Job-Shop Run](docs/getting-started.md)
 - [OptPilot Core](docs/concepts.md)
 - [Candidate Contracts](docs/candidate-contracts.md)
 - [Methods](docs/methods.md)
 - [Packages and Catalogs](docs/catalog.md)
 - [Configuration Reference](docs/configuration.md)
-- [How A Run Works](docs/how-it-works.md)
+- [How a Run Works](docs/how-it-works.md)
 - [Evidence](docs/evidence.md)
-- [Job-Shop Tutorial](docs/examples.md)
-- [First Job-Shop Run](docs/getting-started.md)
+- [Job-Shop Tutorial Map](docs/examples.md)
 - [Job-Shop Environment](docs/job-shop-environment.md)
 - [OptPilot Studio](docs/ui.md)
 - [Workspace Management](docs/studio-workspaces.md)

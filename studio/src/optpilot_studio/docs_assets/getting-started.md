@@ -1,9 +1,14 @@
+---
+title: First Job-Shop Run
+description: Run the smallest bundled job-shop study and inspect the evidence it creates.
+---
+
 # First Job-Shop Run
 
 This page walks through the smallest runnable study in the bundled job-shop
 tutorial package.
 
-Before starting, follow the **Full OptPilot Studio** source-checkout install in
+Before starting, follow the **Source Checkout: Tutorial and Studio** install in
 [Installation](installation.md). The PyPI core package does not ship the
 bundled `catalog/example_package/`.
 
@@ -46,8 +51,56 @@ The command prints a JSON summary. A successful first run should show:
 - a non-empty `run_dir`
 - `best_metric` and `best_trial_id`
 
+Example excerpt:
+
+```json
+{
+  "completed_trials": 1,
+  "failure_count": 0,
+  "best_metric": 1.2009657009657009,
+  "status": "completed"
+}
+```
+
+Run ids, timestamps, trial ids, and exact output paths will differ on your
+machine. The key first-run checks are one completed trial and zero failures.
+
 Run evidence is written under `runs/` unless you pass `--output-root` or set
 `evidence.outputDir` in the study.
+
+If you want copy-pasteable inspection commands, save the command output first:
+
+```bash
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  | tee /tmp/optpilot-first-run.json
+```
+
+Then extract the run directory and inspect the summary:
+
+```bash
+export RUN_DIR=$(uv run python - <<'PY'
+import json
+from pathlib import Path
+print(json.loads(Path("/tmp/optpilot-first-run.json").read_text())["run_dir"])
+PY
+)
+
+uv run python -m json.tool "$RUN_DIR/summary.json"
+```
+
+Inspect the trial observation records:
+
+```bash
+uv run python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+run_dir = Path(os.environ["RUN_DIR"])
+for line in (run_dir / "observations.jsonl").read_text().splitlines():
+    print(json.dumps(json.loads(line), indent=2))
+PY
+```
 
 ## Environment Config
 
@@ -129,6 +182,14 @@ Important details:
 - `metrics.keys` names the metrics that a study may choose as objective or
   secondary metrics.
 
+In these tutorial studies, `normalized_makespan` is the main score:
+
+```text
+normalized_makespan = makespan / reference bound
+```
+
+The evaluator computes it per case and reports the average. Lower is better.
+
 ## Method Config
 
 The baseline method emits one fixed candidate:
@@ -204,18 +265,42 @@ direction tells OptPilot how to rank trials and write the run summary.
 
 ## Inspect The Run
 
-Useful files in the run directory:
+After the first run, inspect these files first:
 
 | File | What it tells you |
 | --- | --- |
 | `summary.json` | Best metric, best trial, failure count, and run status. |
+| `observations.jsonl` | Trial outcomes and metric values. |
+| `trials/<trial-id>/attempt-1/job_shop_metrics.json` | Per-case job-shop metrics written by the evaluator. |
+
+Then inspect the supporting evidence:
+
+| File | What it tells you |
+| --- | --- |
 | `study_spec.json` | Compiled environment, method, objective, runtime, and execution policy. |
 | `candidates.jsonl` | Candidate validation and materialization records. |
-| `observations.jsonl` | Trial outcomes and metric values. |
 | `trials.jsonl` | Terminal trial records and execution metadata. |
 | `method_calls.jsonl` | Method requests, responses, and errors. |
 
 See [Evidence](evidence.md) for the full file layout.
+
+## Troubleshooting
+
+If `failure_count` is greater than zero, open `summary.json` first, then inspect
+`trials.jsonl` and `method_calls.jsonl` for the failing trial or method call.
+
+If the command cannot find `catalog/example_package/`, make sure you are in a
+source checkout of the repository. The PyPI core package does not include the
+bundled tutorial package.
+
+If an optional-dependency study fails to import JobShopLib, OR-Tools,
+Stable-Baselines3, or PyTorch, run:
+
+```bash
+uv sync --all-packages --group examples
+```
+
+The first baseline on this page should not need those optional dependencies.
 
 ## Next Steps
 
