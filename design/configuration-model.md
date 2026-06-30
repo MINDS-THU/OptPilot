@@ -1,17 +1,10 @@
 # Configuration Model
 
-This document defines the next public configuration model for OptPilot. It is
-intentionally smaller than everything OptPilot may support in the future. A
-field belongs in this model only when we are willing to implement schema
-validation, runner behavior, Studio behavior when relevant, and at least one
-runnable example.
-
-Status: the initial implementation is in place. The public JSON schemas,
-compiler, Studio-generated study drafts, bundled example-package configs,
-per-run source copies, setup reuse, process/container runtime execution, retry
-attempt folders, and package-qualified catalog ids have been implemented. The
-implementation checklist at the end of this document is the current source of
-truth for remaining follow-up work.
+This document defines the current public configuration model for OptPilot. It
+is intentionally smaller than everything OptPilot may support in the future. A
+field belongs in this model only when OptPilot validates it, gives it runner
+behavior, exposes it in Studio when relevant, and carries at least one runnable
+example.
 
 The goal is clarity:
 
@@ -141,7 +134,7 @@ runs/
     evidence_files/              # copied retained evaluator outputs, when enabled
     candidates.jsonl             # candidate specs proposed by the method
     observations.jsonl           # metric observations returned to the method
-    trials.jsonl                 # trial lifecycle and status records
+    trials.jsonl                 # terminal trial records and execution metadata
     method_calls.jsonl           # method proposal and observe call records
     scheduler_events.jsonl       # scheduler decisions and lifecycle events
     study_spec.json              # compiled study spec used for the run
@@ -157,22 +150,22 @@ for file-based candidates. A candidate may be tried in one or more trials later,
 so candidate records and trial folders are intentionally separate.
 
 Retries do not overwrite prior evaluator work. Each retry uses a new
-`attempt-*` folder under the same trial folder and appends its own lifecycle
-record to `trials.jsonl`.
+`attempt-*` folder under the same parent trial folder. Scheduling decisions and
+retry transitions are recorded in `scheduler_events.jsonl`.
 
 `observations.jsonl` contains the results returned to the method: status,
 metric values, constraint results, output-file metadata, and provenance.
 
-`trials.jsonl` contains trial lifecycle records: queued, running, succeeded,
-failed, timed out, retried, and similar scheduler-visible state.
+`trials.jsonl` contains terminal trial records with status, candidate id,
+attempt index, workspace path, sandbox metadata, and execution metadata.
 
 `summary.json` contains the final run summary. It is JSON, not JSONL, because it
 is rewritten once at the end rather than appended during the run.
 
 ## Execution Lifecycle
 
-This section describes the target execution behavior. Studio and command-line
-execution should use the same source-copy rule.
+This section describes the execution behavior. Studio and command-line
+execution use the same source-copy rule.
 
 Catalog actions:
 
@@ -437,7 +430,7 @@ Optional top-level fields:
 | --- | --- | --- |
 | `description` | String | Human-readable description. |
 | `tags` | Array of strings | Search and grouping tags. |
-| `runtime` | Runtime object | Environment setup and execution runtime. |
+| `runtime` | Runtime object | Environment setup and component runtime. |
 | `interface` | Interface object | Optional GUI for the environment. |
 | `trialWorkspace` | Array of copy entries | Files copied into each trial workspace before candidate materialization. |
 | `methodContext` | Object | Instructions and references visible to compatible methods. |
@@ -452,7 +445,7 @@ Allowed `evaluator` fields:
 | `python` | One of `python`, `command`, `adapter` | `pythonImport` | Python callable evaluator. |
 | `command` | One of `python`, `command`, `adapter` | `command` | External evaluator command. |
 | `adapter` | One of `python`, `command`, `adapter` | `pythonImport` | Python adapter class. |
-| `timeoutSeconds` | No | Integer, minimum `1` | Evaluator timeout. Defaults to study `execution.timeoutSeconds` when omitted. |
+| `timeoutSeconds` | No | Integer, minimum `1` | Evaluator timeout. Defaults to `600` when omitted. Study `execution.timeoutSeconds` is the trial-level execution timeout policy. |
 | `pythonPath` | No | Array of strings | Import paths resolved against the copied environment source. |
 | `cwd` | No | String | Evaluator working directory, usually inside the trial workspace. |
 | `env` | No | Object of string values | Narrow evaluator-process overrides. Prefer `runtime.env` for component-level variables. |
@@ -648,7 +641,7 @@ Optional top-level fields:
 | --- | --- | --- |
 | `description` | String | Human-readable description. |
 | `tags` | Array of strings | Search and grouping tags. |
-| `runtime` | Runtime object | Method setup and execution runtime. |
+| `runtime` | Runtime object | Method setup and component runtime. |
 | `interface` | Interface object | Optional GUI for the method. |
 | `settings` | Object | Method-specific settings. |
 
@@ -974,11 +967,9 @@ interface:
   readyTimeoutSeconds: 90
 ```
 
-## Target Method Example
+## Complete Method Example
 
-This example shows the intended public model after the implementation checklist
-is complete. It may not validate against the current schemas until method
-workers and component setup land.
+This example shows the public method model.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -1035,11 +1026,9 @@ interface:
   readyTimeoutSeconds: 90
 ```
 
-## Target Study Example
+## Complete Study Example
 
-This example shows the intended public model after the implementation checklist
-is complete. Existing studies may still include legacy execution fields until
-the catalog is migrated.
+This example shows the public study model.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -1125,57 +1114,7 @@ interface:
   readyTimeoutSeconds: 420
 ```
 
-## Required Implementation Changes
-
-Before publishing this model as stable, implementation must match it:
-
-- Done: update JSON schemas so every field above is accepted and every excluded
-  field is rejected.
-- Done: replace public `runtime.sandbox: host` with
-  `runtime.sandbox: process`.
-- Done: add `runtime.setup` for environment and method configs.
-- Done: add `interface.setup` and `interface.envFromHost` for launchable
-  interfaces.
-- Done: remove public `execution.backend`, `execution.runtime`,
-  `execution.resources`, `method.resourceProfile`, and public
-  `method.produces`.
-- Done: validate source-specific metric and record requirements with schema
-  discriminators or equivalent semantic validation.
-- Done: map public `records[].database` to the adapter path used for SQLite
-  record extraction.
-- Done: wire `execution.retry.maxRetries` to scheduler attempts as
-  `maxAttempts = maxRetries + 1`.
-- Done: resolve relative `evidence.outputDir` against the launch working
-  directory or explicit output root, not the catalog study file.
-- Done: enforce the runtime schema split: process runtimes may use
-  `runtime.setup`; container runtimes use images/builds and container-only
-  network policy.
-- Done: ensure Studio's editable-copy and interface-launch paths can run
-  declared setup on editable copies.
-- Done: update Studio study YAML generation so it no longer emits public
-  `execution.backend` or `execution.runtime` fields.
-- Done: migrate the bundled example-package configs away from public
-  `execution.backend` and public `method.produces`.
-- Done: copy environment and method source into each run directory before
-  execution.
-- Done: run setup inside copied source and persist setup status under
-  `.optpilot/setup-status.json` in that copied source for study launches.
-- Done: rebase component-relative executable paths after source copy, while
-  keeping opaque settings such as `evaluator.settings` under component control.
-- Done: use setup fingerprints and `.optpilot/setup-status.json` to decide when
-  setup can be reused instead of rerun.
-- Done: store retry attempt artifacts under `trials/<trial>/attempt-*` and never
-  overwrite earlier attempts.
-- Done: run Python methods through a method worker process or container instead
-  of importing them directly into the main OptPilot runner.
-- Done: run environment evaluation through the declared environment runtime.
-- Done: implement the documented `batch` and `session` method worker protocols.
-- Done: enforce package-qualified catalog ids and reject duplicate component ids
-  inside one package.
-- Done: migrate older docs away from package-qualified imports,
-  `runtime.sandbox: host`, and public `execution.backend`.
-
-## Design Checklist
+## Package Checklist
 
 Before publishing a package, check:
 

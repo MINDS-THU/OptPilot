@@ -14,6 +14,8 @@ evaluator:
         path: cases/ft06_small.yaml
       - id: la01_tiny
         path: cases/la01_tiny.yaml
+      - id: ft06_standard
+        path: cases/ft06_standard.yaml
 
 trialWorkspace:
   - from: template_solver
@@ -35,6 +37,19 @@ candidate:
 methodContext:
   instructions:
     - prompts/solver_code_system_prompt.md
+  references:
+    - name: ft06_small
+      path: cases/ft06_small.yaml
+      type: job_shop_case
+      description: Validation case used by the solver-code evaluator.
+    - name: la01_tiny
+      path: cases/la01_tiny.yaml
+      type: job_shop_case
+      description: Validation case used by the solver-code evaluator.
+    - name: ft06_standard
+      path: cases/ft06_standard.yaml
+      type: job_shop_case
+      description: Larger validation case used by the solver-code evaluator.
 
 metrics:
   source: return

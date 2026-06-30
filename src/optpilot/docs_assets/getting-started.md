@@ -95,6 +95,7 @@ tags: [job-shop, scheduling, parameters, tutorial]
 
 evaluator:
   python: evaluator:evaluate
+  pythonPath: [.]
   timeoutSeconds: 60
   settings:
     cases:
@@ -102,6 +103,8 @@ evaluator:
         path: cases/ft06_small.yaml
       - id: la01_tiny
         path: cases/la01_tiny.yaml
+      - id: ft06_standard
+        path: cases/ft06_standard.yaml
 
 candidate:
   format: parameters
@@ -133,6 +136,21 @@ candidate:
         default: -0.1
         description: Weight for the selected job ready time.
 
+methodContext:
+  references:
+    - name: ft06_small
+      path: cases/ft06_small.yaml
+      type: job_shop_case
+      description: Validation case used by the parameter evaluator.
+    - name: la01_tiny
+      path: cases/la01_tiny.yaml
+      type: job_shop_case
+      description: Validation case used by the parameter evaluator.
+    - name: ft06_standard
+      path: cases/ft06_standard.yaml
+      type: job_shop_case
+      description: Larger validation case used by the parameter evaluator.
+
 metrics:
   source: return
   keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
@@ -148,7 +166,7 @@ Parameter schemas can also include cross-parameter constraints, written as a sma
 
 The evaluator converts the parameter candidate into a dispatching rule, simulates a schedule, validates feasibility, and returns metrics. The environment advertises the metric keys it expects from that evaluator, including `normalized_makespan`.
 
-The `evaluator.settings` block is normal environment-owned input to the evaluator. In this example it lists two validation case files. OptPilot passes that object to the Python evaluator as `context["settings"]`; the evaluator decides how to load the files and aggregate results.
+The `evaluator.settings` block is normal environment-owned input to the evaluator. In this example it lists three validation case files. OptPilot passes that object to the Python evaluator as `context["settings"]`; the evaluator decides how to load the files and aggregate results. The same files are also exposed through `methodContext.references` so compatible methods can inspect the benchmark context before proposing candidates.
 
 ## Method Config
 
@@ -238,7 +256,7 @@ Methods that need to read the same case files can get them through `methodContex
 
 Study paths are resolved from the study file. Environment paths are resolved from the environment file. Method paths are resolved from the method file.
 
-When you run this study, OptPilot compiles the three public YAML files into `study_spec.json` inside the run directory. That compiled spec is evidence of the exact environment, method, objective, evaluator settings, and runtime that were executed.
+When you run this study, OptPilot compiles the three public YAML files into `study_spec.json` inside the run directory. That compiled spec is evidence of the exact environment, method, objective, evaluator settings, component runtime, and study execution policy that were used.
 
 ## Try File Candidates
 
@@ -267,7 +285,7 @@ Important files:
 | `summary.json` | Best metric, best trial, failure count, run directory. |
 | `study_spec.json` | Compiled run spec generated from the three YAML files. |
 | `observations.jsonl` | Trial statuses and metric values. |
-| `trials.jsonl` | Trial inputs and backend metadata. |
+| `trials.jsonl` | Terminal trial records and execution metadata. |
 | `candidates.jsonl` | Candidate validation and materialization details. |
 | `method_calls.jsonl` | Method requests and responses. |
 

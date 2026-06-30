@@ -21,8 +21,16 @@ Useful commands:
 
 ```bash
 uv pip install -U openhands-sdk openhands-tools openhands-workspace openhands-agent-server
-OPENHANDS_SUPPRESS_BANNER=1 uv run agent-server --host 127.0.0.1 --port 8781
+mkdir -p .optpilot-ui/openhands-agent-server
+(
+  cd .optpilot-ui/openhands-agent-server
+  OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. agent-server --host 127.0.0.1 --port 8781
+)
 ```
+
+Run OpenHands from the `.optpilot-ui/openhands-agent-server` directory so its
+conversation/tool-schema cache stays local to Studio and can be refreshed
+without touching project source files.
 
 OptPilot Studio settings should point to `http://127.0.0.1:8781` with session
 endpoint `/api/conversations`.
@@ -34,7 +42,11 @@ For an assistant-enabled GUI session, keep these services running:
 1. OpenHands agent server on port `8781`:
 
    ```bash
-   OPENHANDS_SUPPRESS_BANNER=1 uv run agent-server --host 127.0.0.1 --port 8781
+   mkdir -p .optpilot-ui/openhands-agent-server
+   (
+     cd .optpilot-ui/openhands-agent-server
+     OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. agent-server --host 127.0.0.1 --port 8781
+   )
    ```
 
 2. OptPilot Studio on port `8866`:

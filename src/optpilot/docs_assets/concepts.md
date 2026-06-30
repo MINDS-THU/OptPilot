@@ -5,138 +5,214 @@ description: Core OptPilot concepts and boundaries.
 
 # Concepts
 
-<!-- This page gives the mental model behind OptPilot. For a runnable first example, use [Getting Started](getting-started.md). -->
+Use this page for the mental model behind OptPilot. For a runnable first
+example, start with [Getting Started](getting-started.md). For every YAML field,
+use [Configuration](configuration.md).
 
-OptPilot has one optimization abstraction:
+OptPilot is built around one loop:
 
 ```text
-method proposes candidate -> environment evaluates candidate -> OptPilot records evidence
+method proposes a candidate
+OptPilot validates and materializes it
+environment evaluates it
+OptPilot records evidence
+method can use the evidence in the next proposal
 ```
 
-The important design choice is that methods and environments remain user-owned. OptPilot owns the boundary between them.
+The method and the environment stay user-owned. OptPilot owns the contract,
+orchestration, workspace preparation, and evidence around them.
 
-## Environment
+## Three Things You Author
 
-An environment is anything that can evaluate a candidate and produce metrics. It may be:
+Most OptPilot projects start with three public config files.
+
+| Config role | Main job | Reusable? |
+| --- | --- | --- |
+| `environment` | Define what can be evaluated and how metrics are returned. | Yes |
+| `method` | Define how candidates are proposed and which environment contracts the method can use. | Yes |
+| `study` | Bind one environment to one method for a concrete run. | No, it is a run plan |
+
+Environment and method configs are reusable components. Study configs are
+concrete decisions: which two components to pair, which metric to optimize,
+how many trials to run, and how evidence should be stored.
+
+### Environment
+
+An environment is anything that can evaluate a candidate and produce metrics.
+It may wrap:
 
 - a Python evaluator
 - a command-line simulator
 - a dataset benchmark
-- a custom adapter around a service or external runtime
+- a service or external runtime
+- an existing codebase with a small adapter
 
-The environment config declares the candidate contract, evaluator entrypoint, metric sources, trial workspace seed files, output files, record streams, and optional method-visible context.
+The environment config declares:
 
-## Method
+- the accepted candidate contract
+- the evaluator entrypoint
+- metric names and optional record streams
+- files copied into trial workspaces
+- output files to collect
+- optional context that methods may read
+
+The environment should not care which method produced a candidate. It should
+validate and score candidates according to its own contract.
+
+### Method
 
 A method proposes candidates. It may be:
 
 - random search, Bayesian optimization, or a metaheuristic
-- an RL training loop or policy-improvement workflow
-- an LLM code editor or AlphaEvolve-style agent
-- an existing heuristic-search repository with its own internal loop
+- an RL training loop or policy rollout
+- an LLM code editor or agent workflow
+- a wrapper around an existing optimization repository
+- a small deterministic baseline
 
-OptPilot does not split methods into separate controller and engine concepts. A method is the user-owned optimization process, however simple or complex that process is.
+The method config declares the method entrypoint and the environment surface it
+can use. A method can be general, such as a parameter tuner that reads any
+parameter schema, or specific, such as a solver wrapper that always emits one
+known candidate shape.
 
-## Study
+### Study
 
-A study binds one environment config to one method config and chooses the run policy:
+A study is the place where reusable pieces become one run.
 
-- objective metric and direction
-- trial budget
-- execution backend and runtime
+The study chooses:
+
+- the environment config
+- the method config
+- the primary objective metric and whether lower or higher is better
+- budget and stopping policy
+- parallelism, timeout, and retry behavior
 - evidence level and reproducibility seed
 
-Environment and method configs should be reusable. Study configs should be concrete.
+The objective direction matters because OptPilot uses it to rank trial results,
+write summaries, and expose the current best result to methods. A method may
+also read the objective and use it while proposing candidates.
 
-## Evaluator Settings
+## The Candidate Contract
 
-Environment-specific inputs live in the environment config, under `evaluator.settings`.
+The candidate is the object that crosses from method to environment. This is
+the main boundary in OptPilot.
 
-```python
-evaluate(candidate_runtime, context)
+The environment declares what it can evaluate:
+
+```yaml
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 1.0
 ```
 
-The evaluator receives those settings through `context["settings"]`. For a job-shop environment, settings may list validation case files. For a simulator environment, settings may hold scenario parameters. For a data environment, settings may identify dataset splits, query files, or service options. In all cases, OptPilot stores and transports the settings; the environment evaluator interprets and validates them.
-
-If a method also needs read-only access to the same case files or background material, the environment can expose them through `methodContext.references`. If a reusable evaluator does not natively expose the input shape you want, wrap it with an adapter that maps `settings` to the evaluator's native arguments.
-
-## Candidate
-
-A candidate is what the method proposes and the environment evaluates.
-
-OptPilot supports three candidate formats:
-
-| Format | Use it for |
-| --- | --- |
-| `parameters` | JSON-like decisions: numeric parameters, discrete actions, schedules, simulator controls, BO search spaces, many RL action spaces. |
-| `files` | Generated or edited files: source code, policy scripts, config files, heuristic programs, data files. |
-| `opaque` | A custom payload convention understood by a matching method and environment. |
-
-The full candidate contract is more than the format. For example, a file-editing environment is defined by `format: files`, editable paths, materialization root, allow/deny rules, method context, and evaluator behavior.
-
-## Compatibility
-
-Method/environment compatibility is explicit:
-
-Method compatibility fragment:
+The method declares what it can target:
 
 ```yaml
 accepts:
-  formats: [files]
+  formats: [parameters]
   requires:
     context:
-      - candidate.files.editable
-      - methodContext.instructions
-    capabilities: []
+      - candidate.parameters.schema
 ```
 
-OptPilot checks that:
+OptPilot checks compatibility before the run and validates every submitted
+candidate before evaluation.
 
-- the environment candidate format is listed in `method.accepts.formats`
-- required context paths exist in the compiled environment candidate context
-- required capabilities are declared by the environment
+Candidate formats:
 
-This keeps compatibility tied to the actual contract instead of vague domain tags.
-
-## Authoring Versus Runtime
-
-Users author configs. OptPilot creates runtime folders.
-
-| User-authored concept | Runtime-created storage |
+| Format | Use it for |
 | --- | --- |
-| `candidate` says what a method must return. | Candidate store holds durable files for file candidates. |
-| `trialWorkspace` says what each trial starts with. | Trial workspace is created fresh for each trial. |
-| `methodContext` says which instructions and references are shown to the method. | Method workspace may hold per-call scratch files. |
-| `metrics`, `records`, and `outputFiles` say what to collect. | Evidence store records observations, metadata, and file references. |
+| `parameters` | JSON-like decisions: numeric parameters, discrete choices, schedules, simulator controls, search spaces, or action bundles. |
+| `files` | Generated or edited files: source code, policy scripts, config files, data files, or heuristic programs. |
+| `opaque` | A private payload convention shared by a matching method and environment. |
 
-This distinction keeps the public schema focused on user intent while still supporting retries, parallel trials, container runtimes, and evidence inspection.
+The format is only the top level. The full contract also includes schemas,
+editable file paths, materialization rules, required context, capabilities, and
+evaluator behavior. See [Candidate Contracts](candidate-contracts.md) for the
+detailed model.
 
-`methodContext.references` is the environment-authored place for method-readable background material: natural-language descriptions, data dictionaries, CSV files, SQLite databases, example traces, or other read-only files. Evaluation outputs created later are not placed back into `methodContext`; methods discover those through `EvidenceView.records(...)` and `EvidenceView.artifacts(...)`.
+## Where Information Belongs
 
-## Trial Workspace
+Most design confusion comes from putting information in the wrong place. Use
+this table as the default rule.
 
-`trialWorkspace` entries are copied once per trial before evaluation. They are for files the evaluator needs inside that trial workspace.
+| Information | Put it in | Why |
+| --- | --- | --- |
+| Evaluation inputs such as cases, scenarios, datasets, query specs, or simulator arguments | `environment.evaluator.settings` | The evaluator owns how those inputs are interpreted. |
+| What a method is allowed to submit | `environment.candidate` | The environment owns the accepted candidate shape. |
+| What environment context a method needs to read before proposing | `environment.methodContext` | The environment can expose read-only instructions and references without giving up evaluation ownership. |
+| Method knobs such as model name, search depth, temperature, seed, or internal solver settings | `method.settings` | The method owns its algorithm choices. |
+| Which metric matters for this run, how long to run, and how much evidence to keep | `study` | The study is the concrete run plan. |
+| Results created during a run | Evidence | Runtime outputs should be read through `EvidenceView`, not copied back into static config. |
 
-`trialWorkspace` is not:
+For Python evaluators, `evaluator.settings` is available as
+`context["settings"]`. OptPilot stores and transports those settings, but the
+evaluator decides their domain meaning.
 
-- a dependency manager
-- a permission boundary for what a method can read
-- a semantic classification of files
+If the method also needs read-only access to files listed in evaluator settings,
+expose them through `methodContext.references`. Keep method-owned prompts,
+models, solver parameters, and search knobs in `method.settings`.
 
-A copied directory may contain runnable source, fixtures, datasets, config templates, and support scripts at the same time. The evaluator and candidate materialization rules determine how those files are used.
+## What OptPilot Creates At Runtime
 
-Seed a complete source tree when evaluation intentionally runs workspace-local code after candidate edits are applied. Do not seed the full implementation when the evaluator uses an installed package, a prebuilt container image, an external service, or only parameter/action payloads.
+Users author configs and source code. OptPilot creates run-time storage.
+
+```text
+public YAML configs
+  -> compiled study_spec.json
+  -> method proposal request
+  -> candidate record or candidate files
+  -> trial workspace
+  -> evaluator result
+  -> evidence store
+```
+
+Important runtime storage:
+
+| Runtime storage | Purpose |
+| --- | --- |
+| Compiled spec | Exact environment, method, objective, and execution policy used for the run. |
+| Candidate store | Durable handoff area for method-produced candidates, especially generated files. |
+| Trial workspace | Fresh evaluation directory for one trial attempt. |
+| Method workspace | Scratch area for method calls, command requests, stdout, and stderr. |
+| Evidence store | Run history: observations, trials, candidates, method calls, events, artifacts, and summary. |
+
+`trialWorkspace` in an environment config says what should be copied into each
+trial workspace before evaluation. It is for evaluator input files and
+workspace-local source needed during evaluation. It is not a dependency manager
+or a general permission model.
 
 ## Evidence
 
-Each run records what happened:
+Evidence is the recorded history of a run. It lets users inspect what happened
+and lets iterative methods learn from previous trials without parsing arbitrary
+workspace files.
+
+Every run may record:
 
 - compiled `study_spec.json`
 - `summary.json`
-- observations and trials
+- observations and trial records
 - candidate records
 - method calls and method events
 - scheduler events
-- runtime policy and environment snapshot
+- output files and artifacts
+- run policy and environment snapshot
 
-Methods can inspect prior evidence through `EvidenceView`, so iterative methods can learn from earlier observations without scraping raw files.
+Methods can inspect prior results through `EvidenceView`. For the file layout
+and resume/branch behavior, see [Evidence](evidence.md).
+
+## What To Read Next
+
+- Read [Candidate Contracts](candidate-contracts.md) when designing the
+  method/environment boundary.
+- Read [Methods](methods.md) when writing a candidate-producing method.
+- Read [How A Run Works](how-it-works.md) when you need the runtime sequence.
+- Read [Configuration](configuration.md) when you need allowed fields and YAML
+  examples.
+- Read [Job-Shop Environment](job-shop-environment.md) for the main tutorial
+  example that uses one environment with several candidate contracts.

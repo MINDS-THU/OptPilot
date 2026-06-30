@@ -29,10 +29,14 @@ const state = {
   selectedComponentKey: null,
   componentFilter: "all",
   componentSearch: "",
+  componentConfigDrafts: {},
+  componentConfigOpenSections: {},
   planSearch: "",
   selectedPlanId: null,
   selectedRunId: null,
   selectedRun: null,
+  runsRefreshInFlight: false,
+  runDetailRequestSeq: 0,
   runStatusFilter: "all",
   activeRunTab: "overview",
   sessionTab: "terminal",
@@ -53,6 +57,8 @@ const state = {
   agentSettings: null,
   agentRuntimeStatus: null,
   settingsOpen: false,
+  settingsTab: "assistant",
+  environmentVariableDrafts: [],
   pendingWorkspaceCleanup: null,
 };
 
@@ -78,21 +84,31 @@ function storeValue(key, value) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+let appInitialized = false;
+
+function initializeApp() {
+  if (appInitialized) return;
+  appInitialized = true;
   cacheElements();
   bindEvents();
   loadAll();
   setInterval(loadRunsAndJobs, 3000);
   setInterval(syncActiveAgentSession, 5000);
   setInterval(refreshPlatformStatus, 6000);
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeApp);
+} else {
+  initializeApp();
+}
 
 function cacheElements() {
   for (const id of [
     "healthStatus",
     "sidebarCodeServer",
     "sidebarServiceStatus",
-    "assistantSettingsButton",
+    "studioSettingsButton",
     "pageTitle",
     "pageSubtitle",
     "refreshButton",
@@ -167,6 +183,10 @@ function cacheElements() {
     "openHandsApiKey",
     "openHandsClearApiKey",
     "openHandsStatus",
+    "environmentVariablesList",
+    "environmentVariableName",
+    "environmentVariableValue",
+    "environmentVariableAddButton",
     "assistantSkillsInput",
     "assistantMcpServersInput",
     "assistantMcpFilterRegex",
@@ -191,8 +211,16 @@ function bindEvents() {
   const on = (element, eventName, handler) => {
     if (element) element.addEventListener(eventName, handler);
   };
+  window.optpilotStudioOpenSettings = openSettings;
+  on(els.studioSettingsButton, "click", () => openSettings({ tab: "assistant" }));
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
+  });
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.settingsTab = button.dataset.settingsTab || "assistant";
+      renderSettingsModal();
+    });
   });
   document.querySelectorAll("[data-component-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -222,10 +250,22 @@ function bindEvents() {
     });
   });
   on(els.refreshButton, "click", loadAll);
-  on(els.assistantSettingsButton, "click", openSettings);
   on(els.settingsCloseButton, "click", closeSettings);
   on(els.settingsCancelButton, "click", closeSettings);
   on(els.settingsSaveButton, "click", saveSettings);
+  on(els.environmentVariableAddButton, "click", addEnvironmentVariableDraft);
+  on(els.environmentVariablesList, "click", (event) => {
+    const removeButton = event.target && event.target.closest && event.target.closest("[data-env-draft-remove]");
+    if (!removeButton) return;
+    state.environmentVariableDrafts = state.environmentVariableDrafts.filter((item) => item.name !== removeButton.dataset.envDraftRemove);
+    renderEnvironmentVariablesList();
+  });
+  on(els.environmentVariableValue, "keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addEnvironmentVariableDraft();
+    }
+  });
   on(els.settingsModal, "click", (event) => {
     if (event.target === els.settingsModal) closeSettings();
   });
@@ -373,31 +413,80 @@ async function loadAgentSessions() {
 }
 
 async function loadRunsAndJobs() {
+  if (state.runsRefreshInFlight) return;
+  state.runsRefreshInFlight = true;
   let runsPayload;
   let jobsPayload;
   try {
     [runsPayload, jobsPayload] = await Promise.all([getJson("/api/runs"), getJson("/api/jobs")]);
   } catch (error) {
+    state.runsRefreshInFlight = false;
     return;
   }
-  state.runs = runsPayload.runs || [];
-  state.jobs = jobsPayload.jobs || [];
-  if (state.pendingJobId) {
-    const job = state.jobs.find((item) => item.job_id === state.pendingJobId);
-    if (job && job.run_dir) {
-      const run = state.runs.find((item) => item.path === job.run_dir);
-      if (run) {
-        state.pendingJobId = null;
-        await loadRunDetail(run.id, { keepTab: true });
-        setView("runs");
+  try {
+    state.runs = runsPayload.runs || [];
+    state.jobs = jobsPayload.jobs || [];
+    if (state.pendingJobId) {
+      const job = state.jobs.find((item) => item.job_id === state.pendingJobId);
+      if (job && job.run_dir) {
+        const run = state.runs.find((item) => item.path === job.run_dir);
+        if (run) {
+          state.pendingJobId = null;
+          state.selectedRunId = run.id;
+          state.selectedRun = null;
+          try {
+            await loadRunDetail(run.id, { keepTab: true, skipListRender: true });
+          } catch (error) {
+            // The run folder can appear before every evidence file is readable; the next poll will retry.
+          }
+          setView("runs");
+        }
       }
     }
+    promoteSelectedJobToRun();
+    if (!state.selectedRunId && state.runs[0]) state.selectedRunId = state.runs[0].id;
+    const refreshDetail = shouldRefreshSelectedRunDetail();
+    if (state.view === "runs") renderRuns();
+    if (refreshDetail) {
+      try {
+        await loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
+      } catch (error) {
+        // Runs can be observed while OptPilot is still writing files; the next poll will retry.
+      }
+    }
+  } finally {
+    state.runsRefreshInFlight = false;
   }
-  if (!state.selectedRunId && state.runs[0]) state.selectedRunId = state.runs[0].id;
-  if (state.selectedRunId && state.view === "runs" && (!state.selectedRun || state.selectedRun.run && state.selectedRun.run.id !== state.selectedRunId)) {
-    loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
-  }
-  if (state.view === "runs") renderRuns();
+}
+
+function promoteSelectedJobToRun() {
+  if (!state.selectedRunId || !state.selectedRunId.startsWith("job:")) return false;
+  const jobId = state.selectedRunId.slice(4);
+  const job = state.jobs.find((item) => item.job_id === jobId);
+  if (!job || !job.run_dir) return false;
+  const run = state.runs.find((item) => item.path === job.run_dir);
+  if (!run) return false;
+  state.selectedRunId = run.id;
+  state.selectedRun = null;
+  return true;
+}
+
+function shouldRefreshSelectedRunDetail() {
+  if (!state.selectedRunId || state.view !== "runs") return false;
+  if (state.selectedRunId.startsWith("job:")) return true;
+  if (!state.selectedRun || !state.selectedRun.run) return true;
+  if (state.selectedRun.run.id !== state.selectedRunId) return true;
+  const summary = state.runs.find((run) => run.id === state.selectedRunId);
+  if (!summary) return false;
+  return runSummaryChanged(summary, state.selectedRun.run, state.selectedRun);
+}
+
+function runSummaryChanged(summary, detailRun, detail) {
+  const fields = ["status", "completed_trials", "failure_count", "best_trial_id", "best_candidate_id", "updated_at"];
+  if (fields.some((field) => String(summary[field] ?? "") !== String(detailRun[field] ?? ""))) return true;
+  if (String(summary.best_metric ?? "") !== String(detailRun.best_metric ?? "")) return true;
+  const observationCount = Array.isArray(detail.observations) ? detail.observations.length : 0;
+  return Number(summary.completed_trials || 0) !== observationCount;
 }
 
 function rebuildDerivedState() {
@@ -921,8 +1010,10 @@ function renderAll() {
   }
 }
 
-async function openSettings() {
+async function openSettings(options = {}) {
+  if (options && options.tab) state.settingsTab = options.tab;
   state.settingsOpen = true;
+  state.environmentVariableDrafts = [];
   await loadAgentSettings();
   fillSettingsForm();
   renderSettingsModal();
@@ -930,6 +1021,7 @@ async function openSettings() {
 
 function closeSettings() {
   state.settingsOpen = false;
+  state.environmentVariableDrafts = [];
   renderSettingsModal();
 }
 
@@ -937,6 +1029,14 @@ function renderSettingsModal() {
   if (!els.settingsModal) return;
   els.settingsModal.hidden = !state.settingsOpen;
   document.body.classList.toggle("settings-open", state.settingsOpen);
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    const active = (button.dataset.settingsTab || "assistant") === state.settingsTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    panel.hidden = (panel.dataset.settingsPanel || "assistant") !== state.settingsTab;
+  });
   renderOpenHandsStatus();
 }
 
@@ -953,6 +1053,9 @@ function fillSettingsForm() {
     els.openHandsApiKey.placeholder = openhands.api_key_configured ? "Configured; leave blank to keep" : "Paste API key";
   }
   if (els.openHandsClearApiKey) els.openHandsClearApiKey.checked = false;
+  renderEnvironmentVariablesList();
+  if (els.environmentVariableName) els.environmentVariableName.value = "";
+  if (els.environmentVariableValue) els.environmentVariableValue.value = "";
   if (els.assistantSkillsInput) els.assistantSkillsInput.value = settingsJson(capabilities.skills || []);
   if (els.assistantMcpServersInput) els.assistantMcpServersInput.value = settingsJson(mcpServersObject(capabilities.mcp_servers || []));
   if (els.assistantMcpFilterRegex) els.assistantMcpFilterRegex.value = capabilities.mcp_filter_regex || "";
@@ -977,6 +1080,87 @@ function currentAssistantCapabilities() {
 function currentAssistantPermissions() {
   const assistant = state.agentSettings && state.agentSettings.assistant || {};
   return assistant.permissions || {};
+}
+
+function currentEnvironmentSettings() {
+  return state.agentSettings && state.agentSettings.environment || { variables: [] };
+}
+
+function environmentVariableRecords() {
+  const variables = currentEnvironmentSettings().variables || [];
+  const saved = Array.isArray(variables) ? variables : Object.entries(variables).map(([name, value]) => ({ name, configured: Boolean(value) }));
+  const records = saved.map((record) => ({ ...record, pending: false }));
+  state.environmentVariableDrafts.forEach((draft) => {
+    const index = records.findIndex((record) => record.name === draft.name);
+    const pendingRecord = { name: draft.name, configured: true, pending: true };
+    if (index >= 0) {
+      records[index] = { ...records[index], ...pendingRecord };
+    } else {
+      records.push(pendingRecord);
+    }
+  });
+  return records;
+}
+
+function configuredEnvironmentVariableNames() {
+  return new Set(environmentVariableRecords().filter((item) => item.configured).map((item) => item.name));
+}
+
+function renderEnvironmentVariablesList() {
+  if (!els.environmentVariablesList) return;
+  const records = environmentVariableRecords();
+  if (!records.length) {
+    els.environmentVariablesList.innerHTML = `<p class="empty-inline">No Studio environment variables saved yet.</p>`;
+    return;
+  }
+  els.environmentVariablesList.innerHTML = records.map((record) => `
+    <label class="env-secret-row">
+      <span>
+        <strong>${escapeHtml(record.name || "")}</strong>
+        <small>${record.pending ? "ready to save" : record.configured ? "stored locally" : "not configured"}</small>
+      </span>
+      <span class="env-secret-row-actions">
+        ${statusPill(record.pending ? "pending" : record.configured ? "configured" : "missing")}
+        ${record.pending
+          ? `<button class="ghost-button env-draft-remove" data-env-draft-remove="${escapeHtml(record.name || "")}" type="button">Remove</button>`
+          : `<span class="checkbox-row">
+              <input type="checkbox" data-env-clear="${escapeHtml(record.name || "")}" />
+              <span>Remove</span>
+            </span>`}
+      </span>
+    </label>
+  `).join("");
+}
+
+function addEnvironmentVariableDraft() {
+  if (!els.environmentVariableName || !els.environmentVariableValue) return;
+  const name = els.environmentVariableName.value.trim();
+  const value = els.environmentVariableValue.value;
+  els.environmentVariableName.classList.toggle("invalid-input", !name);
+  els.environmentVariableValue.classList.toggle("invalid-input", !value);
+  if (!name || !value) return;
+  const existing = state.environmentVariableDrafts.find((item) => item.name === name);
+  if (existing) {
+    existing.value = value;
+  } else {
+    state.environmentVariableDrafts.push({ name, value });
+  }
+  els.environmentVariableName.value = "";
+  els.environmentVariableValue.value = "";
+  els.environmentVariableName.classList.remove("invalid-input");
+  els.environmentVariableValue.classList.remove("invalid-input");
+  renderEnvironmentVariablesList();
+}
+
+function environmentSettingsPayload() {
+  const set = state.environmentVariableDrafts.map((item) => ({ name: item.name, value: item.value }));
+  const name = els.environmentVariableName ? els.environmentVariableName.value.trim() : "";
+  const value = els.environmentVariableValue ? els.environmentVariableValue.value : "";
+  if (name && value) set.push({ name, value });
+  const clear = Array.from(document.querySelectorAll("[data-env-clear]:checked"))
+    .map((input) => input.dataset.envClear)
+    .filter(Boolean);
+  return { set, clear };
 }
 
 function settingsJson(value) {
@@ -1096,6 +1280,7 @@ async function saveSettings() {
       clear_api_key: Boolean(els.openHandsClearApiKey && els.openHandsClearApiKey.checked),
     },
     capabilities,
+    environment: environmentSettingsPayload(),
     permissions: {
       file_write: els.assistantPermissionFileWrite ? els.assistantPermissionFileWrite.value : "attached_editable",
       shell_run: els.assistantPermissionShellRun ? els.assistantPermissionShellRun.value : "approval_required",
@@ -1110,10 +1295,13 @@ async function saveSettings() {
   } else {
     state.agentSettings = result.settings || state.agentSettings;
     state.agentRuntimeStatus = result.status || state.agentRuntimeStatus;
+    state.environmentVariableDrafts = [];
   }
   fillSettingsForm();
   renderSettingsModal();
   renderPlatformStatus();
+  renderCatalog();
+  renderExperiments();
   renderAssistant();
 }
 
@@ -1132,7 +1320,7 @@ function setView(view) {
   if (view === "experiments") renderExperiments();
   if (view === "runs") {
     renderRuns();
-    if (state.selectedRunId && (!state.selectedRun || state.selectedRun.run && state.selectedRun.run.id !== state.selectedRunId)) {
+    if (shouldRefreshSelectedRunDetail()) {
       loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
     }
   }
@@ -1812,16 +2000,22 @@ function buildPlans() {
       study,
       environment,
       method,
+      name: summary.name || study.label || "",
+      description: summary.description || "",
+      tags: summary.tags || [],
       metric: objective.metric || "",
       direction: objective.direction || "",
       aggregation: objective.aggregation || "mean",
       secondaryMetrics: objective.secondaryMetrics || [],
       maxTrials: budget.maxTrials || "",
+      maxWallClockSeconds: budget.maxWallClockSeconds || "",
       maxFailures: budget.maxFailures || "",
       parallelism: execution.parallelism || "",
       timeoutSeconds: execution.timeoutSeconds || "",
+      maxRetries: (execution.retry && execution.retry.maxRetries) ?? "",
       evidenceLevel: evidence.level || "",
       evidenceStorage: evidence.outputFileStorage || "",
+      evidenceOutputDir: evidence.outputDir || "",
       seed: reproducibility.seed ?? "",
       checks: [],
       yaml: study.yaml || `# Saved study\n# ${shortPath(study.path)}\n`,
@@ -2935,7 +3129,9 @@ function renderComponentDetail() {
   }
   const item = component.entry;
   const summary = item.summary || {};
-  const hasInterface = Boolean(item.interface && item.interface.port && item.interface.command && item.interface.command.length);
+  const draftConfig = componentConfigDraft(component).config;
+  const activeInterface = draftConfig && draftConfig.interface || item.interface || {};
+  const hasInterface = Boolean(activeInterface && activeInterface.port && activeInterface.command && activeInterface.command.length);
   const launchState = hasInterface && state.interfaceLaunch && state.interfaceLaunch.key === componentLaunchKey(component)
     ? state.interfaceLaunch
     : null;
@@ -2957,18 +3153,22 @@ function renderComponentDetail() {
           ["Files", summary.file_count ?? "-"],
           ["README", summary.readme || "-"],
           ["Mode", "read-only catalog asset"],
+          ["Source config", componentConfigSource(component)],
         ])}
         ${kvPanel("Use", [
           ["Assistant", "reference workspace"],
           ["Registration", "editable copies only"],
-          ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
+          ["Interface", hasInterface ? `port ${activeInterface.port}` : "not declared"],
         ])}
       </div>
+      ${componentGuidePanel(component)}
+      ${componentConfigEditor(component)}
     `;
     els.componentDetail.querySelector(".component-inspect").addEventListener("click", () => openComponentSession(component, "inspect"));
     els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openComponentSession(component, "edit"));
     const launchButton = els.componentDetail.querySelector(".component-launch-interface");
     if (launchButton) launchButton.addEventListener("click", () => launchComponentInterface(component));
+    bindComponentConfigControls(component);
     return;
   }
   const pairs = component.kind === "environment"
@@ -2987,21 +3187,25 @@ function renderComponentDetail() {
         ["Candidate", summary.candidate_format],
         ["Metrics", (summary.metrics || []).join(", ") || "-"],
         ["Evaluator", summary.evaluate_type],
+        ["Source config", componentConfigSource(component)],
       ] : [
         ["Accepts", (summary.candidate_formats || []).join(", ") || "-"],
         ["Protocol", summary.protocol],
         ["Implementation", summary.implementation_type],
+        ["Source config", componentConfigSource(component)],
       ])}
       ${kvPanel("Runtime", component.kind === "environment" ? [
         ["Timeout", summary.runtime && summary.runtime.timeoutSeconds],
         ["Sandbox", summary.runtime && summary.runtime.sandbox],
-        ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
+        ["Interface", hasInterface ? `port ${activeInterface.port}` : "not declared"],
       ] : [
         ["Runtime", summary.runtime && summary.runtime.type],
         ["Image", summary.runtime && summary.runtime.image],
-        ["Interface", hasInterface ? `port ${item.interface.port}` : "not declared"],
+        ["Interface", hasInterface ? `port ${activeInterface.port}` : "not declared"],
       ])}
     </div>
+    ${componentGuidePanel(component)}
+    ${componentConfigEditor(component)}
     <div class="panel-section">
       <h3>Compatible ${component.kind === "environment" ? "Methods" : "Environments"}</h3>
       ${compatList(pairs, component.kind === "environment" ? "method" : "environment")}
@@ -3011,12 +3215,1239 @@ function renderComponentDetail() {
   els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openComponentSession(component, "edit"));
   const launchButton = els.componentDetail.querySelector(".component-launch-interface");
   if (launchButton) launchButton.addEventListener("click", () => launchComponentInterface(component));
+  bindComponentConfigControls(component);
   els.componentDetail.querySelectorAll("[data-build-study-index]").forEach((button) => {
     button.addEventListener("click", () => {
       const pair = pairs[Number(button.dataset.buildStudyIndex)];
       if (pair) createPlanFromPair(pair);
     });
   });
+}
+
+function componentConfigSource(component) {
+  const item = component && component.entry || {};
+  const summary = item.summary || {};
+  const manifest = summary.manifest ? shortPath(`${item.path}/${summary.manifest}`) : "";
+  const configPath = item.config_path || (item.config !== "resource" ? item.path : "");
+  return manifest || (configPath ? shortPath(configPath) : "generated resource manifest");
+}
+
+function componentGuidePanel(component) {
+  const rows = componentGuideRows(component);
+  if (!rows.length) return "";
+  return `
+    <section class="panel-section component-guide-panel">
+      <div class="component-guide-heading">
+        <div>
+          <h3>How to Read This Config</h3>
+          <p>${escapeHtml(componentGuideIntro(component.kind))}</p>
+        </div>
+      </div>
+      <div class="component-guide-grid">
+        ${rows.map((row) => `
+          <div class="component-guide-item">
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(row.value || "-")}</strong>
+            ${row.help ? `<small>${escapeHtml(row.help)}</small>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function componentGuideIntro(kind) {
+  if (kind === "environment") return "An environment owns evaluation: it defines what candidates look like, how trials run, and which metrics come back.";
+  if (kind === "method") return "A method owns proposal: it reads the environment context and returns candidates that match compatible environments.";
+  return "A resource is supporting material, such as a helper interface, dataset, article, or reference workspace. It is not evaluated as a study component by itself.";
+}
+
+function componentGuideRows(component) {
+  const raw = componentConfigDraft(component).config || {};
+  const summary = component.entry && component.entry.summary || {};
+  if (component.kind === "environment") {
+    return [
+      {
+        label: "Candidate contract",
+        value: raw.candidate && raw.candidate.format || summary.candidate_format || "not declared",
+        help: raw.candidate && raw.candidate.description || "The format a compatible method must produce.",
+      },
+      {
+        label: "Metrics",
+        value: listPreview(raw.metrics && raw.metrics.keys || summary.metrics),
+        help: "The names that can be selected as study objectives or secondary metrics.",
+      },
+      {
+        label: "Evaluator",
+        value: evaluatorSummary(raw.evaluator) || summary.evaluate_type || "not declared",
+        help: "The entrypoint OptPilot calls for each candidate trial.",
+      },
+      {
+        label: "Method context",
+        value: methodContextSummary(raw.methodContext),
+        help: "Environment-owned files or instructions visible to compatible methods.",
+      },
+      {
+        label: "Runtime",
+        value: componentExecutionSummary(raw),
+        help: "Execution and dependency setup declared by this environment.",
+      },
+    ];
+  }
+  if (component.kind === "method") {
+    return [
+      {
+        label: "Accepts",
+        value: listPreview(raw.accepts && raw.accepts.formats || summary.candidate_formats),
+        help: "Candidate formats this method can propose.",
+      },
+      {
+        label: "Entrypoint",
+        value: entrypointSummary(raw.entrypoint) || summary.implementation_type || "not declared",
+        help: "How OptPilot invokes the method.",
+      },
+      {
+        label: "Required context",
+        value: listPreview(raw.accepts && raw.accepts.requires && raw.accepts.requires.context || summary.required_context),
+        help: "Environment context paths this method expects.",
+      },
+      {
+        label: "Required capabilities",
+        value: listPreview(raw.accepts && raw.accepts.requires && raw.accepts.requires.capabilities || summary.required_capabilities),
+        help: "Environment capabilities this method expects.",
+      },
+      {
+        label: "Runtime",
+        value: componentExecutionSummary(raw),
+        help: "Execution and dependency setup declared by this method.",
+      },
+    ];
+  }
+  return [
+    {
+      label: "Purpose",
+      value: raw.name || raw.id || component.entry && component.entry.label || "supporting resource",
+      help: raw.description || "Resources provide supporting material outside the core environment/method study loop.",
+    },
+    {
+      label: "Files",
+      value: resourceFileSummary(raw.files, summary),
+      help: "Files included with this resource package.",
+    },
+    {
+      label: "Interface",
+      value: raw.interface && raw.interface.port ? `port ${raw.interface.port}` : "not declared",
+      help: "Optional GUI or helper service Studio can launch.",
+    },
+    {
+      label: "Setup",
+      value: interfaceSetupSummary(raw.interface),
+      help: "Install steps declared under interface.setup.",
+    },
+  ];
+}
+
+function listPreview(value) {
+  const items = []
+    .concat(value || [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  if (!items.length) return "not declared";
+  if (items.length <= 4) return items.join(", ");
+  return `${items.slice(0, 4).join(", ")} +${items.length - 4} more`;
+}
+
+function evaluatorSummary(evaluator) {
+  if (!evaluator || typeof evaluator !== "object") return "";
+  if (evaluator.python) return `python: ${evaluator.python}`;
+  if (evaluator.command) return "command";
+  if (evaluator.adapter) return `adapter: ${evaluator.adapter}`;
+  return "";
+}
+
+function entrypointSummary(entrypoint) {
+  if (!entrypoint || typeof entrypoint !== "object") return "";
+  const protocol = entrypoint.protocol ? ` (${entrypoint.protocol})` : "";
+  if (entrypoint.python) return `python: ${entrypoint.python}${protocol}`;
+  if (entrypoint.command) return `command${protocol}`;
+  return protocol.replace(/[()]/g, "");
+}
+
+function methodContextSummary(methodContext) {
+  if (!methodContext || typeof methodContext !== "object") return "not declared";
+  const references = Array.isArray(methodContext.references) ? methodContext.references.length : 0;
+  const instructions = Array.isArray(methodContext.instructions) ? methodContext.instructions.length : methodContext.instructions ? 1 : 0;
+  const parts = [];
+  if (references) parts.push(`${references} reference${references === 1 ? "" : "s"}`);
+  if (instructions) parts.push(`${instructions} instruction${instructions === 1 ? "" : "s"}`);
+  return parts.join(", ") || "not declared";
+}
+
+function componentExecutionSummary(raw = {}) {
+  const runtime = raw.runtime && typeof raw.runtime === "object" ? raw.runtime : {};
+  const iface = raw.interface && typeof raw.interface === "object" ? raw.interface : {};
+  const parts = [];
+  const sandbox = runtime.sandbox || "process";
+  parts.push(`${sandbox} runtime`);
+  const runtimeSetup = setupStepCount(runtime.setup);
+  if (runtimeSetup) parts.push(`${runtimeSetup} runtime setup step${runtimeSetup === 1 ? "" : "s"}`);
+  if (runtime.container && typeof runtime.container === "object") {
+    const image = runtime.container.image || runtime.container.build && runtime.container.build.tag;
+    if (image) parts.push(`container ${image}`);
+  }
+  const interfaceSetup = setupStepCount(iface.setup);
+  if (interfaceSetup) parts.push(`${interfaceSetup} interface setup step${interfaceSetup === 1 ? "" : "s"}`);
+  if (iface.port) parts.push(`interface port ${iface.port}`);
+  if (parts.length === 1 && !raw.runtime && !raw.interface) return "process runtime defaults; no setup declared";
+  return parts.join("; ");
+}
+
+function interfaceSetupSummary(iface = {}) {
+  const steps = setupStepCount(iface && iface.setup);
+  if (steps) return `${steps} setup step${steps === 1 ? "" : "s"}`;
+  return "not declared";
+}
+
+function setupStepCount(setup) {
+  return setup && Array.isArray(setup.steps) ? setup.steps.length : 0;
+}
+
+function resourceFileSummary(files, summary = {}) {
+  if (Array.isArray(files)) return files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "not declared";
+  if (files && typeof files === "object") return listPreview(Object.keys(files));
+  if (summary.file_count !== undefined) return `${summary.file_count} file${summary.file_count === 1 ? "" : "s"}`;
+  return "not declared";
+}
+
+function componentConfigEditor(component) {
+  const draft = componentConfigDraft(component);
+  const validation = draft.validation ? `<div class="validation-box">${validationHtml(draft.validation)}</div>` : "";
+  const workspace = draft.workspace ? `<p class="source-note">Editable copy saved at ${escapeHtml(shortPath(draft.workspace.root || ""))}.</p>` : "";
+  return `
+    <section class="panel-section config-editor-panel">
+      <div class="config-editor-heading">
+        <div class="config-editor-title">
+          <div class="config-editor-kicker">
+            <span class="config-type-dot config-type-${escapeHtml(component.kind)}"></span>
+            <span>${escapeHtml(component.kind)} configuration</span>
+          </div>
+          <h3>Configuration</h3>
+          <p>Fields are grouped by purpose. Advanced schema fields remain available, but the catalog source stays read-only until you save an editable copy.</p>
+          ${workspace}
+        </div>
+        <div class="config-editor-toolbar">
+          <span class="component-config-state">${draft.dirty ? "unsaved changes" : draft.workspace ? "saved copy" : "catalog source"}</span>
+          <div class="config-editor-actions">
+            <button class="primary-button component-config-save" type="button">Save Editable Copy</button>
+            <button class="ghost-button component-config-reset" type="button">Reset</button>
+          </div>
+        </div>
+      </div>
+      ${validation}
+      ${componentEnvRequirementsPanel(draft.config)}
+      <div class="config-form">
+        ${configNodeHtml(draft.config, [], { root: true, label: component.kind, rootKind: draft.config && draft.config.config || component.kind, openStateKey: componentConfigKey(component) })}
+      </div>
+    </section>
+  `;
+}
+
+function componentEnvRequirementsPanel(raw = {}) {
+  const requirements = componentEnvRequirements(raw);
+  if (!requirements.length) return "";
+  const configured = configuredEnvironmentVariableNames();
+  return `
+    <div class="env-requirements-panel">
+      <div>
+        <strong>Environment variables</strong>
+        <p>These names are declared in envFromHost. Studio injects only declared variables during setup, study execution, or interface launch.</p>
+      </div>
+      <div class="env-requirements-list">
+        ${requirements.map((item) => {
+          const isConfigured = configured.has(item.name);
+          return `
+            <div class="env-requirement-row">
+              <span>
+                <strong>${escapeHtml(item.name)}</strong>
+                <small>${escapeHtml(item.phase)} · ${escapeHtml(item.path)}</small>
+              </span>
+              ${statusPill(isConfigured ? "configured" : "missing")}
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <button class="ghost-button open-settings-from-env" type="button">Open Studio Settings</button>
+    </div>
+  `;
+}
+
+function componentEnvRequirements(raw = {}) {
+  const requirements = [];
+  const add = (phase, path, names) => {
+    envNameList(names).forEach((name) => {
+      requirements.push({ phase, path, name });
+    });
+  };
+  const runtime = raw.runtime && typeof raw.runtime === "object" ? raw.runtime : {};
+  const runtimeSetup = runtime.setup && typeof runtime.setup === "object" ? runtime.setup : {};
+  add("Runtime setup", "runtime.setup.envFromHost", runtimeSetup.envFromHost);
+  add("Runtime execution", "runtime.envFromHost", runtime.envFromHost);
+  const iface = raw.interface && typeof raw.interface === "object" ? raw.interface : {};
+  const interfaceSetup = iface.setup && typeof iface.setup === "object" ? iface.setup : {};
+  add("Interface setup", "interface.setup.envFromHost", interfaceSetup.envFromHost);
+  add("Interface launch", "interface.envFromHost", iface.envFromHost);
+  const seen = new Set();
+  return requirements.filter((item) => {
+    const key = `${item.phase}:${item.path}:${item.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function envNameList(value) {
+  return []
+    .concat(Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function componentConfigDraft(component) {
+  const key = componentConfigKey(component);
+  if (!state.componentConfigDrafts[key]) {
+    state.componentConfigDrafts[key] = {
+      config: deepClone(component.entry && component.entry.raw_config || defaultComponentConfig(component)),
+      dirty: false,
+      validation: null,
+      workspace: null,
+    };
+  }
+  return state.componentConfigDrafts[key];
+}
+
+function componentConfigKey(component) {
+  return component ? `${component.kind}:${component.entry && component.entry.uid || ""}` : "";
+}
+
+function defaultComponentConfig(component) {
+  return {
+    apiVersion: "optpilot.io/v1",
+    config: component && component.kind || "environment",
+    id: component && component.entry && component.entry.id || "",
+  };
+}
+
+function resetComponentConfigDraft(component) {
+  const key = componentConfigKey(component);
+  delete state.componentConfigDrafts[key];
+  delete state.componentConfigOpenSections[key];
+  renderComponentDetail();
+}
+
+function componentConfigPayload(component) {
+  return deepClone(componentConfigDraft(component).config);
+}
+
+function configNodeHtml(value, path, options = {}) {
+  if (Array.isArray(value)) return configArrayHtml(value, path, options);
+  if (value && typeof value === "object") return configObjectHtml(value, path, options);
+  return configPrimitiveHtml(value, path, options);
+}
+
+function configObjectHtml(value, path, options = {}) {
+  if (options.root) return configRootSectionsHtml(value, options);
+  const keys = configOrderedKeys(value, path, options);
+  const body = keys.map((key) => configPropertyHtml(key, value[key], path.concat(key), options)).join("") || `<p class="empty-inline">No fields yet.</p>`;
+  const addPath = encodeConfigPath(path);
+  const missingKeys = configMissingKnownKeys(value, path, options);
+  const content = `
+    <div class="config-object-fields">${body}</div>
+    ${configStandardAddHtml(path, missingKeys)}
+    <div class="config-add-row">
+      <input data-config-add-key="${addPath}" type="text" placeholder="field name" />
+      ${configTypeSelect(addPath)}
+      <button class="ghost-button config-add-field" data-config-add-path="${addPath}" type="button">Add Field</button>
+    </div>
+  `;
+  const removeButton = options.removePath
+    ? `<button class="icon-button config-remove-field" data-config-remove-path="${encodeConfigPath(options.removePath)}" type="button" title="Remove field">x</button>`
+    : "";
+  const openAttr = path.length <= 1 ? "open" : "";
+  const label = escapeHtml(options.label || path[path.length - 1] || "object");
+  const meta = keys.length === 1 ? "1 field" : `${keys.length} fields`;
+  const help = configHelpHtml(configHelpForPath(path, options));
+  return `
+    <details class="config-group ${configDepthClass(path)}" ${openAttr}>
+      <summary>
+        <span class="config-group-title">${label}</span>
+        <span class="config-group-summary">
+          <span class="config-group-meta">object &middot; ${meta}</span>
+          ${removeButton}
+        </span>
+      </summary>
+      ${help}
+      ${content}
+    </details>
+  `;
+}
+
+function configRootSectionsHtml(value, options = {}) {
+  const sections = configRootSections(value, options);
+  const addPath = encodeConfigPath([]);
+  return `
+    <div class="config-root-sections">
+      ${sections.map((section) => configRootSectionHtml(section, value, options)).join("")}
+    </div>
+    <div class="config-add-row config-root-add-row">
+      <input data-config-add-key="${addPath}" type="text" placeholder="top-level field name" />
+      ${configTypeSelect(addPath)}
+      <button class="ghost-button config-add-field" data-config-add-path="${addPath}" type="button">Add Field</button>
+    </div>
+  `;
+}
+
+function configRootSections(value, options = {}) {
+  const rootKind = options.rootKind || value && value.config || "generic";
+  const available = configOrderedKeys(value, [], options);
+  const layout = CONFIG_SECTION_LAYOUTS[rootKind] || CONFIG_SECTION_LAYOUTS.generic;
+  const assigned = new Set();
+  const sections = layout.map((section) => {
+    const keys = (section.keys || []).filter((key) => available.includes(key));
+    const missingKeys = (section.optionalKeys || []).filter((key) => !available.includes(key));
+    keys.forEach((key) => assigned.add(key));
+    return { ...section, keys, missingKeys };
+  });
+  const remaining = available.filter((key) => !assigned.has(key));
+  if (remaining.length) {
+    const advanced = sections.find((section) => section.id === "advanced");
+    if (advanced) {
+      advanced.keys = [...advanced.keys, ...remaining];
+    } else {
+      sections.push({
+        id: "other",
+        title: "Other Fields",
+        description: "Additional fields present in this config.",
+        keys: remaining,
+      });
+    }
+  }
+  return sections.filter((section) => section.keys.length || section.missingKeys && section.missingKeys.length);
+}
+
+function configRootSectionHtml(section, value, options = {}) {
+  const body = section.keys.map((key) => configPropertyHtml(key, value[key], [key], options)).join("");
+  const openAttr = configRootSectionIsOpen(section, options) ? "open" : "";
+  const missingKeys = section.missingKeys || [];
+  const meta = section.keys.length === 1 ? "1 field" : `${section.keys.length} fields`;
+  const availablePreview = configSectionAvailablePreview(section, value, options);
+  return `
+    <details class="config-group config-root-section config-section-${escapeHtml(section.id)}" data-config-section="${escapeHtml(section.id)}" ${openAttr}>
+      <summary>
+        <span class="config-group-heading">
+          <span class="config-group-title">${escapeHtml(section.title)}</span>
+          ${availablePreview ? `<span class="config-group-available">Available: ${escapeHtml(availablePreview)}</span>` : ""}
+        </span>
+        <span class="config-group-summary">
+          <span class="config-group-meta">${escapeHtml(meta)}</span>
+        </span>
+      </summary>
+      ${section.description ? `<p class="config-group-help">${escapeHtml(section.description)}</p>` : ""}
+      <div class="config-object-fields">${body || `<p class="empty-inline">No fields declared in this section yet.</p>`}</div>
+      ${configStandardAddHtml([], missingKeys)}
+    </details>
+  `;
+}
+
+function configRootSectionIsOpen(section, options = {}) {
+  const sectionState = state.componentConfigOpenSections[options.openStateKey] || {};
+  if (Object.prototype.hasOwnProperty.call(sectionState, section.id)) return Boolean(sectionState[section.id]);
+  return false;
+}
+
+function configSectionAvailablePreview(section, value, options = {}) {
+  const fields = [];
+  for (const key of section.missingKeys || []) {
+    fields.push(configAvailableFieldLabel([key], key));
+  }
+  for (const key of section.keys || []) {
+    const child = value && value[key];
+    if (!child || typeof child !== "object" || Array.isArray(child)) continue;
+    for (const nestedKey of configMissingKnownKeys(child, [key], options)) {
+      fields.push(configAvailableFieldLabel([key, nestedKey], nestedKey));
+    }
+  }
+  if (!fields.length) return "";
+  const unique = [...new Set(fields)];
+  const visible = unique.slice(0, 4);
+  return unique.length > visible.length ? `${visible.join(", ")} +${unique.length - visible.length}` : visible.join(", ");
+}
+
+function configAvailableFieldLabel(path, key) {
+  const fullPath = configPathKey(path || []);
+  const preview = CONFIG_FIELD_PREVIEWS[fullPath] || CONFIG_FIELD_PREVIEWS[String(key)] || "";
+  return preview || String(key);
+}
+
+function captureComponentConfigOpenSections(component) {
+  const key = componentConfigKey(component);
+  const sectionState = { ...(state.componentConfigOpenSections[key] || {}) };
+  els.componentDetail.querySelectorAll(".config-root-section").forEach((section) => {
+    const id = section.dataset.configSection;
+    if (id) sectionState[id] = Boolean(section.open);
+  });
+  state.componentConfigOpenSections[key] = sectionState;
+}
+
+function ensureComponentConfigSectionOpen(component, sectionId) {
+  if (!sectionId) return;
+  const key = componentConfigKey(component);
+  state.componentConfigOpenSections[key] = {
+    ...(state.componentConfigOpenSections[key] || {}),
+    [sectionId]: true,
+  };
+}
+
+function configRootSectionIdForPath(path, rootKind) {
+  const key = String((path || [])[0] || "");
+  if (!key) return "";
+  const layout = CONFIG_SECTION_LAYOUTS[rootKind] || CONFIG_SECTION_LAYOUTS.generic || [];
+  const section = layout.find((item) => [...(item.keys || []), ...(item.optionalKeys || [])].includes(key));
+  return section ? section.id : "";
+}
+
+function configStandardAddHtml(path, keys) {
+  if (!keys || !keys.length) return "";
+  const encodedPath = encodeConfigPath(path);
+  return `
+    <div class="config-standard-add-row">
+      <span>Available fields</span>
+      <div>
+        ${keys.map((key) => `<button class="ghost-button config-add-standard-field" data-config-add-standard-path="${encodedPath}" data-config-add-standard-key="${escapeHtml(key)}" type="button">Add ${escapeHtml(key)}</button>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function configPropertyHtml(key, value, path, options = {}) {
+  const removable = !isFixedConfigPath(path);
+  const isContainer = value && typeof value === "object";
+  if (isContainer) {
+    return `
+      <div class="config-property config-property-container">
+        ${configNodeHtml(value, path, { ...options, root: false, label: key, removePath: removable ? path : null })}
+      </div>
+    `;
+  }
+  const help = configHelpForPath(path, options);
+  return `
+    <div class="config-property ${configDepthClass(path)}">
+      <div class="config-property-head">
+        <span class="config-property-label-wrap">
+          <span class="config-property-label">${escapeHtml(key)}</span>
+          ${help ? `<small class="config-property-help">${escapeHtml(help)}</small>` : ""}
+        </span>
+        ${removable ? `<button class="icon-button config-remove-field" data-config-remove-path="${encodeConfigPath(path)}" type="button" title="Remove field">x</button>` : ""}
+      </div>
+      ${configNodeHtml(value, path, { ...options, root: false, label: key })}
+    </div>
+  `;
+}
+
+function configArrayHtml(value, path, options = {}) {
+  const addPath = encodeConfigPath(path);
+  const primitiveItems = value.every((item) => item == null || typeof item !== "object");
+  const removeButton = options.removePath
+    ? `<button class="icon-button config-remove-field" data-config-remove-path="${encodeConfigPath(options.removePath)}" type="button" title="Remove field">x</button>`
+    : "";
+  const openAttr = path.length <= 1 ? "open" : "";
+  const label = escapeHtml(options.label || path[path.length - 1] || "array");
+  const meta = value.length === 1 ? "1 item" : `${value.length} items`;
+  const items = value.map((item, index) => `
+    <div class="config-array-item ${primitiveItems ? "config-array-item-compact" : ""} ${configDepthClass(path.concat(index))}">
+      <div class="config-property-head">
+        <span class="config-property-label-wrap"><span class="config-property-label">${escapeHtml(String(index + 1))}</span></span>
+        <button class="icon-button config-remove-field" data-config-remove-path="${encodeConfigPath(path.concat(index))}" type="button" title="Remove item">x</button>
+      </div>
+      ${configNodeHtml(item, path.concat(index), { ...options, root: false, label: `${options.label || "item"} ${index + 1}` })}
+    </div>
+  `).join("") || `<p class="empty-inline">No items yet.</p>`;
+  const help = configHelpHtml(configHelpForPath(path, options));
+  return `
+    <details class="config-group ${configDepthClass(path)}" ${openAttr}>
+      <summary>
+        <span class="config-group-title">${label}</span>
+        <span class="config-group-summary">
+          <span class="config-group-meta">list &middot; ${meta}</span>
+          ${removeButton}
+        </span>
+      </summary>
+      ${help}
+      <div class="config-array-list">${items}</div>
+      <div class="config-add-row">
+        ${configTypeSelect(addPath)}
+        <button class="ghost-button config-add-item" data-config-add-path="${addPath}" type="button">Add Item</button>
+      </div>
+    </details>
+  `;
+}
+
+function configPrimitiveHtml(value, path, options = {}) {
+  const encoded = encodeConfigPath(path);
+  const disabled = isFixedConfigPath(path) ? "disabled" : "";
+  const valueType = value === null ? "null" : typeof value;
+  const enumOptions = configEnumOptions(path, value);
+  if (enumOptions.length) {
+    const selected = String(value ?? "");
+    return `
+      <label class="config-field">
+        <select data-config-field="${encoded}" data-config-type="string" ${disabled}>
+          ${enumOptions.map((option) => `<option value="${escapeHtml(option)}" ${option === selected ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+        </select>
+      </label>
+    `;
+  }
+  if (typeof value === "boolean") {
+    return `
+      <label class="config-field config-checkbox-field">
+        <input data-config-field="${encoded}" data-config-type="boolean" type="checkbox" ${value ? "checked" : ""} ${disabled} />
+        <span>${escapeHtml(options.label || path[path.length - 1] || "enabled")}</span>
+      </label>
+    `;
+  }
+  if (typeof value === "number") {
+    return `<label class="config-field"><input data-config-field="${encoded}" data-config-type="number" type="number" value="${escapeHtml(String(value))}" ${disabled} /></label>`;
+  }
+  if (valueType === "null") {
+    return `<label class="config-field"><input data-config-field="${encoded}" data-config-type="null" type="text" value="" placeholder="null" ${disabled} /></label>`;
+  }
+  const text = String(value ?? "");
+  const multiline = text.length > 80 || text.includes("\n");
+  return `
+    <label class="config-field">
+      ${multiline
+        ? `<textarea data-config-field="${encoded}" data-config-type="string" ${disabled}>${escapeHtml(text)}</textarea>`
+        : `<input data-config-field="${encoded}" data-config-type="string" type="text" value="${escapeHtml(text)}" ${disabled} />`}
+    </label>
+  `;
+}
+
+function configDepthClass(path) {
+  return `config-depth-${Math.min(Math.max((path || []).length - 1, 0), 4)}`;
+}
+
+const CONFIG_FIELD_ORDER = {
+  "environment:root": ["apiVersion", "config", "id", "description", "tags", "candidate", "evaluator", "trialWorkspace", "methodContext", "metrics", "records", "outputFiles", "runtime", "interface", "capabilities"],
+  "method:root": ["apiVersion", "config", "id", "description", "tags", "accepts", "entrypoint", "settings", "runtime", "interface"],
+  "resource:root": ["apiVersion", "config", "id", "name", "description", "tags", "interface"],
+  "candidate": ["format", "description", "materialize", "parameters", "files", "opaque"],
+  "candidate.parameters": ["schema", "constraints"],
+  "candidate.parameters.schema.[]": ["valueType", "description", "min", "max", "values", "default", "unit", "pattern", "items", "properties", "required", "minItems", "maxItems"],
+  "candidate.files": ["editable", "required", "allow", "deny"],
+  "evaluator": ["python", "command", "adapter", "pythonPath", "cwd", "env", "timeoutSeconds", "settings"],
+  "entrypoint": ["python", "command", "pythonPath", "protocol"],
+  "accepts": ["formats", "requires", "capabilities"],
+  "accepts.requires": ["context", "capabilities"],
+  "methodContext": ["instructions", "references"],
+  "methodContext.references.[]": ["name", "path", "description", "type", "mimeType"],
+  "metrics": ["source", "keys", "path", "database", "query", "extractor", "settings"],
+  "records.[]": ["name", "source", "path", "database", "table", "query", "extractor", "settings"],
+  "outputFiles.[]": ["path", "name", "required"],
+  "candidate.opaque": ["family"],
+  "candidate.parameters.constraints.[]": ["id", "description", "expr"],
+  "trialWorkspace.[]": ["from", "to"],
+  "evaluator.settings.cases.[]": ["id", "path", "description"],
+  "candidate.files.editable.[]": ["path"],
+  "capabilities.[]": ["id", "description"],
+  "runtime": ["sandbox", "setup", "container", "workdir", "env", "envFromHost"],
+  "runtime.setup": ["steps", "env", "envFromHost", "timeoutSeconds"],
+  "runtime.setup.steps.[]": ["uses", "cwd", "env", "extras", "groups", "frozen", "python", "venv", "requirements", "installProject", "install", "command"],
+  "runtime.container": ["image", "executable", "build", "network"],
+  "runtime.container.build": ["context", "dockerfile", "tag", "target", "platform", "args", "extraArgs", "timeoutSeconds"],
+  "interface": ["label", "description", "command", "port", "cwd", "readyPath", "readyTimeoutSeconds", "extraPorts", "setup", "env", "envFromHost"],
+  "interface.setup": ["steps", "env", "envFromHost", "timeoutSeconds"],
+  "interface.setup.steps.[]": ["uses", "cwd", "env", "extras", "groups", "frozen", "python", "venv", "requirements", "installProject", "install", "command"],
+  "settings": ["provider", "model", "apiBase", "apiKeyEnvVar", "temperature", "maxTokens", "batchSize", "includeBaselineCandidate"],
+  "evidence": ["level", "outputFileStorage", "outputDir"],
+};
+
+const CONFIG_OPTIONAL_FIELDS = {
+  candidate: ["description", "materialize", "parameters", "files", "opaque"],
+  "candidate.materialize": ["root"],
+  "candidate.parameters": ["schema", "constraints"],
+  "candidate.parameter": ["valueType", "description", "min", "max", "values", "default", "unit", "pattern", "items", "properties", "required", "minItems", "maxItems"],
+  "candidate.files": ["editable", "required", "allow", "deny"],
+  "candidate.files.editable.[]": ["path"],
+  "candidate.opaque": ["family"],
+  "candidate.parameters.constraints.[]": ["id", "description", "expr"],
+  evaluator: ["timeoutSeconds", "pythonPath", "cwd", "env", "settings"],
+  entrypoint: ["pythonPath", "protocol"],
+  accepts: ["requires"],
+  "accepts.requires": ["context", "capabilities"],
+  methodContext: ["instructions", "references"],
+  "methodContext.references.[]": ["name", "path", "description", "type", "mimeType"],
+  metrics: ["source", "keys", "path", "database", "query", "extractor", "settings"],
+  "records.[]": ["name", "source", "path", "database", "table", "query", "extractor", "settings"],
+  "outputFiles.[]": ["path", "name", "required"],
+  "trialWorkspace.[]": ["from", "to"],
+  "capabilities.[]": ["id", "description"],
+  runtime: ["setup", "container", "workdir", "env", "envFromHost"],
+  "runtime.setup": ["steps", "env", "envFromHost", "timeoutSeconds"],
+  "runtime.container": ["image", "executable", "build", "network"],
+  "runtime.container.build": ["context", "dockerfile", "tag", "target", "platform", "args", "extraArgs", "timeoutSeconds"],
+  interface: ["label", "description", "command", "port", "cwd", "readyPath", "readyTimeoutSeconds", "extraPorts", "setup", "env", "envFromHost"],
+  "interface.setup": ["steps", "env", "envFromHost", "timeoutSeconds"],
+};
+
+const CONFIG_FIELD_PREVIEWS = {
+  runtime: "runtime incl. setup/env/envFromHost",
+  interface: "interface incl. command/port/env",
+  "runtime.env": "runtime.env",
+  "runtime.envFromHost": "runtime.envFromHost",
+  "runtime.setup": "runtime.setup",
+  "runtime.container": "runtime.container",
+  "evaluator.env": "evaluator.env",
+  "interface.env": "interface.env",
+  "interface.envFromHost": "interface.envFromHost",
+  "interface.setup": "interface.setup",
+};
+
+const CONFIG_SECTION_LAYOUTS = {
+  environment: [
+    {
+      id: "identity",
+      title: "Identity",
+      description: "Names, description, and labels used in Studio, docs, and run evidence.",
+      keys: ["id", "description", "tags"],
+      optionalKeys: ["description", "tags"],
+    },
+    {
+      id: "contract",
+      title: "Candidate & Evaluation Contract",
+      description: "What methods must produce, how candidates are evaluated, and which metrics come back.",
+      keys: ["candidate", "evaluator", "metrics"],
+    },
+    {
+      id: "context",
+      title: "Method Context & Trial Files",
+      description: "Environment-owned instructions, references, copied files, records, and output artifacts.",
+      keys: ["methodContext", "trialWorkspace", "records", "outputFiles"],
+      optionalKeys: ["methodContext", "trialWorkspace", "records", "outputFiles"],
+    },
+    {
+      id: "runtime",
+      title: "Runtime & Interface",
+      description: "How editable copies run, install runtime dependencies through runtime.setup, and optionally launch a GUI or helper service.",
+      keys: ["runtime", "interface"],
+      optionalKeys: ["runtime", "interface"],
+    },
+    {
+      id: "advanced",
+      title: "Advanced Schema Fields",
+      description: "Schema identity and any custom fields not covered by the common sections.",
+      keys: ["apiVersion", "config", "capabilities"],
+      optionalKeys: ["capabilities"],
+    },
+  ],
+  method: [
+    {
+      id: "identity",
+      title: "Identity",
+      description: "Names, description, and labels used in Studio, docs, and run evidence.",
+      keys: ["id", "description", "tags"],
+      optionalKeys: ["description", "tags"],
+    },
+    {
+      id: "contract",
+      title: "Accepted Candidate Contract",
+      description: "Which environments this method can work with and what context it expects.",
+      keys: ["accepts"],
+    },
+    {
+      id: "behavior",
+      title: "Method Behavior",
+      description: "How OptPilot invokes the method and which implementation-specific settings are passed in.",
+      keys: ["entrypoint", "settings"],
+      optionalKeys: ["settings"],
+    },
+    {
+      id: "runtime",
+      title: "Runtime & Interface",
+      description: "How editable copies run, install runtime dependencies through runtime.setup, and optionally launch a GUI or helper service.",
+      keys: ["runtime", "interface"],
+      optionalKeys: ["runtime", "interface"],
+    },
+    {
+      id: "advanced",
+      title: "Advanced Schema Fields",
+      description: "Schema identity and any custom fields not covered by the common sections.",
+      keys: ["apiVersion", "config"],
+    },
+  ],
+  resource: [
+    {
+      id: "identity",
+      title: "Identity",
+      description: "Names, description, and labels used in Studio and assistant context.",
+      keys: ["id", "name", "description", "tags"],
+      optionalKeys: ["name", "description", "tags"],
+    },
+    {
+      id: "interface",
+      title: "Launchable Interface",
+      description: "Optional helper GUI settings for editable copies. Interface setup lives under interface.setup.",
+      keys: ["interface"],
+      optionalKeys: ["interface"],
+    },
+    {
+      id: "advanced",
+      title: "Advanced Schema Fields",
+      description: "Schema identity and any custom fields not covered by the common sections.",
+      keys: ["apiVersion", "config"],
+    },
+  ],
+  generic: [
+    {
+      id: "main",
+      title: "Main Fields",
+      description: "Commonly edited fields in this config.",
+      keys: ["id", "name", "label", "description", "tags"],
+    },
+    {
+      id: "advanced",
+      title: "Advanced Fields",
+      description: "Remaining fields in this config.",
+      keys: ["apiVersion", "config"],
+    },
+  ],
+};
+
+const CONFIG_FIELD_HELP = {
+  apiVersion: "Schema version used by OptPilot validation.",
+  config: "Type of config file; this controls which schema validates the file.",
+  id: "Stable id shown in Studio, run evidence, and compatibility checks.",
+  label: "Human-friendly display name.",
+  description: "Short explanation shown in the catalog and assistant context.",
+  tags: "Search and grouping labels.",
+  name: "Display name for this referenced item.",
+  type: "Kind of referenced item or context material.",
+  path: "Path resolved relative to the config that declares it unless noted otherwise.",
+  from: "Source file or folder copied from this component package.",
+  to: "Destination path inside the prepared trial workspace.",
+  candidate: "Defines what a method must produce for this environment.",
+  "candidate.format": "Candidate representation expected by the evaluator.",
+  "candidate.description": "Plain-language description of a candidate for users and LLM methods.",
+  "candidate.materialize": "Where OptPilot places the candidate before evaluation.",
+  "candidate.materialize.root": "Trial workspace subfolder that receives candidate files.",
+  "candidate.parameters": "Parameter schema accepted by this environment.",
+  "candidate.parameters.schema": "Named parameters and their allowed value types.",
+  "candidate.files": "File contract for file-editing methods.",
+  "candidate.files.required": "Files that must exist in every submitted candidate.",
+  "candidate.files.editable": "Files a method is expected to modify.",
+  "candidate.files.allow": "Files a method may include in the candidate bundle.",
+  "candidate.files.deny": "Files a method must not include in the candidate bundle.",
+  "candidate.opaque": "Opaque candidate contract for methods that manage their own internal representation.",
+  "candidate.opaque.family": "Name of the opaque candidate family.",
+  "candidate.parameters.constraints": "Additional constraints over parameter values.",
+  "candidate.parameters.schema.valueType": "Primitive or structured value type accepted for this parameter.",
+  "candidate.parameters.schema.min": "Minimum numeric value.",
+  "candidate.parameters.schema.max": "Maximum numeric value.",
+  "candidate.parameters.schema.values": "Allowed categorical values.",
+  "candidate.parameters.schema.default": "Default value shown to methods and users.",
+  "candidate.parameters.schema.items": "Element schema for array parameters.",
+  "candidate.parameters.schema.properties": "Named child parameter schemas for object parameters.",
+  "candidate.parameters.schema.required": "Required child fields for object parameters.",
+  evaluator: "How OptPilot evaluates one candidate and returns metrics.",
+  "evaluator.python": "Python function called for candidate evaluation.",
+  "evaluator.command": "Subprocess command called for candidate evaluation.",
+  "evaluator.pythonPath": "Extra import paths, resolved relative to this config.",
+  "evaluator.cwd": "Working directory used when running the evaluator.",
+  "evaluator.env": "Environment variables provided to the evaluator.",
+  "evaluator.timeoutSeconds": "Per-trial evaluation time limit.",
+  "evaluator.settings": "Environment-specific settings passed to evaluator code.",
+  trialWorkspace: "Files copied into each trial workspace before evaluation.",
+  methodContext: "Environment-owned context made visible to compatible methods.",
+  "methodContext.instructions": "Prompt or instruction files methods may read.",
+  "methodContext.references": "Datasets, adapters, modules, or docs exposed as method context.",
+  metrics: "Metric names returned by the evaluator.",
+  "metrics.source": "Where metric values come from.",
+  "metrics.keys": "Metrics Studio can display and studies can optimize.",
+  "metrics.path": "File path used when metrics.source is file.",
+  "metrics.database": "SQLite database path used when metrics.source is sqlite.",
+  "metrics.query": "SQLite query used when metrics.source is sqlite.",
+  "metrics.extractor": "Python extractor used when metrics.source is custom.",
+  records: "Extra trial records collected from the evaluator.",
+  "records.source": "Where this record stream comes from.",
+  "records.path": "Record file path for jsonl or csv sources.",
+  "records.database": "SQLite database path for sqlite record sources.",
+  "records.table": "SQLite table name for sqlite_table records.",
+  "records.query": "SQLite query for sqlite_query records.",
+  "records.extractor": "Python extractor used when this record source is custom.",
+  outputFiles: "Artifacts copied or referenced from each completed trial.",
+  "outputFiles.path": "Trial artifact path.",
+  "outputFiles.name": "Display name for this artifact.",
+  "outputFiles.required": "Whether evaluation should fail when this artifact is missing.",
+  accepts: "Candidate contracts this method can work with.",
+  "accepts.formats": "Candidate formats accepted by this method.",
+  "accepts.requires": "Context paths this method expects from an environment.",
+  "accepts.requires.context": "Required environment context fields.",
+  "accepts.requires.capabilities": "Required environment capabilities.",
+  entrypoint: "How OptPilot invokes the method.",
+  "entrypoint.python": "Python class or function implementing the method.",
+  "entrypoint.command": "Command-style method entrypoint.",
+  "entrypoint.pythonPath": "Extra import paths, resolved relative to this config.",
+  "entrypoint.protocol": "Method communication protocol.",
+  settings: "Component-specific knobs passed to the implementation.",
+  "settings.provider": "LLM or service provider name.",
+  "settings.model": "Model or algorithm variant used by the method.",
+  "settings.apiBase": "HTTP endpoint for API-backed methods.",
+  "settings.apiKeyEnvVar": "Environment variable containing the API key.",
+  "settings.temperature": "Sampling randomness for model-backed methods.",
+  "settings.maxTokens": "Maximum response budget for model-backed methods.",
+  "settings.batchSize": "Number of candidates requested per method call.",
+  "settings.includeBaselineCandidate": "Whether to include the environment baseline candidate.",
+  runtime: "How this component is executed when copied and run. Dependency setup belongs under runtime.setup.",
+  "runtime.sandbox": "Use process for a local subprocess, or container for an isolated container runtime.",
+  "runtime.setup": "Install steps Studio runs on the editable copy before execution. Only valid for process runtime.",
+  "runtime.container": "Container image or build settings used when sandbox is container.",
+  "runtime.container.network": "Whether the component container can use network access.",
+  "runtime.workdir": "Working directory inside the copied component source.",
+  "runtime.env": "Environment variables provided to this component runtime.",
+  "runtime.envFromHost": "Environment variable names copied from the host into this runtime.",
+  setup: "Install steps nested under runtime.setup or interface.setup.",
+  "setup.steps": "Ordered setup steps such as uv sync, Python venv install, npm install, or a custom command.",
+  "setup.env": "Environment variables used while running setup steps.",
+  "setup.envFromHost": "Environment variable names copied from the host while running setup.",
+  "setup.timeoutSeconds": "Maximum setup time.",
+  "steps": "Ordered setup steps.",
+  "uses": "Setup step type.",
+  interface: "Optional GUI or helper server Studio can launch for this component.",
+  "interface.label": "Display label for the launchable interface.",
+  "interface.description": "Short explanation of the launchable interface.",
+  "interface.port": "Local port exposed by the launched interface.",
+  "interface.command": "Command used to start the interface.",
+  "interface.cwd": "Working directory used when launching the interface.",
+  "interface.readyPath": "Path Studio polls before opening the interface.",
+  "interface.readyTimeoutSeconds": "Maximum time Studio waits for the interface to become ready.",
+  "interface.extraPorts": "Additional ports exposed through the workspace runtime.",
+  "interface.setup": "Install steps Studio runs before launching this interface.",
+  "interface.env": "Environment variables provided to the launched interface.",
+  "interface.envFromHost": "Environment variable names copied from the host into the launched interface.",
+  files: "File contract or file list for this section.",
+};
+
+function configOrderedKeys(value, path, options = {}) {
+  const keys = Object.keys(value || {});
+  const rootKind = options.rootKind || value && value.config || "";
+  const pathKey = configPathKey(path);
+  const order = CONFIG_FIELD_ORDER[`${rootKind}:${pathKey}`]
+    || CONFIG_FIELD_ORDER[pathKey]
+    || (configIsCandidateParameterPath(path) ? CONFIG_FIELD_ORDER["candidate.parameters.schema.[]"] : []);
+  return [
+    ...order.filter((key) => keys.includes(key)),
+    ...keys.filter((key) => !order.includes(key)),
+  ];
+}
+
+function configPathKey(path) {
+  if (!path || !path.length) return "root";
+  return path.map((part) => typeof part === "number" || /^\d+$/.test(String(part)) ? "[]" : String(part)).join(".");
+}
+
+function configHelpForPath(path, options = {}) {
+  const parts = path || [];
+  const key = configPathKey(path);
+  const rootKind = options.rootKind || "";
+  const last = String(parts[parts.length - 1] || "");
+  const arraylessKey = key.replace(/\.\[\]/g, "");
+  const parameterKey = configIsCandidateParameterPath(parts.slice(0, -1))
+    ? CONFIG_FIELD_HELP[`candidate.parameters.schema.${last}`]
+    : "";
+  const setupKey = key.includes(".setup.") ? CONFIG_FIELD_HELP[key.slice(key.lastIndexOf("setup."))] : "";
+  const specific = CONFIG_FIELD_HELP[`${rootKind}:${key}`]
+    || CONFIG_FIELD_HELP[key]
+    || CONFIG_FIELD_HELP[arraylessKey]
+    || parameterKey
+    || setupKey
+    || CONFIG_FIELD_HELP[last];
+  if (specific) return specific;
+  if (key.startsWith("settings.")) return "Implementation-specific setting passed through to this component.";
+  if (key.endsWith(".path")) return "Path resolved relative to the config that declares it unless noted otherwise.";
+  return "";
+}
+
+function configMissingKnownKeys(value, path, options = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const pathKey = configPathKey(path);
+  let keys = CONFIG_OPTIONAL_FIELDS[pathKey] || (configIsCandidateParameterPath(path) ? CONFIG_OPTIONAL_FIELDS["candidate.parameter"] || [] : []);
+  if (pathKey === "runtime") {
+    const sandbox = value.sandbox || "process";
+    keys = keys.filter((key) => {
+      if (key === "container") return sandbox === "container";
+      if (key === "setup") return sandbox !== "container";
+      return true;
+    });
+  } else if (pathKey === "metrics") {
+    const source = value.source || "return";
+    keys = keys.filter((key) => {
+      if (["path"].includes(key)) return source === "file";
+      if (["database", "query"].includes(key)) return source === "sqlite";
+      if (key === "extractor") return source === "custom";
+      if (key === "settings") return ["file", "sqlite", "custom"].includes(source);
+      return true;
+    });
+  } else if (pathKey === "records.[]") {
+    const source = value.source || "jsonl";
+    keys = keys.filter((key) => {
+      if (key === "path") return ["jsonl", "csv"].includes(source);
+      if (key === "database") return ["sqlite_table", "sqlite_query"].includes(source);
+      if (key === "table") return source === "sqlite_table";
+      if (key === "query") return source === "sqlite_query";
+      if (key === "extractor") return source === "custom";
+      if (key === "settings") return source === "custom";
+      return true;
+    });
+  } else if (pathKey.endsWith("setup.steps.[]")) {
+    const uses = value.uses || "uv";
+    const byType = {
+      uv: ["uses", "cwd", "env", "extras", "groups", "frozen"],
+      "python-venv": ["uses", "cwd", "env", "python", "venv", "requirements", "installProject"],
+      npm: ["uses", "cwd", "env", "install"],
+      command: ["uses", "cwd", "env", "command"],
+    };
+    keys = byType[uses] || byType.uv;
+  }
+  return keys.filter((key) => !(key in value));
+}
+
+function configIsCandidateParameterPath(path) {
+  const parts = (path || []).map((part) => String(part));
+  if (parts.length < 4 || parts[0] !== "candidate" || parts[1] !== "parameters" || parts[2] !== "schema") return false;
+  if (parts.length === 4) return true;
+  if (parts[parts.length - 1] === "items") return true;
+  const propertiesIndex = parts.lastIndexOf("properties");
+  return propertiesIndex >= 4 && parts.length === propertiesIndex + 2;
+}
+
+function configHelpHtml(help) {
+  return help ? `<p class="config-group-help">${escapeHtml(help)}</p>` : "";
+}
+
+function configEnumOptions(path, value) {
+  const key = configPathKey(path);
+  const last = String(path[path.length - 1] ?? "");
+  if (last === "config") return [String(value || "")].filter(Boolean);
+  if (last === "format") return ["parameters", "files", "opaque"];
+  if (key === "metrics.source") return ["return", "file", "stdout", "sqlite", "custom"];
+  if (key === "records.[].source") return ["jsonl", "csv", "sqlite_table", "sqlite_query", "custom"];
+  if (last === "direction") return ["minimize", "maximize"];
+  if (last === "aggregation") return ["mean", "median", "min", "max", "sum", "last", "weighted_mean"];
+  if (last === "level") return ["minimal", "standard", "full"];
+  if (last === "outputFileStorage") return ["reference", "copy"];
+  if (last === "protocol") return ["batch", "session"];
+  if (last === "sandbox") return ["process", "container"];
+  if (last === "uses") return ["uv", "python-venv", "npm", "command"];
+  if (last === "install") return ["ci", "install"];
+  if (last === "network") return ["enabled", "disabled"];
+  if (last === "valueType") return ["float", "int", "bool", "string", "categorical", "array", "object"];
+  return [];
+}
+
+function configTypeSelect(encodedPath) {
+  return `
+    <select data-config-add-type="${encodedPath}">
+      <option value="string">text</option>
+      <option value="number">number</option>
+      <option value="boolean">boolean</option>
+      <option value="object">object</option>
+      <option value="array">list</option>
+    </select>
+  `;
+}
+
+function bindComponentConfigControls(component) {
+  els.componentDetail.querySelectorAll("[data-config-field]").forEach((control) => {
+    const eventName = control.type === "checkbox" || control.tagName === "SELECT" ? "change" : "input";
+    control.addEventListener(eventName, () => {
+      const draft = componentConfigDraft(component);
+      setConfigPath(draft.config, decodeConfigPath(control.dataset.configField), configControlValue(control));
+      markComponentConfigDirty(component);
+    });
+  });
+  els.componentDetail.querySelectorAll(".config-add-field").forEach((button) => {
+    button.addEventListener("click", () => {
+      const path = decodeConfigPath(button.dataset.configAddPath);
+      const keyInput = els.componentDetail.querySelector(`[data-config-add-key="${cssStringEscape(button.dataset.configAddPath)}"]`);
+      const typeSelect = els.componentDetail.querySelector(`[data-config-add-type="${cssStringEscape(button.dataset.configAddPath)}"]`);
+      const key = keyInput && keyInput.value.trim();
+      if (!key) return;
+      const draft = componentConfigDraft(component);
+      const target = getConfigPath(draft.config, path);
+      if (!target || typeof target !== "object" || Array.isArray(target)) return;
+      const rootKind = draft.config && draft.config.config || component.kind;
+      captureComponentConfigOpenSections(component);
+      if (!(key in target)) target[key] = defaultConfigEditorValue(typeSelect && typeSelect.value || "string");
+      ensureComponentConfigSectionOpen(component, configRootSectionIdForPath(path.concat(key), rootKind));
+      markComponentConfigDirty(component);
+      renderComponentDetail();
+    });
+  });
+  els.componentDetail.querySelectorAll(".config-add-standard-field").forEach((button) => {
+    button.addEventListener("click", () => {
+      const path = decodeConfigPath(button.dataset.configAddStandardPath);
+      const key = button.dataset.configAddStandardKey;
+      if (!key) return;
+      const draft = componentConfigDraft(component);
+      const target = getConfigPath(draft.config, path);
+      if (!target || typeof target !== "object" || Array.isArray(target)) return;
+      const rootKind = draft.config && draft.config.config || component.kind;
+      captureComponentConfigOpenSections(component);
+      if (!(key in target)) {
+        target[key] = defaultConfigKnownFieldValue(path, key, draft.config && draft.config.config || component.kind);
+      }
+      ensureComponentConfigSectionOpen(component, configRootSectionIdForPath(path.concat(key), rootKind));
+      markComponentConfigDirty(component);
+      renderComponentDetail();
+    });
+  });
+  els.componentDetail.querySelectorAll(".config-add-item").forEach((button) => {
+    button.addEventListener("click", () => {
+      const path = decodeConfigPath(button.dataset.configAddPath);
+      const typeSelect = els.componentDetail.querySelector(`[data-config-add-type="${cssStringEscape(button.dataset.configAddPath)}"]`);
+      const draft = componentConfigDraft(component);
+      const target = getConfigPath(draft.config, path);
+      if (!Array.isArray(target)) return;
+      captureComponentConfigOpenSections(component);
+      ensureComponentConfigSectionOpen(component, configRootSectionIdForPath(path, draft.config && draft.config.config || component.kind));
+      target.push(defaultConfigEditorValue(typeSelect && typeSelect.value || "string"));
+      markComponentConfigDirty(component);
+      renderComponentDetail();
+    });
+  });
+  els.componentDetail.querySelectorAll(".config-remove-field").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      captureComponentConfigOpenSections(component);
+      removeConfigPath(componentConfigDraft(component).config, decodeConfigPath(button.dataset.configRemovePath));
+      markComponentConfigDirty(component);
+      renderComponentDetail();
+    });
+  });
+  const save = els.componentDetail.querySelector(".component-config-save");
+  if (save) save.addEventListener("click", () => openComponentSession(component, "save"));
+  const reset = els.componentDetail.querySelector(".component-config-reset");
+  if (reset) reset.addEventListener("click", () => resetComponentConfigDraft(component));
+  els.componentDetail.querySelectorAll(".open-settings-from-env").forEach((button) => {
+    button.addEventListener("click", () => openSettings({ tab: "environment" }));
+  });
+}
+
+function configControlValue(control) {
+  const type = control.dataset.configType || "string";
+  if (type === "boolean") return Boolean(control.checked);
+  if (type === "number") {
+    const value = Number(control.value);
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (type === "null") return control.value === "" ? null : control.value;
+  return control.value;
+}
+
+function markComponentConfigDirty(component) {
+  const draft = componentConfigDraft(component);
+  draft.dirty = true;
+  draft.validation = null;
+  draft.workspace = null;
+  const stateLabel = els.componentDetail.querySelector(".component-config-state");
+  if (stateLabel) stateLabel.textContent = "unsaved changes";
+}
+
+function encodeConfigPath(path) {
+  return encodeURIComponent(JSON.stringify(path || []));
+}
+
+function decodeConfigPath(value) {
+  try {
+    return JSON.parse(decodeURIComponent(value || "%5B%5D"));
+  } catch (error) {
+    return [];
+  }
+}
+
+function getConfigPath(root, path) {
+  return (path || []).reduce((value, key) => value == null ? undefined : value[key], root);
+}
+
+function setConfigPath(root, path, value) {
+  if (!path.length) return;
+  const parent = getConfigPath(root, path.slice(0, -1));
+  const key = path[path.length - 1];
+  if (Array.isArray(parent)) parent[Number(key)] = value;
+  else if (parent && typeof parent === "object") parent[key] = value;
+}
+
+function removeConfigPath(root, path) {
+  if (!path.length || isFixedConfigPath(path)) return;
+  const parent = getConfigPath(root, path.slice(0, -1));
+  const key = path[path.length - 1];
+  if (Array.isArray(parent)) parent.splice(Number(key), 1);
+  else if (parent && typeof parent === "object") delete parent[key];
+}
+
+function isFixedConfigPath(path) {
+  return path.length === 1 && ["apiVersion", "config"].includes(String(path[0]));
+}
+
+function defaultConfigEditorValue(type) {
+  if (type === "number") return 0;
+  if (type === "boolean") return false;
+  if (type === "object") return {};
+  if (type === "array") return [];
+  return "";
+}
+
+function defaultConfigKnownFieldValue(path, key, rootKind = "") {
+  const fullPath = configPathKey((path || []).concat(key));
+  if (fullPath === "runtime") return { sandbox: "process" };
+  if (fullPath === "interface") return { label: "", command: ["bash", "-lc", ""], port: 3000 };
+  if (fullPath === "candidate.materialize") return { root: "." };
+  if (fullPath === "candidate.parameters") return { schema: {} };
+  if (fullPath === "candidate.files") return { editable: [{ path: "" }] };
+  if (fullPath === "candidate.opaque") return { family: "" };
+  if (fullPath.endsWith(".setup")) return { steps: [{ uses: "uv" }] };
+  if (fullPath.endsWith(".steps")) return [{ uses: "uv" }];
+  if (fullPath === "runtime.container") return { image: "", network: "disabled" };
+  if (fullPath === "runtime.container.build") return { tag: "" };
+  if (fullPath.endsWith(".env") || fullPath.endsWith(".args") || key === "settings" || key === "expr" || key === "schema") return {};
+  if (fullPath === "candidate.files.required") return [];
+  if (configIsCandidateParameterPath(path) && key === "required") return [];
+  if (configIsCandidateParameterPath(path) && key === "items") return { valueType: "float" };
+  if (configIsCandidateParameterPath(path) && key === "properties") return {};
+  if (["tags", "pythonPath", "envFromHost", "instructions", "records", "outputFiles", "capabilities", "extraPorts", "references", "trialWorkspace", "editable", "allow", "deny", "extraArgs", "groups", "extras", "requirements", "command", "formats", "context", "constraints", "values"].includes(key)) return [];
+  if (key === "methodContext") return { references: [] };
+  if (key === "container") return { image: "", network: "disabled" };
+  if (key === "build") return { tag: "" };
+  if (key === "requires") return {};
+  if (key === "description") return "";
+  if (key === "name" || key === "id" || key === "type" || key === "mimeType" || key === "family") return "";
+  if (key === "valueType") return "float";
+  if (key === "source") return configPathKey(path || []) === "metrics" ? "return" : "jsonl";
+  if (key === "cwd" || key === "workdir" || key === "readyPath" || key === "label" || key === "image" || key === "executable" || key === "context" || key === "dockerfile" || key === "tag" || key === "target" || key === "platform" || key === "path" || key === "database" || key === "table" || key === "query" || key === "extractor" || key === "from" || key === "to" || key === "python" || key === "venv" || key === "install") return "";
+  if (key === "timeoutSeconds" || key === "readyTimeoutSeconds" || key === "port") return key === "port" ? 3000 : 600;
+  if (key === "min" || key === "max" || key === "minItems" || key === "maxItems") return 0;
+  if (key === "installProject" || key === "frozen" || key === "required") return false;
+  if (key === "sandbox") return "process";
+  if (key === "network") return "disabled";
+  if (key === "uses") return "uv";
+  return defaultConfigEditorValue("string");
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function cssStringEscape(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function componentLaunchKey(component) {
@@ -3026,7 +4457,7 @@ function componentLaunchKey(component) {
 
 function interfaceLaunchStatus(component, launchState) {
   const item = component.entry || {};
-  const iface = item.interface || {};
+  const iface = componentConfigDraft(component).config && componentConfigDraft(component).config.interface || item.interface || {};
   const port = iface.port || launchState.port || "-";
   const label = iface.label || launchState.label || "interface";
   const steps = (launchState.steps || []).slice(-6);
@@ -3082,6 +4513,10 @@ function catalogSearchText(component) {
     component.id,
     component.path,
     component.entry && component.entry.label,
+    component.entry && component.entry.id,
+    component.entry && component.entry.path,
+    component.entry && component.entry.qualified_id,
+    component.entry && component.entry.catalog_key,
     summary.description,
     summary.goal,
     summary.candidate_format,
@@ -3089,6 +4524,7 @@ function catalogSearchText(component) {
     summary.implementation_type,
     component.entry && component.entry.interface && component.entry.interface.label,
     component.entry && component.entry.interface && component.entry.interface.port,
+    ...[].concat(component.entry && component.entry.tags || []),
     ...[].concat(summary.candidate_formats || []),
     ...[].concat(summary.metrics || []),
   ].filter(Boolean).join(" "));
@@ -3123,22 +4559,20 @@ function renderPlanDetail() {
       <div>
         <h2>${escapeHtml(plan.title)}</h2>
         <p class="path-text">${escapeHtml(plan.source)}</p>
+        ${studySourceNote(plan)}
       </div>
       ${plan.status && plan.status !== "saved" ? statusPill(plan.status) : ""}
     </div>
-    <div class="action-row">
+    <div class="action-row study-action-row">
       ${!locked ? `<button class="ghost-button plan-draft" type="button">${escapeHtml(saveLabel)}</button>` : ""}
       <button class="primary-button plan-launch" type="button" ${launchEnabled ? "" : "disabled"}>${escapeHtml(launchLabel)}</button>
     </div>
     <div class="plan-layout">
       <section class="study-config-grid">
+        ${studyGuidePanel(plan)}
         ${studyConfigEditor(plan, locked)}
         ${studyReadinessPanel(plan)}
-      </section>
-      <section>
-        <h3>Study YAML</h3>
-        <pre class="code-box yaml-preview">${escapeHtml(plan.draft && plan.draft.yaml || plan.yaml || planYamlPreview(plan) || "")}</pre>
-        <div class="validation-box">${plan.draft ? validationHtml(plan.draft.validation || plan.draft) : ""}</div>
+        ${studyValidationPanel(plan)}
       </section>
     </div>
   `;
@@ -3150,64 +4584,151 @@ function renderPlanDetail() {
 
 function studyConfigEditor(plan, locked) {
   return `
-    <section class="study-card">
-      <h3>Binding</h3>
-      <div class="study-binding">
-        ${readonlyField("Environment", plan.environment && plan.environment.label || "-")}
-        ${readonlyField("Method", plan.method && plan.method.label || "-")}
-      </div>
-    </section>
-    <section class="study-card">
-      <h3>Objective</h3>
+    ${studyConfigSection("Binding", "2 fields", "Choose the environment that evaluates candidates and the method that proposes them.", `
       <div class="control-grid">
-        ${selectField("Metric", "metric", plan.metric || "", metricOptions(plan), locked)}
-        ${selectField("Direction", "direction", plan.direction || "maximize", ["minimize", "maximize"], locked)}
-        ${selectField("Aggregation", "aggregation", plan.aggregation || "mean", ["mean", "median", "min", "max", "sum", "last", "weighted_mean"], locked)}
-        ${inputField("Secondary metrics", "secondaryMetrics", (plan.secondaryMetrics || []).join(", "), "text", locked)}
+        ${catalogSelectField("Environment", "environmentUid", plan.environment && plan.environment.uid || "", state.catalog.environments || [], !(state.catalog.environments || []).length, "Defines the candidate contract, evaluator, metrics, and artifacts.")}
+        ${catalogSelectField("Method", "methodUid", plan.method && plan.method.uid || "", state.catalog.methods || [], !(state.catalog.methods || []).length, "Must accept the environment candidate format and required context.")}
       </div>
-    </section>
-    <section class="study-card">
-      <h3>Run Policy</h3>
+    `)}
+    ${studyConfigSection("Objective", "4 fields", "Tell OptPilot how completed trials should be compared.", `
       <div class="control-grid">
-        ${inputField("Max trials", "maxTrials", plan.maxTrials || "", "number", locked, "1")}
-        ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "1")}
-        ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1")}
-        ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1")}
+        ${selectField("Metric", "metric", plan.metric || "", metricOptions(plan), locked, "Primary metric used to identify the best trial.")}
+        ${selectField("Direction", "direction", plan.direction || "maximize", ["minimize", "maximize"], locked, "Whether lower or higher metric values are better.")}
+        ${selectField("Aggregation", "aggregation", plan.aggregation || "mean", ["mean", "median", "min", "max", "sum", "last", "weighted_mean"], locked, "How repeated observations are reduced to one comparison value.")}
+        ${inputField("Secondary metrics", "secondaryMetrics", (plan.secondaryMetrics || []).join(", "), "text", locked, "", "Additional metrics to display and keep in evidence.")}
       </div>
-    </section>
-    <section class="study-card">
-      <h3>Evidence</h3>
+    `)}
+    ${studyConfigSection("Run Policy", "6 fields", "Set the trial budget and local subprocess execution limits.", `
       <div class="control-grid">
-        ${selectField("Level", "evidenceLevel", plan.evidenceLevel || "standard", ["minimal", "standard", "full"], locked)}
-        ${selectField("File storage", "evidenceStorage", plan.evidenceStorage || "reference", ["reference", "copy"], locked)}
-        ${inputField("Seed", "seed", plan.seed ?? "", "number", locked, "0")}
+        ${inputField("Max trials", "maxTrials", plan.maxTrials || "", "number", locked, "1", "Total candidate evaluations to run.")}
+        ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1", "Per-trial time limit.")}
+        ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1", "Number of trials allowed to run at the same time.")}
+        ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "1", "Optional stop limit for failed trials. Leave blank for no limit.")}
+        ${inputField("Max retries", "maxRetries", plan.maxRetries ?? "", "number", locked, "0", "Retries allowed for a failed trial.")}
+        ${inputField("Max wall-clock seconds", "maxWallClockSeconds", plan.maxWallClockSeconds ?? "", "number", locked, "1", "Optional total run time limit. Leave blank for no limit.")}
+      </div>
+    `)}
+    ${studyConfigSection("Evidence", "4 fields", "Control how much run evidence and artifact material is retained.", `
+      <div class="control-grid">
+        ${selectField("Level", "evidenceLevel", plan.evidenceLevel || "standard", ["minimal", "standard", "full"], locked, "How detailed the run records should be.")}
+        ${selectField("File storage", "evidenceStorage", plan.evidenceStorage || "reference", ["reference", "copy"], locked, "Whether output files are referenced in place or copied into evidence.")}
+        ${inputField("Output directory", "evidenceOutputDir", plan.evidenceOutputDir || "", "text", locked, "", "Optional custom directory for evaluator output artifacts.")}
+        ${inputField("Seed", "seed", plan.seed ?? "", "number", locked, "0", "Seed used when components support reproducibility.")}
+      </div>
+    `)}
+    ${studyConfigSection("Study Details", "3 fields", "Name this run plan and make it easy to find later.", `
+      <div class="control-grid">
+        ${inputField("Name", "name", plan.name || planName(plan), "text", locked, "", "Shown in run folders, the run list, and generated evidence.")}
+        ${inputField("Tags", "tags", (plan.tags || []).join(", "), "text", locked, "", "Comma-separated labels for search and grouping.")}
+      </div>
+      ${textareaField("Description", "description", plan.description || "", locked, "Explain what this study is trying to test.")}
+    `)}
+  `;
+}
+
+function studyConfigSection(title, meta, description, body) {
+  return `
+    <details class="study-card study-config-card">
+      <summary>${studyCardHeading(title, meta, description)}</summary>
+      <div class="study-card-body">${body}</div>
+    </details>
+  `;
+}
+
+function studyGuidePanel(plan) {
+  const environmentLabel = plan.environment && (plan.environment.label || plan.environment.id) || "Choose an environment";
+  const methodLabel = plan.method && (plan.method.label || plan.method.id) || "Choose a method";
+  const metric = plan.metric || firstMetric(plan.environment || {}) || "metric";
+  const direction = plan.direction || "maximize";
+  return `
+    <section class="study-guide-panel">
+      <div>
+        <span>Study Workflow</span>
+        <strong>${escapeHtml(environmentLabel)} + ${escapeHtml(methodLabel)}</strong>
+        <p>The environment defines the candidate contract and metrics. The method proposes compatible candidates. Launching creates execution copies and records trials, candidates, metrics, and artifacts in a run folder.</p>
+      </div>
+      <div class="study-guide-metric">
+        <span>Primary objective</span>
+        <strong>${escapeHtml(metric)} ${escapeHtml(direction)}</strong>
       </div>
     </section>
   `;
+}
+
+function studyCardHeading(title, meta, description = "") {
+  return `
+    <div class="study-card-heading">
+      <span class="study-card-chevron" aria-hidden="true">›</span>
+      <div>
+        <h3>${escapeHtml(title)}</h3>
+        ${description ? `<p class="study-card-help">${escapeHtml(description)}</p>` : ""}
+      </div>
+      <span class="study-card-meta">${escapeHtml(meta)}</span>
+    </div>
+  `;
+}
+
+function studySourceNote(plan) {
+  if (plan.study && plan.study.path) {
+    return `<p class="source-note">Loaded from read-only source. Save Copy creates an editable study config.</p>`;
+  }
+  if (plan.draft && plan.draft.path) {
+    return `<p class="source-note">Editable study config saved at ${escapeHtml(shortPath(plan.draft.path))}.</p>`;
+  }
+  return "";
 }
 
 function readonlyField(label, value) {
   return `<div class="readonly-field"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value || "-")}</strong></div>`;
 }
 
-function inputField(label, field, value, type = "text", disabled = false, min = "") {
+function inputField(label, field, value, type = "text", disabled = false, min = "", help = "") {
   return `
     <label class="control-field">
-      <span>${escapeHtml(label)}</span>
+      ${controlLabelHtml(label, help)}
       <input data-plan-field="${escapeHtml(field)}" type="${escapeHtml(type)}" value="${escapeHtml(value ?? "")}" ${min !== "" ? `min="${escapeHtml(min)}"` : ""} ${disabled ? "disabled" : ""} />
     </label>
   `;
 }
 
-function selectField(label, field, value, options, disabled = false) {
+function textareaField(label, field, value, disabled = false, help = "") {
+  return `
+    <label class="control-field control-field-wide">
+      ${controlLabelHtml(label, help)}
+      <textarea data-plan-field="${escapeHtml(field)}" ${disabled ? "disabled" : ""}>${escapeHtml(value ?? "")}</textarea>
+    </label>
+  `;
+}
+
+function selectField(label, field, value, options, disabled = false, help = "") {
   const optionValues = Array.from(new Set([value, ...(options || [])].filter((item) => item !== "" && item !== null && item !== undefined)));
   return `
     <label class="control-field">
-      <span>${escapeHtml(label)}</span>
+      ${controlLabelHtml(label, help)}
       <select data-plan-field="${escapeHtml(field)}" ${disabled ? "disabled" : ""}>
         ${optionValues.map((option) => `<option value="${escapeHtml(option)}" ${String(option) === String(value) ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}
       </select>
     </label>
+  `;
+}
+
+function catalogSelectField(label, field, value, entries, disabled = false, help = "") {
+  return `
+    <label class="control-field">
+      ${controlLabelHtml(label, help)}
+      <select data-plan-field="${escapeHtml(field)}" ${disabled ? "disabled" : ""}>
+        ${(entries || []).map((entry) => `<option value="${escapeHtml(entry.uid || "")}" ${entry.uid === value ? "selected" : ""}>${escapeHtml(entry.label || entry.id || shortPath(entry.path))}</option>`).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function controlLabelHtml(label, help = "") {
+  return `
+    <span class="control-label">
+      <strong>${escapeHtml(label)}</strong>
+      ${help ? `<small>${escapeHtml(help)}</small>` : ""}
+    </span>
   `;
 }
 
@@ -3221,15 +4742,32 @@ function bindPlanConfigControls(plan) {
     const eventName = control.tagName === "SELECT" ? "change" : "input";
     control.addEventListener(eventName, () => {
       updatePlanField(plan, control.dataset.planField, control.value);
-      refreshPlanPreview(plan);
+      if (control.dataset.planField === "environmentUid" || control.dataset.planField === "methodUid") {
+        renderExperiments();
+      } else {
+        refreshPlanPreview(plan);
+      }
     });
   });
 }
 
 function updatePlanField(plan, field, value) {
   if (plan.study) convertSavedPlanToDraft(plan);
-  if (field === "secondaryMetrics") {
+  if (field === "environmentUid") {
+    const entry = catalogEntryByUid("environment", value);
+    if (entry) {
+      plan.environment = entry;
+      if (!metricOptions(plan).includes(plan.metric)) {
+        plan.metric = firstMetric(entry) || plan.metric || "";
+      }
+    }
+  } else if (field === "methodUid") {
+    const entry = catalogEntryByUid("method", value);
+    if (entry) plan.method = entry;
+  } else if (field === "secondaryMetrics") {
     plan.secondaryMetrics = value.split(",").map((item) => item.trim()).filter(Boolean);
+  } else if (field === "tags") {
+    plan.tags = value.split(",").map((item) => item.trim()).filter(Boolean);
   } else {
     plan[field] = value;
   }
@@ -3247,10 +4785,10 @@ function convertSavedPlanToDraft(plan) {
 }
 
 function refreshPlanPreview(plan) {
-  const preview = els.planDetail.querySelector(".yaml-preview");
-  if (preview) preview.textContent = planYamlPreview(plan);
   const validation = els.planDetail.querySelector(".validation-box");
   if (validation && !plan.draft) validation.innerHTML = "";
+  const validationPanel = els.planDetail.querySelector(".study-validation-section");
+  if (validationPanel && !plan.draft) validationPanel.remove();
   const launchButton = els.planDetail.querySelector(".plan-launch");
   if (launchButton) launchButton.textContent = plan.draft && plan.draft.path ? "Launch Study" : "Save & Launch";
   const saveButton = els.planDetail.querySelector(".plan-draft");
@@ -3301,9 +4839,11 @@ function runRowsWithJobs() {
 }
 
 async function loadRunDetail(runId, options = {}) {
+  const requestSeq = ++state.runDetailRequestSeq;
   state.selectedRunId = runId;
   if (runId && runId.startsWith("job:")) {
     const job = state.jobs.find((item) => `job:${item.job_id}` === runId);
+    if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return;
     state.selectedRun = job ? { job, run: jobRunSummary(job) } : null;
     if (!options.keepTab) state.activeRunTab = "overview";
     if (!options.skipListRender) renderRuns();
@@ -3311,7 +4851,9 @@ async function loadRunDetail(runId, options = {}) {
     renderAssistant();
     return;
   }
-  state.selectedRun = await getJson(`/api/runs/${encodeURIComponent(runId)}`);
+  const detail = await getJson(`/api/runs/${encodeURIComponent(runId)}`);
+  if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return;
+  state.selectedRun = detail;
   if (!options.keepTab) state.activeRunTab = "overview";
   if (!options.skipListRender) renderRuns();
   renderRunDetail();
@@ -3464,10 +5006,16 @@ function runTabContent(detail) {
 
 async function openComponentSession(component, mode) {
   try {
-    const action = mode === "edit" ? "edit-copy" : "open-workspace";
+    const action = mode === "edit" ? "edit-copy" : mode === "save" ? "save-copy" : "open-workspace";
     const agentSession = currentAgentSession();
-    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/${action}`, { session_id: agentSession ? agentSession.id : "" });
+    const requestPayload = { session_id: agentSession ? agentSession.id : "" };
+    if (mode === "edit" || mode === "save") requestPayload.config = componentConfigPayload(component);
+    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/${action}`, requestPayload);
     if (payload.workspace) {
+      const draft = componentConfigDraft(component);
+      draft.dirty = false;
+      draft.workspace = payload.workspace;
+      draft.validation = payload.workspace.validation || null;
       const session = mergeUiWorkspace(payload.workspace);
       state.selectedSessionId = session.id;
       state.selectedFileKey = firstFileKey(session);
@@ -3493,7 +5041,7 @@ async function launchComponentInterface(component) {
   };
   renderComponentDetail();
   try {
-    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/launch-interface-job`, {});
+    const payload = await postJson(`/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/launch-interface-job`, { config: componentConfigPayload(component) });
     const launch = payload.launch || {};
     state.interfaceLaunch = { ...state.interfaceLaunch, ...launch, key: launchKey };
     renderComponentDetail();
@@ -3622,7 +5170,7 @@ async function savePlanDraft(plan, options = {}) {
 
 async function launchPlan(plan) {
   if (plan.study && plan.study.path) {
-    const launched = await postJson("/api/studies/launch", { study_path: plan.study.path, output_root: "runs" }, { tolerateError: true });
+    const launched = await postJson("/api/studies/launch", { study_path: plan.study.path }, { tolerateError: true });
     afterLaunch(launched);
     return;
   }
@@ -3635,11 +5183,18 @@ async function launchPlan(plan) {
       return;
     }
   }
-  const launched = await postJson("/api/studies/launch", { study_path: plan.draft.path, output_root: "runs" }, { tolerateError: true });
+  const launched = await postJson("/api/studies/launch", { study_path: plan.draft.path }, { tolerateError: true });
   afterLaunch(launched);
 }
 
 async function afterLaunch(launched) {
+  if (launched && launched.error) {
+    pushAssistantMessage(["tool", "Study launch blocked", launched.error]);
+    setAssistantOpen(true);
+    renderExperiments();
+    renderAssistant();
+    return;
+  }
   if (launched.job) {
     state.pendingJobId = launched.job.job_id;
     state.selectedRunId = `job:${launched.job.job_id}`;
@@ -3888,17 +5443,22 @@ function planPayload(plan) {
   return {
     environment_path: plan.environment.path,
     method_path: plan.method.path,
-    name: `${plan.environment.id}-${plan.method.id}`,
+    name: plan.name || planName(plan),
+    description: plan.description || "",
+    tags: plan.tags || [],
     metric: plan.metric || firstMetric(plan.environment) || "score",
     direction: plan.direction || "maximize",
     aggregation: plan.aggregation || "mean",
     secondaryMetrics: plan.secondaryMetrics || [],
     maxTrials: Number(plan.maxTrials || 8),
+    maxWallClockSeconds: positiveOptionalNumber(plan.maxWallClockSeconds),
     maxFailures: positiveOptionalNumber(plan.maxFailures),
     parallelism: Number(plan.parallelism || 1),
     timeoutSeconds: Number(plan.timeoutSeconds || 120),
+    maxRetries: nonNegativeOptionalNumber(plan.maxRetries),
     evidenceLevel: plan.evidenceLevel || "standard",
     evidenceStorage: plan.evidenceStorage || "reference",
+    evidenceOutputDir: plan.evidenceOutputDir || "",
     seed: plan.seed === "" || plan.seed === null || plan.seed === undefined ? null : Number(plan.seed),
   };
 }
@@ -3981,16 +5541,22 @@ function planFromPair(pair) {
   const plan = {
     environment: pair.environment,
     method: pair.method,
+    name: `${pair.environment.id}-${pair.method.id}`,
+    description: "",
+    tags: [],
     metric,
     direction: directionForMetric(metric),
     aggregation: "mean",
     secondaryMetrics,
     maxTrials: 8,
+    maxWallClockSeconds: "",
     maxFailures: "",
     parallelism: 1,
     timeoutSeconds,
+    maxRetries: "",
     evidenceLevel: "standard",
     evidenceStorage: "reference",
+    evidenceOutputDir: "",
     seed: 0,
   };
   return {
@@ -4009,9 +5575,13 @@ function planYamlPreview(plan) {
   const lines = [
     "apiVersion: optpilot.io/v1",
     "config: study",
-    `name: ${plan.environment && plan.method ? `${plan.environment.id}-${plan.method.id}` : slug(plan.title || "study")}`,
-    "",
+    `name: ${yamlScalar(plan.name || planName(plan))}`,
   ];
+  if (plan.description) lines.push(`description: ${yamlScalar(plan.description)}`);
+  if ((plan.tags || []).length) {
+    lines.push(`tags: [${plan.tags.map(yamlScalar).join(", ")}]`);
+  }
+  lines.push("");
   if (plan.environment) lines.push(`environmentConfig: ${plan.environment.path}`);
   if (plan.method) lines.push(`methodConfig: ${plan.method.path}`);
   lines.push(
@@ -4029,6 +5599,10 @@ function planYamlPreview(plan) {
     "budget:",
     `  maxTrials: ${Number(plan.maxTrials || 1)}`,
   );
+  const maxWallClockSeconds = positiveOptionalNumber(plan.maxWallClockSeconds);
+  if (maxWallClockSeconds !== null) {
+    lines.push(`  maxWallClockSeconds: ${maxWallClockSeconds}`);
+  }
   const maxFailures = positiveOptionalNumber(plan.maxFailures);
   if (maxFailures !== null) {
     lines.push(`  maxFailures: ${maxFailures}`);
@@ -4041,16 +5615,28 @@ function planYamlPreview(plan) {
   if (plan.timeoutSeconds !== "" && plan.timeoutSeconds !== null && plan.timeoutSeconds !== undefined) {
     lines.push(`  timeoutSeconds: ${Number(plan.timeoutSeconds || 0)}`);
   }
+  const maxRetries = nonNegativeOptionalNumber(plan.maxRetries);
+  if (maxRetries !== null) {
+    lines.push("  retry:", `    maxRetries: ${maxRetries}`);
+  }
   lines.push(
     "",
     "evidence:",
     `  level: ${plan.evidenceLevel || "standard"}`,
     `  outputFileStorage: ${plan.evidenceStorage || "reference"}`,
   );
+  if (plan.evidenceOutputDir) {
+    lines.push(`  outputDir: ${yamlScalar(plan.evidenceOutputDir)}`);
+  }
   if (plan.seed !== "" && plan.seed !== null && plan.seed !== undefined) {
     lines.push("", "reproducibility:", `  seed: ${Number(plan.seed || 0)}`);
   }
   return lines.join("\n");
+}
+
+function planName(plan) {
+  if (plan && plan.environment && plan.method) return `${plan.environment.id}-${plan.method.id}`;
+  return slug(plan && plan.title || "study");
 }
 
 function compatibilityChecks(pair) {
@@ -4063,22 +5649,38 @@ function studyReadinessPanel(plan) {
   if (!rows.length) return "";
   return `
     <div class="readiness-panel">
-      <h3>Readiness</h3>
+      <h3>Launch Preview</h3>
       <div class="readiness-list">${rows.map(readinessRow).join("")}</div>
     </div>
+  `;
+}
+
+function studyValidationPanel(plan) {
+  if (!plan.draft) return "";
+  return `
+    <section class="study-card study-validation-section">
+      <h3>Validation</h3>
+      <div class="validation-box">${validationHtml(plan.draft.validation || plan.draft)}</div>
+    </section>
   `;
 }
 
 function studyReadinessRows(plan) {
   const rows = [];
   if (plan.environment && plan.method) {
-    rows.push(["Binding", "Environment and method references are resolved.", "ready"]);
-  }
-  if (plan.study && plan.study.path) {
-    rows.push(["Catalog config", "Loaded from Catalog. Editing saves a separate copy.", "ready"]);
-    return rows;
+    rows.push(["Binding", `${plan.environment.label || plan.environment.id} + ${plan.method.label || plan.method.id}`, "ready"]);
+    rows.push(["Environment runtime", componentExecutionSummary(plan.environment.raw_config || {}), "ready"]);
+    rows.push(["Method runtime", componentExecutionSummary(plan.method.raw_config || {}), "ready"]);
+  } else {
+    rows.push(["Binding", "Choose one environment and one method before launch.", "review"]);
   }
   for (const check of plan.checks || []) rows.push(check);
+  rows.push(["Execution copies", "Catalog source stays read-only. Launching runs copied source workspaces.", "ready"]);
+  rows.push(["Run evidence", "Candidates, trials, metrics, and artifacts will be recorded in the run folder.", "ready"]);
+  if (plan.study && plan.study.path) {
+    rows.push(["Study config", "Loaded from saved config. Save Copy before changing fields.", "ready"]);
+    return rows;
+  }
   if (plan.draft && plan.draft.validation) {
     const valid = Boolean(plan.draft.validation.valid);
     rows.push(["Study config", valid ? "Schema validation passed." : "Schema validation needs review.", valid ? "valid" : "review"]);
@@ -4491,10 +6093,10 @@ function capabilityItem(capability) {
 
 function statusClass(status) {
   const value = String(status || "unknown");
-  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "docker", "podman"].includes(value)) return "status-ready";
+  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "configured", "docker", "podman"].includes(value)) return "status-ready";
   if (["failed", "invalid", "incompatible", "unavailable", "offline", "missing", "off", "setup"].includes(value)) return "status-failed";
   if (["running", "validating", "opening"].includes(value)) return "status-running";
-  if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited"].includes(value)) return "status-review";
+  if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited", "pending"].includes(value)) return "status-review";
   return `status-${escapeHtml(value)}`;
 }
 
@@ -4515,6 +6117,16 @@ function positiveOptionalNumber(value) {
   if (value === "" || value === null || value === undefined) return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function nonNegativeOptionalNumber(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function yamlScalar(value) {
+  return JSON.stringify(String(value ?? ""));
 }
 
 function formatBytes(value) {

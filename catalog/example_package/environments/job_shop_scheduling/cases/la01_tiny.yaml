@@ -1,6 +1,6 @@
 name: la01-tiny
 machine_count: 4
-lower_bound: 20
+lower_bound: 14
 due_date: 26
 jobs:
   - - {machine: 0, duration: 2}

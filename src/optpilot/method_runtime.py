@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import utc_now_iso
-from .setup import apply_prepared_env
+from .setup import apply_prepared_env, minimal_host_env
 
 
 TERMINAL_STATES = {"completed", "failed", "finished", "succeeded", "cancelled"}
@@ -777,7 +777,7 @@ def _container_pythonpath() -> str:
 
 
 def _host_method_env(runtime: Dict[str, Any]) -> Dict[str, str]:
-    env = apply_prepared_env(os.environ.copy(), runtime.get("preparedEnv", {}))
+    env = apply_prepared_env(minimal_host_env(), runtime.get("preparedEnv", {}))
     env.update({str(key): str(value) for key, value in runtime.get("env", {}).items()})
     env.update({str(key): str(value) for key, value in runtime.get("environmentVariables", {}).items()})
     env.update(_host_env_passthrough(runtime))

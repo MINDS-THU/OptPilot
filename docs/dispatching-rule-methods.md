@@ -5,35 +5,69 @@ description: How dispatching-rule methods connect to the job-shop example.
 
 # Dispatching Rule Methods
 
-Dispatching rules are the simplest natural method family for job-shop scheduling. The examples include both a dependency-free OptPilot baseline and a wrapper around JobShopLib's built-in dispatching-rule solver.
+Dispatching rules are the simplest useful job-shop method family. They choose
+which available operation to schedule next. The examples show three OptPilot
+patterns with increasing strength:
 
-| Example | Method config | Environment config | Dependency |
+- emit one fixed parameter candidate
+- tune bounded dispatch-rule weights over several trials
+- wrap JobShopLib's dispatching-rule solver and return complete schedules
+
+The file-copy baseline is also included as a smoke test for file candidates. It
+does not optimize by itself.
+
+## Which Contract To Use
+
+| Example | Environment config | Candidate returned by method | Extra dependency |
 | --- | --- | --- | --- |
-| Fixed weighted rule | `catalog/example_package/methods/fixed_rule_parameters/method.yaml` | `environment_rule_parameters.yaml` | none |
-| Baseline Python rule file | `catalog/example_package/methods/baseline_file_copy/method.yaml` | `environment_dispatch_rule.yaml` | none |
-| JobShopLib dispatching rule | `catalog/example_package/methods/job_shop_lib_dispatching_rule/method.yaml` | `environment_schedule_solution.yaml` | `job-shop-lib` |
+| Fixed weighted rule | `environment_rule_parameters.yaml` | one parameter dictionary | none |
+| Tune weighted rule parameters | `environment_rule_parameters.yaml` | several parameter dictionaries | none |
+| Baseline Python rule file | `environment_dispatch_rule.yaml` | unmodified `dispatch_rule.py` | none |
+| JobShopLib dispatching rule | `environment_schedule_solution.yaml` | `spec.solutions` schedules | `uv sync --extra examples` |
 
-## Dependency-Free Baselines
+## Dependency-Free Parameter Methods
 
-Run the parameter baseline:
+Run the fixed baseline:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-Run the file-candidate baseline:
+Run the deterministic tuner:
+
+```bash
+uv run optpilot validate catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
+```
+
+Both studies use `environment_rule_parameters.yaml`. The environment exposes a
+schema for four numeric weights. The fixed baseline submits one setting. The
+tuner reads the schema from candidate context, proposes a bounded grid of
+settings, and lets OptPilot evaluate each candidate against the same cases.
+
+This is the smallest useful optimizer in the tutorial because improvement comes
+from multiple OptPilot trials, not from a hidden solver loop.
+
+## File-Candidate Smoke Test
+
+Run:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
-These two studies are useful sanity checks before adding external method dependencies.
+This study uses `baseline-file-copy` with `environment_dispatch_rule.yaml`. The
+method copies the environment's template `dispatch_rule.py` into the candidate
+store, and OptPilot materializes it into the trial workspace before evaluation.
+
+Use this to verify file-candidate materialization before trying an LLM or a
+larger heuristic-code generator.
 
 ## JobShopLib Dispatching Rule
 
-Install the examples extra:
+Install the optional example dependencies:
 
 ```bash
 uv sync --extra examples
@@ -46,9 +80,9 @@ uv run optpilot validate catalog/example_package/studies/job_shop_lib_dispatchin
 uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
 ```
 
-The JobShopLib method reads the job-shop case references exposed through `methodContext.references`, calls JobShopLib for each case, and emits a schedule-solution candidate:
-
-Candidate `spec` payload fragment:
+This method uses `environment_schedule_solution.yaml`. It reads validation
+cases from `methodContext.references`, calls JobShopLib's
+`DispatchingRuleSolver`, and emits schedule-solution parameters:
 
 ```yaml
 solutions:
@@ -67,22 +101,24 @@ The method owns the JobShopLib call:
 from job_shop_lib.dispatching.rules import DispatchingRuleSolver
 ```
 
-JobShopLib also exposes individual rule functions and scorers such as shortest processing time, first-come first-served, most work remaining, most operations remaining, and random operation. To use a different built-in rule, change the method setting:
+The environment does not import JobShopLib. It validates the returned schedule
+and computes the same metrics used by every other job-shop method.
 
-Method `settings` fragment:
+To use a different built-in rule, change the method setting:
 
 ```yaml
 settings:
   dispatchingRule: shortest_processing_time
 ```
 
-The environment does not import JobShopLib. It validates the schedule and computes the same metrics used by every other job-shop method.
+## What This Page Teaches
 
-## Why This Method Is Included
+Dispatching rules show three different OptPilot boundaries:
 
-This page shows two levels of integration:
+- parameter candidates when the environment can turn weights into behavior
+- file candidates when the candidate itself is source code
+- schedule-solution candidates when an external library produces complete
+  schedules
 
-- a tiny dependency-free method useful for first runs
-- a real external-library wrapper that reuses JobShopLib while producing the same schedule-solution contract as any other external solver
-
-That contrast is useful for users deciding whether to write a small native OptPilot method or wrap an existing method library.
+Those boundaries are reusable beyond job-shop scheduling. Pick the one that
+matches what your method naturally produces.

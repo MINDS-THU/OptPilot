@@ -1,8 +1,0 @@
-duration: 120.0
-num_aircraft: 2
-pallet_interval: 20.0
-pallet_expiration_time: 120.0
-flight_time: 30.0
-unload_time: 2.0
-return_time: 30.0
-maintenance_time: 10.0

@@ -1,0 +1,38 @@
+apiVersion: optpilot.io/v1
+config: method
+id: tune-dispatch-weights
+description: Deterministically searches weighted dispatch-rule parameters for the job-shop example.
+tags: [job-shop, parameters, optimizer, no-api]
+
+entrypoint:
+  python: method:TuneDispatchWeightsMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 3
+  maxCandidates: 12
+  candidates:
+    - remaining_work_weight: 0.0
+      processing_time_weight: -3.0
+      machine_ready_weight: -2.0
+      job_ready_weight: -2.0
+    - remaining_work_weight: 0.0
+      processing_time_weight: -2.0
+      machine_ready_weight: -2.0
+      job_ready_weight: -2.0
+    - remaining_work_weight: 2.0
+      processing_time_weight: -1.0
+      machine_ready_weight: -0.1
+      job_ready_weight: -0.1
+  grid:
+    remaining_work_weight: [0.0, 1.0, 2.0]
+    processing_time_weight: [-3.0, -2.0, -1.0]
+    machine_ready_weight: [-2.0, -0.5, -0.1]
+    job_ready_weight: [-2.0, -0.5, -0.1]
+
+accepts:
+  formats: [parameters]
+  requires:
+    context:
+      - candidate.parameters.schema

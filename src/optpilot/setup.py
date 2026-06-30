@@ -118,7 +118,7 @@ def apply_prepared_env(env: Dict[str, str], prepared_env: JsonDict | None) -> Di
 
 
 def setup_env(setup: JsonDict) -> Dict[str, str]:
-    env = _minimal_host_env()
+    env = minimal_host_env()
     for key in setup.get("envFromHost", []) or []:
         key = str(key)
         if key in os.environ:
@@ -127,20 +127,28 @@ def setup_env(setup: JsonDict) -> Dict[str, str]:
     return env
 
 
-def _minimal_host_env() -> Dict[str, str]:
+def minimal_host_env() -> Dict[str, str]:
     keys = [
         "PATH",
         "HOME",
         "USER",
         "LOGNAME",
         "SHELL",
+        "LANG",
+        "LC_ALL",
         "TMPDIR",
         "TEMP",
         "TMP",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
         "SYSTEMROOT",
         "SystemRoot",
     ]
     return {key: os.environ[key] for key in keys if key in os.environ}
+
+
+def _minimal_host_env() -> Dict[str, str]:
+    return minimal_host_env()
 
 
 def setup_commands_for_step(step: JsonDict, root: Path) -> List[List[str]]:

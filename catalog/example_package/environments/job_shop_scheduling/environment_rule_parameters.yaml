@@ -14,6 +14,8 @@ evaluator:
         path: cases/ft06_small.yaml
       - id: la01_tiny
         path: cases/la01_tiny.yaml
+      - id: ft06_standard
+        path: cases/ft06_standard.yaml
 
 candidate:
   format: parameters
@@ -44,6 +46,21 @@ candidate:
         max: 2.0
         default: -0.1
         description: Weight for the selected job ready time.
+
+methodContext:
+  references:
+    - name: ft06_small
+      path: cases/ft06_small.yaml
+      type: job_shop_case
+      description: Validation case used by the parameter evaluator.
+    - name: la01_tiny
+      path: cases/la01_tiny.yaml
+      type: job_shop_case
+      description: Validation case used by the parameter evaluator.
+    - name: ft06_standard
+      path: cases/ft06_standard.yaml
+      type: job_shop_case
+      description: Larger validation case used by the parameter evaluator.
 
 metrics:
   source: return

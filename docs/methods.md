@@ -7,7 +7,8 @@ description: How OptPilot connects user-owned optimization methods to environmen
 
 OptPilot exposes one optimization abstraction: `method`.
 
-A method proposes candidates. It can be a random search, Bayesian optimizer, RL trainer, metaheuristic, LLM workflow, or an existing agent process. OptPilot does not split methods into separate controller and engine concepts.
+A method proposes candidates. It can be a random search, Bayesian optimizer, RL
+trainer, metaheuristic, LLM workflow, or an existing agent process.
 
 Methods remain user-owned. OptPilot provides the invocation protocol, candidate contract checking, trial orchestration, and evidence recording around them.
 
@@ -121,12 +122,15 @@ Expose those files through the environment config's top-level `methodContext.ref
 ```yaml
 methodContext:
   references:
-    - name: ft06_small
-      type: job_shop_case
-      path: cases/ft06_small.yaml
+    - name: validation_small
+      type: validation_case
+      path: cases/validation_small.yaml
 ```
 
-OptPilot includes that context in `study_state["candidate_context"]`. A method can read the referenced files and emit candidate keys using the reference names, for example `spec.solutions.ft06_small`. The evaluator decides how those names map to its own settings.
+OptPilot includes that context in `study_state["candidate_context"]`. A method
+can read the referenced files and emit candidate keys using the reference
+names, for example `spec.solutions.validation_small`. The evaluator decides how
+those names map to its own settings.
 
 ## Session Protocol
 
@@ -181,5 +185,8 @@ runtime:
       tag: my-agent-image:latest
   envFromHost: [OPENAI_API_KEY]
 ```
+
+Relative `build.context` paths are resolved from the method config file.
+Relative `build.dockerfile` paths are resolved from `build.context`.
 
 Method runtime containers are independent from environment runtime containers. Use method runtime for optimizer or agent dependencies, and environment runtime for simulator or evaluator dependencies.

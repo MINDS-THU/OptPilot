@@ -66,7 +66,14 @@ OPTPILOT_AGENT_TOOLS = [
 
 
 def _tool_schema(properties: JsonDict, required: Optional[List[str]] = None) -> JsonDict:
-    return {"type": "object", "properties": properties, "required": required or []}
+    return {"type": "object", "additionalProperties": False, "properties": properties, "required": required or []}
+
+
+CONFIG_KIND_SCHEMA = {"type": "string", "enum": ["environment", "method", "resource", "study"]}
+OBJECTIVE_DIRECTION_SCHEMA = {"type": "string", "enum": ["maximize", "minimize"]}
+OBJECTIVE_AGGREGATION_SCHEMA = {"type": "string", "enum": ["mean", "median", "min", "max", "sum", "last", "weighted_mean"]}
+EVIDENCE_LEVEL_SCHEMA = {"type": "string", "enum": ["minimal", "standard", "full"]}
+EVIDENCE_STORAGE_SCHEMA = {"type": "string", "enum": ["reference", "copy"]}
 
 
 OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
@@ -129,6 +136,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Run a bounded command in an editable attached workspace. Risky commands return an approval request.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
+            "cwd": {"type": "string"},
             "command": {"type": "array", "items": {"type": "string"}},
             "timeout_seconds": {"type": "integer"},
         }, ["command"]),
@@ -139,18 +147,19 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
             "port": {"type": "integer"},
+            "extra_ports": {"type": "array", "items": {"type": "integer"}},
         }, ["port"]),
     },
     {
         "name": "optpilot_catalog_list",
         "description": "List reusable catalog environments, methods, resources, plus saved study plans.",
-        "parameters": _tool_schema({"config_kind": {"type": "string"}}),
+        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA}),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_catalog_detail",
         "description": "Inspect one reusable catalog entry or saved study plan by kind and uid/path.",
-        "parameters": _tool_schema({"config_kind": {"type": "string"}, "uid": {"type": "string"}, "path": {"type": "string"}}, ["config_kind"]),
+        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string"}, "path": {"type": "string"}}, ["config_kind"]),
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -190,7 +199,27 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     {
         "name": "optpilot_study_draft",
         "description": "Draft a study from selected environment and method configs.",
-        "parameters": _tool_schema({"environment_path": {"type": "string"}, "method_path": {"type": "string"}, "name": {"type": "string"}, "metric": {"type": "string"}, "direction": {"type": "string"}, "maxTrials": {"type": "integer"}}),
+        "parameters": _tool_schema({
+            "environment_path": {"type": "string"},
+            "method_path": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "metric": {"type": "string"},
+            "direction": OBJECTIVE_DIRECTION_SCHEMA,
+            "aggregation": OBJECTIVE_AGGREGATION_SCHEMA,
+            "secondaryMetrics": {"type": "array", "items": {"type": "string"}},
+            "maxTrials": {"type": "integer", "minimum": 1},
+            "maxWallClockSeconds": {"type": "integer", "minimum": 1},
+            "maxFailures": {"type": "integer", "minimum": 1},
+            "parallelism": {"type": "integer", "minimum": 1},
+            "timeoutSeconds": {"type": "integer", "minimum": 1},
+            "maxRetries": {"type": "integer", "minimum": 0},
+            "evidenceLevel": EVIDENCE_LEVEL_SCHEMA,
+            "evidenceStorage": EVIDENCE_STORAGE_SCHEMA,
+            "evidenceOutputDir": {"type": "string"},
+            "seed": {"type": "integer"},
+        }, ["environment_path", "method_path"]),
     },
     {
         "name": "optpilot_study_save",
@@ -200,7 +229,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     {
         "name": "optpilot_study_launch",
         "description": "Launch a validated study after approval.",
-        "parameters": _tool_schema({"study_path": {"type": "string"}, "output_root": {"type": "string"}}, ["study_path"]),
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "output_root": {"type": "string"}}, ["study_path"]),
     },
     {
         "name": "optpilot_job_stop",
@@ -239,7 +268,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     {
         "name": "optpilot_smoke_test_study",
         "description": "Run a small validated study into a temporary output directory.",
-        "parameters": _tool_schema({"study_path": {"type": "string"}, "max_trials": {"type": "integer"}}, ["study_path"]),
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "max_trials": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 10}}, ["study_path"]),
     },
     {
         "name": "optpilot_docs_search",
@@ -250,13 +279,13 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     {
         "name": "optpilot_capability_list",
         "description": "List configured assistant skills, MCP servers, custom tools, and permission defaults.",
-        "parameters": _tool_schema({"capability_kind": {"type": "string"}}),
+        "parameters": _tool_schema({"capability_kind": {"type": "string", "enum": ["skill", "mcp_server", "custom_tool"]}}),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_capability_detail",
         "description": "Inspect one configured assistant capability by kind and id.",
-        "parameters": _tool_schema({"capability_kind": {"type": "string"}, "id": {"type": "string"}}, ["capability_kind", "id"]),
+        "parameters": _tool_schema({"capability_kind": {"type": "string", "enum": ["skill", "mcp_server", "custom_tool"]}, "id": {"type": "string"}}, ["capability_kind", "id"]),
         "annotations": {"readOnlyHint": True},
     },
 ]

@@ -30,7 +30,8 @@ from optpilot.candidate_files import CandidateFileStore, store_candidate_file
 from optpilot.config import compile_authoring_config
 from optpilot.evidence import EvidenceView
 from optpilot.environment import build_environment_snapshot
-from optpilot.execution import _aggregate_metric_values
+from optpilot.execution import _aggregate_metric_values, _worker_process_env
+from optpilot.method_runtime import _host_method_env
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 from optpilot.runner import run_expanded_study_spec, run_study
 from optpilot.schema_validation import validate_public_config_schema
@@ -46,6 +47,7 @@ from optpilot.ui.server import (
     _agent_session_operation_lock,
     _append_agent_message,
     _append_jsonl,
+    _catalog_detail,
     _agent_settings_payload,
     _approve_agent_action,
     _attach_agent_workspace,
@@ -66,6 +68,7 @@ from optpilot.ui.server import (
     _list_runs,
     _launch_catalog_interface,
     _interface_launch_by_id,
+    _open_catalog_workspace,
     _open_study_workspace,
     _read_agent_approvals,
     _read_agent_events,
@@ -79,6 +82,7 @@ from optpilot.ui.server import (
     _local_code_server_executable,
     _start_catalog_interface_launch,
     _validate_study,
+    _require_declared_env_from_host,
 )
 
 
@@ -310,6 +314,41 @@ class MvpIntegrationTest(unittest.TestCase):
                     self.assertEqual(observations[0]["status"], "success")
                     self.assertIn("normalized_makespan", observations[0]["metric_values"])
 
+    def test_job_shop_tune_dispatch_weights_improves_over_fixed_baseline(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        baseline_path = repo_root / "catalog" / "example_package" / "studies" / "job_shop_rule_parameters_baseline.yaml"
+        tuner_path = repo_root / "catalog" / "example_package" / "studies" / "job_shop_tune_dispatch_weights.yaml"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            baseline = run_study(str(baseline_path), output_root=tmp_dir)
+            tuned = run_study(str(tuner_path), output_root=tmp_dir)
+
+            self.assertEqual(baseline.completed_trials, 1)
+            self.assertEqual(baseline.failure_count, 0)
+            self.assertEqual(tuned.completed_trials, 12)
+            self.assertEqual(tuned.failure_count, 0)
+            self.assertIsNotNone(baseline.best_metric)
+            self.assertIsNotNone(tuned.best_metric)
+            self.assertLess(tuned.best_metric, baseline.best_metric)
+
+    def test_job_shop_rl_uses_environment_owned_training_context(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        spec = compile_authoring_config(
+            repo_root / "catalog" / "example_package" / "studies" / "job_shop_rl_stable_baselines.yaml"
+        )
+        method_config = spec["method"]["config"]
+        references = spec["candidate"]["context"]["methodContext"]["references"]
+        capabilities = {item["id"] for item in spec["candidate"]["context"]["capabilities"]}
+
+        self.assertNotIn("trainInstances", method_config)
+        self.assertIn("job-shop-rl-training-context", capabilities)
+        self.assertEqual(
+            {reference["name"] for reference in references if reference.get("type") == "job_shop_training_case"},
+            {"train_tiny_a", "train_tiny_b"},
+        )
+        adapter = next(reference for reference in references if reference["name"] == "rl_env_adapter")
+        self.assertEqual(adapter["type"], "python_module")
+        self.assertTrue(Path(adapter["path"]).exists())
+
     @unittest.skipUnless(_stable_baselines3_stack_importable(), "stable-baselines3 example stack is not importable")
     def test_job_shop_stable_baselines_example_runs_end_to_end(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -414,7 +453,7 @@ class MvpIntegrationTest(unittest.TestCase):
         }
 
         self.assertEqual(reference_cases, settings_cases)
-        self.assertEqual(settings_cases, {"ft06_small", "la01_tiny"})
+        self.assertEqual(settings_cases, {"ft06_small", "ft06_standard", "la01_tiny"})
 
     def test_weighted_mean_supports_per_result_weights(self) -> None:
         metric_results = [
@@ -1580,6 +1619,26 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("--network", fake_invocations[-1])
             self.assertIn("OPTPILOT_METHOD_TEST_TOKEN=secret-token", fake_invocations[-1])
 
+    def test_process_runtimes_only_receive_declared_host_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPTPILOT_DECLARED_TOKEN": "visible",
+                "OPTPILOT_UNDECLARED_TOKEN": "hidden",
+                "PATH": os.environ.get("PATH", ""),
+            },
+            clear=False,
+        ):
+            method_env = _host_method_env({"envFromHost": ["OPTPILOT_DECLARED_TOKEN"], "env": {"STATIC_VALUE": "1"}})
+            worker_env = _worker_process_env({"envFromHost": ["OPTPILOT_DECLARED_TOKEN"], "env": {"STATIC_VALUE": "1"}})
+
+        self.assertEqual(method_env["OPTPILOT_DECLARED_TOKEN"], "visible")
+        self.assertEqual(worker_env["OPTPILOT_DECLARED_TOKEN"], "visible")
+        self.assertEqual(method_env["STATIC_VALUE"], "1")
+        self.assertEqual(worker_env["STATIC_VALUE"], "1")
+        self.assertNotIn("OPTPILOT_UNDECLARED_TOKEN", method_env)
+        self.assertNotIn("OPTPILOT_UNDECLARED_TOKEN", worker_env)
+
     def test_method_config_rejects_unimplemented_shapes(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         for implementation in [
@@ -1933,6 +1992,84 @@ class MvpIntegrationTest(unittest.TestCase):
         container_on_process = deepcopy(environment)
         container_on_process["runtime"] = {"sandbox": "process", "container": {"image": "python:3.12"}}
         self.assertFalse(validate_public_config_schema(container_on_process).valid)
+
+    def test_container_build_dockerfile_resolves_relative_to_build_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            docker_dir = tmp_path / "docker"
+            docker_dir.mkdir()
+            dockerfile = docker_dir / "Dockerfile"
+            dockerfile.write_text("FROM python:3.11-slim\n", encoding="utf-8")
+            runtime = {
+                "sandbox": "container",
+                "container": {
+                    "image": "optpilot-context-relative-test:latest",
+                    "build": {
+                        "context": "docker",
+                        "dockerfile": "Dockerfile",
+                        "tag": "optpilot-context-relative-test:latest",
+                    },
+                    "network": "disabled",
+                },
+            }
+            environment_path = tmp_path / "environment.yaml"
+            environment_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "container-context-env",
+                        "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
+                        "runtime": runtime,
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 1.0}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["throughput"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            method_path = tmp_path / "method.yaml"
+            method_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "container-context-method",
+                        "entrypoint": {"python": "tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod"},
+                        "runtime": runtime,
+                        "settings": {"batchSize": 1, "values": {"x": 0.5}},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            study_path = tmp_path / "study.yaml"
+            study_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "container-context-study",
+                        "environmentConfig": "environment.yaml",
+                        "methodConfig": "method.yaml",
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            compiled = compile_authoring_config(study_path)
+
+        self.assertEqual(compiled["execution"]["backend"]["config"]["build"]["context"], str(docker_dir.resolve()))
+        self.assertEqual(compiled["execution"]["backend"]["config"]["build"]["dockerfile"], str(dockerfile.resolve()))
+        self.assertEqual(compiled["method"]["runtime"]["build"]["context"], str(docker_dir.resolve()))
+        self.assertEqual(compiled["method"]["runtime"]["build"]["dockerfile"], str(dockerfile.resolve()))
 
     def test_public_schema_rejects_unimplemented_runtime_and_candidate_shapes(self) -> None:
         environment = {
@@ -2464,66 +2601,6 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertEqual(observations[0]["status"], "timeout")
             self.assertEqual(observations[0]["provenance"]["resource_profile"]["timeoutSeconds"], 1)
 
-    def test_sa_example_evaluator_timeout_kills_simulator_process_group(self) -> None:
-        from catalog.example_package.environments.strategic_airlift_devs.evaluator import evaluate
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            workspace = tmp_path / "workspace"
-            simulator_root = workspace / "simulator"
-            devs_project = simulator_root / "devs_project"
-            devs_project.mkdir(parents=True)
-            (devs_project / "__init__.py").write_text("", encoding="utf-8")
-
-            marker = f"optpilot-sa-timeout-{time.time_ns()}"
-            (simulator_root / "child_sleeper.py").write_text(
-                "import time\n"
-                "time.sleep(30)\n",
-                encoding="utf-8",
-            )
-            (devs_project / "run_strategicairlift_d0.py").write_text(
-                "import subprocess\n"
-                "import sys\n"
-                "import time\n"
-                f"subprocess.Popen([sys.executable, 'child_sleeper.py', '{marker}'])\n"
-                "time.sleep(30)\n",
-                encoding="utf-8",
-            )
-
-            before = self._process_count_with_marker(marker)
-            with self.assertRaises(subprocess.TimeoutExpired):
-                evaluate(
-                    {
-                        "workspace": str(workspace),
-                        "candidateRoot": str(simulator_root),
-                    },
-                    {
-                        "workspace": str(workspace),
-                        "trial_id": "trial-timeout",
-                        "study_id": "study-timeout",
-                        "settings": {
-                            "duration": 600.0,
-                            "num_aircraft": 2,
-                            "pallet_interval": 20.0,
-                            "pallet_expiration_time": 120.0,
-                            "flight_time": 30.0,
-                            "unload_time": 2.0,
-                            "return_time": 30.0,
-                            "maintenance_time": 10.0,
-                            "timeoutSeconds": 1,
-                        },
-                    },
-                )
-
-            self.assertTrue((workspace / "sa_events.jsonl").exists())
-            self.assertTrue((workspace / "sa_stderr.log").exists())
-
-            for _ in range(20):
-                if self._process_count_with_marker(marker) == before:
-                    break
-                time.sleep(0.1)
-            self.assertEqual(self._process_count_with_marker(marker), before)
-
     def test_local_subprocess_backend_runs_successful_trial(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         raw_spec = compile_authoring_config(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml")
@@ -2806,23 +2883,15 @@ class MvpIntegrationTest(unittest.TestCase):
         state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
 
         catalog = _catalog_payload(state)
-        validation = _validate_study(repo_root / "catalog" / "example_package" / "studies" / "sa_baseline.yaml")
+        validation = _validate_study(repo_root / "catalog" / "example_package" / "studies" / "job_shop_rule_parameters_baseline.yaml")
 
-        sa_environment = next(item for item in catalog["environments"] if item["id"] == "sa-simulator-code-edit")
         job_shop_parameter_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
         job_shop_solution_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-schedule-solution")
         job_shop_file_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-dispatch-rule")
         method_ids = {item["id"] for item in catalog["methods"]}
-        self.assertEqual(sa_environment["summary"]["candidate_format"], "files")
-        self.assertEqual(sa_environment["package"], "example_package")
-        self.assertEqual(sa_environment["qualified_id"], "example_package/environment/sa-simulator-code-edit")
         self.assertEqual(job_shop_parameter_environment["summary"]["candidate_format"], "parameters")
         self.assertEqual(job_shop_solution_environment["summary"]["candidate_format"], "parameters")
         self.assertEqual(job_shop_file_environment["summary"]["candidate_format"], "files")
-        self.assertIn(
-            "devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py",
-            sa_environment["summary"]["editable_files"],
-        )
         self.assertIn("dispatch_rule.py", job_shop_file_environment["summary"]["editable_files"])
         openai_method = next(item for item in catalog["methods"] if item["id"] == "openai-file-editor")
         self.assertEqual(openai_method["summary"]["candidate_formats"], ["files"])
@@ -2841,11 +2910,72 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(any(item["label"] == "job-shop-rule-parameters-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-dispatch-rule-baseline" for item in catalog["studies"]))
         self.assertTrue(any(item["label"] == "job-shop-solver-code-baseline" for item in catalog["studies"]))
-        self.assertTrue(any(item["label"] == "sa-baseline" for item in catalog["studies"]))
-        self.assertTrue(any(item["label"] == "sa-openai-file-editor" for item in catalog["studies"]))
         self.assertIn("builtin.reference_random_search", catalog["builtins"]["method"])
         self.assertTrue(validation["valid"], validation)
-        self.assertEqual(validation["environment_id"], "sa-simulator-code-edit")
+        self.assertEqual(validation["environment_id"], "job-shop-rule-parameters")
+
+    def test_ui_catalog_exposes_complete_component_config_yaml(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
+
+        catalog = _catalog_payload(state)
+        environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
+        method = next(item for item in catalog["methods"] if item["id"] == "tune-dispatch-weights")
+        resource = next(item for item in catalog["resources"] if item["id"] == "devs-simulation-interface")
+
+        self.assertIn("config: environment", environment["yaml"])
+        self.assertIn("candidate:", environment["yaml"])
+        self.assertIn("metrics:", environment["yaml"])
+        self.assertIn("config: method", method["yaml"])
+        self.assertIn("entrypoint:", method["yaml"])
+        self.assertIn("accepts:", method["yaml"])
+        self.assertIn("config: resource", resource["yaml"])
+        self.assertIn("interface:", resource["yaml"])
+
+        environment_detail = _catalog_detail(state, "environment", environment["uid"])
+        method_detail = _catalog_detail(state, "method", method["uid"])
+        resource_detail = _catalog_detail(state, "resource", resource["uid"])
+
+        self.assertTrue(environment_detail["validation"]["valid"], environment_detail)
+        self.assertTrue(method_detail["validation"]["valid"], method_detail)
+        self.assertTrue(resource_detail["validation"]["valid"], resource_detail)
+        self.assertEqual(environment_detail["config"]["config"], "environment")
+        self.assertEqual(method_detail["config"]["config"], "method")
+        self.assertEqual(resource_detail["config"]["config"], "resource")
+        self.assertIn("config: environment", environment_detail["yaml"])
+        self.assertIn("config: method", method_detail["yaml"])
+        self.assertIn("config: resource", resource_detail["yaml"])
+
+    def test_ui_catalog_edit_copy_writes_overridden_config(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(
+                cwd=repo_root,
+                catalog_roots=[repo_root / "catalog" / "example_package"],
+                run_roots=[],
+            )
+            state.workspaces_dir = (tmp_path / "workspaces").resolve()
+            state.workspaces_dir.mkdir(parents=True)
+            catalog = _catalog_payload(state)
+            environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
+            edited = deepcopy(environment["raw_config"])
+            edited["description"] = "Edited from Studio form."
+            edited["runtime"] = {"sandbox": "process"}
+
+            workspace = _open_catalog_workspace(
+                state,
+                "environment",
+                environment["uid"],
+                editable=True,
+                config_override=edited,
+            )
+            config_path = Path(workspace["root"]) / workspace["registered_entries"][0]["config_path"]
+            saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["description"], "Edited from Studio form.")
+        self.assertEqual(saved["runtime"]["sandbox"], "process")
+        self.assertTrue(workspace["validation"]["valid"], workspace["validation"])
 
     def test_ui_default_catalog_roots_are_catalog_packages(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2863,11 +2993,11 @@ class MvpIntegrationTest(unittest.TestCase):
         method_ids = {item["id"] for item in catalog["methods"]}
         study_labels = {item["label"] for item in catalog["studies"]}
 
-        self.assertIn("sa-simulator-code-edit", environment_ids)
+        self.assertIn("job-shop-rule-parameters", environment_ids)
         self.assertIn("job-shop-dispatch-rule", environment_ids)
         self.assertIn("openai-file-editor", method_ids)
         self.assertIn("fixed-rule-parameters", method_ids)
-        self.assertIn("sa-baseline", study_labels)
+        self.assertIn("job-shop-rule-parameters-baseline", study_labels)
         self.assertTrue(catalog["environments"])
         self.assertTrue(catalog["methods"])
         self.assertTrue(catalog["studies"])
@@ -3124,18 +3254,39 @@ class MvpIntegrationTest(unittest.TestCase):
                     "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
                     "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
                     "name": "ui-draft-toy",
+                    "description": "Draft created through the full Studio study form.",
+                    "tags": ["ui", "draft"],
                     "metric": "throughput",
                     "direction": "maximize",
+                    "aggregation": "mean",
+                    "secondaryMetrics": ["cost"],
                     "maxTrials": 1,
-                    "backend": "local",
+                    "maxWallClockSeconds": 3600,
+                    "maxFailures": 2,
                     "parallelism": 1,
                     "timeoutSeconds": 120,
+                    "maxRetries": 1,
+                    "evidenceLevel": "full",
+                    "evidenceStorage": "copy",
+                    "evidenceOutputDir": "runs/ui-draft-toy",
+                    "seed": 123,
                 },
             )
 
             self.assertTrue(draft["validation"]["valid"], draft)
             self.assertTrue(Path(draft["path"]).exists())
-            self.assertEqual(draft["draft"]["name"], "ui-draft-toy")
+            draft_doc = draft["draft"]
+            self.assertEqual(draft_doc["name"], "ui-draft-toy")
+            self.assertEqual(draft_doc["description"], "Draft created through the full Studio study form.")
+            self.assertEqual(draft_doc["tags"], ["ui", "draft"])
+            self.assertEqual(draft_doc["objective"]["secondaryMetrics"], ["cost"])
+            self.assertEqual(draft_doc["budget"]["maxWallClockSeconds"], 3600)
+            self.assertEqual(draft_doc["budget"]["maxFailures"], 2)
+            self.assertEqual(draft_doc["execution"]["retry"], {"maxRetries": 1})
+            self.assertEqual(draft_doc["evidence"]["level"], "full")
+            self.assertEqual(draft_doc["evidence"]["outputFileStorage"], "copy")
+            self.assertEqual(draft_doc["evidence"]["outputDir"], "runs/ui-draft-toy")
+            self.assertEqual(draft_doc["reproducibility"], {"seed": 123})
             no_failure_limit_draft = _draft_study(
                 state,
                 {
@@ -3146,7 +3297,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "direction": "maximize",
                     "maxTrials": 1,
                     "maxFailures": 0,
-                    "backend": "local",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
                 },
@@ -3157,23 +3307,22 @@ class MvpIntegrationTest(unittest.TestCase):
             examples_state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
             examples_state.jobs_dir = Path(tmp_dir) / "example-jobs"
             examples_state.jobs_dir.mkdir(parents=True, exist_ok=True)
-            sa_draft = _draft_study(
+            openai_file_draft = _draft_study(
                 examples_state,
                 {
-                    "environment_path": str(repo_root / "catalog" / "example_package" / "environments" / "strategic_airlift_devs" / "environment.yaml"),
+                    "environment_path": str(repo_root / "catalog" / "example_package" / "environments" / "job_shop_scheduling" / "environment_dispatch_rule.yaml"),
                     "method_path": str(repo_root / "catalog" / "example_package" / "methods" / "openai_file_editor" / "method.yaml"),
-                    "name": "ui-draft-sa",
-                    "metric": "service_score",
-                    "direction": "maximize",
+                    "name": "ui-draft-openai-file",
+                    "metric": "normalized_makespan",
+                    "direction": "minimize",
                     "maxTrials": 1,
-                    "backend": "local",
                     "parallelism": 1,
-                    "timeoutSeconds": 180,
+                    "timeoutSeconds": 120,
                 },
             )
 
-            self.assertTrue(sa_draft["validation"]["valid"], sa_draft)
-            self.assertNotIn("instances", sa_draft["draft"])
+            self.assertTrue(openai_file_draft["validation"]["valid"], openai_file_draft)
+            self.assertNotIn("instances", openai_file_draft["draft"])
             incompatible_schedule_draft = _draft_study(
                 examples_state,
                 {
@@ -3183,41 +3332,14 @@ class MvpIntegrationTest(unittest.TestCase):
                     "metric": "makespan",
                     "direction": "maximize",
                     "maxTrials": 1,
-                    "backend": "local",
                     "parallelism": 1,
                     "timeoutSeconds": 120,
                 },
             )
             self.assertFalse(incompatible_schedule_draft["compatibility"]["compatible"])
             self.assertFalse(incompatible_schedule_draft["validation"]["valid"])
-            self.assertIn(
-                "required capability 'schedule-solution-candidate' is not provided",
-                " ".join(incompatible_schedule_draft["validation"]["errors"]),
-            )
-            self.assertIn(
-                "required capability 'schedule-solution-candidate' is missing",
-                " ".join(incompatible_schedule_draft["compatibility"]["reasons"]),
-            )
-
-            container_draft = _draft_study(
-                state,
-                {
-                    "environment_path": str(repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml"),
-                    "method_path": str(repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml"),
-                    "name": "ui-container-draft",
-                    "metric": "throughput",
-                    "direction": "maximize",
-                    "maxTrials": 1,
-                    "backend": "container",
-                    "containerImage": "python:3.11-slim",
-                    "containerExecutable": "docker",
-                    "parallelism": 1,
-                    "timeoutSeconds": 120,
-                },
-            )
-            self.assertTrue(container_draft["validation"]["valid"], container_draft)
-            self.assertNotIn("backend", container_draft["draft"]["execution"])
-            self.assertNotIn("runtime", container_draft["draft"]["execution"])
+            self.assertIn("is incompatible", " ".join(incompatible_schedule_draft["validation"]["errors"]))
+            self.assertTrue(incompatible_schedule_draft["compatibility"]["reasons"])
 
     def test_ui_study_plan_workspace_is_persisted(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -3238,7 +3360,6 @@ class MvpIntegrationTest(unittest.TestCase):
                     "metric": "throughput",
                     "direction": "maximize",
                     "maxTrials": 1,
-                    "backend": "local",
                     "parallelism": 1,
                 },
             )
@@ -3965,7 +4086,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("OptPilot Assistant", start_payload["agent"]["agent_context"]["system_message_suffix"])
         self.assertTrue(any(tool["name"] == "optpilot_catalog_list" for tool in start_payload["client_tools"]))
         preview_tool = next(tool for tool in start_payload["client_tools"] if tool["name"] == "optpilot_workspace_preview_open")
-        self.assertNotIn("extra_ports", preview_tool["parameters"]["properties"])
+        self.assertIn("extra_ports", preview_tool["parameters"]["properties"])
         for tool in start_payload["client_tools"]:
             self.assertNotIn("kind", tool.get("parameters", {}).get("properties", {}))
         self.assertIn("\"current_page\": \"catalog\"", event_payload["content"][0]["text"])
@@ -4866,6 +4987,56 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertFalse(result["settings"]["assistant"]["openhands"]["api_key_configured"])
         self.assertEqual(result["status"]["mode"], "missing API key")
         self.assertEqual(stored["assistant"]["openhands"]["api_key"], "")
+
+    def test_ui_settings_store_environment_variables_without_echoing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+
+            result = _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False, "base_url": "", "model": ""},
+                    "environment": {
+                        "set": [{"name": "OPENROUTER_API_KEY", "value": "sk-secret"}],
+                    },
+                },
+            )
+            payload = _agent_settings_payload(state)
+            stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
+
+            variable = result["settings"]["environment"]["variables"][0]
+            self.assertEqual(variable, {"name": "OPENROUTER_API_KEY", "configured": True})
+            self.assertNotIn("sk-secret", json.dumps(payload))
+            self.assertEqual(stored["environment"]["variables"]["OPENROUTER_API_KEY"], "sk-secret")
+
+            cleared = _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False, "base_url": "", "model": ""},
+                    "environment": {"clear": ["OPENROUTER_API_KEY"]},
+                },
+            )
+
+        self.assertEqual(cleared["settings"]["environment"]["variables"], [])
+
+    def test_ui_resolves_declared_env_from_studio_settings_before_host(self) -> None:
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "host-value"}, clear=False), tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False, "base_url": "", "model": ""},
+                    "environment": {
+                        "set": [{"name": "OPENROUTER_API_KEY", "value": "studio-value"}],
+                    },
+                },
+            )
+
+            resolved = _require_declared_env_from_host(state, ["OPENROUTER_API_KEY"], action="test")
+
+        self.assertEqual(resolved["OPENROUTER_API_KEY"], "studio-value")
 
     def test_ui_agent_settings_persist_openhands_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

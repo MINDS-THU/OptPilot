@@ -42,9 +42,6 @@ examples = [
   "job-shop-lib>=1.7.0",
   "stable-baselines3>=2.3,<3",
 ]
-sa = [
-  "xdevs @ git+https://github.com/iscar-ucm/xdevs.py.git@v3.0.0",
-]
 
 [project.urls]
 Homepage = "https://github.com/MINDS-THU/OptPilot"

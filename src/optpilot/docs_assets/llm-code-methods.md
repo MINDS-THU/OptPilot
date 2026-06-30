@@ -5,39 +5,35 @@ description: How LLM agents that write dispatch rules or solver code connect to 
 
 # LLM Code-Writing Methods
 
-LLM code-writing methods produce file candidates. The method may be a small prompt wrapper, a multi-step agent, or an existing workflow that writes code. OptPilot does not need to know the internal prompting strategy. It only needs the generated files and the environment contract they target.
+LLM code-writing methods produce file candidates. OptPilot does not need to
+know the prompting strategy or agent loop. It only needs a file manifest that
+matches the environment's file-candidate contract.
 
 The job-shop example exposes two file-candidate targets:
 
 | Target | Environment config | Required function |
 | --- | --- | --- |
-| Dispatch rule | `environment_dispatch_rule.yaml` | `score(operation, machine, state)` |
-| Solver script | `environment_solver_code.yaml` | `solve(instance, time_limit_seconds, context)` |
+| Priority rule | `environment_dispatch_rule.yaml` | `score(operation, machine, state)` |
+| Complete solver | `environment_solver_code.yaml` | `solve(instance, time_limit_seconds, context)` |
 
 ## Dispatch-Rule Editing
 
-Use this when the LLM should generate or revise a priority rule:
-
-Study config fragment:
+Use this contract when the method should write a priority rule:
 
 ```yaml
 environmentConfig: ../environments/job_shop_scheduling/environment_dispatch_rule.yaml
 ```
 
-The generated file must be named:
-
-```text
-dispatch_rule.py
-```
-
-The evaluator imports that file from the trial workspace and schedules operations by repeatedly calling:
+The generated file must be named `dispatch_rule.py` and define:
 
 ```python
 def score(operation, machine, state):
     ...
 ```
 
-Run the baseline before connecting an LLM:
+Higher scores are scheduled first.
+
+Run the baseline file-copy study before connecting an LLM:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
@@ -51,41 +47,29 @@ uv run optpilot validate catalog/example_package/studies/job_shop_openai_dispatc
 uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
 ```
 
-That study uses:
-
-```text
-catalog/example_package/methods/openai_file_editor/method.yaml
-method:OpenAIFileEditMethod
-```
-
-The included study has `budget.maxTrials: 1` and `includeBaselineCandidate: true`, so it is executable without provider credentials and exercises the actual file-candidate method path. To request a real LLM edit, set a provider key such as `OPENROUTER_API_KEY`, increase the study budget, or set `includeBaselineCandidate: false`.
-
-The same method config is used by the Strategic Airlift editing study. The method stays generic: it accepts `files`, reads the environment-provided editable-file contract and `methodContext.instructions`, and returns a file candidate. The study is where one environment is bound to one method for a concrete run.
+The included study has `budget.maxTrials: 1` and
+`includeBaselineCandidate: true`, so it is executable without provider
+credentials. To request a real LLM edit, set a provider key such as
+`OPENROUTER_API_KEY`, increase the study budget, or set
+`includeBaselineCandidate: false`.
 
 ## Solver-Code Writing
 
-Use this when the LLM should write a complete solver wrapper, for example a heuristic solver or an OR-Tools script:
-
-Study config fragment:
+Use this contract when the method should write a complete solver wrapper:
 
 ```yaml
 environmentConfig: ../environments/job_shop_scheduling/environment_solver_code.yaml
 ```
 
-The generated file must be named:
-
-```text
-solver.py
-```
-
-and define:
+The generated file must be named `solver.py` and define:
 
 ```python
 def solve(instance, time_limit_seconds, context):
     ...
 ```
 
-The evaluator independently checks schedule feasibility. Invalid solver output fails the trial instead of producing a misleading score.
+The evaluator independently checks schedule feasibility. Invalid solver output
+fails the trial instead of producing a misleading score.
 
 Run the baseline first:
 
@@ -94,24 +78,11 @@ uv run optpilot validate catalog/example_package/studies/job_shop_solver_code_ba
 uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
 
-## Method Shape
+## What The Method Can See
 
-A native LLM method can be a normal batch method. This is a minimal complete method config template for a user-owned file-writing method:
+File-candidate environments expose editable paths and prompt instructions:
 
 ```yaml
-apiVersion: optpilot.io/v1
-config: method
-id: my-llm-code-writer
-
-entrypoint:
-  python: method:MyLLMCodeWriter
-  protocol: batch
-
-settings:
-  batchSize: 1
-  model: gpt-4.1-mini
-  temperature: 0.2
-
 accepts:
   formats: [files]
   requires:
@@ -122,22 +93,32 @@ accepts:
 
 The method can read:
 
-- `study_state["candidate_context"]` for editable files and method instructions
-- `evidence_view` or previous observations for feedback
-- files listed by the environment's `methodContext`, including natural-language notes, CSV files, SQLite databases, or other reference material
-- `evidence_view.records(...)` for structured rows extracted after evaluation
-- `evidence_view.artifacts(...)` for evaluator output files such as logs, JSON reports, plots, CSV files, or SQLite databases
+- `study_state["candidate_context"]` for editable paths and method
+  instructions
+- previous observations through `evidence_view`
+- files listed by the environment's `methodContext.references`
+- evaluator artifacts such as logs, JSON reports, plots, CSV files, or SQLite
+  databases when they are recorded as evidence
 
 It returns file candidates through `CandidateFileStore`.
 
-## Difference From Curated Method Packages
+## OpenAI-Compatible Editor
 
-Use this page when you are writing the OptPilot method yourself. The repository includes a generic OpenAI-compatible file-editing method under:
+The repository includes a generic file-editing method:
 
 ```text
 catalog/example_package/methods/openai_file_editor/
 ```
 
-That method accepts file-candidate environments with `methodContext.instructions`, and the job-shop dispatch-rule binding above is a concrete runnable example.
+The method accepts any file-candidate environment with editable paths and
+instructions. If the environment exposes `methodContext.references`, the editor
+adds readable referenced files to the prompt with a bounded context budget. The
+job-shop dispatch-rule study is one binding of that generic method to one
+environment.
 
-Use [Curated Packages](curated-packages.md) when you already have a larger upstream repository that owns its own search loop and should be distributed with its adapters, configs, dependencies, and smoke tests outside the OptPilot framework repository.
+## When To Use A Separate Package
+
+Use this page when the OptPilot method itself owns the code-writing loop. If you
+already have a larger upstream repository with its own search loop, adapters,
+dependencies, and smoke tests, add it as a separate package instead. See
+[Catalog](catalog.md).

@@ -40,7 +40,13 @@ Use the resource action in OptPilot Studio. The first launch in a fresh copied
 workspace can take a few minutes because it creates a local Python environment
 and installs frontend dependencies. Later launches reuse those dependencies.
 
-The backend model can be customized with environment variables before launch:
+Before using LLM-backed generation or graph parsing, save `OPENROUTER_API_KEY`
+in Studio Settings under Environment & Secrets. The resource config declares
+this variable with `interface.envFromHost`, so Studio can show whether the
+required local value is available before launching the interface.
+
+The backend model and generation parallelism have working defaults. Advanced
+users can override them with shell environment variables before manual launch:
 
 ```bash
 export DEVS_INTERFACE_MODEL_ID="openrouter/openai/gpt-5.4"

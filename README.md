@@ -14,7 +14,7 @@ OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework. T
 flowchart LR
   Env["Environment\nwhat can be evaluated"]
   Method["Method\nhow candidates are produced"]
-  Study["Study\nobjective + budget + runtime"]
+  Study["Study\nobjective + budget + execution"]
   Runner["OptPilot runner\nvalidate + materialize + evaluate"]
   Evidence["Evidence\nobservations + artifacts"]
 
@@ -47,8 +47,7 @@ Included in the current release:
 - local thread, local subprocess, and Docker/Podman-compatible environment execution
 - Docker/Podman-compatible command-method runtime isolation
 - local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
-- curated job-shop scheduling tutorial environment with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
-- strategic-airlift DEVS example using an external generated simulator
+- runnable job-shop scheduling tutorial environment with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
 - OptPilot Studio, a local UI for browsing reusable catalogs, opening workspaces, checking compatibility, launching studies, inspecting runs, and optionally using an OpenHands-backed assistant
 
 Not included:
@@ -80,7 +79,7 @@ uv run optpilot --help
 
 Start with the job-shop parameter baseline. It is the recommended first run, works from a fresh checkout, and does not require API keys or external solvers.
 
-The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, objective, budget, and runtime.
+The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, objective, budget, and execution policy.
 
 Run the job-shop parameter baseline:
 
@@ -106,7 +105,7 @@ The UI scans packages under `catalog/` by default. Stop the local server with
 For the assistant-enabled Studio workflow with OpenHands, embedded Code Server,
 and per-workspace containers, see [UI](docs/ui.md).
 
-Some advanced examples, such as Strategic Airlift and future curated application packages, require extra setup. Use the job-shop example first, then continue with the example-specific docs.
+Some examples, such as the JobShopLib and Stable-Baselines method wrappers, require optional dependencies. Use the dependency-free job-shop baseline first, then continue with the example-specific docs.
 
 ## Full Config Examples
 
@@ -121,15 +120,15 @@ Read [Getting Started](docs/getting-started.md) for the full configs and the exp
 ## Catalog Packages
 
 OptPilot ships one package at `catalog/example_package/`. When Studio registers
-user-owned files, it creates `catalog/local_package/` on demand. Future curated
-packages should be added as additional siblings under `catalog/`; they should
-not overwrite existing packages.
+user-owned files, it creates `catalog/local_package/` on demand. Add future
+packages as additional siblings under `catalog/`; they should not overwrite
+existing packages.
 
 ```text
 catalog/
   example_package/
   local_package/
-  another_curated_package/
+  another_package/
 ```
 
 Each package can contain `environments/`, `methods/`, `resources/`, and
@@ -139,17 +138,24 @@ launchable apps. Study configs are concrete run plans.
 
 ## Container Runtime Example
 
-Run environment trials in a container:
+Run an environment evaluator in a container by declaring the component runtime
+on the environment config:
+
+```yaml
+runtime:
+  sandbox: container
+  container:
+    image: python:3.11-slim
+    executable: docker
+    network: disabled
+```
+
+The study still owns trial policy:
 
 ```yaml
 execution:
-  backend: local
-  runtime:
-    sandbox: container
-    network: disabled
-    container:
-      image: python:3.11-slim
-      executable: docker
+  parallelism: 1
+  timeoutSeconds: 300
 ```
 
 Run a command method in its own container:
@@ -161,10 +167,10 @@ entrypoint:
 
 runtime:
   sandbox: container
-  network: disabled
   container:
     image: my-agent-image:latest
     executable: docker
+    network: disabled
     build:
       context: .
       dockerfile: Dockerfile.agent

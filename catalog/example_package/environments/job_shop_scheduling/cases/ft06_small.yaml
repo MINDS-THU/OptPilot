@@ -1,6 +1,6 @@
 name: ft06-small
 machine_count: 3
-lower_bound: 18
+lower_bound: 13
 due_date: 22
 jobs:
   - - {machine: 0, duration: 3}

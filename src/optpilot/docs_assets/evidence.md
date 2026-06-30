@@ -29,7 +29,7 @@ Common files:
 | `study_spec.json` | Compiled run spec generated from the study, environment, and method configs. |
 | `candidates.jsonl` | Candidate records, validation details, and materialization details. |
 | `observations.jsonl` | Trial observations and metric values. |
-| `trials.jsonl` | Trial lifecycle records and backend metadata. |
+| `trials.jsonl` | Terminal trial records, statuses, and execution metadata. |
 | `method_calls.jsonl` | Method requests, responses, and errors. |
 | `method_events.jsonl` | Events emitted by methods. |
 | `scheduler_events.jsonl` | Scheduling and worker events. |
@@ -59,16 +59,20 @@ runs/my-study-2026-06-20T.../
     candidate-.../files/...
   trials/
     trial-.../
-      candidate/
-      candidate.json
-      workspace_manifest.json
-      evaluator outputs...
+      attempt-1/
+        candidate/
+        candidate.json
+        workspace_manifest.json
+        evaluator outputs...
   evidence_files/
     trial-.../
       copied outputs when evidence.outputFileStorage: copy
 ```
 
-The most important files for debugging are usually `summary.json`, `observations.jsonl`, `candidates.jsonl`, and the corresponding `trials/<trial-id>/` directory.
+The most important files for debugging are usually `summary.json`,
+`observations.jsonl`, `candidates.jsonl`, and the corresponding
+`trials/<trial-id>/attempt-<n>/` directory. Retries add later attempt folders
+without overwriting earlier evaluator work.
 
 ## Storage Roles
 
@@ -133,13 +137,13 @@ def propose(self, n_candidates, study_state, evidence_view):
 Resume appends more trials to an existing run:
 
 ```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+uv run optpilot run path/to/study.yaml \
   --resume-run-dir path/to/existing-run
 ```
 
 Branch starts a new run that records a previous run as its parent:
 
 ```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+uv run optpilot run path/to/study.yaml \
   --branch-from-run-dir path/to/existing-run
 ```

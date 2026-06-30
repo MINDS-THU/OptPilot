@@ -22,5 +22,6 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
+      - methodContext.references
     capabilities:
       - schedule-solution-candidate

@@ -1147,9 +1147,15 @@ def _runtime_to_sandbox_spec(runtime: Dict[str, Any]) -> Dict[str, Any]:
 
 def _resolve_container_build(build: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
     resolved = deepcopy(build)
-    for key in ("context", "dockerfile"):
-        if resolved.get(key):
-            resolved[key] = str(_resolve_path(resolved[key], base_path))
+    context_path = _resolve_path(resolved.get("context", "."), base_path)
+    if resolved.get("context"):
+        resolved["context"] = str(context_path)
+    if resolved.get("dockerfile"):
+        dockerfile = Path(str(resolved["dockerfile"])).expanduser()
+        if dockerfile.is_absolute():
+            resolved["dockerfile"] = str(dockerfile.resolve())
+        else:
+            resolved["dockerfile"] = str((context_path / dockerfile).resolve())
     return resolved
 
 

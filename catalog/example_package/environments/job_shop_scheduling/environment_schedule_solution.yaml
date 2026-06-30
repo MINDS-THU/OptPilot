@@ -14,6 +14,8 @@ evaluator:
         path: cases/ft06_small.yaml
       - id: la01_tiny
         path: cases/la01_tiny.yaml
+      - id: ft06_standard
+        path: cases/ft06_standard.yaml
 
 candidate:
   format: parameters
@@ -35,6 +37,22 @@ methodContext:
       path: cases/la01_tiny.yaml
       type: job_shop_case
       description: Validation case used by the schedule-solution evaluator.
+    - name: ft06_standard
+      path: cases/ft06_standard.yaml
+      type: job_shop_case
+      description: Larger validation case used by the schedule-solution evaluator.
+    - name: train_tiny_a
+      path: training_cases/train_tiny_a.yaml
+      type: job_shop_training_case
+      description: Training case for RL policy learning.
+    - name: train_tiny_b
+      path: training_cases/train_tiny_b.yaml
+      type: job_shop_training_case
+      description: Training case for RL policy learning.
+    - name: rl_env_adapter
+      path: rl_env_adapter.py
+      type: python_module
+      description: Environment-owned Gymnasium adapter for job-shop RL methods.
 
 metrics:
   source: return
@@ -47,3 +65,5 @@ outputFiles:
 capabilities:
   - id: schedule-solution-candidate
     description: Accepts complete schedule solutions keyed by validation case id.
+  - id: job-shop-rl-training-context
+    description: Provides training cases and a Gymnasium adapter for RL methods.

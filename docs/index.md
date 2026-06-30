@@ -28,7 +28,7 @@ Most OptPilot integrations have three authored YAML files:
 | --- | --- |
 | `config: environment` | What can be evaluated, what candidate format is valid, and how are metrics returned? |
 | `config: method` | How are candidates proposed, and which environment contracts can the method target? |
-| `config: study` | Which environment and method should run together, with which objective, budget, and runtime? |
+| `config: study` | Which environment and method should run together, with which objective, budget, and execution policy? |
 
 Environment and method configs are reusable components. Study configs are
 concrete run plans.
@@ -63,7 +63,7 @@ flowchart LR
   subgraph Configs["Public YAML configs"]
     Env["EnvironmentConfig\ncandidate contract + evaluator"]
     Method["MethodConfig\nentrypoint + compatibility"]
-    Study["StudyConfig\nobjective + budget + runtime"]
+    Study["StudyConfig\nobjective + budget + execution"]
   end
 
   subgraph Runtime["Run time"]
@@ -151,8 +151,8 @@ containers; see [UI](ui.md) for setup.
 ## Start Here
 
 1. Run the first example with [Getting Started](getting-started.md).
-2. Read [Candidate Contracts](candidate-contracts.md) for the environment/method boundary.
-3. Read [Concepts](concepts.md) for the vocabulary.
+2. Read [Concepts](concepts.md) for the vocabulary.
+3. Read [Candidate Contracts](candidate-contracts.md) for the environment/method boundary.
 4. Read [How A Run Works](how-it-works.md) and [Evidence](evidence.md) when you want the runtime model.
 5. Use [Examples](examples.md) and [Job-Shop Environment](job-shop-environment.md) to choose a method track.
 6. Use [Catalog](catalog.md) and [Configuration](configuration.md) when you start writing your own integrations.

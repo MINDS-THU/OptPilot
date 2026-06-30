@@ -1,6 +1,6 @@
 # Configuration Reference
 
-<!-- This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run the job-shop baseline yet. -->
+<!-- This page is a field reference. Start with [Getting Started](getting-started.md) if you have not run OptPilot yet. -->
 
 OptPilot public configs are YAML files validated by JSON Schema. The schemas are packaged in `src/optpilot/schemas/` and are used by:
 
@@ -8,7 +8,9 @@ OptPilot public configs are YAML files validated by JSON Schema. The schemas are
 uv run optpilot validate path/to/study.yaml
 ```
 
-It covers the three public config roles: `environment`, `method`, and `study`.
+It covers the three public experiment config roles: `environment`, `method`,
+and `study`. Catalog packages may also include optional `resource` manifests
+for support material and launchable helper interfaces.
 
 For the conceptual model behind those roles, use [Concepts](concepts.md). For the runtime procedure after these files are loaded and validated, use [How A Run Works](how-it-works.md).
 
@@ -18,7 +20,7 @@ Every public config starts with:
 
 ```yaml
 apiVersion: optpilot.io/v1
-config: environment   # enum: environment | method | study
+config: environment   # enum: environment | method | study | resource
 ```
 
 `config` selects the schema. OptPilot also writes an internal compiled run spec into run directories; users do not author that file directly.
@@ -29,12 +31,11 @@ The public config uses concrete names for concrete jobs.
 
 | Name | Use |
 | --- | --- |
-| `config` | Identifies the config file role: `environment`, `method`, or `study`. |
+| `config` | Identifies the config file role: `environment`, `method`, `study`, or `resource`. |
 | `format` | Identifies candidate representation: `parameters`, `files`, or `opaque`. |
 | `valueType` | Identifies one parameter value shape inside `candidate.parameters.schema`. |
 | `python`, `command`, `adapter` | Identify how evaluator or method code is invoked without a separate discriminator field. |
 | `source` | Identifies where a value comes from for selector fields such as `metrics.source` and `records[].source`. |
-| `backend` | Identifies how trials are scheduled. |
 
 Candidate compatibility is based on the candidate format plus required contract paths and capabilities. OptPilot does not require a separate candidate domain label.
 
@@ -68,32 +69,36 @@ That is why validation is the recommended first command whenever you create or e
 
 ## Config Roles
 
-This reference covers three authored config roles:
+This reference covers three authored experiment config roles:
 
 - `config: environment` describes what can be evaluated and how
 - `config: method` describes how candidates are proposed and what contracts the method accepts
 - `config: study` binds one environment to one method and chooses one run policy
 
+Packages can also include `config: resource` manifests for optional support
+material or launchable helper interfaces. Resources are not part of the core
+environment-method-study experiment contract.
+
 ## Directory Layout
 
 The same organization is used for built-in examples, local user-owned code, and
-future curated packages:
+additional packages:
 
 ```text
 catalog/
-  example_package/
+  my_package/
     environments/
-      strategic_airlift_devs/
+      my_environment/
         environment.yaml
         evaluator.py
         assets/
         prompts/
     methods/
-      baseline_file_copy/
+      my_method/
         method.yaml
         method.py
     studies/
-      sa_baseline.yaml
+      my_study.yaml
   local_package/
     environments/
       my_environment/
@@ -141,9 +146,13 @@ and evaluates for each candidate.
 
 Example:
 
-- `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml` resolves `environmentConfig` relative to the study file
-- `catalog/example_package/environments/job_shop_scheduling/environment_rule_parameters.yaml` resolves evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative to the environment file
-- `catalog/example_package/methods/fixed_rule_parameters/method.yaml` resolves any `pythonPath` entries relative to the method file
+- `catalog/my_package/studies/my_study.yaml` resolves `environmentConfig`
+  relative to the study file
+- `catalog/my_package/environments/my_environment/environment.yaml` resolves
+  evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative
+  to the environment file
+- `catalog/my_package/methods/my_method/method.yaml` resolves any `pythonPath`
+  entries relative to the method file
 
 ## Environment Config
 
@@ -304,9 +313,10 @@ evaluator:
 
 The adapter can loop over `cases`, call domain code, aggregate metrics, and
 return one OptPilot evaluator result. If a method must read the same case files
-before proposing a candidate, expose those files through `methodContext.references`
-or method `settings`. That keeps case handling owned by the environment/method
-integration instead of making it a built-in OptPilot abstraction.
+before proposing a candidate, expose those environment-owned files through
+`methodContext.references`. Keep method `settings` for method-owned knobs,
+model choices, prompts, or assets. This keeps case handling out of OptPilot
+core while preserving a clear environment/method boundary.
 
 ### Command Placeholders
 
@@ -418,21 +428,21 @@ Environment field fragments:
 
 ```yaml
 trialWorkspace:
-  - from: ../../../../resource/devs_gen_gallery/simulators/SA/simulator
-    to: simulator
+  - from: assets/template_project
+    to: project
 
 candidate:
   format: files
-  description: Editable simulator control logic.
+  description: Editable source file.
   materialize:
-    root: simulator
+    root: project
   files:
     editable:
-      - path: devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+      - path: solver.py
     required:
-      - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+      - solver.py
     allow:
-      - devs_project/StrategicAirlift_D0_libs/Aircraft_libs/MissionController.py
+      - solver.py
     deny: []
 ```
 
@@ -579,6 +589,9 @@ runtime:
       tag: my-env:latest
 ```
 
+Relative `build.context` paths are resolved from the component config file.
+Relative `build.dockerfile` paths are resolved from `build.context`.
+
 ### Environment Variants And Inputs
 
 Environment configs are the reusable place to bind evaluator-specific inputs.
@@ -644,9 +657,9 @@ Resources can declare the same block in an optional
 ```yaml
 apiVersion: optpilot.io/v1
 config: resource
-id: devs-display-generator
-name: DEVS Display Generator
-tags: [simulation, frontend]
+id: case-browser
+name: Case Browser
+tags: [frontend]
 
 interface:
   command: [python, -m, http.server, "5173", --bind, 0.0.0.0]

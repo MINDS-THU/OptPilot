@@ -31,6 +31,7 @@ IGNORED_SOURCE_NAMES = {
     "__pycache__",
     "dist",
     "node_modules",
+    "resource",
     "runs",
 }
 

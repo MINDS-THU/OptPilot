@@ -15,6 +15,7 @@ interface:
   command: [bash, -lc, ./_optpilot_launch_interface.sh]
   port: 3000
   cwd: .
+  envFromHost: [OPENROUTER_API_KEY]
   extraPorts: [8000]
   readyPath: /
   readyTimeoutSeconds: 420

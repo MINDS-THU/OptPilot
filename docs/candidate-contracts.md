@@ -83,11 +83,11 @@ candidate:
   format: files
   files:
     editable:
-      - path: dispatch_rule.py
+      - path: policy.py
     required:
-      - dispatch_rule.py
+      - policy.py
     allow:
-      - dispatch_rule.py
+      - policy.py
   materialize:
     root: candidate
 ```
@@ -138,7 +138,7 @@ candidate:
         values: [safe, fast]
 ```
 
-A schema-general method can read this schema and return:
+A schema-general method can read this schema and return this candidate `spec`:
 
 ```json
 {"x": 0.42, "mode": "safe"}
@@ -149,7 +149,7 @@ The same method could also work with a different environment that asks for
 types from `candidate.parameters.schema`.
 
 A specific solver wrapper can still be method-specific. For example, a route
-solver might always return:
+solver might always return this candidate `spec`:
 
 ```json
 {"route": ["depot", "A", "B", "depot"]}
@@ -166,9 +166,9 @@ evaluation. The environment still does not know how the route was produced.
 | --- | --- | --- |
 | Schema-general parameter method | Reads the environment's parameter names, types, and bounds, then chooses values for those fields. | Require `candidate.parameters.schema` in `accepts`. |
 | Specific solver wrapper | Always returns one known field such as `route`, `assignment`, or `solutions`. | Require the environment capability or context it needs; candidate validation checks submitted values. |
-| Trained policy rollout method | Uses a trained policy internally, but returns an environment-facing schedule or route. | Require method-readable cases or capabilities through `accepts`. |
+| Trained policy rollout method | Uses training context and a policy internally, but returns an environment-facing schedule or route. | Require the method-visible references and capabilities it needs through `accepts`. |
 | File editor | Reads `candidate.files.editable` and edits whichever files the environment exposes. | Require `candidate.files.editable` and optional `methodContext` entries. |
-| Heuristic-search repository wrapper | Runs an upstream search repository and returns generated files such as `dispatch_rule.py`. | Rely on `accepts` and file validation against the environment candidate contract. |
+| Heuristic-search repository wrapper | Runs an upstream search repository and returns generated files such as `policy.py` or `solver.py`. | Rely on `accepts` and file validation against the environment candidate contract. |
 
 ## Context For Methods
 
@@ -201,17 +201,5 @@ flowchart TD
 
 The public YAML is for users. The internal `study_spec.json` is what the runner actually executed and is written into every run directory for auditability.
 
-## Job-Shop Contract Matrix
-
-The main tutorial uses one scheduling problem with several candidate contracts.
-
-| Environment config | Candidate contract | Method examples |
-| --- | --- | --- |
-| `environment_rule_parameters.yaml` | weighted dispatch-rule parameters | fixed parameter baseline, schema-general parameter methods |
-| `environment_schedule_solution.yaml` | `parameters.spec.solutions` keyed by validation case id | OR-Tools, simulated annealing, JobShopLib dispatching, Stable-Baselines rollout |
-| `environment_dispatch_rule.yaml` | `files` containing `dispatch_rule.py` | baseline file copy, OpenAI file editor, future heuristic packages |
-| `environment_solver_code.yaml` | `files` containing `solver.py` | solver-code writers |
-
-The environment implementation and metrics stay stable. The candidate contract changes to let different method families connect cleanly.
-
-One important limitation is visible here: `solutions` is declared as an object because case ids are environment-specific. The evaluator enforces the detailed schedule shape and feasibility during evaluation. Compatibility can check that the method produces a `solutions` parameter, but the full schedule semantics live in the evaluator.
+For a concrete tutorial that uses one environment with several different
+candidate contracts, see [Job-Shop Environment](job-shop-environment.md).

@@ -20,12 +20,12 @@ For explanations, use the public docs:
 catalog/
   example_package/
   local_package/
-  another_curated_package/
+  another_package/
 ```
 
 Adding a new package should add another sibling folder. It should not overwrite
-this package. That keeps example code, user-owned code, and future curated case
-study packages easy to inspect, update, and remove.
+this package. That keeps example code, user-owned code, and future case study
+packages easy to inspect, update, and remove.
 
 ## What A Package Can Contain
 
@@ -36,9 +36,14 @@ catalog/example_package/
       environment_rule_parameters.yaml
       evaluator.py
       cases/
+      training_cases/
+      rl_env_adapter.py
       prompts/
   methods/
     fixed_rule_parameters/
+      method.yaml
+      method.py
+    tune_dispatch_weights/
       method.yaml
       method.py
   resources/
@@ -47,12 +52,13 @@ catalog/example_package/
       optpilot.resource.yaml
   studies/
     job_shop_rule_parameters_baseline.yaml
+    job_shop_tune_dispatch_weights.yaml
 ```
 
 Environment and method folders own reusable config variants and implementation
 code. Resource folders hold reusable reference material, simulator interfaces,
 datasets, or launchable apps. Study files are concrete run plans that bind one
-environment, one method, objective, budget, and runtime.
+environment, one method, objective, budget, and execution policy.
 
 Python import strings should be local to the config folder, with `pythonPath`
 pointing at that folder. For this package, imports look like:
@@ -68,10 +74,11 @@ demand. Registered configs should use the same local-import pattern.
 
 ## Quick Runs
 
-Dependency-free job-shop baselines:
+Dependency-free job-shop baselines and parameter tuning:
 
 ```bash
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
@@ -86,14 +93,12 @@ uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
 ```
 
-LLM code-editing and external simulator examples:
+LLM code-editing example:
 
 ```bash
 uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
-uv sync --extra sa
-uv run optpilot run catalog/example_package/studies/sa_baseline.yaml
 ```
 
-The Strategic Airlift sample also requires the generated simulator tree under
-`resource/`. The OpenAI-compatible editing studies require provider credentials
-for real LLM edits.
+The OpenAI-compatible editing study runs its baseline candidate without
+provider credentials. Real LLM edits require provider credentials and a larger
+trial budget.

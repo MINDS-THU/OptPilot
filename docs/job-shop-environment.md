@@ -6,20 +6,23 @@ description: The main OptPilot example environment used to demonstrate multiple 
 # Job-Shop Environment
 
 The job-shop scheduling example is the main cross-method tutorial environment.
-
-It demonstrates the core OptPilot idea: keep the environment boundary stable, then connect very different methods through candidate contracts.
+It demonstrates the core OptPilot idea: keep evaluation stable, then connect
+different methods by changing only the candidate contract.
 
 ## Shared Comparison Setup
 
 The runnable job-shop studies are designed as a comparison set. Where the candidate contract allows it, they use the same:
 
-- validation cases: `ft06_small.yaml` and `la01_tiny.yaml`
+- validation cases: `ft06_small.yaml`, `la01_tiny.yaml`, and `ft06_standard.yaml`
 - objective: minimize `normalized_makespan`
 - secondary metrics: `makespan`, `tardiness`, and `utilization`
-- budget: `maxTrials: 1`
-- runtime: local execution with `parallelism: 1`
+- budget: baseline studies use `maxTrials: 1`; the dependency-free tuning study uses `maxTrials: 12`
+- execution policy: local study orchestration, usually with `parallelism: 1`; the tuning study uses `parallelism: 3`
 
-The study file is the binding point. Each study chooses one environment config, one method config, the objective, budget, execution runtime, evidence level, and seed. The validation cases live in each environment config's `evaluator.settings`.
+The study file is the binding point. Each study chooses one environment config,
+one method config, the objective, budget, execution policy, evidence level, and
+seed. Validation cases live in each environment config's
+`evaluator.settings`.
 
 ## What It Evaluates
 
@@ -30,7 +33,8 @@ A job-shop instance contains jobs, operations, machine assignments, and processi
 - a generated `dispatch_rule.py`
 - a generated `solver.py`
 
-The evaluator simulates or validates the resulting schedule and returns:
+The evaluator converts each candidate into a schedule, or validates schedules
+that the candidate already contains. It returns:
 
 - `makespan`
 - `normalized_makespan`
@@ -49,18 +53,18 @@ objective:
   direction: minimize
 ```
 
-## Environment Config Variants
+## Job-Shop Contract Matrix
 
-The same environment implementation has four reusable config variants.
+The same environment implementation has four reusable config variants. Each one
+keeps the same job-shop problem and metrics, but exposes a different candidate
+contract so different method families can connect cleanly.
 
-| Config | Candidate format | Intended methods |
+| Environment config | Candidate contract | Method examples |
 | --- | --- | --- |
-| `environment_rule_parameters.yaml` | `parameters` | Dependency-free weighted [dispatching rules](dispatching-rule-methods.md) |
-| `environment_schedule_solution.yaml` | `parameters` with `solutions` | External solvers and policies, including JobShopLib [dispatching rules](dispatching-rule-methods.md), [simulated annealing](simulated-annealing-methods.md), [OR-Tools CP-SAT](cp-sat-methods.md), and [reinforcement learning](reinforcement-learning-methods.md) |
-| `environment_dispatch_rule.yaml` | `files` with `dispatch_rule.py` | [Dispatching rules](dispatching-rule-methods.md), [LLM code-writing methods](llm-code-methods.md), curated method packages |
-| `environment_solver_code.yaml` | `files` with `solver.py` | [LLM code-writing methods](llm-code-methods.md) and user-provided solver-code methods |
-
-This is intentional: the problem and metrics stay the same, while the candidate contract changes.
+| `environment_rule_parameters.yaml` | weighted dispatch-rule `parameters` | fixed parameter baseline, tune-dispatch-weights, schema-general parameter methods |
+| `environment_schedule_solution.yaml` | `parameters.spec.solutions` keyed by validation case id | JobShopLib dispatching, simulated annealing, OR-Tools CP-SAT, Stable-Baselines rollout |
+| `environment_dispatch_rule.yaml` | `files` containing `dispatch_rule.py` | baseline file copy, OpenAI file editor, method packages that write priority rules |
+| `environment_solver_code.yaml` | `files` containing `solver.py` | solver-code writers |
 
 ```mermaid
 flowchart TB
@@ -75,13 +79,36 @@ flowchart TB
   Problem --> D
   Problem --> C
 
-  P --> M1["fixed-rule-parameters baseline\nschema-general parameter methods"]
+  P --> M1["fixed-rule-parameters baseline\ntune-dispatch-weights optimizer\nschema-general parameter methods"]
   S --> M2["JobShopLib dispatching\nsimulated annealing\nOR-Tools\nRL rollout"]
-  D --> M3["baseline file copy\nOpenAI file editor\nfuture heuristic packages"]
+  D --> M3["baseline file copy\nOpenAI file editor\nmethod packages"]
   C --> M4["solver-code writers"]
 ```
 
-The environment configs are not method-specific solver adapters. They are candidate contracts for the same evaluation problem.
+The environment configs are not method-specific solver adapters. They are
+contracts for the same evaluation problem.
+
+One limitation is intentional: `solutions` is declared as an object because
+case ids are environment-specific. OptPilot checks the top-level candidate
+shape and required context paths. The evaluator enforces the detailed schedule
+shape, case ids, and feasibility.
+
+## What Methods Can See
+
+The environment exposes information to methods only when it is useful before
+proposal time:
+
+- `environment_rule_parameters.yaml` exposes the parameter schema through the
+  compiled candidate context and the validation cases through
+  `methodContext.references`.
+- `environment_schedule_solution.yaml` exposes validation cases, RL training
+  cases, and the RL adapter through `methodContext.references`.
+- `environment_dispatch_rule.yaml` and `environment_solver_code.yaml` expose
+  prompt instructions through `methodContext.instructions` and validation cases
+  through `methodContext.references`.
+
+The evaluator still owns the cases and scoring logic. Methods may read the
+allowed context, but they do not own the environment inputs.
 
 ## JobShopLib Method Families
 
@@ -96,9 +123,10 @@ The environment configs are not method-specific solver adapters. They are candid
 
 The environment does not import JobShopLib and does not know which of these produced a schedule. JobShopLib imports live in `catalog/example_package/methods/...`, and each wrapper translates the JobShopLib schedule into the neutral `solutions` candidate expected by `environment_schedule_solution.yaml`.
 
-## Connect Another JobShopLib Method
+## Connect Another Schedule Method
 
-Use `environment_schedule_solution.yaml` when the method can produce a complete schedule. The method wrapper should:
+Use `environment_schedule_solution.yaml` when the method can produce a complete
+schedule. The method wrapper should:
 
 1. read job-shop case references from `methodContext.references`
 2. convert each case payload into the solver's preferred representation
@@ -117,71 +145,21 @@ return [{
 }]
 ```
 
-That is the main OptPilot boundary. A CP-SAT model, simulated annealer, dispatching rule, trained RL policy, Gurobi model, or LLM-controlled search can all connect this way as long as the final candidate is a valid schedule solution.
+That is the main OptPilot boundary. A CP-SAT model, simulated annealer,
+dispatching rule, trained RL policy, Gurobi model, or LLM-controlled search can
+all connect this way as long as the final candidate is a valid schedule
+solution.
 
-## Run The Baselines
+## Where To Run Each Method
 
-Parameter baseline:
+Start with the dependency-free parameter baseline:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
 ```
 
-File dispatch-rule baseline:
-
-```bash
-uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
-```
-
-Solver-code baseline:
-
-```bash
-uv run optpilot validate catalog/example_package/studies/job_shop_solver_code_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
-```
-
-JobShopLib dispatching rule:
-
-```bash
-uv sync --extra examples
-uv run optpilot validate catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
-```
-
-Simulated annealing:
-
-```bash
-uv sync --extra examples
-uv run optpilot validate catalog/example_package/studies/job_shop_simulated_annealing.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
-```
-
-OR-Tools CP-SAT:
-
-```bash
-uv sync --extra examples
-uv run optpilot validate catalog/example_package/studies/job_shop_ortools_cpsat.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml
-```
-
-Reinforcement learning policy rollout:
-
-```bash
-uv sync --extra examples
-uv run optpilot validate catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
-```
-
-OpenAI-compatible file editor:
-
-```bash
-uv run optpilot validate catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
-```
-
-The baseline studies run from a fresh checkout without API keys or provider credentials. The OpenAI-compatible file-editor study is also executable without provider credentials at `maxTrials: 1` because it emits the baseline file candidate first. The JobShopLib dispatching-rule, simulated annealing, CP-SAT, and Stable-Baselines RL studies additionally require the optional `examples` dependency.
+Then use the method pages for the track you want: [Dispatching Rule Methods](dispatching-rule-methods.md), [Simulated Annealing Methods](simulated-annealing-methods.md), [OR-Tools CP-SAT Methods](cp-sat-methods.md), [Reinforcement Learning Methods](reinforcement-learning-methods.md), or [LLM Code-Writing Methods](llm-code-methods.md). Dependency-free baseline and tuning studies run from a fresh checkout. JobShopLib, CP-SAT, simulated annealing, and Stable-Baselines examples require `uv sync --extra examples`.
 
 ## Weighted-Rule Parameter Contract
 
@@ -204,7 +182,11 @@ candidate:
         max: 5.0
 ```
 
-The evaluator converts these weights into a priority dispatching rule.
+The evaluator converts these weights into a priority dispatching rule. The
+fixed-rule baseline emits one parameter setting. The `tune-dispatch-weights`
+method reads the same schema from the candidate context, proposes several
+bounded settings, observes the returned metrics through the normal batch
+protocol, and keeps the environment unchanged.
 
 ## Schedule-Solution Contract
 
@@ -242,9 +224,16 @@ solutions:
         machine: 0
         start: 0
         end: 2
+  ft06_standard:
+    operations:
+      - job: 0
+        operation: 0
+        machine: 0
+        start: 0
+        end: 1
 ```
 
-The keys `ft06_small` and `la01_tiny` come from the environment config's case ids. The environment also exposes those case files to methods through `methodContext.references`, so a solver method can solve the exact benchmark set used by the evaluator.
+The keys `ft06_small`, `la01_tiny`, and `ft06_standard` come from the environment config's case ids. The environment also exposes those case files to methods through `methodContext.references`, so a solver method can solve the exact benchmark set used by the evaluator.
 
 This contract is suitable for any method that produces finished schedules: JobShopLib, OR-Tools, Gurobi, a trained RL policy, or an internal company solver. The environment only validates and scores schedules. It does not know which method or library produced them.
 
@@ -260,6 +249,7 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
+      - methodContext.references
     capabilities:
       - schedule-solution-candidate
 ```
@@ -341,4 +331,4 @@ After you understand the environment configs, choose the method page that matche
 - [OR-Tools CP-SAT Methods](cp-sat-methods.md)
 - [Reinforcement Learning Methods](reinforcement-learning-methods.md)
 - [LLM Code-Writing Methods](llm-code-methods.md)
-- [Curated Packages](curated-packages.md)
+- [Catalog](catalog.md)

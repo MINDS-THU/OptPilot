@@ -2,12 +2,6 @@
 
 This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [Getting Started](getting-started.md).
 
-This page follows what happens after:
-
-```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-```
-
 At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
 
 ## Runtime Sequence
@@ -50,7 +44,9 @@ sequenceDiagram
   Runner->>Evidence: write summary
 ```
 
-The method proposes candidates. The runner does not invent them. The runner supplies the method with the study state, method context, candidate contract, and evidence that the method is allowed to rely on.
+The method proposes candidates. The runner does not invent them. The runner
+supplies the method with study state, candidate context, method-visible
+references or instructions, and evidence that the method is allowed to rely on.
 
 ## Config Compilation
 
@@ -63,7 +59,7 @@ Compilation performs these checks:
 - validate all three files against JSON Schema
 - resolve config-relative paths
 - check that the method accepts the environment candidate format
-- check required method context paths and capabilities
+- check required context paths and capabilities
 - check that the study objective metric is declared by the environment when metric keys are provided
 
 The compiled spec is written to:
@@ -161,14 +157,18 @@ The trial workspace is what gets evaluated. The candidate store is a handoff are
 
 ## Trial Workspace Preparation
 
-Each candidate evaluation gets a fresh workspace under `run_dir/trials/`.
+Each candidate evaluation gets a fresh attempt workspace under
+`run_dir/trials/<trial-id>/attempt-<n>/`. The first evaluation uses
+`attempt-1`; retries append later attempt folders without overwriting earlier
+evaluator work.
 
 For parameter candidates:
 
 - the candidate `spec` is passed directly as runtime input
 - no environment source tree is required unless the evaluator itself needs copied files
 
-The job-shop parameter baseline from [Getting Started](getting-started.md) follows this simpler path.
+The parameter baseline from [Getting Started](getting-started.md) follows this
+simpler path.
 
 For file candidates:
 
@@ -179,9 +179,11 @@ For file candidates:
 5. It writes `workspace_manifest.json`.
 6. It calls the evaluator with the workspace and candidate root.
 
-The SA example copies a complete simulator source tree because the evaluator runs the simulator from inside the trial workspace after candidate edits are applied. If an evaluator uses an installed package, a prebuilt image, an external service, or only JSON input files, it does not need to copy the complete environment implementation.
-
-File-candidate tracks such as Strategic Airlift add this materialization step on top of the same base loop. The method still proposes candidates, the environment still evaluates them, and OptPilot still records the evidence.
+File-candidate environments may copy a complete source tree when evaluation
+intentionally runs workspace-local code after candidate edits are applied. If
+an evaluator uses an installed package, a prebuilt image, an external service,
+or only JSON input files, it does not need to copy the complete environment
+implementation.
 
 ## Environment Evaluation
 

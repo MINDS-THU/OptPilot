@@ -102,6 +102,8 @@ class OpenAIFileEditMethod:
             *[f"- {path}" for path in self.target_files],
             "Current source files:",
             self._render_source_snapshot(),
+            "Environment-provided references:",
+            self._render_method_references(),
             "Recent observations:",
             self._render_recent_observations(),
             "Return JSON only using exactly this shape:",
@@ -128,6 +130,34 @@ class OpenAIFileEditMethod:
             language = _fence_language(relative_path)
             blocks.append(f"FILE: {relative_path}\n```{language}\n{source_text}\n```")
         return "\n\n".join(blocks)
+
+    def _render_method_references(self) -> str:
+        method_context = self.candidate_context.get("methodContext", {})
+        references = method_context.get("references", []) if isinstance(method_context, dict) else []
+        if not references:
+            return "No environment references provided."
+
+        remaining_bytes = int(self.config.get("maxReferenceBytes", 16000))
+        max_file_bytes = int(self.config.get("maxReferenceFileBytes", 8000))
+        blocks = []
+        for reference in references:
+            if remaining_bytes <= 0:
+                blocks.append("Additional references omitted because the reference context budget was reached.")
+                break
+            if not isinstance(reference, dict) or not reference.get("path"):
+                continue
+            path = Path(str(reference["path"]))
+            header = _reference_header(reference, path)
+            if not path.is_file():
+                blocks.append(f"{header}\nReference file is not available at prompt-build time.")
+                continue
+            byte_limit = min(max_file_bytes, remaining_bytes)
+            content, bytes_used, truncated = _read_reference_text(path, byte_limit)
+            remaining_bytes -= bytes_used
+            language = _fence_language(path.name)
+            suffix = "\n\n[truncated]" if truncated else ""
+            blocks.append(f"{header}\n```{language}\n{content}\n```{suffix}")
+        return "\n\n".join(blocks) if blocks else "No readable environment references provided."
 
     def _render_recent_observations(self) -> str:
         if not self.observations:
@@ -183,10 +213,11 @@ class OpenAIFileEditMethod:
 
     def _request_edit(self, messages: List[Dict[str, str]]) -> Tuple[str, Dict[str, str]]:
         api_key_env_var = str(self.config.get("apiKeyEnvVar", "OPENAI_API_KEY"))
-        api_key = os.environ.get(api_key_env_var) or self._read_api_key_from_dotenv(api_key_env_var)
+        api_key = os.environ.get(api_key_env_var)
         if not api_key:
             raise ValueError(
-                f"OpenAIFileEditMethod requires {api_key_env_var} in the environment or a .env file."
+                f"OpenAIFileEditMethod requires {api_key_env_var}. Declare it in runtime.envFromHost "
+                "and configure it in Studio Settings or the host environment before launching."
             )
 
         payload = {
@@ -220,26 +251,6 @@ class OpenAIFileEditMethod:
         parsed = json.loads(content)
         edited_files = _extract_edited_files(parsed, self.target_files)
         return str(parsed.get("summary", "LLM edited candidate files.")), edited_files
-
-    def _read_api_key_from_dotenv(self, env_var_name: str) -> str | None:
-        for dotenv_path in self._candidate_dotenv_paths():
-            value = _read_dotenv_value(dotenv_path, env_var_name)
-            if value:
-                return value
-        return None
-
-    def _candidate_dotenv_paths(self) -> List[Path]:
-        candidates: List[Path] = []
-        seen: set[Path] = set()
-        search_roots = [self.study_spec.base_dir, *self.study_spec.base_dir.parents, Path.cwd()]
-        for root in search_roots:
-            dotenv_path = root / ".env"
-            resolved = dotenv_path.resolve()
-            if resolved in seen or not dotenv_path.is_file():
-                continue
-            seen.add(resolved)
-            candidates.append(dotenv_path)
-        return candidates
 
     def _store_candidate(
         self,
@@ -327,23 +338,28 @@ def _candidate_id(record: Dict[str, Any] | None) -> str | None:
     return record.get("candidate_id")
 
 
-def _read_dotenv_value(path: Path, env_var_name: str) -> str | None:
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[len("export ") :].strip()
-        if "=" not in line:
-            continue
-        name, value = line.split("=", 1)
-        if name.strip() != env_var_name:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"\"", "'"}:
-            return value[1:-1]
-        return value
-    return None
+def _reference_header(reference: Dict[str, Any], path: Path) -> str:
+    details = {
+        "name": reference.get("name") or path.name,
+        "path": str(path),
+    }
+    if reference.get("type"):
+        details["type"] = reference["type"]
+    if reference.get("mimeType"):
+        details["mimeType"] = reference["mimeType"]
+    if reference.get("description"):
+        details["description"] = reference["description"]
+    return "REFERENCE: " + json.dumps(details, sort_keys=True)
+
+
+def _read_reference_text(path: Path, max_bytes: int) -> Tuple[str, int, bool]:
+    if max_bytes <= 0:
+        return "", 0, True
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    truncated = len(data) > max_bytes
+    sample = data[:max_bytes]
+    return sample.decode("utf-8", errors="replace"), len(sample), truncated
 
 
 def _editable_paths_from_context(candidate_context: Dict[str, Any]) -> List[str]:

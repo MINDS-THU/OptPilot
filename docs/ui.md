@@ -160,7 +160,7 @@ launches, and catalog registration require the OpenHands-backed tool path.
 The assistant can inspect attached workspaces, read or write files inside
 editable attached roots, run shell/debug commands inside the workspace
 container, inspect catalog entries, validate configs, draft study YAML, inspect
-run evidence, and search curated OptPilot documentation. Higher-impact actions,
+run evidence, and search OptPilot documentation. Higher-impact actions,
 including launching studies, applying catalog registration, stopping jobs, and
 writing files, are approval-gated in the Studio UI.
 

@@ -43,7 +43,8 @@ from ..config import (
 )
 from ..registry import BUILTIN_COMPONENTS
 from ..run_sources import _choose_source_root
-from ..setup import setup_commands_for_step, setup_cwd
+from ..schema_validation import validate_public_config_schema
+from ..setup import minimal_host_env, setup_commands_for_step, setup_cwd
 
 
 JsonDict = Dict[str, Any]
@@ -1156,8 +1157,6 @@ class UiState:
         job_dir.mkdir(parents=True, exist_ok=False)
         stdout_path = job_dir / "stdout.log"
         stderr_path = job_dir / "stderr.log"
-        stdout_handle = stdout_path.open("w", encoding="utf-8")
-        stderr_handle = stderr_path.open("w", encoding="utf-8")
         command = [
             sys.executable,
             "-m",
@@ -1167,10 +1166,14 @@ class UiState:
             "--output-root",
             str(output_root),
         ]
+        env = _study_subprocess_env(self, study_path)
+        stdout_handle = stdout_path.open("w", encoding="utf-8")
+        stderr_handle = stderr_path.open("w", encoding="utf-8")
         try:
             process = subprocess.Popen(
                 command,
                 cwd=str(self.cwd),
+                env=env,
                 stdout=stdout_handle,
                 stderr=stderr_handle,
                 text=True,
@@ -1713,6 +1716,12 @@ def _handler_factory(state: UiState):
                 if path.startswith("/api/methods/"):
                     self._send_json(_catalog_detail(state, "method", path.split("/", 3)[3]))
                     return
+                if path == "/api/resources":
+                    self._send_json({"resources": _catalog_payload(state)["resources"]})
+                    return
+                if path.startswith("/api/resources/"):
+                    self._send_json(_catalog_detail(state, "resource", path.split("/", 3)[3]))
+                    return
                 if path == "/api/compatibility":
                     self._send_json(_compatibility_payload(state))
                     return
@@ -1958,21 +1967,29 @@ def _handler_factory(state: UiState):
 
         def _handle_catalog_workspace_post(self, path: str) -> None:
             parts = path.split("/")
-            if len(parts) != 6 or parts[5] not in {"open-workspace", "edit-copy", "launch-interface", "launch-interface-job"}:
+            if len(parts) != 6 or parts[5] not in {"open-workspace", "save-copy", "edit-copy", "launch-interface", "launch-interface-job"}:
                 self._send_json({"error": "Unknown catalog workspace action"}, status=HTTPStatus.NOT_FOUND)
                 return
             _, _, _, kind, uid, action = parts
             if kind not in {"environment", "method", "study", "resource"}:
                 self._send_json({"error": "Unknown catalog kind"}, status=HTTPStatus.BAD_REQUEST)
                 return
+            payload = self._read_json_body()
+            config_override = payload.get("config") if isinstance(payload.get("config"), dict) else None
             if action == "launch-interface":
-                self._send_json(_launch_catalog_interface(state, kind, uid), status=HTTPStatus.CREATED)
+                self._send_json(_launch_catalog_interface(state, kind, uid, config_override=config_override), status=HTTPStatus.CREATED)
                 return
             if action == "launch-interface-job":
-                self._send_json(_start_catalog_interface_launch(state, kind, uid), status=HTTPStatus.ACCEPTED)
+                self._send_json(_start_catalog_interface_launch(state, kind, uid, config_override=config_override), status=HTTPStatus.ACCEPTED)
                 return
-            payload = self._read_json_body()
-            workspace = _open_catalog_workspace(state, kind, uid, editable=action == "edit-copy", install=action == "edit-copy")
+            workspace = _open_catalog_workspace(
+                state,
+                kind,
+                uid,
+                editable=action in {"save-copy", "edit-copy"},
+                install=action == "edit-copy",
+                config_override=config_override,
+            )
             session_id = str(payload.get("session_id") or "")
             if session_id:
                 _attach_agent_workspace(state, session_id, str(workspace["id"]), select=True)
@@ -2140,6 +2157,8 @@ def _catalog_entry(path: Path, raw: JsonDict, *, package_id: str = "") -> JsonDi
         "description": str(raw.get("description", "")),
         "tags": list(raw.get("tags", []) or []),
         "summary": {},
+        "raw_config": deepcopy(raw),
+        "yaml": yaml.safe_dump(raw, sort_keys=False),
     }
     if interface:
         entry["interface"] = interface
@@ -2183,8 +2202,10 @@ def _catalog_entry(path: Path, raw: JsonDict, *, package_id: str = "") -> JsonDi
     elif config == "study":
         environment_ref = raw.get("environmentConfig")
         method_ref = raw.get("methodConfig")
-        entry["yaml"] = yaml.safe_dump(raw, sort_keys=False)
         entry["summary"] = {
+            "name": raw.get("name"),
+            "description": raw.get("description"),
+            "tags": list(raw.get("tags", []) or []),
             "environment": environment_ref,
             "environmentPath": str(_resolve_config_path(environment_ref, path)) if environment_ref else "",
             "method": method_ref,
@@ -2241,6 +2262,14 @@ def _resource_catalog_entry(path: Path, *, package_id: str = "") -> JsonDict:
     tags = list(dict.fromkeys(tags))[:4]
     interface = _normalize_interface_config(manifest.get("interface"))
     resource_id = str(manifest.get("id") or _slug_text(path.name))
+    public_config = _resource_public_config(
+        manifest,
+        resource_id=resource_id,
+        label=label,
+        description=description,
+        tags=tags,
+        interface=interface,
+    )
     summary: JsonDict = {
         "readme": _relative_path(readme, path) if readme else "",
         "file_count": _count_resource_files(path),
@@ -2263,10 +2292,41 @@ def _resource_catalog_entry(path: Path, *, package_id: str = "") -> JsonDict:
         "description": description,
         "tags": tags,
         "summary": summary,
+        "raw_config": deepcopy(public_config),
+        "yaml": yaml.safe_dump(public_config, sort_keys=False),
     }
+    if manifest_path:
+        entry["config_path"] = str(manifest_path)
     if interface:
         entry["interface"] = interface
     return entry
+
+
+def _resource_public_config(
+    manifest: JsonDict,
+    *,
+    resource_id: str,
+    label: str,
+    description: str,
+    tags: List[str],
+    interface: JsonDict,
+) -> JsonDict:
+    if manifest.get("apiVersion") == AUTHORING_API_VERSION and manifest.get("config") == "resource":
+        return dict(manifest)
+    config: JsonDict = {
+        "apiVersion": AUTHORING_API_VERSION,
+        "config": "resource",
+        "id": resource_id,
+    }
+    if label:
+        config["name"] = label
+    if description:
+        config["description"] = description
+    if tags:
+        config["tags"] = tags
+    if interface:
+        config["interface"] = interface
+    return config
 
 
 def _catalog_package_id(root: Path) -> str:
@@ -2469,6 +2529,9 @@ def _read_ui_settings(state: UiState) -> JsonDict:
             permissions = assistant.get("permissions")
             if isinstance(permissions, dict):
                 current["permissions"] = _normalize_assistant_permissions(permissions)
+        environment = raw.get("environment")
+        if isinstance(environment, dict):
+            settings["environment"] = _normalize_environment_settings(environment)
     return settings
 
 
@@ -2499,8 +2562,143 @@ def _default_ui_settings() -> JsonDict:
                 "custom_tools": [],
             },
             "permissions": dict(DEFAULT_ASSISTANT_PERMISSIONS),
-        }
+        },
+        "environment": {"variables": {}},
     }
+
+
+def _normalize_environment_settings(raw: Optional[JsonDict]) -> JsonDict:
+    variables: Dict[str, str] = {}
+    payload = raw if isinstance(raw, dict) else {}
+    source = payload.get("variables", {}) if isinstance(payload.get("variables"), dict) else {}
+    for key, value in source.items():
+        try:
+            name = _clean_env_var_name(key)
+        except ValueError:
+            continue
+        text = str(value or "")
+        if text:
+            variables[name] = text
+    return {"variables": variables}
+
+
+def _clean_env_var_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError("Environment variable name is required.")
+    if "=" in name:
+        raise ValueError("Environment variable names cannot contain '='.")
+    first = name[0]
+    if not (first == "_" or "A" <= first <= "Z" or "a" <= first <= "z"):
+        raise ValueError(f"Invalid environment variable name: {name}")
+    for char in name[1:]:
+        if not (char == "_" or "A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9"):
+            raise ValueError(f"Invalid environment variable name: {name}")
+    return name
+
+
+def _environment_variables_from_settings(settings: JsonDict) -> Dict[str, str]:
+    environment = settings.get("environment", {}) if isinstance(settings.get("environment"), dict) else {}
+    return dict(_normalize_environment_settings(environment).get("variables", {}))
+
+
+def _safe_environment_settings(settings: JsonDict) -> JsonDict:
+    variables = _environment_variables_from_settings(settings)
+    records = [
+        {"name": name, "configured": bool(value)}
+        for name, value in sorted(variables.items())
+    ]
+    return {"variables": records, "count": len(records)}
+
+
+def _resolve_declared_env_from_host(state: UiState, names: Iterable[Any]) -> tuple[Dict[str, str], List[str]]:
+    settings_variables = _environment_variables_from_settings(_read_ui_settings(state))
+    resolved: Dict[str, str] = {}
+    missing: List[str] = []
+    for raw_name in _dedupe_strings(names):
+        name = _clean_env_var_name(raw_name)
+        if settings_variables.get(name):
+            resolved[name] = settings_variables[name]
+        elif os.environ.get(name):
+            resolved[name] = os.environ[name]
+        else:
+            missing.append(name)
+    return resolved, missing
+
+
+def _require_declared_env_from_host(state: UiState, names: Iterable[Any], *, action: str) -> Dict[str, str]:
+    resolved, missing = _resolve_declared_env_from_host(state, names)
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(
+            f"Missing environment variable{'s' if len(missing) != 1 else ''} for {action}: {joined}. "
+            "Add them in Studio Settings or export them before launching. "
+            "Only variables declared with envFromHost are injected."
+        )
+    return resolved
+
+
+def _dedupe_strings(values: Iterable[Any]) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _declared_env_from_host(payload: Any) -> List[str]:
+    names: List[str] = []
+    if isinstance(payload, dict):
+        env_from_host = payload.get("envFromHost")
+        if isinstance(env_from_host, list):
+            names.extend(str(item) for item in env_from_host if str(item).strip())
+        for value in payload.values():
+            names.extend(_declared_env_from_host(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            names.extend(_declared_env_from_host(item))
+    return _dedupe_strings(names)
+
+
+def _study_env_requirements(study_path: Path) -> List[str]:
+    compiled = compile_authoring_config(study_path)
+    names: List[str] = []
+    for key in ("environment", "method", "execution"):
+        names.extend(_declared_env_from_host(compiled.get(key)))
+    return _dedupe_strings(names)
+
+
+def _setup_env_requirements(setup: Any) -> List[str]:
+    if not isinstance(setup, dict):
+        return []
+    env_from_host = setup.get("envFromHost", [])
+    return _dedupe_strings(env_from_host if isinstance(env_from_host, list) else [])
+
+
+def _interface_launch_env_requirements(raw: JsonDict, interface: JsonDict) -> List[str]:
+    names: List[str] = []
+    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    names.extend(_setup_env_requirements(runtime.get("setup")))
+    names.extend(_setup_env_requirements(interface.get("setup") if isinstance(interface, dict) else {}))
+    if isinstance(interface, dict) and isinstance(interface.get("envFromHost"), list):
+        names.extend(str(item) for item in interface.get("envFromHost", []) if str(item).strip())
+    return _dedupe_strings(names)
+
+
+def _study_subprocess_env(state: UiState, study_path: Path) -> Dict[str, str]:
+    declared_env = _require_declared_env_from_host(state, _study_env_requirements(study_path), action="study launch")
+    env = minimal_host_env()
+    pythonpath_entries = [str(Path(__file__).resolve().parents[2]), str(state.cwd.resolve())]
+    existing_pythonpath = os.environ.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpath_entries.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(item for item in pythonpath_entries if item))
+    env.update(declared_env)
+    return env
 
 
 def _normalize_assistant_permissions(raw: Optional[JsonDict]) -> JsonDict:
@@ -2724,7 +2922,8 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
                 "openhands": safe_openhands,
                 "capabilities": capabilities,
                 "permissions": permissions,
-            }
+            },
+            "environment": _safe_environment_settings(settings),
         },
         "status": state.agent_adapter.status(),
         "settings_path": str(state.settings_path),
@@ -2749,6 +2948,23 @@ def _update_agent_settings(state: UiState, payload: JsonDict) -> JsonDict:
         assistant["capabilities"] = _normalize_assistant_capabilities(payload.get("capabilities"))
     if isinstance(payload.get("permissions"), dict):
         assistant["permissions"] = _normalize_assistant_permissions(payload.get("permissions"))
+    if isinstance(payload.get("environment"), dict):
+        environment = settings.setdefault("environment", {"variables": {}})
+        variables = _environment_variables_from_settings(settings)
+        incoming_environment = payload["environment"]
+        for raw_name in incoming_environment.get("clear", []) or []:
+            try:
+                variables.pop(_clean_env_var_name(raw_name), None)
+            except ValueError:
+                continue
+        for item in incoming_environment.get("set", []) or []:
+            if not isinstance(item, dict):
+                continue
+            name = _clean_env_var_name(item.get("name"))
+            value = str(item.get("value") or "")
+            if value:
+                variables[name] = value
+        environment["variables"] = variables
     _write_ui_settings(state, settings)
     _refresh_agent_adapter(state)
     return _agent_settings_payload(state)
@@ -2990,16 +3206,22 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"resource not found: {path}")
         entry = _resource_catalog_entry(path)
+        config_yaml = str(entry.get("yaml") or "")
+        config_raw = yaml.safe_load(config_yaml) or {}
+        if entry.get("config_path"):
+            validation = validate_authoring_config(entry["config_path"])
+        else:
+            schema_result = validate_public_config_schema(config_raw, config_path=str(path / "optpilot.resource.yaml"))
+            validation = {
+                "valid": schema_result.valid,
+                "path": "",
+                "errors": [f"{issue.path}: {issue.message}" for issue in schema_result.errors],
+            }
         return {
             "entry": entry,
-            "config": {
-                "kind": "resource",
-                "id": entry["id"],
-                "name": entry["label"],
-                "path": str(path),
-                "summary": entry.get("summary", {}),
-                "interface": entry.get("interface") or {},
-            },
+            "config": config_raw,
+            "yaml": config_yaml,
+            "validation": validation,
             "compatibility": {"compatible": [], "incompatible": []},
         }
     path = _decode_id(uid)
@@ -3011,6 +3233,7 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
         return {
             "entry": entry,
             "config": raw,
+            "yaml": entry.get("yaml") or yaml.safe_dump(raw, sort_keys=False),
             "validation": _validate_study(path),
             "compatibility": {"compatible": [], "incompatible": []},
         }
@@ -3028,6 +3251,8 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
     return {
         "entry": entry,
         "config": raw,
+        "yaml": entry.get("yaml") or yaml.safe_dump(raw, sort_keys=False),
+        "validation": validate_authoring_config(path),
         "compatibility": {
             "compatible": [item for item in related if item["compatible"]],
             "incompatible": [item for item in related if not item["compatible"]],
@@ -3152,6 +3377,12 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
         method,
     )
     name = str(payload.get("name") or f"{environment.get('id', environment_path.stem)}-{method.get('id', method_path.stem)}")
+    description = str(payload.get("description") or "").strip()
+    tags = payload.get("tags", [])
+    if isinstance(tags, str):
+        tags = [item.strip() for item in tags.split(",") if item.strip()]
+    if not isinstance(tags, list):
+        tags = []
     metric = str(payload.get("metric") or _first_metric(environment) or "score")
     direction = str(payload.get("direction") or "maximize")
     aggregation = str(payload.get("aggregation") or "mean")
@@ -3159,33 +3390,56 @@ def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
     if not isinstance(secondary_metrics, list):
         secondary_metrics = []
     max_trials = int(payload.get("maxTrials", payload.get("max_trials", 12)) or 12)
+    max_wall_clock_raw = payload.get("maxWallClockSeconds", payload.get("max_wall_clock_seconds"))
     max_failures_raw = payload.get("maxFailures", payload.get("max_failures"))
     parallelism = int(payload.get("parallelism", 1) or 1)
     timeout = int(payload.get("timeoutSeconds", payload.get("timeout_seconds", 120)) or 120)
+    max_retries_raw = payload.get("maxRetries", payload.get("max_retries"))
     evidence_level = str(payload.get("evidenceLevel", payload.get("evidence_level", "standard")) or "standard")
     evidence_storage = str(payload.get("evidenceStorage", payload.get("evidence_storage", "reference")) or "reference")
+    evidence_output_dir = str(payload.get("evidenceOutputDir", payload.get("evidence_output_dir", "")) or "").strip()
     draft = {
         "apiVersion": AUTHORING_API_VERSION,
         "config": "study",
         "name": name,
-        "environmentConfig": str(environment_path),
-        "methodConfig": str(method_path),
-        "objective": {
-            "metric": metric,
-            "direction": direction,
-            "aggregation": aggregation,
-            "secondaryMetrics": [str(item) for item in secondary_metrics if item],
-        },
-        "budget": {"maxTrials": max_trials},
-        "execution": {"parallelism": parallelism, "timeoutSeconds": timeout},
-        "evidence": {"level": evidence_level, "outputFileStorage": evidence_storage},
     }
+    if description:
+        draft["description"] = description
+    if tags:
+        draft["tags"] = [str(item) for item in tags if str(item)]
+    draft.update(
+        {
+            "environmentConfig": str(environment_path),
+            "methodConfig": str(method_path),
+            "objective": {
+                "metric": metric,
+                "direction": direction,
+                "aggregation": aggregation,
+                "secondaryMetrics": [str(item) for item in secondary_metrics if item],
+            },
+            "budget": {"maxTrials": max_trials},
+            "execution": {"parallelism": parallelism, "timeoutSeconds": timeout},
+            "evidence": {"level": evidence_level, "outputFileStorage": evidence_storage},
+        }
+    )
+    if max_wall_clock_raw not in (None, ""):
+        max_wall_clock = int(max_wall_clock_raw)
+        if max_wall_clock <= 0:
+            raise ValueError("maxWallClockSeconds must be >= 1 when provided.")
+        draft["budget"]["maxWallClockSeconds"] = max_wall_clock
     if max_failures_raw not in (None, ""):
         max_failures = int(max_failures_raw)
         if max_failures < 0:
             raise ValueError("maxFailures must be >= 1 when provided, or blank/0 for no limit.")
         if max_failures > 0:
             draft["budget"]["maxFailures"] = max_failures
+    if max_retries_raw not in (None, ""):
+        max_retries = int(max_retries_raw)
+        if max_retries < 0:
+            raise ValueError("maxRetries must be >= 0 when provided.")
+        draft["execution"]["retry"] = {"maxRetries": max_retries}
+    if evidence_output_dir:
+        draft["evidence"]["outputDir"] = evidence_output_dir
     if payload.get("seed") not in (None, ""):
         draft["reproducibility"] = {"seed": int(payload.get("seed"))}
     draft_yaml = yaml.safe_dump(draft, sort_keys=False)
@@ -5447,6 +5701,7 @@ def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
         "focus_paths": list(payload.get("focus_paths", []) or []),
         "registration_enabled": bool(payload.get("registration_enabled", True)),
         "setup": dict(payload.get("setup", {}) or {}),
+        "validation": dict(payload.get("validation", {}) or {}),
         "source_path": str(payload.get("source_path") or ""),
         "source_root": str(payload.get("source_root") or payload.get("root") or ""),
         "created_at": str(payload.get("created_at") or _now_iso()),
@@ -5599,7 +5854,7 @@ def _run_component_setup_in_workspace_runtime(
     results = []
     for label, setup in _component_setup_specs(raw, interface=interface):
         timeout = int(setup.get("timeoutSeconds", 600) or 600)
-        base_env = _workspace_runtime_setup_env(setup)
+        base_env = _workspace_runtime_setup_env(state, setup)
         step_results = []
         for index, step in enumerate(setup.get("steps") or []):
             for command in setup_commands_for_step(step, root):
@@ -5634,12 +5889,44 @@ def _run_component_setup_in_workspace_runtime(
     return {"ran": bool(results), "results": results}
 
 
-def _workspace_runtime_setup_env(setup: JsonDict) -> Dict[str, str]:
-    env: Dict[str, str] = {}
-    for key in setup.get("envFromHost", []) or []:
-        key = str(key)
-        if key in os.environ:
-            env[key] = os.environ[key]
+def _normalize_component_config_override(kind: str, config_override: Optional[JsonDict]) -> Optional[JsonDict]:
+    if not config_override:
+        return None
+    if not isinstance(config_override, dict):
+        raise ValueError("config must be an object.")
+    raw = deepcopy(config_override)
+    if raw.get("apiVersion") != AUTHORING_API_VERSION:
+        raise ValueError(f"config.apiVersion must be {AUTHORING_API_VERSION}.")
+    if raw.get("config") != kind:
+        raise ValueError(f"config.config must be {kind}.")
+    return raw
+
+
+def _write_component_config_copy(kind: str, target: Path, raw: JsonDict) -> JsonDict:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    if kind == "study":
+        return _validate_study(target)
+    return validate_authoring_config(target)
+
+
+def _resource_config_target(entry: JsonDict, original_root: Path, copied_root: Path) -> Path:
+    source_value = entry.get("config_path")
+    if source_value:
+        source_path = Path(str(source_value)).resolve()
+        try:
+            return copied_root / source_path.relative_to(original_root.resolve())
+        except ValueError:
+            return copied_root / source_path.name
+    return copied_root / "optpilot.resource.yaml"
+
+
+def _workspace_runtime_setup_env(state: UiState, setup: JsonDict) -> Dict[str, str]:
+    env = _require_declared_env_from_host(
+        state,
+        setup.get("envFromHost", []) or [],
+        action="component setup",
+    )
     env.update({str(key): str(value) for key, value in (setup.get("env") or {}).items()})
     return env
 
@@ -5694,12 +5981,15 @@ def _open_catalog_workspace(
     editable: bool,
     title_prefix: str = "Edit",
     install: bool = False,
+    config_override: Optional[JsonDict] = None,
 ) -> JsonDict:
+    override_raw = _normalize_component_config_override(kind, config_override)
     if kind == "resource":
         resource_root = _decode_id(uid).resolve()
         if not resource_root.exists() or not resource_root.is_dir():
             raise FileNotFoundError(f"resource not found: {resource_root}")
         entry = _resource_catalog_entry(resource_root)
+        raw_for_workspace = override_raw or deepcopy(entry.get("raw_config") or {})
         label = str(entry.get("label") or resource_root.name)
         if editable:
             workspace_id = f"ws_{uuid.uuid4().hex[:10]}"
@@ -5709,6 +5999,7 @@ def _open_catalog_workspace(
             mode = "editable"
             source_type = "catalog-copy"
             title = f"{title_prefix} {label}"
+            copied_config_path = _resource_config_target(entry, resource_root, source_root)
         else:
             workspace_id = f"ws_{slug_path(resource_root)}_resource"
             root = resource_root
@@ -5716,6 +6007,10 @@ def _open_catalog_workspace(
             mode = "read-only"
             source_type = "catalog"
             title = f"Inspect {label}"
+            copied_config_path = _resource_config_target(entry, resource_root, source_root)
+        validation: JsonDict = {}
+        if editable and raw_for_workspace:
+            validation = _write_component_config_copy("resource", copied_config_path, raw_for_workspace)
         readme = entry.get("summary", {}).get("readme") or "README.md"
         workspace = _create_ui_workspace(
             state,
@@ -5731,16 +6026,20 @@ def _open_catalog_workspace(
                 "registered_entries": [{
                     "kind": "resource",
                     "id": str(entry.get("id") or resource_root.name),
-                    "config_path": "",
+                    "config_path": _relative_path(copied_config_path, root) if editable else "",
                     "source_config_path": str(resource_root),
                 }],
                 "focus_paths": [readme] if (root / readme).exists() else ["README.md"],
                 "registration_enabled": editable,
+                "validation": validation,
             },
         )
         if editable and install:
-            interface = dict(entry.get("interface") or {})
-            setup_result = _run_component_setup_in_workspace_runtime(state, workspace, {}, source_root, interface, lambda *_args, **_kwargs: None)
+            interface = _normalize_interface_config(raw_for_workspace.get("interface"))
+            if validation and not validation.get("valid"):
+                setup_result = {"ran": False, "skipped": True, "reason": "Config validation failed.", "validation": validation}
+            else:
+                setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw_for_workspace, source_root, interface, lambda *_args, **_kwargs: None)
             workspace = dict(_require_ui_workspace(state, str(workspace["id"])))
             workspace["setup"] = setup_result
             workspace = _upsert_ui_workspace(state, workspace)
@@ -5749,6 +6048,7 @@ def _open_catalog_workspace(
     raw = _read_yaml(config_path)
     if raw.get("config") != kind or raw.get("apiVersion") != AUTHORING_API_VERSION:
         raise FileNotFoundError(f"{kind} config not found: {config_path}")
+    raw_for_workspace = override_raw or deepcopy(raw)
     label = str(raw.get("name") or raw.get("id") or config_path.stem)
     original_source_root = _catalog_component_source_root(kind, config_path, raw)
     if editable:
@@ -5765,10 +6065,13 @@ def _open_catalog_workspace(
         source_type = "catalog"
         title = f"Inspect {label}"
     copied_config_path = source_root / config_path.relative_to(original_source_root)
+    validation: JsonDict = {}
+    if editable and override_raw is not None:
+        validation = _write_component_config_copy(kind, copied_config_path, raw_for_workspace)
     focus_paths = _focus_paths_for_config(root, copied_config_path if editable else config_path, raw)
     registered_entry = {
         "kind": kind,
-        "id": str(raw.get("id") or raw.get("name") or config_path.stem),
+        "id": str(raw_for_workspace.get("id") or raw_for_workspace.get("name") or config_path.stem),
         "config_path": _relative_path(copied_config_path if editable else config_path, root),
         "source_config_path": str(config_path),
     }
@@ -5786,10 +6089,14 @@ def _open_catalog_workspace(
             "registered_entries": [registered_entry],
             "focus_paths": focus_paths,
             "registration_enabled": editable or mode != "read-only",
+            "validation": validation,
         },
     )
     if editable and install:
-        setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw, source_root, {}, lambda *_args, **_kwargs: None)
+        if validation and not validation.get("valid"):
+            setup_result = {"ran": False, "skipped": True, "reason": "Config validation failed.", "validation": validation}
+        else:
+            setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw_for_workspace, source_root, {}, lambda *_args, **_kwargs: None)
         workspace = dict(_require_ui_workspace(state, str(workspace["id"])))
         workspace["setup"] = setup_result
         workspace = _upsert_ui_workspace(state, workspace)
@@ -5804,12 +6111,19 @@ def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
     return job.to_dict()
 
 
-def _start_catalog_interface_launch(state: UiState, kind: str, uid: str) -> JsonDict:
+def _start_catalog_interface_launch(state: UiState, kind: str, uid: str, *, config_override: Optional[JsonDict] = None) -> JsonDict:
     if kind == "study":
         raise ValueError("Study configs do not declare launchable interfaces.")
-    interface = _catalog_interface_for_uid(kind, uid)
+    override_raw = _normalize_component_config_override(kind, config_override)
+    interface = _component_interface_for_uid(kind, uid, config_override=override_raw)
     if not interface:
         raise ValueError("This catalog entry does not declare an interface.")
+    raw = override_raw or (_read_yaml(_decode_id(uid)) if kind != "resource" else _resource_catalog_entry(_decode_id(uid).resolve()).get("raw_config", {}))
+    _require_declared_env_from_host(
+        state,
+        _interface_launch_env_requirements(raw, interface),
+        action="interface launch",
+    )
     launch_id = f"launch-{uuid.uuid4().hex[:12]}"
     job = UiLaunchJob(
         launch_id=launch_id,
@@ -5828,16 +6142,17 @@ def _start_catalog_interface_launch(state: UiState, kind: str, uid: str) -> Json
     )
     with state._lock:
         state.interface_launches[launch_id] = job
-    threading.Thread(target=_run_catalog_interface_launch, args=(state, launch_id, kind, uid), daemon=True).start()
+    threading.Thread(target=_run_catalog_interface_launch, args=(state, launch_id, kind, uid, override_raw), daemon=True).start()
     return {"launch": job.to_dict()}
 
 
-def _run_catalog_interface_launch(state: UiState, launch_id: str, kind: str, uid: str) -> None:
+def _run_catalog_interface_launch(state: UiState, launch_id: str, kind: str, uid: str, config_override: Optional[JsonDict] = None) -> None:
     try:
         result = _launch_catalog_interface(
             state,
             kind,
             uid,
+            config_override=config_override,
             progress=lambda title, detail="", status="running", data=None: _record_interface_launch_step(
                 state,
                 launch_id,
@@ -5935,22 +6250,26 @@ def _launch_log_tail(log_paths: JsonDict, *, max_chars: int = 4000) -> JsonDict:
     return logs
 
 
-def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Optional[Any] = None) -> JsonDict:
+def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Optional[Any] = None, config_override: Optional[JsonDict] = None) -> JsonDict:
     def report(title: str, detail: str = "", status: str = "running", data: Optional[JsonDict] = None) -> None:
         if progress:
             progress(title, detail, status, data)
 
     if kind == "study":
         raise ValueError("Study configs do not declare launchable interfaces.")
+    override_raw = _normalize_component_config_override(kind, config_override)
     report("Reading interface config", f"Loading {kind} interface declaration.")
-    interface = _catalog_interface_for_uid(kind, uid)
+    interface = _component_interface_for_uid(kind, uid, config_override=override_raw)
     if not interface:
         raise ValueError("This catalog entry does not declare an interface.")
     report("Creating editable workspace", "Copying the catalog entry into a draft workspace.")
-    workspace = _open_catalog_workspace(state, kind, uid, editable=True, title_prefix="Launch")
+    workspace = _open_catalog_workspace(state, kind, uid, editable=True, title_prefix="Launch", config_override=override_raw)
+    validation = workspace.get("validation") if isinstance(workspace.get("validation"), dict) else {}
+    if validation and not validation.get("valid"):
+        raise ValueError("Edited config validation failed: " + "; ".join(str(error) for error in validation.get("errors", []) or ["invalid config"]))
     root = Path(str(workspace["root"])).resolve()
     source_root = _workspace_source_root(workspace)
-    raw = _read_yaml(_decode_id(uid)) if kind != "resource" else {}
+    raw = override_raw or (_read_yaml(_decode_id(uid)) if kind != "resource" else _resource_catalog_entry(_decode_id(uid).resolve()).get("raw_config", {}))
     cwd = (source_root / str(interface.get("cwd") or ".")).resolve()
     if not _is_relative_to(cwd, source_root):
         raise ValueError("Interface cwd must stay inside the launched workspace copy.")
@@ -5965,10 +6284,13 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
     env.setdefault("PORT", str(port))
     env["OPTPILOT_INTERFACE_PORT"] = str(port)
     env["OPTPILOT_WORKSPACE_ROOT"] = str(root)
-    for key in interface.get("envFromHost") or []:
-        key = str(key)
-        if key in os.environ:
-            env[key] = os.environ[key]
+    env.update(
+        _require_declared_env_from_host(
+            state,
+            interface.get("envFromHost") or [],
+            action="interface launch",
+        )
+    )
     report(
         "Starting workspace runtime",
         "Ensuring the per-workspace container is running, then starting the interface command.",
@@ -6010,6 +6332,12 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
 
 
 def _catalog_interface_for_uid(kind: str, uid: str) -> JsonDict:
+    return _component_interface_for_uid(kind, uid)
+
+
+def _component_interface_for_uid(kind: str, uid: str, *, config_override: Optional[JsonDict] = None) -> JsonDict:
+    if config_override is not None:
+        return _normalize_interface_config(config_override.get("interface"))
     if kind == "resource":
         resource_root = _decode_id(uid).resolve()
         if not resource_root.exists() or not resource_root.is_dir():

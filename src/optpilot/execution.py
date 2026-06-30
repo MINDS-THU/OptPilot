@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 from .candidate_materialization import MaterializationRecord, ValidationReport
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import Observation, ResourceProfile, SandboxSpec, TrialSpec, utc_now_iso
-from .setup import apply_prepared_env
+from .setup import apply_prepared_env, minimal_host_env
 
 
 class Evaluator:
@@ -1017,7 +1017,7 @@ def trial_spec_from_dict(payload: Dict[str, Any]) -> TrialSpec:
 
 
 def _worker_process_env(config: Dict[str, Any]) -> Dict[str, str]:
-    env = apply_prepared_env(os.environ.copy(), config.get("preparedEnv", {}))
+    env = apply_prepared_env(minimal_host_env(), config.get("preparedEnv", {}))
     env.update({str(key): str(value) for key, value in config.get("env", {}).items()})
     env.update({str(key): str(value) for key, value in config.get("environmentVariables", {}).items()})
     for key in config.get("envFromHost", []) or []:

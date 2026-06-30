@@ -6,8 +6,8 @@ description: How OptPilot organizes packages of environments, methods, resources
 # Catalog
 
 `catalog/` is the local shelf of OptPilot packages. Each direct child is a
-package that can contain environments, methods, resources, studies, code,
-prompts, fixtures, and package-specific docs.
+package: a folder that can contain environments, methods, resources, studies,
+code, prompts, fixtures, and package-specific docs.
 
 The repository ships one package:
 
@@ -25,7 +25,7 @@ uv run optpilot ui --open-browser
 ## Catalog vs Package
 
 A catalog is the collection of packages available to OptPilot. A package is one
-curated folder inside that collection.
+folder inside that collection.
 
 Adding a package should add a new sibling under `catalog/`; it should not
 overwrite `example_package` or any user-created package:
@@ -34,13 +34,36 @@ overwrite `example_package` or any user-created package:
 catalog/
   example_package/       # bundled runnable examples
   local_package/         # created on demand for user registrations
-  job_shop_case_study/   # future curated package
+  scheduling_case_study/ # another package
   my_lab_project/        # user-owned package
 ```
 
 This keeps packages removable, reviewable, and easy to update. If two packages
 contain similar ids, keep both folders and resolve the conflict in the UI or by
 renaming the entry inside one package.
+
+## Adding A Package
+
+Use a new package when you want to bring a project, case study, or team example
+into OptPilot without mixing it into the bundled examples. Place the folder
+under `catalog/`, or launch Studio with an extra catalog path:
+
+```bash
+uv run optpilot ui --catalog catalog/example_package --catalog path/to/my_package
+```
+
+A useful package usually includes:
+
+- a short README that says what the package contains and which study to run first
+- environment and method configs with the source files needed to run them
+- study files that validate the package on small examples
+- dependency files or setup commands for components that need installation
+- small sample data; large or licensed data should have clear download instructions
+
+Keep new packages additive. Do not copy them into `example_package` unless you
+are intentionally editing the example package itself. One folder per package
+makes it easy to inspect where entries came from, update or remove a package,
+and keep user-owned work separate from bundled examples.
 
 ## Package Layout
 
@@ -69,7 +92,8 @@ catalog/my_package/
 Environment and method directories own reusable implementation and reusable
 config variants. Resources are reusable reference folders, simulator
 interfaces, datasets, or launchable apps. Study YAML files are concrete run
-plans that bind one environment, one method, objective, budget, and runtime.
+plans that bind one environment, one method, objective, budget, and execution
+policy.
 
 ## Local Package
 

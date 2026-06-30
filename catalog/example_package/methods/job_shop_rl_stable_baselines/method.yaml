@@ -12,9 +12,6 @@ entrypoint:
 settings:
   batchSize: 1
   algorithm: PPO
-  trainInstances:
-    - training_cases/train_tiny_a.yaml
-    - training_cases/train_tiny_b.yaml
   maxJobs: 6
   totalTimesteps: 128
   discountFactor: 0.95
@@ -25,5 +22,7 @@ accepts:
   requires:
     context:
       - candidate.parameters.schema
+      - methodContext.references
     capabilities:
       - schedule-solution-candidate
+      - job-shop-rl-training-context
