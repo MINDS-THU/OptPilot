@@ -120,7 +120,7 @@ After the first run succeeds, open Studio:
 uv run optpilot ui --open-browser
 ```
 
-![OptPilot Studio catalog and assistant](docs/assets/studio-assistant-catalog.png)
+![OptPilot Studio catalog and assistant](https://raw.githubusercontent.com/MINDS-THU/OptPilot/main/docs/assets/studio-assistant-catalog.png)
 
 Studio scans packages under `catalog/` by default. Stop the local server with
 `Ctrl-C` in the terminal when you are done.

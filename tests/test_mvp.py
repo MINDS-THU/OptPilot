@@ -2930,7 +2930,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(result["counts"]["study"], 6)
         self.assertIn(("environment", "job-shop-rule-parameters"), entry_ids)
         self.assertIn(("method", "tune-dispatch-weights"), entry_ids)
-        self.assertIn(("resource", "devs-simulation-interface"), entry_ids)
+        self.assertEqual(result["counts"]["resource"], 0)
 
     def test_core_package_roots_expand_catalog_folder_to_packages(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2959,7 +2959,6 @@ class MvpIntegrationTest(unittest.TestCase):
         catalog = _catalog_payload(state)
         environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
         method = next(item for item in catalog["methods"] if item["id"] == "tune-dispatch-weights")
-        resource = next(item for item in catalog["resources"] if item["id"] == "devs-simulation-interface")
 
         self.assertIn("config: environment", environment["yaml"])
         self.assertIn("candidate:", environment["yaml"])
@@ -2967,22 +2966,17 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("config: method", method["yaml"])
         self.assertIn("entrypoint:", method["yaml"])
         self.assertIn("accepts:", method["yaml"])
-        self.assertIn("config: resource", resource["yaml"])
-        self.assertIn("interface:", resource["yaml"])
+        self.assertEqual(catalog["resources"], [])
 
         environment_detail = _catalog_detail(state, "environment", environment["uid"])
         method_detail = _catalog_detail(state, "method", method["uid"])
-        resource_detail = _catalog_detail(state, "resource", resource["uid"])
 
         self.assertTrue(environment_detail["validation"]["valid"], environment_detail)
         self.assertTrue(method_detail["validation"]["valid"], method_detail)
-        self.assertTrue(resource_detail["validation"]["valid"], resource_detail)
         self.assertEqual(environment_detail["config"]["config"], "environment")
         self.assertEqual(method_detail["config"]["config"], "method")
-        self.assertEqual(resource_detail["config"]["config"], "resource")
         self.assertIn("config: environment", environment_detail["yaml"])
         self.assertIn("config: method", method_detail["yaml"])
-        self.assertIn("config: resource", resource_detail["yaml"])
 
     def test_ui_catalog_edit_copy_writes_overridden_config(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
