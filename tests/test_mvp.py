@@ -5160,6 +5160,24 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(status["runtime"]["memory_limit"], "4g")
         self.assertEqual(status["runtime"]["pids_limit"], 1024)
 
+    def test_ui_workspace_runtime_separates_bind_and_public_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(
+                cwd=Path(tmp_dir),
+                catalog_roots=[],
+                run_roots=[],
+                code_server=CodeServerOptions(host="127.0.0.1", public_host="studio.example.test", port=18766),
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    host="127.0.0.1",
+                    public_host="studio.example.test",
+                    port_start=18766,
+                ),
+            )
+
+        self.assertEqual(state.code_server.url, "http://studio.example.test:18766/")
+        self.assertEqual(state.workspace_runtime._code_server_base_url(18767), "http://studio.example.test:18767/")
+        self.assertEqual(state.workspace_runtime._code_server_probe_url(18767), "http://127.0.0.1:18767/")
+
     def test_ui_code_server_status_rejects_non_code_server_port_conflict(self) -> None:
         class FakeOptPilotHandler(BaseHTTPRequestHandler):
             server_version = "OptPilotUI/0.1"
@@ -5578,6 +5596,8 @@ class MvpIntegrationTest(unittest.TestCase):
                 "ui",
                 "--port",
                 "9001",
+                "--public-host",
+                "studio.example.test",
                 "--catalog",
                 "catalog/example_package",
                 "--workspace-runtime-bin",
@@ -5586,6 +5606,8 @@ class MvpIntegrationTest(unittest.TestCase):
                 "custom/workspace:latest",
                 "--workspace-runtime-network",
                 "bridge",
+                "--workspace-runtime-host",
+                "127.0.0.2",
                 "--workspace-runtime-port-start",
                 "19000",
             ]
@@ -5593,10 +5615,12 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(args.command, "ui")
         self.assertEqual(args.port, 9001)
+        self.assertEqual(args.public_host, "studio.example.test")
         self.assertEqual(args.catalog, ["catalog/example_package"])
         self.assertEqual(args.workspace_runtime_bin, "podman")
         self.assertEqual(args.workspace_runtime_image, "custom/workspace:latest")
         self.assertEqual(args.workspace_runtime_network, "bridge")
+        self.assertEqual(args.workspace_runtime_host, "127.0.0.2")
         self.assertEqual(args.workspace_runtime_port_start, 19000)
 
     def test_cli_ui_forwards_workspace_runtime_options(self) -> None:
@@ -5604,12 +5628,16 @@ class MvpIntegrationTest(unittest.TestCase):
             exit_code = cli_main(
                 [
                     "ui",
+                    "--public-host",
+                    "studio.example.test",
                     "--workspace-runtime-bin",
                     "podman",
                     "--workspace-runtime-image",
                     "custom/workspace:latest",
                     "--workspace-runtime-network",
                     "bridge",
+                    "--workspace-runtime-host",
+                    "127.0.0.2",
                     "--workspace-runtime-port-start",
                     "19000",
                 ]
@@ -5618,9 +5646,11 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         run_ui_mock.assert_called_once()
         kwargs = run_ui_mock.call_args.kwargs
+        self.assertEqual(kwargs["public_host"], "studio.example.test")
         self.assertEqual(kwargs["workspace_runtime_executable"], "podman")
         self.assertEqual(kwargs["workspace_runtime_image"], "custom/workspace:latest")
         self.assertEqual(kwargs["workspace_runtime_network"], "bridge")
+        self.assertEqual(kwargs["workspace_runtime_host"], "127.0.0.2")
         self.assertEqual(kwargs["workspace_runtime_port_start"], 19000)
 
     @staticmethod

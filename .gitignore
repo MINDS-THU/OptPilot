@@ -29,3 +29,4 @@ frontier_pid_study.yaml
 workspace/
 .optpilot-ui/
 .venv/
+/_deploy/
