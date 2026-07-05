@@ -3065,7 +3065,7 @@ function renderPreviewWorkbench() {
       ? `Preparing port ${preview.port || 5173} through the workspace runtime.`
       : preview.status === "error"
       ? preview.message || "The preview could not be opened."
-      : "Start a frontend server in the workspace terminal, make it listen on 0.0.0.0, then enter the port here.";
+      : "Start a frontend server in the workspace terminal, make it listen on 127.0.0.1, then enter the port here.";
   }
   if (els.openWorkspacePreviewButton) {
     els.openWorkspacePreviewButton.disabled = !hasWorkspace || opening;

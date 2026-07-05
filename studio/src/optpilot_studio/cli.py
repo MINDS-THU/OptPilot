@@ -15,6 +15,7 @@ def _run_ui_command(args) -> int:
     run_ui(
         host=args.host,
         port=args.port,
+        public_host=args.public_host,
         catalog_roots=args.catalog,
         run_roots=args.runs,
         code_server_bin=args.code_server_bin,
@@ -25,6 +26,7 @@ def _run_ui_command(args) -> int:
         workspace_runtime_executable=args.workspace_runtime_bin,
         workspace_runtime_image=args.workspace_runtime_image,
         workspace_runtime_network=args.workspace_runtime_network,
+        workspace_runtime_host=args.workspace_runtime_host,
         workspace_runtime_port_start=args.workspace_runtime_port_start,
         open_browser=args.open_browser,
     )
