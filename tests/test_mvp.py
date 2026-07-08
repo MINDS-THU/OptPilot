@@ -6,6 +6,8 @@ import contextlib
 import io
 import importlib.util
 import os
+import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -14,17 +16,19 @@ import threading
 import time
 import unittest
 from copy import deepcopy
+from urllib.error import HTTPError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import List
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 import yaml
 
 from optpilot.candidate_materialization import BoundsCandidateValidator, FileCandidateManifestValidator, WorkspaceBundleMaterializer
 from optpilot.adapters import ReadOnlySQLiteQuery
-from optpilot_studio.agent import OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
+from optpilot_studio.agent import OPTPILOT_AGENT_TOOL_SPECS, OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
 from optpilot.cli import build_parser, main as cli_main
 from optpilot.candidate_files import CandidateFileStore, store_candidate_file
 from optpilot.config import compile_authoring_config
@@ -63,28 +67,41 @@ from optpilot_studio.ui.server import (
     _delete_ui_workspace,
     _detach_agent_workspace,
     _detach_workspace,
+    _discover_workspace_configs,
     _draft_study,
     _apply_registration_manifest,
+    _apply_package_plan,
     _list_agent_sessions,
     _list_ui_workspaces,
     _list_runs,
     _launch_catalog_interface,
     _interface_launch_by_id,
+    _launch_workspace_interface,
     _open_catalog_workspace,
     _open_study_workspace,
+    _handler_factory,
     _read_agent_approvals,
     _read_agent_events,
     _read_agent_messages,
     _reject_agent_action,
     _rename_ui_workspace,
     _require_ui_workspace,
+    _resolve_agent_or_allowed_path,
     _sync_agent_session,
     _update_agent_settings,
+    _upsert_agent_session,
     _execute_agent_tool,
     _local_code_server_executable,
     _start_catalog_interface_launch,
+    _start_workspace_interface_launch,
     _validate_study,
     _require_declared_env_from_host,
+    _prepare_package_plan,
+    _shell_needs_approval,
+    _smoke_package_plan,
+    _update_package_plan,
+    _validate_package_plan,
+    _preview_proxy_handler_factory,
 )
 
 
@@ -587,7 +604,7 @@ class MvpIntegrationTest(unittest.TestCase):
                                 ],
                             },
                         },
-                        "metrics": {"source": "return", "keys": ["score"]},
+                        "metrics": {"source": "return", "keys": ["throughput"]},
                     },
                     sort_keys=False,
                 ),
@@ -621,7 +638,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "name": "nested-parameter-study",
                         "environmentConfig": "environment.yaml",
                         "methodConfig": "method.yaml",
-                        "objective": {"metric": "score", "direction": "maximize"},
+                        "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
                     sort_keys=False,
@@ -701,7 +718,7 @@ class MvpIntegrationTest(unittest.TestCase):
                                 }
                             ],
                         },
-                        "metrics": {"source": "stdout", "keys": ["score"]},
+                        "metrics": {"source": "stdout", "keys": ["throughput"]},
                     },
                     sort_keys=False,
                 ),
@@ -738,7 +755,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "name": "nested-file-study",
                         "environmentConfig": "environment.yaml",
                         "methodConfig": "method.yaml",
-                        "objective": {"metric": "score", "direction": "maximize"},
+                        "objective": {"metric": "throughput", "direction": "maximize"},
                         "budget": {"maxTrials": 1},
                     },
                     sort_keys=False,
@@ -2928,16 +2945,17 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(result["counts"]["environment"], 3)
         self.assertGreaterEqual(result["counts"]["method"], 6)
         self.assertGreaterEqual(result["counts"]["study"], 6)
+        self.assertGreaterEqual(result["counts"]["resource"], 1)
         self.assertIn(("environment", "job-shop-rule-parameters"), entry_ids)
         self.assertIn(("method", "tune-dispatch-weights"), entry_ids)
-        self.assertEqual(result["counts"]["resource"], 0)
+        self.assertIn(("resource", "devs-gen-interface"), entry_ids)
 
     def test_core_package_roots_expand_catalog_folder_to_packages(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
 
         roots = expand_package_roots([repo_root / "catalog"])
 
-        self.assertEqual(roots, [repo_root / "catalog" / "example_package"])
+        self.assertIn(repo_root / "catalog" / "example_package", roots)
 
     def test_cli_package_validate_json_output(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2951,6 +2969,431 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(payload["valid"], payload)
         self.assertEqual(payload["package_id"], "example_package")
         self.assertIn("entries", payload)
+
+    def test_cli_package_setup_check_reports_missing_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir) / "local_package"
+            env_dir = package / "environments" / "setup-env"
+            env_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "setup-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "runtime": {"setup": {"steps": [{"uses": "python-venv", "requirements": ["missing.txt"]}]}},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["package", "setup-check", str(package), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(payload["valid"])
+        self.assertIn("requirements[0] does not exist", payload["entries"][0]["errors"][0])
+
+    def test_cli_package_setup_check_runs_dot_optpilot_resource_setup_from_resource_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir) / "local_package"
+            resource = package / "resources" / "tool"
+            manifest_dir = resource / ".optpilot"
+            manifest_dir.mkdir(parents=True)
+            (resource / "README.md").write_text("# Tool\n", encoding="utf-8")
+            (manifest_dir / "resource.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "resource",
+                        "id": "tool",
+                        "name": "Tool",
+                        "interface": {
+                            "command": ["python3", "-m", "http.server", "5173"],
+                            "port": 5173,
+                            "setup": {
+                                "steps": [
+                                    {
+                                        "uses": "command",
+                                        "command": [
+                                            "python3",
+                                            "-c",
+                                            "from pathlib import Path; Path('setup-root-marker.txt').write_text('ok')",
+                                        ],
+                                    }
+                                ]
+                            },
+                        },
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["package", "setup-check", str(package), "--run-setup", "--json"])
+            payload = json.loads(stdout.getvalue())
+            marker_created = (resource / "setup-root-marker.txt").is_file()
+            marker_in_manifest_dir = (manifest_dir / "setup-root-marker.txt").exists()
+
+        self.assertEqual(exit_code, 0, payload)
+        self.assertTrue(payload["valid"], payload)
+        self.assertTrue(marker_created)
+        self.assertFalse(marker_in_manifest_dir)
+
+    def test_package_setup_validation_ignores_inline_python_command_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir) / "local_package"
+            env_dir = package / "environments" / "inline-setup"
+            env_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "inline-setup",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "runtime": {
+                            "setup": {
+                                "steps": [
+                                    {
+                                        "uses": "command",
+                                        "command": [
+                                            "python3",
+                                            "-c",
+                                            "from pathlib import Path; Path('generated/setup_dep.py').write_text('VALUE = 1\\n')",
+                                        ],
+                                    }
+                                ]
+                            }
+                        },
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = validate_package(package, check_setup_files=True)
+
+        self.assertTrue(result["valid"], result)
+
+    def test_cli_package_smoke_runs_selected_study(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package = tmp_path / "local_package"
+            env_dir = package / "environments" / "toy-env"
+            method_dir = package / "methods" / "random-method"
+            study_dir = package / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': float(candidate_runtime.get('x', 0))}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "toy-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "smoke",
+                        "environmentConfig": "../environments/toy-env/environment.yaml",
+                        "methodConfig": "../methods/random-method/method.yaml",
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["package", "smoke", str(package), "--study", "studies/smoke.yaml", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0, payload)
+        self.assertTrue(payload["valid"], payload)
+
+    def test_cli_package_smoke_runs_component_setup_before_runtime_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package = tmp_path / "local_package"
+            env_dir = package / "environments" / "setup-env"
+            method_dir = package / "methods" / "random-method"
+            study_dir = package / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "import setup_dep\n\n"
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': float(setup_dep.VALUE)}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "setup-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "runtime": {
+                            "setup": {
+                                "steps": [
+                                    {
+                                        "uses": "command",
+                                        "command": [
+                                            "python3",
+                                            "-c",
+                                            "from pathlib import Path; Path('setup_dep.py').write_text('VALUE = 0.5\\n')",
+                                        ],
+                                    }
+                                ]
+                            }
+                        },
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "setup-smoke",
+                        "environmentConfig": "../environments/setup-env/environment.yaml",
+                        "methodConfig": "../methods/random-method/method.yaml",
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["package", "smoke", str(package), "--study", "studies/smoke.yaml", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0, payload)
+        self.assertTrue(payload["valid"], payload)
+
+    def test_core_package_validate_checks_source_imports_and_setup_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir) / "local_package"
+            env_dir = package / "environments" / "missing-reference"
+            env_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "missing-reference",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "runtime": {
+                            "setup": {
+                                "steps": [
+                                    {"uses": "python-venv", "requirements": ["requirements.txt"]},
+                                ],
+                            },
+                        },
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "methodContext": {"references": [{"name": "missing", "path": "missing.md"}]},
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            schema_only = validate_package(package)
+            source_checked = validate_package(package, check_source=True)
+            setup_checked = validate_package(package, check_setup_files=True)
+
+        self.assertTrue(schema_only["valid"], schema_only)
+        self.assertFalse(source_checked["valid"], source_checked)
+        self.assertIn("methodContext.references[0].path does not exist", source_checked["entries"][0]["errors"][0])
+        self.assertFalse(setup_checked["valid"], setup_checked)
+        self.assertIn("requirements[0] does not exist", setup_checked["entries"][0]["errors"][0])
+
+    def test_core_package_import_check_isolates_same_named_local_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir) / "local_package"
+            for name, class_name in (("alpha", "AlphaMethod"), ("beta", "BetaMethod")):
+                method_dir = package / "methods" / name
+                method_dir.mkdir(parents=True)
+                (method_dir / "method.py").write_text(
+                    f"class {class_name}:\n"
+                    "    pass\n",
+                    encoding="utf-8",
+                )
+                (method_dir / "method.yaml").write_text(
+                    yaml.safe_dump(
+                        {
+                            "apiVersion": "optpilot.io/v1",
+                            "config": "method",
+                            "id": name,
+                            "entrypoint": {"python": f"method:{class_name}", "pythonPath": ["."]},
+                            "accepts": {"formats": ["parameters"]},
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+            result = validate_package(package, check_imports=True, check_source=True)
+
+        self.assertTrue(result["valid"], result)
+
+    def test_core_package_source_check_rejects_outside_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package = tmp_path / "local_package"
+            env_dir = package / "environments" / "outside-ref"
+            outside = tmp_path / "outside" / "prompt.md"
+            env_dir.mkdir(parents=True)
+            outside.parent.mkdir(parents=True)
+            outside.write_text("not portable", encoding="utf-8")
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "outside-ref",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "methodContext": {"instructions": [str(outside)]},
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = validate_package(package, check_source=True)
+
+        self.assertFalse(result["valid"], result)
+        self.assertIn("must stay inside package", result["entries"][0]["errors"][0])
+
+    def test_core_package_import_check_ignores_ambient_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            package = tmp_path / "local_package"
+            method_dir = package / "methods" / "ambient"
+            ambient_dir = tmp_path / "ambient"
+            method_dir.mkdir(parents=True)
+            ambient_dir.mkdir()
+            (ambient_dir / "ambient_only.py").write_text("class AmbientMethod:\n    pass\n", encoding="utf-8")
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "ambient",
+                        "entrypoint": {"python": "ambient_only:AmbientMethod", "pythonPath": ["."]},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"PYTHONPATH": str(ambient_dir)}):
+                result = validate_package(package, check_imports=True)
+
+        self.assertFalse(result["valid"], result)
+        self.assertIn("Could not import", result["entries"][0]["errors"][0])
 
     def test_ui_catalog_exposes_complete_component_config_yaml(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2966,17 +3409,27 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("config: method", method["yaml"])
         self.assertIn("entrypoint:", method["yaml"])
         self.assertIn("accepts:", method["yaml"])
-        self.assertEqual(catalog["resources"], [])
+        resource = next(item for item in catalog["resources"] if item["id"] == "devs-gen-interface")
+        self.assertIn("config: resource", resource["yaml"])
+        self.assertIn("interface:", resource["yaml"])
 
         environment_detail = _catalog_detail(state, "environment", environment["uid"])
         method_detail = _catalog_detail(state, "method", method["uid"])
+        resource_detail = _catalog_detail(state, "resource", resource["uid"])
 
         self.assertTrue(environment_detail["validation"]["valid"], environment_detail)
         self.assertTrue(method_detail["validation"]["valid"], method_detail)
         self.assertEqual(environment_detail["config"]["config"], "environment")
         self.assertEqual(method_detail["config"]["config"], "method")
+        self.assertEqual(resource_detail["config"]["config"], "resource")
         self.assertIn("config: environment", environment_detail["yaml"])
         self.assertIn("config: method", method_detail["yaml"])
+        self.assertIn("config: resource", resource_detail["yaml"])
+
+        environment_by_id = _catalog_detail(state, "environment", environment["id"])
+        method_by_qualified_id = _catalog_detail(state, "method", method["qualified_id"])
+        self.assertEqual(environment_by_id["config"]["id"], environment["id"])
+        self.assertEqual(method_by_qualified_id["config"]["id"], method["id"])
 
     def test_ui_catalog_edit_copy_writes_overridden_config(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -3016,10 +3469,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
         catalog = _catalog_payload(state)
 
-        self.assertEqual(
-            roots,
-            [repo_root / "catalog" / "example_package"],
-        )
+        self.assertIn(repo_root / "catalog" / "example_package", roots)
         self.assertEqual(state.catalog_roots, roots)
         environment_ids = {item["id"] for item in catalog["environments"]}
         method_ids = {item["id"] for item in catalog["methods"]}
@@ -3033,6 +3483,82 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(catalog["environments"])
         self.assertTrue(catalog["methods"])
         self.assertTrue(catalog["studies"])
+        self.assertTrue(catalog["resources"])
+
+    def test_ui_static_files_reject_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_factory(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+            try:
+                ok_response = urlopen(f"{base_url}/static/app.js", timeout=5)
+                ok_response.read()
+                with self.assertRaises(HTTPError) as captured:
+                    urlopen(f"{base_url}/static/%2e%2e/server.py", timeout=5)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=1)
+
+        self.assertEqual(captured.exception.code, 404)
+
+    def test_ui_workspace_preview_proxy_strips_private_headers(self) -> None:
+        seen_headers: List[JsonDict] = []
+
+        class UpstreamHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                payload = {
+                    "authorization": self.headers.get("Authorization"),
+                    "cookie": self.headers.get("Cookie"),
+                    "x_optpilot_preview_token": self.headers.get("X-OptPilot-Preview-Token"),
+                    "x_test": self.headers.get("X-Test"),
+                }
+                seen_headers.append(payload)
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+        upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+        upstream_thread.start()
+        proxy = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            _preview_proxy_handler_factory(f"http://127.0.0.1:{upstream.server_port}", token="preview-secret", allowed_ports=[]),
+        )
+        proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+        proxy_thread.start()
+        try:
+            request = Request(
+                f"http://127.0.0.1:{proxy.server_port}/?__optpilot_preview_token=preview-secret",
+                headers={
+                    "Authorization": "Bearer should-not-forward",
+                    "Cookie": "optpilot_preview_token=preview-secret; session=private",
+                    "X-OptPilot-Preview-Token": "preview-secret",
+                    "X-Test": "forward-me",
+                },
+            )
+            payload = json.loads(urlopen(request, timeout=5).read().decode("utf-8"))
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+            upstream.shutdown()
+            upstream.server_close()
+            proxy_thread.join(timeout=1)
+            upstream_thread.join(timeout=1)
+
+        self.assertEqual(payload["x_test"], "forward-me")
+        self.assertIsNone(payload["authorization"])
+        self.assertIsNone(payload["cookie"])
+        self.assertIsNone(payload["x_optpilot_preview_token"])
+        self.assertEqual(seen_headers, [payload])
 
     def test_ui_catalog_scans_user_resources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -3245,6 +3771,68 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(current["result"]["workspace"]["mode"], "editable")
         self.assertEqual(current["result"]["interface"]["port"], 5173)
 
+    def test_ui_relaunches_workspace_interface_without_rerunning_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            resource = tmp_path / "catalog" / "local_package" / "resources" / "preview_tool"
+            resource.mkdir(parents=True)
+            (resource / "README.md").write_text("# Preview Tool\n\nHas a local frontend.\n", encoding="utf-8")
+            (resource / "index.html").write_text("<h1>Preview</h1>\n", encoding="utf-8")
+            (resource / "optpilot.resource.yaml").write_text(
+                "\n".join(
+                    [
+                        "apiVersion: optpilot.io/v1",
+                        "config: resource",
+                        "id: preview-tool",
+                        "name: Preview Tool",
+                        "interface:",
+                        "  label: Preview UI",
+                        "  command: [python, -m, http.server, '5173', --bind, 0.0.0.0]",
+                        "  port: 5173",
+                        "  readyTimeoutSeconds: 0",
+                        "  setup:",
+                        "    steps:",
+                        "      - uses: command",
+                        "        command:",
+                        "          - python",
+                        "          - -c",
+                        "          - \"from pathlib import Path; p=Path('setup-count.txt'); n=int(p.read_text() if p.exists() else '0')+1; p.write_text(str(n))\"",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[tmp_path / "catalog" / "local_package"],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19195,
+                ),
+            )
+            resource_entry = _catalog_payload(state)["resources"][0]
+
+            launched = _launch_catalog_interface(state, "resource", resource_entry["uid"])
+            workspace_id = launched["workspace"]["id"]
+            setup_counter = Path(launched["workspace"]["root"]) / "setup-count.txt"
+            workspace_after_first_launch = _require_ui_workspace(state, workspace_id)
+            relaunched = _launch_workspace_interface(state, workspace_id, setup_policy="auto")
+            setup_count = setup_counter.read_text(encoding="utf-8")
+            calls = _fake_workspace_container_calls(tmp_path)
+            deleted = _delete_ui_workspace(state, workspace_id)
+
+        self.assertEqual(setup_count, "1")
+        self.assertTrue(workspace_after_first_launch["setup"]["ran"])
+        self.assertTrue(relaunched["setup"]["skipped"])
+        self.assertIn("previous", relaunched["setup"])
+        self.assertEqual(relaunched["preview"]["workspace_id"], workspace_id)
+        detached_execs = [call for call in calls if call and call[0] == "exec" and "-d" in call]
+        self.assertGreaterEqual(len(detached_execs), 2, calls)
+        self.assertTrue(deleted["files_deleted"])
+
     def test_public_config_schema_allows_environment_and_method_interfaces(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         environment = yaml.safe_load((repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml").read_text(encoding="utf-8"))
@@ -3444,6 +4032,895 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(any(entry["id"] == "reusable-tool" for entry in catalog["resources"]))
             self.assertTrue(any(entry["kind"] == "resource" for entry in applied["workspace"]["registered_entries"]))
             self.assertTrue(any(item["id"] == workspace["id"] and item["registered_entries"] for item in indexed))
+
+    def test_ui_registration_discovers_configs_inside_managed_workspace(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Draft Workspace"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "toy_factory"
+            method_dir = root / "optpilot_configs" / "methods" / "reference_random_search"
+            study_dir = root / "optpilot_configs" / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            shutil.copyfile(
+                repo_root / "tests" / "fixtures" / "catalog" / "environments" / "toy_factory.yaml",
+                env_dir / "environment.yaml",
+            )
+            shutil.copyfile(
+                repo_root / "tests" / "fixtures" / "catalog" / "methods" / "reference_random_search.yaml",
+                method_dir / "method.yaml",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "toy-smoke",
+                        "environmentConfig": "../environments/toy_factory/environment.yaml",
+                        "methodConfig": "../methods/reference_random_search/method.yaml",
+                        "objective": {"metric": "throughput", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            discovered = _discover_workspace_configs(state, workspace["id"])
+            created = _create_registration_manifest(state, workspace["id"], {})
+
+        configs = discovered["configs"]
+        self.assertEqual(
+            [(item["kind"], item["relative_path"], item["valid"]) for item in configs],
+            [
+                ("environment", "optpilot_configs/environments/toy_factory/environment.yaml", True),
+                ("method", "optpilot_configs/methods/reference_random_search/method.yaml", True),
+                ("study", "optpilot_configs/studies/smoke.yaml", True),
+            ],
+        )
+        self.assertEqual(len(created["registration"]["targets"]), 2)
+
+    def test_ui_registration_normalizes_component_config_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "External Project"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "factory"
+            method_dir = root / "optpilot_configs" / "methods" / "fixed"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "prompt.md").write_text("Use the local evaluator.", encoding="utf-8")
+            (method_dir / "method.py").write_text("class FixedMethod:\n    pass\n", encoding="utf-8")
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "factory-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "methodContext": {"instructions": ["prompt.md"]},
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "fixed-method",
+                        "entrypoint": {"python": "method:FixedMethod", "pythonPath": ["."]},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            created = _create_registration_manifest(state, workspace["id"], {})
+            applied = _apply_registration_manifest(state, workspace["id"], created["registration"]["id"])
+            env_entry = next(item for item in applied["workspace"]["registered_entries"] if item["kind"] == "environment")
+            method_entry = next(item for item in applied["workspace"]["registered_entries"] if item["kind"] == "method")
+            env_destination = Path(env_entry["config_path"]).parent
+            method_destination = Path(method_entry["config_path"]).parent
+            env_config = yaml.safe_load((env_destination / "environment.yaml").read_text(encoding="utf-8"))
+            env_config_exists = (env_destination / "environment.yaml").exists()
+            env_evaluator_exists = (env_destination / "evaluator.py").exists()
+            env_prompt_exists = (env_destination / "prompt.md").exists()
+            env_kept_draft_nesting = (env_destination / "optpilot_configs").exists()
+            method_config_exists = (method_destination / "method.yaml").exists()
+            method_source_exists = (method_destination / "method.py").exists()
+
+        self.assertTrue(applied["applied"])
+        self.assertTrue(env_config_exists)
+        self.assertTrue(env_evaluator_exists)
+        self.assertTrue(env_prompt_exists)
+        self.assertFalse(env_kept_draft_nesting)
+        self.assertTrue(method_config_exists)
+        self.assertTrue(method_source_exists)
+        self.assertEqual(env_config["evaluator"]["pythonPath"], ["."])
+        self.assertEqual(env_config["methodContext"]["instructions"], ["prompt.md"])
+
+    def test_ui_package_plan_validates_smokes_and_applies_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "External Pair"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "toy"
+            method_dir = root / "optpilot_configs" / "methods" / "random"
+            study_dir = root / "optpilot_configs" / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': float(candidate_runtime.get('x', 0))}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "toy-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "toy-smoke",
+                        "environmentConfig": "../environments/toy/environment.yaml",
+                        "methodConfig": "../methods/random/method.yaml",
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], prepared["id"])["package_plan"]
+            blocked = _apply_package_plan(state, workspace["id"], prepared["id"])
+            smoke = _smoke_package_plan(state, workspace["id"], prepared["id"], {"max_trials": 1, "timeout_seconds": 120})["smoke"]
+            smoke_by_id = _smoke_package_plan(
+                state,
+                workspace["id"],
+                prepared["id"],
+                {"study": "toy-smoke", "max_trials": 1, "timeout_seconds": 120},
+            )["smoke"]
+            applied = _apply_package_plan(state, workspace["id"], prepared["id"])
+            package_root = tmp_path / "catalog" / "local_package"
+            study_yaml = yaml.safe_load((package_root / "studies" / "toy-smoke.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(prepared["classification"], "environment-plus-method")
+        self.assertTrue(validated["validation"]["valid"], validated)
+        self.assertEqual(validated["readiness"], "component-ready")
+        self.assertFalse(blocked["applied"], blocked)
+        self.assertTrue(smoke["valid"], smoke)
+        self.assertTrue(smoke_by_id["valid"], smoke_by_id)
+        self.assertTrue(smoke_by_id["study"].endswith("studies/toy-smoke.yaml"), smoke_by_id)
+        self.assertTrue(applied["applied"])
+        self.assertEqual(study_yaml["environmentConfig"], "../environments/toy-env/environment.yaml")
+        self.assertEqual(study_yaml["methodConfig"], "../methods/random-method/method.yaml")
+
+    def test_ui_package_plan_smoke_uses_studio_declared_environment_variables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Secret Smoke"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "secret"
+            method_dir = root / "optpilot_configs" / "methods" / "random"
+            study_dir = root / "optpilot_configs" / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "import os\n\n"
+                "def evaluate(candidate_runtime, context):\n"
+                "    if os.environ.get('CURATION_SMOKE_TOKEN') != 'secret-value':\n"
+                "        raise RuntimeError('missing curation smoke token')\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1.0}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "secret-env",
+                        "runtime": {"sandbox": "process", "envFromHost": ["CURATION_SMOKE_TOKEN"]},
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "secret-smoke",
+                        "environmentConfig": "../environments/secret/environment.yaml",
+                        "methodConfig": "../methods/random/method.yaml",
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            session = _create_agent_session(state, {"title": "Secret smoke"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], prepared["id"])["package_plan"]
+            requested = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_smoke",
+                {"workspace_id": workspace["id"], "plan_id": prepared["id"], "max_trials": 1, "timeout_seconds": 120},
+            )
+            approvals = _read_agent_approvals(state, session["id"])
+            missing = _approve_agent_action(state, session["id"], approvals[0]["id"])["result"]
+            state.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            state.settings_path.write_text(
+                json.dumps({"environment": {"variables": {"CURATION_SMOKE_TOKEN": "secret-value"}}}),
+                encoding="utf-8",
+            )
+            smoke = _smoke_package_plan(state, workspace["id"], prepared["id"], {"max_trials": 1, "timeout_seconds": 120})["smoke"]
+
+        self.assertTrue(validated["validation"]["valid"], validated)
+        self.assertTrue(requested["data"]["approval_required"])
+        self.assertFalse(missing["ok"], missing)
+        self.assertIn("Missing environment variable", missing["summary"])
+        self.assertIn("Repair the failing config", missing["summary"])
+        self.assertTrue(smoke["valid"], smoke)
+
+    def test_ui_package_plan_materializes_source_hints_and_rewrites(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Opaque Source Hint"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "factory"
+            env_dir.mkdir(parents=True)
+            (root / "src").mkdir()
+            (root / "src" / "layout.yml").write_text("layout: demo\n", encoding="utf-8")
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "factory-env",
+                        "evaluator": {
+                            "python": "evaluator:evaluate",
+                            "pythonPath": ["."],
+                            "settings": {"layoutConfig": "src/layout.yml"},
+                        },
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            target = prepared["components"][0]
+            updated = _update_package_plan(
+                state,
+                workspace["id"],
+                prepared["id"],
+                {
+                    "components": [
+                        {
+                            "target_id": target["target_id"],
+                            "source_hints": [{"path": "src/layout.yml", "reason": "opaque evaluator setting"}],
+                            "path_rewrites": [{"from": "src/layout.yml", "to": "data/layout.yml"}],
+                        }
+                    ]
+                },
+            )["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], updated["id"])["package_plan"]
+            applied = _apply_package_plan(state, workspace["id"], updated["id"])
+            package_root = tmp_path / "catalog" / "local_package"
+            hinted_file_exists = (package_root / "environments" / "factory-env" / "data" / "layout.yml").exists()
+
+        self.assertTrue(validated["validation"]["valid"], validated)
+        self.assertTrue(applied["applied"], applied)
+        self.assertTrue(hinted_file_exists)
+
+    def test_ui_package_plan_apply_replaces_stale_local_package_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            stale = tmp_path / "catalog" / "local_package" / "stale.txt"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("old", encoding="utf-8")
+            workspace = _create_ui_workspace(state, {"title": "Clean Apply"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "clean"
+            env_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "clean-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            applied = _apply_package_plan(state, workspace["id"], prepared["id"])
+
+        self.assertTrue(applied["applied"], applied)
+        self.assertFalse(stale.exists())
+
+    def test_ui_package_plan_registers_resource_only_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Reference Notes"})
+            root = Path(workspace["root"])
+            (root / "README.md").write_text("Useful notes", encoding="utf-8")
+
+            prepared = _prepare_package_plan(
+                state,
+                workspace["id"],
+                {"kind": "resource", "resource_id": "reference-notes"},
+            )["package_plan"]
+            applied = _apply_package_plan(state, workspace["id"], prepared["id"])
+            destination = tmp_path / "catalog" / "local_package" / "resources" / "reference-notes"
+            readme_exists = (destination / "README.md").exists()
+
+        self.assertEqual(prepared["classification"], "resource-only")
+        self.assertTrue(applied["applied"])
+        self.assertTrue(readme_exists)
+
+    def test_ui_agent_package_plan_tools_require_approval_for_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Resource Draft"})
+            Path(workspace["root"], "README.md").write_text("Draft", encoding="utf-8")
+            session = _create_agent_session(state, {"title": "Package plan"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            prepared = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_prepare",
+                {"workspace_id": workspace["id"], "kind": "resource", "resource_id": "resource-draft"},
+            )
+            plan_id = prepared["data"]["package_plan"]["id"]
+            approval = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_apply",
+                {"workspace_id": workspace["id"], "plan_id": plan_id},
+            )
+
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertFalse(approval["ok"], approval)
+        self.assertTrue(approval["data"]["approval_required"])
+
+    def test_ui_agent_config_validate_summary_names_repairable_schema_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Missing Evaluator"})
+            root = Path(workspace["root"])
+            config_dir = root / "optpilot_configs" / "environments" / "broken"
+            config_dir.mkdir(parents=True)
+            (config_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            session = _create_agent_session(state, {"title": "Validate config"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_config_validate",
+                {"workspace_id": workspace["id"], "path": "optpilot_configs/environments/broken/environment.yaml"},
+            )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("Config validation failed:", result["summary"])
+        self.assertIn("id", result["summary"])
+        self.assertIn("Repair", result["summary"])
+
+    def test_ui_agent_relative_config_paths_default_to_selected_workspace_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Selected Workspace"})
+            root = Path(workspace["root"])
+            config_path = root / "optpilot_configs" / "methods" / "method.yaml"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("config: method\n", encoding="utf-8")
+            session = _create_agent_session(state, {"title": "Resolve config"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            resolved = _resolve_agent_or_allowed_path(
+                state,
+                session["id"],
+                {"path": "optpilot_configs/methods/method.yaml"},
+            )
+
+        self.assertEqual(resolved, config_path.resolve())
+
+    def test_ui_agent_package_plan_validate_summary_names_missing_adapters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Missing Adapters"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "factory"
+            method_dir = root / "optpilot_configs" / "methods" / "weighted"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "factory-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"weight": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "weighted-method",
+                        "entrypoint": {"python": "method:WeightedMethod", "pythonPath": ["."], "protocol": "batch"},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": []}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            session = _create_agent_session(state, {"title": "Validate package"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+            prepared = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_prepare",
+                {"workspace_id": workspace["id"]},
+            )
+            plan_id = prepared["data"]["package_plan"]["id"]
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_validate",
+                {"workspace_id": workspace["id"], "plan_id": plan_id},
+            )
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("Package plan validation failed:", result["summary"])
+        self.assertIn("evaluator", result["summary"])
+        self.assertIn("Repair missing adapters", result["summary"])
+
+    def test_ui_agent_package_plan_summary_prompts_smoke_study_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Component Ready Pair"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "toy"
+            method_dir = root / "optpilot_configs" / "methods" / "random"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': float(candidate_runtime.get('x', 0))}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "toy-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            session = _create_agent_session(state, {"title": "Validate package"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+            prepared = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_prepare",
+                {"workspace_id": workspace["id"]},
+            )
+            plan_id = prepared["data"]["package_plan"]["id"]
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_validate",
+                {"workspace_id": workspace["id"], "plan_id": plan_id},
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("readiness is component-ready", result["summary"])
+        self.assertIn("Next draft a minimal smoke study", result["summary"])
+
+    def test_ui_package_plan_validation_catches_wrong_method_protocol_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Bad Method Signature"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "toy"
+            method_dir = root / "optpilot_configs" / "methods" / "bad"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1.0}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "toy-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.py").write_text(
+                "class BadMethod:\n"
+                "    def __init__(self, settings):\n"
+                "        self.settings = settings\n"
+                "    def propose(self, n_candidates, study_state):\n"
+                "        return []\n",
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "bad-method",
+                        "entrypoint": {"python": "method:BadMethod", "pythonPath": ["."], "protocol": "batch"},
+                        "accepts": {"formats": ["parameters"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], prepared["id"])["package_plan"]
+
+        self.assertFalse(validated["validation"]["valid"], validated)
+        self.assertEqual(validated["status"], "invalid")
+        self.assertIn("definition, study_spec, and rng", " ".join(validated["validation"]["errors"]))
+
+    def test_ui_package_plan_validation_catches_missing_local_source_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Missing Source Closure"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "factory"
+            env_dir.mkdir(parents=True)
+            (root / "src").mkdir()
+            (root / "src" / "factory_core.py").write_text("class Factory: pass\n", encoding="utf-8")
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    from src.factory_core import Factory\n"
+                "    _factory = Factory()\n"
+                "    return {'status': 'success', 'metric_values': {'score': 1.0}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "factory-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], prepared["id"])["package_plan"]
+
+        self.assertFalse(validated["validation"]["valid"], validated)
+        self.assertIn("local import 'src.factory_core'", " ".join(validated["validation"]["errors"]))
+        self.assertIn("source_hints", " ".join(validated["validation"]["errors"]))
+
+    def test_ui_package_plan_smoke_rejects_zero_exit_run_with_failed_trials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[tmp_path / "catalog" / "local_package"], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Failing Smoke"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "failing"
+            method_dir = root / "optpilot_configs" / "methods" / "random"
+            study_dir = root / "optpilot_configs" / "studies"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            study_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    raise RuntimeError('intentional evaluator failure')\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "failing-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (study_dir / "smoke.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "study",
+                        "name": "failing-smoke",
+                        "environmentConfig": "../environments/failing/environment.yaml",
+                        "methodConfig": "../methods/random/method.yaml",
+                        "objective": {"metric": "score", "direction": "maximize"},
+                        "budget": {"maxTrials": 1},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
+            validated = _validate_package_plan(state, workspace["id"], prepared["id"])["package_plan"]
+            smoke = _smoke_package_plan(state, workspace["id"], prepared["id"], {"max_trials": 1, "timeout_seconds": 120})["smoke"]
+
+        self.assertTrue(validated["validation"]["valid"], validated)
+        self.assertFalse(smoke["valid"], smoke)
+        self.assertIn("failure_count=1", " ".join(smoke["errors"]))
+
+    def test_ui_agent_study_draft_accepts_workspace_relative_config_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Workspace Study Draft"})
+            root = Path(workspace["root"])
+            env_dir = root / "optpilot_configs" / "environments" / "toy"
+            method_dir = root / "optpilot_configs" / "methods" / "random"
+            env_dir.mkdir(parents=True)
+            method_dir.mkdir(parents=True)
+            (env_dir / "evaluator.py").write_text(
+                "def evaluate(candidate_runtime, context):\n"
+                "    return {'status': 'success', 'metric_values': {'score': float(candidate_runtime.get('x', 0))}, 'constraint_results': {}, 'output_files': [], 'event_summary': {}}\n",
+                encoding="utf-8",
+            )
+            (env_dir / "environment.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "environment",
+                        "id": "toy-env",
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
+                        "candidate": {
+                            "format": "parameters",
+                            "parameters": {"schema": {"x": {"valueType": "float", "min": 0, "max": 1}}},
+                        },
+                        "metrics": {"source": "return", "keys": ["score"]},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            (method_dir / "method.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "apiVersion": "optpilot.io/v1",
+                        "config": "method",
+                        "id": "random-method",
+                        "entrypoint": {"python": "optpilot.methods:ReferenceRandomSearchMethod", "protocol": "batch"},
+                        "settings": {"batchSize": 1},
+                        "accepts": {"formats": ["parameters"], "requires": {"context": ["candidate.parameters.schema"]}},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            session = _create_agent_session(state, {"title": "Draft smoke study"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_study_draft",
+                {
+                    "workspace_id": workspace["id"],
+                    "environment_path": "optpilot_configs/environments/toy/environment.yaml",
+                    "method_path": "optpilot_configs/methods/random/method.yaml",
+                    "name": "toy-smoke",
+                    "metric": "score",
+                    "direction": "maximize",
+                    "maxTrials": 1,
+                    "timeoutSeconds": 30,
+                },
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["data"]["validation"]["valid"], result)
+        self.assertEqual(result["data"]["draft"]["name"], "toy-smoke")
 
     def test_ui_agent_sessions_persist_workspace_context_and_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -3740,6 +5217,21 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(context["selected_workspace"]["id"], first["id"])
         self.assertEqual([item["id"] for item in context["attached_workspaces"]], [first["id"], second["id"]])
 
+    def test_ui_new_agent_session_starts_detached_in_browser_client(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        app_js = repo_root / "studio" / "src" / "optpilot_studio" / "ui" / "static" / "app.js"
+        source = app_js.read_text(encoding="utf-8")
+        start = source.index("async function createAgentSession()")
+        end = source.index("async function closeWorkspaceFromCurrentSession", start)
+        body = source[start:end]
+
+        self.assertIn("attached_workspace_ids: []", body)
+        self.assertIn('selected_workspace_id: ""', body)
+        self.assertIn("state.agentWorkspaceAttachments[id] = []", body)
+        self.assertIn("state.selectedWorkspaceByAgentSession[id] = null", body)
+        self.assertNotIn("attached_workspace_ids: attached", body)
+        self.assertNotIn("currentAttachedIds.slice()", body)
+
     def test_ui_agent_session_list_does_not_probe_workspace_runtimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -3823,6 +5315,13 @@ class MvpIntegrationTest(unittest.TestCase):
                     port_start=19000,
                 ),
             )
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    "permissions": {"shell_run": "safe_without_approval"},
+                },
+            )
             workspace = _create_ui_workspace(
                 state,
                 {
@@ -3866,11 +5365,36 @@ class MvpIntegrationTest(unittest.TestCase):
             )
             tree = _execute_agent_tool(state, session["id"], "optpilot_file_tree", {"path": ".", "max_files": 20})
             tree_default = _execute_agent_tool(state, session["id"], "optpilot_file_tree", {"path": None, "max_files": 20})
+            viewed = _execute_agent_tool(state, session["id"], "optpilot_file_editor", {"command": "view", "path": "configs/demo.yaml", "view_range": [1, 1]})
+            edited = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_editor",
+                {"command": "str_replace", "path": "configs/demo.yaml", "old_str": "config: note\n", "new_str": "config: edited\n"},
+            )
+            inserted = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_editor",
+                {"command": "insert", "path": "configs/demo.yaml", "insert_line": 1, "new_str": "added: true"},
+            )
+            created = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_editor",
+                {"command": "create", "path": "configs/created.yaml", "file_text": "created: true\n"},
+            )
             shell = _execute_agent_tool(
                 state,
                 session["id"],
                 "optpilot_shell_run",
                 {"command": [sys.executable, "-c", "print('assistant ok')"]},
+            )
+            terminal = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_terminal",
+                {"command": f"{shlex.quote(sys.executable)} -c \"print('terminal ok')\""},
             )
             approval = _execute_agent_tool(
                 state,
@@ -3887,8 +5411,16 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertIn("-config: note", diff["data"]["diff"])
             self.assertTrue(any(item["path"] == "configs/demo.yaml" for item in tree["data"]["files"]))
             self.assertTrue(any(item["path"] == "configs/demo.yaml" for item in tree_default["data"]["files"]))
+            self.assertEqual(viewed["data"]["content"], "config: note")
+            self.assertIn("-config: note", edited["data"]["diff"])
+            self.assertIn("+config: edited", edited["data"]["diff"])
+            self.assertIn("+added: true", inserted["data"]["diff"])
+            self.assertTrue(created["ok"], created)
+            self.assertEqual((Path(workspace["root"]) / "configs" / "demo.yaml").read_text(encoding="utf-8"), "config: edited\nadded: true\n")
             self.assertTrue(shell["ok"], shell)
             self.assertIn("assistant ok", shell["data"]["stdout"])
+            self.assertTrue(terminal["ok"], terminal)
+            self.assertIn("terminal ok", terminal["data"]["stdout"])
             self.assertTrue(shell["data"]["runtime"]["containerized"])
             self.assertEqual(shell["data"]["runtime"]["executor"], "container")
             self.assertFalse(approval["ok"])
@@ -3918,6 +5450,133 @@ class MvpIntegrationTest(unittest.TestCase):
                     "optpilot_file_read",
                     {"workspace_id": unattached["id"], "path": "README.md"},
                 )
+            with self.assertRaises(FileExistsError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_editor",
+                    {"command": "create", "path": "configs/demo.yaml", "file_text": "overwrite: no\n"},
+                )
+            with self.assertRaises(ValueError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_editor",
+                    {"command": "str_replace", "path": "configs/demo.yaml", "old_str": "missing", "new_str": "replacement"},
+                )
+            with self.assertRaises(PermissionError):
+                _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_file_editor",
+                    {"workspace_id": read_only["id"], "command": "str_replace", "path": "blocked.txt", "old_str": "a", "new_str": "b"},
+                )
+
+    def test_ui_agent_permission_settings_gate_mutating_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    "permissions": {
+                        "file_write": "approval_required",
+                        "shell_run": "disabled",
+                        "catalog_registration": "disabled",
+                        "study_launch": "disabled",
+                        "job_stop": "disabled",
+                    },
+                },
+            )
+            workspace = _create_ui_workspace(state, {"title": "Permission workspace", "root": str(tmp_path / "workspace")})
+            session = _create_agent_session(state, {"title": "Permissions"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            write = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_write",
+                {"path": "configs/demo.yaml", "content": "ok: true\n"},
+            )
+            approvals = _read_agent_approvals(state, session["id"])
+            approved = _approve_agent_action(state, session["id"], approvals[0]["id"])
+            shell = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": [sys.executable, "-c", "print('blocked')"]},
+            )
+            registration = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_apply",
+                {"workspace_id": workspace["id"], "plan_id": "missing-plan", "approved": True},
+            )
+            smoke = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_package_plan_smoke",
+                {"workspace_id": workspace["id"], "plan_id": "missing-plan", "approved": True},
+            )
+            stopped = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_job_stop",
+                {"job_id": "missing-job", "approved": True},
+            )
+            written_content = (Path(workspace["root"]) / "configs" / "demo.yaml").read_text(encoding="utf-8")
+
+        self.assertFalse(write["ok"])
+        self.assertTrue(write["data"]["approval_required"])
+        self.assertEqual(len(approvals), 1)
+        self.assertTrue(approved["result"]["ok"], approved)
+        self.assertEqual(written_content, "ok: true\n")
+        for result, permission in [
+            (shell, "shell_run"),
+            (registration, "catalog_registration"),
+            (smoke, "study_launch"),
+            (stopped, "job_stop"),
+        ]:
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(result["data"]["permission"], permission)
+            self.assertEqual(result["data"]["permission_status"], "disabled")
+
+    def test_ui_agent_approval_bypass_argument_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    "permissions": {"file_write": "approval_required", "shell_run": "approval_required"},
+                },
+            )
+            workspace = _create_ui_workspace(state, {"title": "Bypass workspace", "root": str(tmp_path / "workspace")})
+            session = _create_agent_session(state, {"title": "Bypass"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            write = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_file_write",
+                {"path": "demo.txt", "content": "bad\n", "approved": True},
+            )
+            shell = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_shell_run",
+                {"command": [sys.executable, "-c", "print('bad')"], "approved": True},
+            )
+            persisted = _agent_session_by_id(state, session["id"])
+
+        self.assertFalse(write["ok"], write)
+        self.assertFalse(shell["ok"], shell)
+        self.assertEqual(write["data"]["policy_error"], "approval_bypass_rejected")
+        self.assertEqual(shell["data"]["policy_error"], "approval_bypass_rejected")
+        self.assertFalse((Path(workspace["root"]) / "demo.txt").exists())
+        self.assertEqual(persisted["effective_status"], "idle")
 
     def test_ui_agent_approval_dedupes_and_forwards_approved_tool_result(self) -> None:
         forwarded: List[JsonDict] = []
@@ -3955,13 +5614,13 @@ class MvpIntegrationTest(unittest.TestCase):
                 state,
                 session["id"],
                 "optpilot_shell_run",
-                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-1"},
+                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-1", "description": "Check pip"},
             )
             second = _execute_agent_tool(
                 state,
                 session["id"],
                 "optpilot_shell_run",
-                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-1"},
+                {"command": ["./pip", "--version"], "_openhands_tool_call_id": "call-install-2", "description": "Inspect pip version"},
             )
             approvals = _read_agent_approvals(state, session["id"])
             approved = _approve_agent_action(state, session["id"], approvals[0]["id"])
@@ -3976,9 +5635,46 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(approved["result"]["ok"], approved)
         self.assertEqual(forwarded[0]["conversation_id"], "oh-approval-conversation")
         self.assertEqual(forwarded[0]["call_id"], "call-install-1")
+        self.assertEqual(forwarded[1]["conversation_id"], "oh-approval-conversation")
+        self.assertEqual(forwarded[1]["call_id"], "call-install-2")
         self.assertIn("approved-pip", forwarded[0]["result"]["data"]["stdout"])
         self.assertEqual(persisted["status"], "waiting_for_agent")
+        self.assertEqual(persisted["effective_status"], "waiting_for_agent")
         self.assertTrue(any(event["type"] == "openhands_tool_result_forwarded" for event in events))
+
+    def test_ui_agent_shell_approval_detects_shell_wrapped_install_commands(self) -> None:
+        self.assertTrue(_shell_needs_approval(["sh", "-lc", ".venv/bin/pip install -e ."]))
+        self.assertTrue(_shell_needs_approval(["bash", "-c", "python -m pip install demo-package"]))
+        self.assertTrue(_shell_needs_approval(["zsh", "-lc", "echo setup && uv pip install -r requirements.txt"]))
+        self.assertFalse(_shell_needs_approval(["sh", "-lc", "python -c \"print('ok')\""]))
+        self.assertFalse(_shell_needs_approval(["sh", "-lc", "grep -R \"pip install\" README.md"]))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            workspace = _create_ui_workspace(state, {"title": "Approval workspace", "root": str(tmp_path / "approval")})
+            session = _create_agent_session(state, {"title": "Terminal approval"})
+            _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
+
+            result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_terminal",
+                {
+                    "command": ".venv/bin/pip install -e .",
+                    "description": "Install the editable project",
+                    "_openhands_tool_call_id": "call-terminal-install",
+                },
+            )
+            approvals = _read_agent_approvals(state, session["id"])
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["data"]["approval_required"])
+        self.assertEqual(len(approvals), 1)
+        self.assertEqual(approvals[0]["status"], "pending")
+        self.assertEqual(approvals[0]["tool"], "optpilot_terminal")
+        self.assertIn("pip install", approvals[0]["summary"])
+        self.assertIn("call-terminal-install", approvals[0]["openhands_tool_call_ids"])
 
     def test_ui_agent_docs_and_smoke_tools_are_available(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -4022,6 +5718,15 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertFalse(smoke["ok"], smoke)
         self.assertTrue(smoke["data"]["approval_required"])
 
+    def test_ui_agent_tool_schema_allows_workspace_relative_study_draft(self) -> None:
+        by_name = {str(tool.get("name")): tool for tool in OPTPILOT_AGENT_TOOL_SPECS}
+        study_draft = by_name["optpilot_study_draft"]["parameters"]["properties"]
+        smoke_description = str(by_name["optpilot_package_plan_smoke"].get("description") or "")
+
+        self.assertIn("workspace_id", study_draft)
+        self.assertNotIn("approved=true", smoke_description)
+        self.assertIn("approve or reject", smoke_description)
+
     def test_ui_agent_session_dispatches_to_openhands_http_bridge(self) -> None:
         requests = []
 
@@ -4036,9 +5741,6 @@ class MvpIntegrationTest(unittest.TestCase):
                 if self.path == "/api/conversations/oh-test-conversation/events":
                     self._send_json({"success": True})
                     return
-                if self.path == "/api/conversations/oh-test-conversation/ask_agent":
-                    self._send_json({"response": "OpenHands saw the Catalog context."})
-                    return
                 self._send_json({"error": "not found"}, status=404)
 
             def do_GET(self) -> None:  # noqa: N802
@@ -4046,11 +5748,13 @@ class MvpIntegrationTest(unittest.TestCase):
                     self._send_json({
                         "items": [
                             {
-                                "kind": "MessageEvent",
+                                "kind": "ActionEvent",
                                 "source": "agent",
-                                "message": {
-                                    "role": "assistant",
-                                    "content": [{"type": "text", "text": "OpenHands saw the Catalog context."}],
+                                "tool_name": "finish",
+                                "tool_call_id": "finish-oh-test",
+                                "action": {
+                                    "kind": "FinishAction",
+                                    "message": "OpenHands saw the Catalog context.",
                                 },
                             }
                         ],
@@ -4115,8 +5819,22 @@ class MvpIntegrationTest(unittest.TestCase):
         start_payload = next(body for path, body in requests if path == "/api/conversations")
         event_payload = next(body for path, body in requests if path.endswith("/events"))
         self.assertEqual(start_payload["agent"]["llm"]["model"], "openrouter/deepseek/deepseek-v4-flash")
+        self.assertEqual(start_payload["confirmation_policy"], {"kind": "NeverConfirm"})
         self.assertIn("OptPilot Assistant", start_payload["agent"]["agent_context"]["system_message_suffix"])
-        self.assertTrue(any(tool["name"] == "optpilot_catalog_list" for tool in start_payload["client_tools"]))
+        native_tool_names = {tool["name"] for tool in start_payload["agent"]["tools"]}
+        self.assertIn("grep", native_tool_names)
+        self.assertIn("glob", native_tool_names)
+        self.assertIn("task_tracker", native_tool_names)
+        self.assertNotIn("terminal", native_tool_names)
+        self.assertNotIn("file_editor", native_tool_names)
+        self.assertNotIn("optpilot_terminal", native_tool_names)
+        self.assertNotIn("optpilot_file_editor", native_tool_names)
+        client_tool_names = {tool["name"] for tool in start_payload["client_tools"]}
+        self.assertIn("optpilot_catalog_list", client_tool_names)
+        self.assertIn("optpilot_terminal", client_tool_names)
+        self.assertIn("optpilot_file_editor", client_tool_names)
+        self.assertNotIn("terminal", client_tool_names)
+        self.assertNotIn("file_editor", client_tool_names)
         preview_tool = next(tool for tool in start_payload["client_tools"] if tool["name"] == "optpilot_workspace_preview_open")
         self.assertIn("extra_ports", preview_tool["parameters"]["properties"])
         for tool in start_payload["client_tools"]:
@@ -4223,11 +5941,13 @@ class MvpIntegrationTest(unittest.TestCase):
                             {
                                 "items": [
                                     {
-                                        "kind": "MessageEvent",
+                                        "kind": "ActionEvent",
                                         "source": "agent",
-                                        "message": {
-                                            "role": "assistant",
-                                            "content": [{"type": "text", "text": "Catalog tool result received."}],
+                                        "tool_name": "finish",
+                                        "tool_call_id": "finish-catalog-1",
+                                        "action": {
+                                            "kind": "FinishAction",
+                                            "message": "Catalog tool result received.",
                                         },
                                     }
                                 ],
@@ -4309,6 +6029,107 @@ class MvpIntegrationTest(unittest.TestCase):
         tool_result_payload = next(body for _path, body in requests if "OptPilot tool result for optpilot_catalog_list" in json.dumps(body))
         self.assertIn('"ok": true', tool_result_payload["content"][0]["text"])
 
+    def test_ui_agent_openhands_approval_tool_pauses_without_forwarding_result(self) -> None:
+        requests = []
+        server_state = {"user_message_seen": False, "tool_result_seen": False}
+
+        class FakeOpenHandsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+                requests.append((self.path, body))
+                if self.path == "/api/conversations":
+                    self._send_json({"id": "oh-approval-pause"})
+                    return
+                if self.path == "/api/conversations/oh-approval-pause/events":
+                    text = body.get("content", [{}])[0].get("text", "") if isinstance(body.get("content"), list) else ""
+                    if "OptPilot tool result for optpilot_package_plan_smoke" in text:
+                        server_state["tool_result_seen"] = True
+                    else:
+                        server_state["user_message_seen"] = True
+                    self._send_json({"success": True})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def do_GET(self) -> None:  # noqa: N802
+                if self.path.startswith("/api/conversations/oh-approval-pause/events/search"):
+                    if server_state["user_message_seen"]:
+                        self._send_json(
+                            {
+                                "items": [
+                                    {
+                                        "kind": "ActionEvent",
+                                        "tool_name": "optpilot_package_plan_smoke",
+                                        "tool_call_id": "call-smoke-approval",
+                                        "action": {
+                                            "kind": "optpilot_package_plan_smoke",
+                                            "workspace_id": "workspace-id",
+                                            "plan_id": "plan-id",
+                                        },
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        self._send_json({"items": []})
+                    return
+                self._send_json({"error": "not found"}, status=404)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def _send_json(self, payload: JsonDict, status: int = 200) -> None:
+                data = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenHandsHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+                _update_agent_settings(
+                    state,
+                    {
+                        "openhands": {
+                            "enabled": True,
+                            "base_url": f"http://127.0.0.1:{server.server_port}",
+                            "session_endpoint": "/api/conversations",
+                            "model": "deepseek/deepseek-v4-flash",
+                            "api_key": "sk-test-secret",
+                        }
+                    },
+                )
+                session = _create_agent_session(state, {"title": "Approval pause"})
+                result = _append_agent_message(
+                    state,
+                    session["id"],
+                    {
+                        "role": "user",
+                        "title": "User",
+                        "content": "Run the package plan smoke test.",
+                        "ui_context": {"current_page": "workspace"},
+                    },
+                )
+                persisted = _agent_session_by_id(state, session["id"])
+                approvals = _read_agent_approvals(state, session["id"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["session"]["effective_status"], "awaiting_user_approval")
+        self.assertEqual(persisted["effective_status"], "awaiting_user_approval")
+        self.assertEqual(len([approval for approval in approvals if approval["status"] == "pending"]), 1)
+        self.assertEqual(approvals[0]["openhands_tool_call_ids"], ["call-smoke-approval"])
+        self.assertFalse(server_state["tool_result_seen"])
+        self.assertFalse(any("OptPilot tool result for optpilot_package_plan_smoke" in json.dumps(body) for _path, body in requests))
+        self.assertTrue(any(event["type"] == "optpilot_approval_pause" for event in persisted["events"]))
+
     def test_ui_agent_http_bridge_ignores_previous_assistant_events(self) -> None:
         server_state = {"message_count": 0}
 
@@ -4336,11 +6157,13 @@ class MvpIntegrationTest(unittest.TestCase):
                         items.append(
                             {
                                 "id": "evt-old-answer",
-                                "kind": "MessageEvent",
+                                "kind": "ActionEvent",
                                 "source": "agent",
-                                "message": {
-                                    "role": "assistant",
-                                    "content": [{"type": "text", "text": "First answer."}],
+                                "tool_name": "finish",
+                                "tool_call_id": "finish-first",
+                                "action": {
+                                    "kind": "FinishAction",
+                                    "message": "First answer.",
                                 },
                             }
                         )
@@ -4348,11 +6171,13 @@ class MvpIntegrationTest(unittest.TestCase):
                         items.append(
                             {
                                 "id": "evt-new-answer",
-                                "kind": "MessageEvent",
+                                "kind": "ActionEvent",
                                 "source": "agent",
-                                "message": {
-                                    "role": "assistant",
-                                    "content": [{"type": "text", "text": "Second answer."}],
+                                "tool_name": "finish",
+                                "tool_call_id": "finish-second",
+                                "action": {
+                                    "kind": "FinishAction",
+                                    "message": "Second answer.",
                                 },
                             }
                         )
@@ -4409,8 +6234,8 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(contents.count("First answer."), 1)
         self.assertEqual(contents.count("Second answer."), 1)
 
-    def test_ui_agent_http_bridge_rejects_cached_final_response_on_reused_conversation(self) -> None:
-        server_state = {"message_count": 0, "search_count": 0}
+    def test_ui_agent_http_bridge_ignores_agent_final_response_endpoint(self) -> None:
+        server_state = {"message_count": 0, "search_count": 0, "final_response_count": 0}
 
         class FakeOpenHandsHandler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
@@ -4438,11 +6263,13 @@ class MvpIntegrationTest(unittest.TestCase):
                                 "items": [
                                     {
                                         "id": "evt-fresh-answer",
-                                        "kind": "MessageEvent",
+                                        "kind": "ActionEvent",
                                         "source": "agent",
-                                        "llm_message": {
-                                            "role": "assistant",
-                                            "content": [{"type": "text", "text": "Second answer."}],
+                                        "tool_name": "finish",
+                                        "tool_call_id": "finish-second",
+                                        "action": {
+                                            "kind": "FinishAction",
+                                            "message": "Second answer.",
                                         },
                                     }
                                 ]
@@ -4452,6 +6279,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         self._send_json({"items": []})
                     return
                 if self.path == "/api/conversations/oh-cached-final-conversation/agent_final_response":
+                    server_state["final_response_count"] += 1
                     self._send_json({"response": "First answer."})
                     return
                 self._send_json({"error": "not found"}, status=404)
@@ -4503,10 +6331,11 @@ class MvpIntegrationTest(unittest.TestCase):
             server.server_close()
 
         contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
-        self.assertEqual(first["session"]["status"], "idle")
-        self.assertEqual(second["session"]["status"], "waiting_for_agent")
+        self.assertEqual(first["session"]["status"], "waiting_for_agent")
+        self.assertEqual(second["session"]["status"], "idle")
         self.assertEqual(synced["status"], "idle")
-        self.assertEqual(contents.count("First answer."), 1)
+        self.assertEqual(server_state["final_response_count"], 0)
+        self.assertEqual(contents.count("First answer."), 0)
         self.assertEqual(contents.count("Second answer."), 1)
 
     def test_ui_agent_openhands_parser_does_not_treat_user_llm_message_as_assistant(self) -> None:
@@ -4567,7 +6396,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn('"config_kind": "method"', tool_payload["arguments_preview"])
         self.assertEqual(adapter._openhands_event_trace(tool_feedback_event)["payload"]["category"], "tool_result_feedback")
 
-    def test_ui_agent_openhands_prefers_finish_message_and_ignores_waiting_text(self) -> None:
+    def test_ui_agent_openhands_only_treats_finish_message_as_final(self) -> None:
         adapter = OpenHandsAdapter(OpenHandsRuntimeConfig(enabled=False))
         finish_event = {
             "id": "evt-finish",
@@ -4580,8 +6409,8 @@ class MvpIntegrationTest(unittest.TestCase):
                 "message": "Install failed in the workspace runtime because Python and Node are unavailable.",
             },
         }
-        waiting_event = {
-            "id": "evt-waiting",
+        plain_message_event = {
+            "id": "evt-plain-message",
             "kind": "MessageEvent",
             "source": "agent",
             "llm_message": {
@@ -4589,22 +6418,311 @@ class MvpIntegrationTest(unittest.TestCase):
                 "content": [
                     {
                         "type": "text",
-                        "text": "The user still hasn't sent a new message. </think> (Waiting for your next message.)",
+                        "text": "I need to wait for the file read results before proceeding.",
                     }
                 ],
             },
         }
 
-        answer = adapter._best_user_facing_answer([waiting_event, finish_event], set(), set())
+        answer = adapter._best_finish_text([plain_message_event, finish_event], set(), set())
 
         self.assertEqual(answer, "Install failed in the workspace runtime because Python and Node are unavailable.")
-        self.assertEqual(adapter._event_assistant_text(waiting_event), "")
-        self.assertEqual(
-            adapter._user_facing_assistant_text(
-                "The user did not send another message. </think> The task is complete on my side: waiting for the next request."
-            ),
-            "",
+        self.assertEqual(adapter._best_finish_text([plain_message_event], set(), set()), "")
+        self.assertEqual(adapter._event_assistant_text(plain_message_event), "I need to wait for the file read results before proceeding.")
+
+    def test_ui_agent_openhands_finish_suppresses_pending_tool_execution(self) -> None:
+        finish_event = {
+            "id": "evt-finish",
+            "kind": "ActionEvent",
+            "source": "agent",
+            "action": {
+                "kind": "FinishAction",
+                "message": "Done before stale tool calls arrive.",
+            },
+        }
+        stale_tool_event = {
+            "id": "evt-stale-tool",
+            "kind": "ActionEvent",
+            "source": "agent",
+            "tool_name": "optpilot_file_read",
+            "tool_call_id": "tool-stale-read",
+            "tool_call": {
+                "id": "tool-stale-read",
+                "name": "optpilot_file_read",
+                "arguments": json.dumps({"path": "stale.py"}),
+            },
+        }
+
+        class FinishFirstAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(OpenHandsRuntimeConfig(enabled=False))
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0) -> tuple[JsonDict, JsonDict]:
+                if method == "GET" and "events/search" in url:
+                    return {"items": [finish_event, stale_tool_event]}, {}
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+        adapter = FinishFirstAdapter()
+        executed_tools: List[str] = []
+
+        answer, events, runtime_error, paused_approval_id = adapter._poll_openhands_answer(
+            "http://openhands.example/api/conversations",
+            "conversation-1",
+            tool_executor=lambda tool_name, arguments: executed_tools.append(tool_name) or {"ok": True},
+            poll_seconds=0.2,
         )
+
+        self.assertEqual(answer, "Done before stale tool calls arrive.")
+        self.assertEqual(runtime_error, "")
+        self.assertEqual(paused_approval_id, "")
+        self.assertEqual(executed_tools, [])
+        self.assertTrue(any(event.get("payload", {}).get("tool") == "optpilot_file_read" for event in events))
+
+    def test_ui_agent_openhands_runtime_error_is_terminal(self) -> None:
+        error_event = {
+            "id": "evt-error",
+            "kind": "ConversationErrorEvent",
+            "code": "APIError",
+            "detail": "litellm.APIError: Cannot connect to host openrouter.ai:443",
+        }
+        status_event = {
+            "id": "evt-status-error",
+            "kind": "ConversationStateUpdateEvent",
+            "key": "execution_status",
+            "value": "error",
+        }
+
+        class ErrorAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(OpenHandsRuntimeConfig(enabled=False))
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0, **kwargs: object) -> tuple[JsonDict, JsonDict]:
+                if method == "GET" and "events/search" in url:
+                    return {"items": [error_event, status_event]}, {}
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+        adapter = ErrorAdapter()
+
+        answer, events, runtime_error, paused_approval_id = adapter._poll_openhands_answer(
+            "http://openhands.example/api/conversations",
+            "conversation-1",
+            tool_executor=None,
+            poll_seconds=0.2,
+        )
+
+        self.assertEqual(answer, "")
+        self.assertIn("Cannot connect to host openrouter.ai:443", runtime_error)
+        self.assertEqual(paused_approval_id, "")
+        self.assertTrue(any(event.get("payload", {}).get("category") == "error" for event in events))
+        self.assertTrue(any("Cannot connect to host openrouter.ai:443" in event.get("payload", {}).get("summary", "") for event in events))
+
+    def test_ui_agent_openhands_tool_result_delivery_timeout_is_recorded(self) -> None:
+        class TimeoutPostingAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(OpenHandsRuntimeConfig(enabled=False))
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0, **kwargs: object) -> tuple[JsonDict, JsonDict]:
+                if method == "POST" and url.endswith("/events"):
+                    raise TimeoutError("timed out while posting tool result")
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+        adapter = TimeoutPostingAdapter()
+        handled: set[str] = set()
+        executed: List[str] = []
+        tool_call_event = {
+            "id": "evt-tool-call",
+            "kind": "ActionEvent",
+            "source": "agent",
+            "tool_name": "optpilot_workspace_list",
+            "tool_call_id": "tool-call-timeout",
+            "action": {"kind": "optpilot_workspace_list"},
+        }
+
+        events, paused_approval_id = adapter._execute_openhands_client_tools(
+            [tool_call_event],
+            "http://openhands.example/api/conversations",
+            "conversation-1",
+            lambda tool_name, arguments: executed.append(tool_name) or {"ok": True, "summary": "Listed workspaces."},
+            handled,
+        )
+
+        self.assertEqual(executed, ["optpilot_workspace_list"])
+        self.assertEqual(handled, {"tool-call-timeout"})
+        self.assertEqual(paused_approval_id, "")
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["payload"]["tool_call_id"], "tool-call-timeout")
+        self.assertEqual(events[0]["payload"]["delivery_status"], "timeout")
+        self.assertIn("timed out", events[0]["payload"]["delivery_error"])
+        self.assertEqual(events[0]["payload"]["result"]["summary"], "Listed workspaces.")
+
+    def test_ui_agent_submit_tool_result_confirms_delivery_after_timeout(self) -> None:
+        class ConfirmedTimeoutAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(
+                    OpenHandsRuntimeConfig(
+                        enabled=True,
+                        base_url="http://openhands.example",
+                        session_endpoint="/api/conversations",
+                        model="test/model",
+                        api_key="sk-test",
+                    )
+                )
+
+            def status(self) -> JsonDict:
+                return {"dispatch": "openhands_http"}
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0, **kwargs: object) -> tuple[JsonDict, JsonDict]:
+                if method == "POST" and url.endswith("/events"):
+                    raise TimeoutError("timed out while posting approved tool result")
+                if method == "GET" and "events/search" in url:
+                    return {
+                        "items": [
+                            {
+                                "kind": "MessageEvent",
+                                "source": "user",
+                                "llm_message": {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "OptPilot tool result for optpilot_package_plan_smoke (call-smoke-1). Use this structured result to continue the task.",
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }, {}
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+        adapter = ConfirmedTimeoutAdapter()
+
+        result = adapter.submit_tool_result("conversation-1", "optpilot_package_plan_smoke", "call-smoke-1", {"ok": False})
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["delivery_status"], "confirmed_after_timeout")
+
+    def test_ui_agent_openhands_tool_result_timeout_can_confirm_delivery(self) -> None:
+        class ConfirmedToolTimeoutAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(OpenHandsRuntimeConfig(enabled=False))
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0, **kwargs: object) -> tuple[JsonDict, JsonDict]:
+                if method == "POST" and url.endswith("/events"):
+                    raise TimeoutError("timed out while posting tool result")
+                if method == "GET" and "events/search" in url:
+                    return {
+                        "items": [
+                            {
+                                "kind": "MessageEvent",
+                                "source": "user",
+                                "llm_message": {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "OptPilot tool result for optpilot_workspace_list (tool-call-confirmed). Use this structured result to continue the task.",
+                                        }
+                                    ],
+                                },
+                            }
+                        ]
+                    }, {}
+                raise AssertionError(f"unexpected request: {method} {url}")
+
+        adapter = ConfirmedToolTimeoutAdapter()
+        events, paused_approval_id = adapter._execute_openhands_client_tools(
+            [
+                {
+                    "id": "evt-tool-call",
+                    "kind": "ActionEvent",
+                    "source": "agent",
+                    "tool_name": "optpilot_workspace_list",
+                    "tool_call_id": "tool-call-confirmed",
+                    "action": {"kind": "optpilot_workspace_list"},
+                }
+            ],
+            "http://openhands.example/api/conversations",
+            "conversation-1",
+            lambda tool_name, arguments: {"ok": True, "tool": tool_name, "summary": "Listed workspaces."},
+            set(),
+        )
+
+        self.assertEqual(paused_approval_id, "")
+        self.assertEqual(events[0]["payload"]["delivery_status"], "confirmed_after_timeout")
+        self.assertNotIn("result", events[0]["payload"])
+
+    def test_ui_agent_session_retries_timed_out_tool_result_forwarding(self) -> None:
+        class RetryAdapter:
+            def __init__(self) -> None:
+                self.forwarded: List[JsonDict] = []
+
+            def submit_tool_result(self, conversation_id: str, name: str, call_id: str, result: JsonDict) -> JsonDict:
+                self.forwarded.append(
+                    {
+                        "conversation_id": conversation_id,
+                        "name": name,
+                        "call_id": call_id,
+                        "result": result,
+                    }
+                )
+                return {"sent": True, "conversation_id": conversation_id, "tool_call_id": call_id}
+
+            def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                return {
+                    "status": "answered",
+                    "conversation_id": conversation_id,
+                    "assistant_message": {
+                        "role": "assistant",
+                        "title": "OpenHands",
+                        "content": "Recovered after retrying the stored tool result.",
+                    },
+                    "events": [],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            adapter = RetryAdapter()
+            state.agent_adapter = adapter
+            session = _create_agent_session(state, {"title": "Retry forwarding"})
+            session["status"] = "waiting_for_agent"
+            session["openhands_conversation_id"] = "conversation-retry"
+            session["active_turn_id"] = "turn-retry"
+            session["active_turn_started_at"] = "2026-07-06T08:20:03Z"
+            _upsert_agent_session(state, session)
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "id": "optpilot-tool-result-call-retry",
+                    "type": "optpilot_tool_result",
+                    "created_at": "2026-07-06T08:20:04Z",
+                    "payload": {
+                        "tool": "optpilot_file_read",
+                        "tool_call_id": "call-retry",
+                        "ok": True,
+                        "summary": "Read file.",
+                        "delivery_status": "timeout",
+                        "delivery_error": "timed out",
+                        "result": {"ok": True, "tool": "optpilot_file_read", "summary": "Read file.", "data": {"content": "hello"}},
+                    },
+                },
+            )
+
+            synced = _sync_agent_session(state, session["id"])
+            events = _read_agent_events(state, session["id"])
+            messages = _read_agent_messages(state, session["id"])
+
+        self.assertEqual(synced["status"], "idle")
+        self.assertEqual(adapter.forwarded[0]["call_id"], "call-retry")
+        self.assertEqual(adapter.forwarded[0]["result"]["data"]["content"], "hello")
+        self.assertTrue(
+            any(
+                event["type"] == "openhands_tool_result_forwarded"
+                and event.get("payload", {}).get("retry")
+                and event.get("payload", {}).get("tool_call_id") == "call-retry"
+                for event in events
+            )
+        )
+        self.assertTrue(any(message["content"] == "Recovered after retrying the stored tool result." for message in messages))
 
     def test_ui_agent_messages_hide_malformed_context_echoes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -4658,7 +6776,6 @@ class MvpIntegrationTest(unittest.TestCase):
 
         contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
         self.assertIn("Use the host runtime for this project.", contents)
-        self.assertFalse(any("Waiting for your next message" in content for content in contents))
 
     def test_ui_agent_events_hide_internal_context_packet_previews(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -4681,6 +6798,102 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(events[1]["payload"]["summary"], "User request sent to OpenHands: hello")
         self.assertNotIn("current_page", events[1]["payload"]["summary"])
         self.assertNotIn("current_page", events[1]["payload"]["raw_preview"])
+
+    def test_ui_agent_events_hide_plain_openhands_assistant_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Plain message"})
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "type": "openhands_event",
+                    "payload": {
+                        "category": "assistant_message",
+                        "summary": "I need to wait for the three file read results before proceeding.",
+                        "assistant_preview": "I need to wait for the three file read results before proceeding.",
+                    },
+                },
+            )
+
+            events = _read_agent_events(state, session["id"])
+
+        self.assertFalse(
+            any(
+                event.get("payload", {}).get("summary")
+                == "I need to wait for the three file read results before proceeding."
+                for event in events
+            )
+        )
+
+    def test_ui_agent_events_redact_internal_sync_state_from_result_previews(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Tool result preview"})
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "type": "optpilot_tool_result",
+                    "payload": {
+                        "tool": "optpilot_workspace_list",
+                        "result_preview": json.dumps(
+                            {
+                                "ok": True,
+                                "data": {
+                                    "sessions": [
+                                        {
+                                            "id": "as_old",
+                                            "openhands_pending_sync": {
+                                                "ignored_response_texts": [
+                                                    "I need to wait for the three file read results before proceeding."
+                                                ]
+                                            },
+                                        }
+                                    ]
+                                },
+                            }
+                        ),
+                    },
+                },
+            )
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "type": "openhands_event",
+                    "payload": {
+                        "category": "tool_result_feedback",
+                        "raw_preview": (
+                            'OptPilot tool result: {\\"openhands_pending_sync\\": {'
+                            '\\"ignored_response_texts\\": ['
+                            '\\"I need to wait for the three file read results before proceeding.\\"'
+                            "]}, \\\"status\\\": \\\"waiting_for_agent\\\"}"
+                        ),
+                    },
+                },
+            )
+
+            events = _read_agent_events(state, session["id"])
+
+        preview = events[1]["payload"]["result_preview"]
+        raw_preview = events[2]["payload"]["raw_preview"]
+        self.assertNotIn("openhands_pending_sync", preview)
+        self.assertNotIn("I need to wait for the three file read results before proceeding.", preview)
+        self.assertIn('"id": "as_old"', preview)
+        self.assertNotIn("openhands_pending_sync", raw_preview)
+        self.assertNotIn("I need to wait for the three file read results before proceeding.", raw_preview)
+
+    def test_ui_agent_session_payload_hides_internal_sync_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Internal sync"})
+            session["openhands_pending_sync"] = {
+                "ignored_response_texts": ["I need to wait for the file read results before proceeding."]
+            }
+            _upsert_agent_session(state, session)
+
+            payload = _agent_session_by_id(state, session["id"])
+
+        self.assertNotIn("openhands_pending_sync", payload)
+        self.assertNotIn("I need to wait for the file read results before proceeding.", json.dumps(payload))
 
     def test_ui_agent_session_running_dispatch_does_not_store_placeholder_answer(self) -> None:
         class SlowAdapter:
@@ -4729,6 +6942,138 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertFalse(any(message["role"] == "assistant" and message["content"] == "" for message in messages_after_dispatch))
         self.assertEqual(synced["status"], "idle")
         self.assertTrue(any(message["content"] == "Late OpenHands answer." for message in messages_after_sync))
+
+    def test_ui_agent_session_sync_marks_openhands_error_terminal(self) -> None:
+        class ErrorSyncAdapter:
+            def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                return {
+                    "status": "failed",
+                    "conversation_id": conversation_id,
+                    "assistant_message": {
+                        "role": "assistant",
+                        "title": "OpenHands error",
+                        "content": "OpenHands reported an error: APIError: Cannot connect to host openrouter.ai:443",
+                    },
+                    "events": [
+                        {
+                            "type": "openhands_event",
+                            "payload": {
+                                "category": "error",
+                                "summary": "APIError: Cannot connect to host openrouter.ai:443",
+                            },
+                        }
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            state.agent_adapter = ErrorSyncAdapter()
+            session = _create_agent_session(state, {"title": "OpenHands error"})
+            session["status"] = "waiting_for_agent"
+            session["openhands_conversation_id"] = "conversation-error"
+            session["active_turn_id"] = "turn-error"
+            session["active_turn_started_at"] = "2026-07-06T08:20:03Z"
+            _upsert_agent_session(state, session)
+
+            synced = _sync_agent_session(state, session["id"])
+            messages = _read_agent_messages(state, session["id"])
+            events = _read_agent_events(state, session["id"])
+
+        self.assertEqual(synced["status"], "error")
+        self.assertNotIn("active_turn_id", synced)
+        self.assertTrue(any(message["title"] == "OpenHands error" for message in messages))
+        self.assertTrue(any(event.get("payload", {}).get("category") == "error" for event in events))
+
+    def test_ui_agent_sync_serializes_tool_execution_for_same_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Concurrent sync"})
+            session["status"] = "waiting_for_agent"
+            session["openhands_conversation_id"] = "conversation-with-tool-call"
+            session["active_turn_id"] = "turn-active"
+            session["active_turn_started_at"] = "2026-06-30T00:00:00Z"
+            _upsert_agent_session(state, session)
+
+            class ReplayToolAdapter:
+                def __init__(self) -> None:
+                    self.lock = threading.Lock()
+                    self.active = 0
+                    self.max_active = 0
+                    self.ignored_snapshots: List[set[str]] = []
+                    self.tool_executions = 0
+                    self.first_sync_entered = threading.Event()
+
+                def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                    with self.lock:
+                        self.active += 1
+                        self.max_active = max(self.max_active, self.active)
+                        ignored = set(kwargs.get("ignored_tool_calls") or set())
+                        self.ignored_snapshots.append(ignored)
+                        self.first_sync_entered.set()
+                    try:
+                        time.sleep(0.15)
+                        events = []
+                        if "tool-call-1" not in ignored:
+                            tool_executor = kwargs["tool_executor"]
+                            tool_executor("optpilot_workspace_list", {"_openhands_tool_call_id": "tool-call-1"})
+                            self.tool_executions += 1
+                            events.append(
+                                {
+                                    "type": "optpilot_tool_result",
+                                    "payload": {
+                                        "tool": "optpilot_workspace_list",
+                                        "tool_call_id": "tool-call-1",
+                                        "ok": True,
+                                        "summary": "Listed workspaces.",
+                                    },
+                                }
+                            )
+                        return {
+                            "status": "running",
+                            "conversation_id": conversation_id,
+                            "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                            "events": events,
+                        }
+                    finally:
+                        with self.lock:
+                            self.active -= 1
+
+            adapter = ReplayToolAdapter()
+            state.agent_adapter = adapter
+            results: List[JsonDict] = []
+            errors: List[BaseException] = []
+
+            def run_sync() -> None:
+                try:
+                    results.append(_sync_agent_session(state, session["id"]))
+                except BaseException as exc:  # pragma: no cover - assertion path
+                    errors.append(exc)
+
+            first = threading.Thread(target=run_sync)
+            second = threading.Thread(target=run_sync)
+            first.start()
+            self.assertTrue(adapter.first_sync_entered.wait(timeout=1.0))
+            second.start()
+            first.join(timeout=2.0)
+            second.join(timeout=2.0)
+
+            events = _read_agent_events(state, session["id"])
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(adapter.max_active, 1)
+        self.assertEqual(adapter.tool_executions, 1)
+        self.assertEqual(adapter.ignored_snapshots[0], set())
+        self.assertIn("tool-call-1", adapter.ignored_snapshots[1])
+        tool_result_events = [
+            event
+            for event in events
+            if event.get("type") == "optpilot_tool_result"
+            and event.get("payload", {}).get("tool_call_id") == "tool-call-1"
+        ]
+        self.assertEqual(len(tool_result_events), 1)
 
     def test_ui_agent_session_cancel_interrupts_and_ignores_late_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -5079,7 +7424,10 @@ class MvpIntegrationTest(unittest.TestCase):
             result = _update_agent_settings(
                 state,
                 {
-                    "openhands": {"enabled": False},
+                    "openhands": {
+                        "enabled": False,
+                        "native_tools": ["grep", "terminal", "file_editor", "glob", "grep", "task_tracker"],
+                    },
                     "capabilities": {
                         "skills": [
                             {
@@ -5123,6 +7471,7 @@ class MvpIntegrationTest(unittest.TestCase):
             stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
 
         assistant = result["settings"]["assistant"]
+        self.assertEqual(assistant["openhands"]["native_tools"], ["grep", "glob", "task_tracker"])
         self.assertEqual(assistant["capabilities"]["skills"][0]["source"], ".agents/skills/connect-github-integration")
         self.assertEqual(assistant["capabilities"]["mcp_servers"][0]["url"], "https://mcp.notion.com/mcp")
         self.assertEqual(assistant["capabilities"]["mcp_filter_regex"], "^(notion|optpilot)_")

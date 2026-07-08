@@ -118,7 +118,6 @@ class BackendServiceTests(unittest.TestCase):
     def setUp(self):
         self._old_openrouter_api_key = os.environ.pop("OPENROUTER_API_KEY", None)
         self._old_devs_display_password = os.environ.pop("DEVS_DISPLAY_PASSWORD", None)
-        self._old_hamlet_display_password = os.environ.pop("HAMLET_DISPLAY_PASSWORD", None)
         self._old_devs_display_auth_secret = os.environ.pop("DEVS_DISPLAY_AUTH_SECRET", None)
 
     def tearDown(self):
@@ -126,8 +125,6 @@ class BackendServiceTests(unittest.TestCase):
             os.environ["OPENROUTER_API_KEY"] = self._old_openrouter_api_key
         if self._old_devs_display_password is not None:
             os.environ["DEVS_DISPLAY_PASSWORD"] = self._old_devs_display_password
-        if self._old_hamlet_display_password is not None:
-            os.environ["HAMLET_DISPLAY_PASSWORD"] = self._old_hamlet_display_password
         if self._old_devs_display_auth_secret is not None:
             os.environ["DEVS_DISPLAY_AUTH_SECRET"] = self._old_devs_display_auth_secret
 

@@ -109,6 +109,8 @@ def index_package(package_root: str | Path) -> PackageIndex:
         resolved = path.resolve()
         if resolved in seen_paths:
             continue
+        if _resource_manifest_source_root(root, path) is not None:
+            continue
         seen_paths.add(resolved)
         raw = _read_yaml(path)
         config = raw.get("config")
@@ -150,6 +152,21 @@ def resource_manifest(path: str | Path) -> tuple[Optional[Path], JsonDict]:
         if raw.get("apiVersion") == AUTHORING_API_VERSION and raw.get("config") == "resource":
             return manifest_path, raw
     return None, {}
+
+
+def _resource_manifest_source_root(package_root: Path, path: Path) -> Optional[Path]:
+    resources_root = package_root / "resources"
+    try:
+        relative = path.resolve().relative_to(resources_root.resolve())
+    except ValueError:
+        return None
+    if len(relative.parts) < 2:
+        return None
+    resource_root = (resources_root / relative.parts[0]).resolve()
+    for name in RESOURCE_MANIFEST_NAMES:
+        if path.resolve() == (resource_root / name).resolve():
+            return resource_root
+    return None
 
 
 def _entry_for_config(path: Path, raw: JsonDict, *, package_id: str) -> PackageEntry:

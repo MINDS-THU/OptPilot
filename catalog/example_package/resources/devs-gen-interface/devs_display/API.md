@@ -1,6 +1,7 @@
-# devs_display API
+# DEVS Display API
 
-This document defines the target API for the session-based devs_display frontend and backend.
+This document defines the session-based API used by the DEVS Simulation
+Generator Interface frontend and backend.
 
 The legacy top-level APIs (`/projects`, `/projects/{name}/files`, `/chat`) are intentionally not part of this design. The frontend should treat a session as the top-level workspace, and every project, chat request, message, progress event, and file operation should be scoped to a session.
 
@@ -27,7 +28,6 @@ Optional settings:
 | Variable | Meaning |
 | --- | --- |
 | `DEVS_DISPLAY_PASSWORD` | Enables password protection when non-empty. |
-| `HAMLET_DISPLAY_PASSWORD` | Backward-compatible alternative password variable. |
 | `DEVS_DISPLAY_AUTH_SECRET` | Optional token signing secret. Defaults to a value derived from the password. |
 | `DEVS_DISPLAY_AUTH_TOKEN_TTL_SECONDS` | Bearer token lifetime. Defaults to 7 days. |
 
@@ -84,8 +84,7 @@ Response:
   "default_provider": "openai",
   "default_model": "openrouter/openai/gpt-5.4-mini",
   "api_key_available": {
-    "openai": true,
-    "gemini": false
+    "openai": true
   },
   "model_presets": [
     {

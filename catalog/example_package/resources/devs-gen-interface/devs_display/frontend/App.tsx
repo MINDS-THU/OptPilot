@@ -6,7 +6,7 @@ import { SessionSelectorPanel } from './components/SessionSelectorPanel';
 import { ProjectPanel } from './components/ProjectPanel';
 import { VisualizationControls } from './components/VisualizationControls';
 import { SourcePreviewPanel } from './components/SourcePreviewPanel';
-import { parseModelCode } from './services/geminiService';
+import { parseModelCode } from './services/graphParseService';
 import {
   createSession,
   deleteSession,
@@ -103,7 +103,7 @@ const LoginScreen: React.FC<{
         <div className="mb-5">
           <h1 className="flex items-center gap-2 text-xl font-bold text-slate-800">
             <Cpu className="text-blue-600" />
-            HAMLET Workspace
+            DEVS Generator Workspace
           </h1>
         </div>
         <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="hamlet-password">
@@ -564,7 +564,7 @@ const App: React.FC = () => {
   const handleDeleteSession = async (session: SessionInfo) => {
       const title = session.title || session.session_id;
       const confirmed = window.confirm(
-          `Delete session "${title}"?\n\nThis removes the session from HAMLET. Automatically-created session workspaces will also be deleted.`
+          `Delete session "${title}"?\n\nThis removes the session from the DEVS Generator. Automatically-created session workspaces will also be deleted.`
       );
       if (!confirmed) return;
 
@@ -1139,7 +1139,7 @@ const App: React.FC = () => {
           <div>
             <h1 className="flex items-center gap-2 text-xl font-bold text-slate-800">
               <Cpu className="text-blue-600" />
-              HAMLET Workspace
+              DEVS Generator Workspace
             </h1>
             <p className="text-sm text-slate-500">{workspaceLabel}</p>
           </div>

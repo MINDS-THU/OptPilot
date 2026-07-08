@@ -23,14 +23,15 @@ from .graph_parser import (
     local_parse_xdevs_structure,
     parse_model_for_visualizer as parse_model_for_visualizer_impl,
 )
+from devs_settings import DEFAULT_VISUALIZER_MODEL_ID, first_preset_model, openrouter_api_key
 
 load_dotenv(override=True)
 
 META_DIR_NAME = ".devs_display_sessions"
-HAMLET_CORE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DEFAULT_REGISTRY_PATH = os.path.join(HAMLET_CORE_DIR, "devs_display", ".storage", "session_registry.json")
-DEFAULT_WORKING_DIRS_ROOT = os.path.join(HAMLET_CORE_DIR, "devs_app", "working_dirs")
-DEFAULT_GRAPH_PARSE_MODEL = "openrouter/openai/gpt-5.4-mini"
+DEVS_INTERFACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+DEFAULT_REGISTRY_PATH = os.path.join(DEVS_INTERFACE_ROOT, "devs_display", ".storage", "session_registry.json")
+DEFAULT_WORKING_DIRS_ROOT = os.path.join(DEVS_INTERFACE_ROOT, "devs_app", "working_dirs")
+DEFAULT_GRAPH_PARSE_MODEL = DEFAULT_VISUALIZER_MODEL_ID
 
 
 def utc_now() -> str:
@@ -568,24 +569,12 @@ class DEVSBackendService:
             return sessions[offset : offset + limit]
 
     def get_frontend_config(self):
-        openrouter_available = bool(os.getenv("OPENROUTER_API_KEY", ""))
-        gemini_available = bool(
-            os.getenv("GEMINI_API_KEY", "")
-            or os.getenv("GOOGLE_API_KEY", "")
-            or os.getenv("API_KEY", "")
-        )
-        default_provider = "openai" if openrouter_available else "gemini"
-        default_model = next(
-            preset["model"]
-            for preset in FRONTEND_MODEL_PRESETS
-            if preset["provider"] == default_provider
-        )
+        openrouter_available = bool(openrouter_api_key())
         return {
-            "default_provider": default_provider,
-            "default_model": default_model,
+            "default_provider": "openai",
+            "default_model": first_preset_model(FRONTEND_MODEL_PRESETS),
             "api_key_available": {
                 "openai": openrouter_available,
-                "gemini": gemini_available,
             },
             "model_presets": FRONTEND_MODEL_PRESETS,
         }

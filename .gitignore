@@ -15,6 +15,7 @@ resource/*
 source/
 catalog/*/runs/
 catalog/*/**/runs/
+catalog/local_package/
 catalog/*/resources/**/.venv/
 catalog/*/resources/**/node_modules/
 catalog/*/resources/**/.storage/

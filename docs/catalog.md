@@ -25,10 +25,44 @@ The core CLI can validate a package folder:
 optpilot package validate path/to/package
 ```
 
-Package validation checks recognized OptPilot config files and their schemas.
-It does not install dependencies or prove that every study can complete. For a
-release-quality package, validate the package, validate the study files you
-intend to advertise, and smoke-run at least one small study.
+By default, package validation checks recognized OptPilot config files and
+their schemas. Use the deeper checks before publishing or registering a package
+made from an external codebase:
+
+```bash
+optpilot package validate path/to/package \
+  --check-source \
+  --check-setup-files \
+  --check-imports
+```
+
+These checks verify public source paths, setup files, and Python callable
+imports under the registered package layout. Public source paths must resolve
+inside the package; a path that only works because the original external
+workspace is still on your machine is not portable package source.
+
+These checks still do not install dependencies or prove that every study can
+complete. For a release-quality package, validate the package, validate the
+study files you intend to advertise, and smoke-run at least one small study.
+
+If a package declares `runtime.setup` or `interface.setup`, check the setup
+files first:
+
+```bash
+optpilot package setup-check path/to/package
+```
+
+Run setup only when you explicitly want OptPilot to execute those declarations:
+
+```bash
+optpilot package setup-check path/to/package --run-setup
+```
+
+For a package with a small study, run a smoke check:
+
+```bash
+optpilot package smoke path/to/package --study studies/smoke.yaml
+```
 
 Studio scans packages under `catalog/` when launched from a source checkout:
 
@@ -150,9 +184,40 @@ For a first local package:
 uv run optpilot ui --catalog catalog/example_package --catalog catalog/my_package
 ```
 
-Package validation proves that recognized config files are structurally valid.
-The smoke run proves that dependencies, runtime setup, candidate generation,
-and evaluation work together for at least one small study.
+Schema-only package validation proves that recognized config files are
+structurally valid. The deeper package checks catch missing public source
+paths, setup files, and import targets. A smoke run is still the proof that
+dependencies, runtime setup, candidate generation, and evaluation work together
+for at least one small study.
+
+## Studio Package Plans
+
+When you attach an external project in Studio, use **Register to Catalog** to
+prepare a package plan. A package plan classifies the workspace as
+environment-only, method-only, environment-plus-method, resource-only, or not
+yet classifiable.
+
+Studio materializes the plan in a temporary package, runs schema/source/setup
+file/import checks, optionally smoke-runs a selected study, and applies the
+normalized package into `catalog/local_package`.
+
+The external project does not need to already contain `environments/`,
+`methods/`, or `resources/` folders. Studio writes that clean layout during
+package-plan apply.
+
+`catalog/local_package/` is local generated content. It is useful for trying a
+curated package in Studio, but it is not part of the bundled example package
+and should not be committed as release content unless you intentionally turn it
+into a named package.
+
+Package-plan readiness has four practical states:
+
+- **schema-valid**: the YAML files have the right shape.
+- **component-ready**: source paths, setup files, and imports resolve for a
+  one-sided environment or method package.
+- **resource-ready**: resource manifests and interface files resolve.
+- **run-ready**: a paired environment-method package has passed at least one
+  smoke study.
 
 ## Package Layout
 

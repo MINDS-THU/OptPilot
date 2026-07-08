@@ -62,8 +62,8 @@ _Captured from the current Studio source checkout with `catalog/example_package/
 
 | View | What it is for |
 | --- | --- |
-| Catalog | Browse reusable environments, methods, resources, and study files from packages. |
-| Studies | Edit and launch concrete study YAML files through configuration forms. |
+| Catalog | Browse reusable environments, methods, and resources from packages. |
+| Studies | Edit and launch concrete study plans, including study YAML files shipped with packages. |
 | Runs | Inspect completed and running study evidence. |
 | Workspaces | Open editable copies, local folders, and run-analysis workspaces. |
 | Settings | Configure assistant settings and platform-level environment variables. |

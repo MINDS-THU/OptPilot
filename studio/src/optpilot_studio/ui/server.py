@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import calendar
 import difflib
@@ -12,6 +13,7 @@ import importlib.util
 import json
 import mimetypes
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -41,12 +43,13 @@ from optpilot.config import (
     compile_authoring_config,
     validate_authoring_config,
 )
+from optpilot.package_validation import validate_package
 from optpilot.registry import BUILTIN_COMPONENTS
 from optpilot.run_sources import _choose_source_root
 from optpilot.schema_validation import validate_public_config_schema
 from optpilot.setup import minimal_host_env, setup_commands_for_step, setup_cwd
 
-from ..agent import OpenHandsAdapter, OpenHandsRuntimeConfig
+from ..agent import OpenHandsAdapter, OpenHandsRuntimeConfig, sanitize_openhands_native_tools
 
 
 JsonDict = Dict[str, Any]
@@ -62,6 +65,7 @@ RUN_SENTINEL_FILES = {
 # methods are reusable catalog configs that can be registered through Studio.
 INDEXED_CONFIGS = {"environment", "method", "study"}
 REGISTERABLE_CONFIGS = {"environment", "method"}
+OPT_CONFIGS = {"environment", "method", "resource", "study"}
 CATALOG_DIR_NAME = "catalog"
 EXAMPLE_PACKAGE_NAME = "example_package"
 LOCAL_PACKAGE_NAME = "local_package"
@@ -109,6 +113,13 @@ CODE_SERVER_DEFAULT_USER_SETTINGS: JsonDict = {
     "workbench.tips.enabled": False,
     "workbench.welcomePage.walkthroughs.openOnInstall": False,
 }
+
+
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    source: str = "assistant"
+    approval_id: str = ""
+    bypass_approval: bool = False
 
 
 @dataclass
@@ -1425,6 +1436,25 @@ _HOP_BY_HOP_HEADERS = {
 }
 
 
+_PREVIEW_PROXY_PRIVATE_HEADERS = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "x-optpilot-preview-token",
+}
+
+
+def _preview_proxy_should_forward_header(name: str) -> bool:
+    lowered = name.lower()
+    if lowered == "host" or lowered in _HOP_BY_HOP_HEADERS:
+        return False
+    if lowered in _PREVIEW_PROXY_PRIVATE_HEADERS:
+        return False
+    if lowered.startswith("x-optpilot-"):
+        return False
+    return True
+
+
 def _preview_proxy_handler_factory(target_base_url: str, *, token: str, allowed_ports: Iterable[int]):
     target_base_url = target_base_url.rstrip("/")
     code_server_base_url = target_base_url.split("/proxy/", 1)[0].rstrip("/") if "/proxy/" in target_base_url else ""
@@ -1471,7 +1501,7 @@ def _preview_proxy_handler_factory(target_base_url: str, *, token: str, allowed_
             headers = {
                 key: value
                 for key, value in self.headers.items()
-                if key.lower() not in _HOP_BY_HOP_HEADERS and key.lower() != "host"
+                if _preview_proxy_should_forward_header(key)
             }
             headers["Accept-Encoding"] = "identity"
             request = Request(upstream_url, data=body, headers=headers, method=self.command)
@@ -1647,7 +1677,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _handler_factory(state: UiState):
-    static_dir = Path(__file__).parent / "static"
+    static_dir = (Path(__file__).parent / "static").resolve()
 
     class OptPilotUiHandler(BaseHTTPRequestHandler):
         server_version = "OptPilotUI/0.1"
@@ -1661,7 +1691,7 @@ def _handler_factory(state: UiState):
                     self._send_file(static_dir / "index.html")
                     return
                 if path.startswith("/static/"):
-                    self._send_file(static_dir / path.removeprefix("/static/"))
+                    self._send_static_file(path.removeprefix("/static/"))
                     return
                 if path == "/api/health":
                     self._send_json({"ok": True, "cwd": str(state.cwd)})
@@ -1882,6 +1912,14 @@ def _handler_factory(state: UiState):
                 workspace = _require_ui_workspace(state, workspace_id)
                 self._send_json(state.code_server_open_url(Path(workspace["root"])))
                 return
+            if len(parts) == 5 and parts[4] == "launch-interface-job":
+                payload = self._read_json_body()
+                setup_policy = str(payload.get("setup") or "auto")
+                self._send_json(
+                    _start_workspace_interface_launch(state, workspace_id, setup_policy=setup_policy),
+                    status=HTTPStatus.ACCEPTED,
+                )
+                return
             if len(parts) == 5 and parts[4] == "detach":
                 payload = self._read_json_body()
                 self._send_json({"workspace": _detach_workspace(state, workspace_id, str(payload.get("session_id", "")))})
@@ -1893,6 +1931,24 @@ def _handler_factory(state: UiState):
             if len(parts) == 5 and parts[4] == "registrations":
                 payload = self._read_json_body()
                 self._send_json(_create_registration_manifest(state, workspace_id, payload), status=HTTPStatus.CREATED)
+                return
+            if len(parts) == 5 and parts[4] == "package-plans":
+                payload = self._read_json_body()
+                self._send_json(_prepare_package_plan(state, workspace_id, payload), status=HTTPStatus.CREATED)
+                return
+            if len(parts) == 7 and parts[4] == "package-plans" and parts[6] == "update":
+                payload = self._read_json_body()
+                self._send_json(_update_package_plan(state, workspace_id, parts[5], payload))
+                return
+            if len(parts) == 7 and parts[4] == "package-plans" and parts[6] == "validate":
+                self._send_json(_validate_package_plan(state, workspace_id, parts[5]))
+                return
+            if len(parts) == 7 and parts[4] == "package-plans" and parts[6] == "smoke":
+                payload = self._read_json_body()
+                self._send_json(_smoke_package_plan(state, workspace_id, parts[5], payload))
+                return
+            if len(parts) == 7 and parts[4] == "package-plans" and parts[6] == "apply":
+                self._send_json(_apply_package_plan(state, workspace_id, parts[5]))
                 return
             if len(parts) == 7 and parts[4] == "registrations" and parts[6] == "validate":
                 self._send_json(_validate_registration_manifest(state, workspace_id, parts[5]))
@@ -1919,7 +1975,7 @@ def _handler_factory(state: UiState):
                 self._send_json({"events": _read_agent_events(state, session_id)})
                 return
             if len(parts) == 5 and parts[4] == "approvals":
-                self._send_json({"approvals": _read_agent_approvals(state, session_id)})
+                self._send_json({"approvals": _public_agent_approvals(state, session_id)})
                 return
             self._send_json({"session": session})
 
@@ -1932,6 +1988,18 @@ def _handler_factory(state: UiState):
             if len(parts) == 5 and parts[4] == "message":
                 payload = self._read_json_body()
                 with _agent_session_operation_lock(state, session_id):
+                    pending_ids = _agent_pending_approval_ids(state, session_id)
+                    if pending_ids:
+                        self._send_json(
+                            {
+                                "error": "approval_required",
+                                "summary": "Resolve the pending approval before sending another assistant message.",
+                                "pending_approval_ids": pending_ids,
+                                "session": _agent_session_payload(state, _require_agent_session(state, session_id)),
+                            },
+                            status=HTTPStatus.CONFLICT,
+                        )
+                        return
                     self._send_json(_append_agent_message(state, session_id, payload))
                 return
             if len(parts) == 5 and parts[4] == "attach-workspace":
@@ -1952,7 +2020,12 @@ def _handler_factory(state: UiState):
                 self._send_json({"session": _cancel_agent_session(state, session_id)})
                 return
             if len(parts) == 5 and parts[4] == "sync":
-                self._send_json({"session": _sync_agent_session(state, session_id)})
+                try:
+                    self._send_json({"session": _sync_agent_session(state, session_id)})
+                except Exception as exc:
+                    if not _is_timeout_like(exc):
+                        raise
+                    self._send_json({"session": _mark_agent_session_waiting_after_sync_timeout(state, session_id, exc)})
                 return
             if len(parts) == 6 and parts[4] == "tools":
                 payload = self._read_json_body()
@@ -2083,6 +2156,13 @@ def _handler_factory(state: UiState):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_static_file(self, relative_path: str) -> None:
+            requested = (static_dir / unquote(relative_path)).resolve()
+            if not _is_relative_to(requested, static_dir):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self._send_file(requested)
 
         def _send_json(self, payload: JsonDict, status: HTTPStatus = HTTPStatus.OK) -> None:
             data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -2524,7 +2604,10 @@ def _read_ui_settings(state: UiState) -> JsonDict:
             current.update({key: value for key, value in assistant.items() if key != "openhands"})
             openhands = assistant.get("openhands")
             if isinstance(openhands, dict):
-                current.setdefault("openhands", {}).update(openhands)
+                current_openhands = current.setdefault("openhands", {})
+                current_openhands.update(openhands)
+                if isinstance(current_openhands.get("native_tools"), list):
+                    current_openhands["native_tools"] = list(sanitize_openhands_native_tools(current_openhands.get("native_tools")))
             capabilities = assistant.get("capabilities")
             if isinstance(capabilities, dict):
                 current["capabilities"] = _normalize_assistant_capabilities(capabilities)
@@ -2545,6 +2628,14 @@ DEFAULT_ASSISTANT_PERMISSIONS = {
     "job_stop": "approval_required",
 }
 
+ASSISTANT_PERMISSION_VALUES = {
+    "file_write": {"attached_editable", "approval_required", "disabled"},
+    "shell_run": {"approval_required", "safe_without_approval", "disabled"},
+    "catalog_registration": {"approval_required", "disabled"},
+    "study_launch": {"approval_required", "disabled"},
+    "job_stop": {"approval_required", "disabled"},
+}
+
 
 def _default_ui_settings() -> JsonDict:
     env_config = OpenHandsRuntimeConfig.from_env()
@@ -2557,6 +2648,7 @@ def _default_ui_settings() -> JsonDict:
                 "session_endpoint": env_config.session_endpoint,
                 "model": env_config.model,
                 "api_key": "",
+                "native_tools": list(env_config.native_tools),
             },
             "capabilities": {
                 "skills": [],
@@ -2736,7 +2828,7 @@ def _normalize_assistant_permissions(raw: Optional[JsonDict]) -> JsonDict:
         return permissions
     for key in permissions:
         value = str(raw.get(key) or permissions[key]).strip()
-        permissions[key] = value or permissions[key]
+        permissions[key] = value if value in ASSISTANT_PERMISSION_VALUES[key] else permissions[key]
     return permissions
 
 
@@ -2923,6 +3015,7 @@ def _openhands_config_from_settings(settings: JsonDict) -> OpenHandsRuntimeConfi
         model=config.model,
         api_key=env_config.api_key,
         enabled=config.enabled,
+        native_tools=config.native_tools,
     )
 
 
@@ -2942,6 +3035,7 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
         "base_url": str(openhands.get("base_url") or ""),
         "session_endpoint": str(openhands.get("session_endpoint") or ""),
         "model": str(openhands.get("model") or ""),
+        "native_tools": list(_openhands_config_from_settings(settings).native_tools),
         "api_key_configured": bool(openhands.get("api_key") or OpenHandsRuntimeConfig.from_env().api_key),
     }
     return {
@@ -2969,6 +3063,8 @@ def _update_agent_settings(state: UiState, payload: JsonDict) -> JsonDict:
     openhands["base_url"] = str(incoming.get("base_url") or "").strip().rstrip("/")
     openhands["session_endpoint"] = str(incoming.get("session_endpoint") or "").strip()
     openhands["model"] = str(incoming.get("model") or "").strip()
+    if isinstance(incoming.get("native_tools"), list):
+        openhands["native_tools"] = list(sanitize_openhands_native_tools(incoming.get("native_tools")))
     if incoming.get("clear_api_key"):
         openhands["api_key"] = ""
     elif "api_key" in incoming and str(incoming.get("api_key") or "").strip():
@@ -3231,7 +3327,7 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
         "resources": "resource",
     }.get(str(expected_config or ""), str(expected_config or ""))
     if expected_config == "resource":
-        path = _decode_id(uid)
+        path = _resolve_catalog_identifier(state, expected_config, uid)
         if not path.exists() or not path.is_dir():
             raise FileNotFoundError(f"resource not found: {path}")
         entry = _resource_catalog_entry(path)
@@ -3253,7 +3349,7 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             "validation": validation,
             "compatibility": {"compatible": [], "incompatible": []},
         }
-    path = _decode_id(uid)
+    path = _resolve_catalog_identifier(state, expected_config, uid)
     raw = _read_yaml(path)
     if raw.get("config") != expected_config or raw.get("apiVersion") != AUTHORING_API_VERSION:
         raise FileNotFoundError(f"{expected_config} config not found: {path}")
@@ -3287,6 +3383,43 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             "incompatible": [item for item in related if not item["compatible"]],
         },
     }
+
+
+def _resolve_catalog_identifier(state: UiState, expected_config: str, value: str) -> Path:
+    """Resolve either an encoded catalog uid or a user-facing catalog id."""
+    identifier = str(value or "").strip()
+    if not identifier:
+        raise FileNotFoundError(f"{expected_config} config not found: {value}")
+    decoded = _try_decode_id(identifier)
+    if decoded is not None:
+        if expected_config == "resource" and decoded.exists() and decoded.is_dir():
+            return decoded
+        if expected_config != "resource" and decoded.exists() and decoded.is_file():
+            return decoded
+    catalog = _catalog_payload(state)
+    if expected_config == "resource":
+        entries = catalog.get("resources", [])
+    else:
+        key = {
+            "environment": "environments",
+            "method": "methods",
+            "study": "studies",
+        }.get(expected_config, "")
+        entries = catalog.get(key, []) if key else []
+    for entry in entries:
+        candidates = {
+            str(entry.get("uid") or ""),
+            str(entry.get("id") or ""),
+            str(entry.get("qualified_id") or ""),
+            str(entry.get("catalog_key") or ""),
+            str(entry.get("label") or ""),
+        }
+        if identifier not in candidates:
+            continue
+        raw_path = entry.get("path") or entry.get("root")
+        if raw_path:
+            return Path(str(raw_path)).resolve()
+    raise FileNotFoundError(f"{expected_config} config not found: {value}")
 
 
 def _compatibility_payload(state: UiState) -> JsonDict:
@@ -3394,9 +3527,26 @@ def _add_context_paths(paths: set, prefix: str, value: Any) -> None:
         paths.add(prefix)
 
 
+def _draft_study_config_path(state: UiState, payload: JsonDict, key: str) -> Path:
+    value = payload.get(key)
+    if value in (None, ""):
+        raise ValueError(f"{key} is required.")
+    workspace_id = str(payload.get("workspace_id") or "")
+    if workspace_id:
+        workspace = _require_ui_workspace(state, workspace_id)
+        root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+        requested = Path(str(value)).expanduser()
+        target = requested if requested.is_absolute() else root / requested
+        target = target.resolve()
+        if not _is_relative_to(target, root):
+            raise PermissionError(f"{key} is outside the workspace root.")
+        return target
+    return _resolve_user_path(value, state.cwd)
+
+
 def _draft_study(state: UiState, payload: JsonDict) -> JsonDict:
-    environment_path = _resolve_user_path(payload.get("environment_path"), state.cwd)
-    method_path = _resolve_user_path(payload.get("method_path"), state.cwd)
+    environment_path = _draft_study_config_path(state, payload, "environment_path")
+    method_path = _draft_study_config_path(state, payload, "method_path")
     environment = _read_yaml(environment_path)
     method = _read_yaml(method_path)
     compatibility = _compatibility_result(
@@ -3929,7 +4079,6 @@ def _read_agent_messages(state: UiState, session_id: str) -> List[JsonDict]:
         if (
             _is_legacy_openhands_placeholder(message)
             or _is_malformed_openhands_context_echo(message)
-            or _is_non_user_facing_openhands_message(message)
         ):
             continue
         key = (str(message.get("role") or ""), _normalize_agent_text(str(message.get("content") or "")))
@@ -3950,19 +4099,6 @@ def _is_malformed_openhands_context_echo(message: JsonDict) -> bool:
         message.get("role") == "assistant"
         and content.startswith("User request:")
         and "Visible OptPilot Studio context packet:" in content
-    )
-
-
-def _is_non_user_facing_openhands_message(message: JsonDict) -> bool:
-    if message.get("role") != "assistant":
-        return False
-    content = str(message.get("content") or "").strip()
-    normalized = _normalize_agent_text(content).lower()
-    return (
-        normalized.startswith(("the user hasn't replied", "the user still hasn't sent a new message"))
-        or normalized.startswith("the task is complete on my side:")
-        or "(waiting for your next message" in normalized
-        or "</think>" in content
     )
 
 
@@ -4054,27 +4190,6 @@ def _user_facing_openhands_text(content: Any) -> str:
     normalized = _normalize_agent_text(text).lower()
     if not normalized:
         return ""
-    if "(waiting for your next message" in normalized or normalized == "waiting for your next message.":
-        return ""
-    if normalized.startswith((
-        "the user hasn't replied",
-        "the user still hasn't sent a new message",
-        "the task is complete on my side",
-    )):
-        return ""
-    if "delayed tool result" in normalized and "prior" in normalized:
-        return ""
-    planning_markers = (
-        " i should ",
-        " i need ",
-        " let me ",
-        " the user ",
-        " now i have ",
-        "there's nothing more to do except wait",
-    )
-    marker_count = sum(1 for marker in planning_markers if marker in f" {normalized} ")
-    if marker_count >= 2:
-        return ""
     return text
 
 
@@ -4105,7 +4220,20 @@ def _read_agent_events(state: UiState, session_id: str) -> List[JsonDict]:
     path = _agent_events_path(state, session_id)
     if not path.exists():
         return []
-    return [_sanitize_agent_event(event) for event in _read_jsonl(path)]
+    events: List[JsonDict] = []
+    for event in _read_jsonl(path):
+        sanitized = _sanitize_agent_event(event)
+        if _hide_public_agent_event(sanitized):
+            continue
+        events.append(sanitized)
+    return events
+
+
+def _hide_public_agent_event(event: JsonDict) -> bool:
+    if not isinstance(event, dict) or event.get("type") != "openhands_event":
+        return False
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return str(payload.get("category") or "") == "assistant_message"
 
 
 def _sanitize_agent_event(event: JsonDict) -> JsonDict:
@@ -4115,13 +4243,77 @@ def _sanitize_agent_event(event: JsonDict) -> JsonDict:
     payload = sanitized.get("payload")
     if not isinstance(payload, dict):
         return sanitized
-    if sanitized.get("type") != "openhands_event":
-        return sanitized
     if isinstance(payload.get("summary"), str):
-        payload["summary"] = _sanitize_openhands_step_text(payload["summary"])
+        payload["summary"] = _redact_internal_agent_state_text(_sanitize_openhands_step_text(payload["summary"]))
+    if isinstance(payload.get("assistant_preview"), str):
+        payload["assistant_preview"] = _redact_internal_agent_state_text(_sanitize_openhands_step_text(payload["assistant_preview"]))
     if isinstance(payload.get("raw_preview"), str):
-        payload["raw_preview"] = _sanitize_openhands_step_text(payload["raw_preview"])
+        payload["raw_preview"] = _sanitize_agent_result_preview(payload["raw_preview"])
+    if isinstance(payload.get("result_preview"), str):
+        payload["result_preview"] = _sanitize_agent_result_preview(payload["result_preview"])
     return sanitized
+
+
+def _sanitize_agent_result_preview(text: str) -> str:
+    sanitized_text = _redact_internal_agent_state_text(_sanitize_openhands_step_text(text))
+    try:
+        payload = json.loads(sanitized_text)
+    except (TypeError, ValueError):
+        return sanitized_text
+    cleaned = _strip_internal_agent_state(payload)
+    try:
+        return json.dumps(cleaned, indent=2, sort_keys=True)
+    except (TypeError, ValueError):
+        return sanitized_text
+
+
+def _strip_internal_agent_state(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_agent_state(item)
+            for key, item in value.items()
+            if key not in {"openhands_pending_sync"}
+        }
+    if isinstance(value, list):
+        return [_strip_internal_agent_state(item) for item in value]
+    if isinstance(value, str):
+        return _redact_internal_agent_state_text(value)
+    return value
+
+
+def _redact_internal_agent_state_text(text: str) -> str:
+    cleaned = str(text)
+    for marker, replacement in (
+        ('"openhands_pending_sync"', '"internal_openhands_sync_state": "[redacted]"'),
+        ('\\"openhands_pending_sync\\"', '\\"internal_openhands_sync_state\\": \\"[redacted]\\"'),
+    ):
+        while True:
+            start = cleaned.find(marker)
+            if start < 0:
+                break
+            colon = cleaned.find(":", start + len(marker))
+            brace = cleaned.find("{", colon + 1) if colon >= 0 else -1
+            if colon < 0 or brace < 0:
+                cleaned = cleaned[:start] + replacement + cleaned[start + len(marker) :]
+                break
+            depth = 0
+            end = len(cleaned)
+            for index in range(brace, len(cleaned)):
+                char = cleaned[index]
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = index + 1
+                        break
+            cursor = end
+            while cursor < len(cleaned) and cleaned[cursor] in " \t\r\n":
+                cursor += 1
+            if cursor < len(cleaned) and cleaned[cursor] == ",":
+                cursor += 1
+            cleaned = cleaned[:start] + replacement + cleaned[cursor:]
+    return cleaned
 
 
 def _sanitize_openhands_step_text(text: str) -> str:
@@ -4154,6 +4346,10 @@ def _write_agent_approvals(state: UiState, session_id: str, approvals: List[Json
     path = _agent_approvals_path(state, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"approvals": approvals}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _upsert_agent_approval(state: UiState, session_id: str, approval: JsonDict) -> JsonDict:
@@ -4174,11 +4370,161 @@ def _tool_result(tool: str, ok: bool, summary: str, *, data: Optional[JsonDict] 
     }
 
 
+def _approval_display_payload(approval: JsonDict) -> JsonDict:
+    display = approval.get("display_payload") if isinstance(approval.get("display_payload"), dict) else {}
+    arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
+    redacted_arguments = display.get("redacted_arguments") if isinstance(display.get("redacted_arguments"), dict) else {}
+    if not redacted_arguments and arguments:
+        redacted_arguments = {
+            str(key): value
+            for key, value in arguments.items()
+            if str(key) not in {"content", "file_text", "yaml", "api_key", "token", "secret", "password", "_openhands_tool_call_id", "approved"}
+        }
+    return {
+        "summary": str(display.get("summary") or approval.get("summary") or ""),
+        "targets": display.get("targets") if isinstance(display.get("targets"), list) else list(approval.get("targets") or []),
+        "redacted_arguments": redacted_arguments,
+    }
+
+
+def _public_agent_approval(approval: JsonDict) -> JsonDict:
+    public_keys = {
+        "id",
+        "session_id",
+        "tool",
+        "kind",
+        "title",
+        "summary",
+        "targets",
+        "status",
+        "created_at",
+        "updated_at",
+        "approved_at",
+        "rejected_at",
+        "executed_at",
+        "request_key",
+        "openhands_tool_call_id",
+        "openhands_tool_call_ids",
+        "rejection_reason",
+    }
+    public = {key: approval[key] for key in public_keys if key in approval}
+    public["display_payload"] = _approval_display_payload(approval)
+    if isinstance(approval.get("forwarding"), dict):
+        public["forwarding"] = approval["forwarding"]
+    if isinstance(approval.get("result"), dict):
+        result = approval["result"]
+        public["result"] = {
+            "ok": bool(result.get("ok")),
+            "tool": str(result.get("tool") or ""),
+            "summary": str(result.get("summary") or ""),
+        }
+    if "openhands_feedback" in approval:
+        public["openhands_feedback"] = approval.get("openhands_feedback")
+    return public
+
+
+def _public_agent_approvals(state: UiState, session_id: str) -> List[JsonDict]:
+    return [_public_agent_approval(approval) for approval in _read_agent_approvals(state, session_id)]
+
+
+def _agent_pending_approval_ids(state: UiState, session_id: str) -> List[str]:
+    return [str(item.get("id")) for item in _read_agent_approvals(state, session_id) if item.get("status") == "pending" and item.get("id")]
+
+
+def _agent_forwarding_failed_approval_ids(state: UiState, session_id: str) -> List[str]:
+    failed_ids: List[str] = []
+    for approval in _read_agent_approvals(state, session_id):
+        forwarding = approval.get("forwarding") if isinstance(approval.get("forwarding"), dict) else {}
+        if forwarding.get("status") in {"failed", "partial"} and approval.get("id"):
+            failed_ids.append(str(approval["id"]))
+    return failed_ids
+
+
+def _agent_effective_status(state: UiState, session: JsonDict) -> str:
+    session_id = str(session.get("id") or "")
+    if session_id and _agent_pending_approval_ids(state, session_id):
+        return "awaiting_user_approval"
+    if session_id and _agent_forwarding_failed_approval_ids(state, session_id):
+        return "approval_forwarding_failed"
+    return str(session.get("status") or "idle")
+
+
+def _decorate_agent_session_status(state: UiState, payload: JsonDict) -> JsonDict:
+    session_id = str(payload.get("id") or "")
+    active_ids = _agent_pending_approval_ids(state, session_id) if session_id else []
+    forwarding_failed_ids = _agent_forwarding_failed_approval_ids(state, session_id) if session_id else []
+    payload["effective_status"] = _agent_effective_status(state, payload)
+    payload["pending_approval_count"] = len(active_ids)
+    payload["active_approval_ids"] = active_ids[:1]
+    payload["queued_approval_count"] = max(len(active_ids) - 1, 0)
+    payload["forwarding_failed_approval_ids"] = forwarding_failed_ids
+    return payload
+
+
+def _validation_error_summary(validation: JsonDict, *, limit: int = 3) -> str:
+    errors: List[str] = []
+    for error in validation.get("errors", []) or []:
+        if error:
+            errors.append(str(error))
+    for entry in validation.get("entries", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("qualified_id") or entry.get("id") or entry.get("path") or "entry")
+        config = str(entry.get("config") or "").strip()
+        if config and config not in label:
+            label = f"{config} {label}"
+        for error in entry.get("errors", []) or []:
+            if error:
+                errors.append(f"{label}: {error}")
+    unique: List[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        normalized = " ".join(error.split())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+        if len(unique) >= limit:
+            break
+    if not unique:
+        return "no detailed error was reported"
+    suffix = ""
+    if len(errors) > len(unique):
+        suffix = f"; and {len(errors) - len(unique)} more"
+    return "; ".join(unique) + suffix
+
+
+def _smoke_error_summary(smoke: JsonDict, *, limit: int = 3) -> str:
+    errors = [str(error) for error in smoke.get("errors", []) or [] if str(error).strip()]
+    if not errors:
+        for key in ("stderr", "stdout"):
+            text = str(smoke.get(key) or "").strip()
+            if text:
+                errors.append(text)
+                break
+    unique: List[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        normalized = " ".join(error.split())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(_cap_text(normalized, 500))
+        if len(unique) >= limit:
+            break
+    if not unique:
+        return "no detailed smoke error was reported"
+    suffix = ""
+    if len(errors) > len(unique):
+        suffix = f"; and {len(errors) - len(unique)} more"
+    return "; ".join(unique) + suffix
+
+
 def _approval_request_key(tool: str, kind: str, arguments: JsonDict) -> str:
     stable_arguments = {
         str(key): value
         for key, value in (arguments or {}).items()
-        if key not in {"_openhands_tool_call_id", "approved"}
+        if key not in {"_openhands_tool_call_id", "approved", "description"}
     }
     payload = {"tool": tool, "kind": kind, "arguments": stable_arguments}
     return hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
@@ -4186,7 +4532,9 @@ def _approval_request_key(tool: str, kind: str, arguments: JsonDict) -> str:
 
 def _approval_record_key(approval: JsonDict) -> str:
     arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
-    return str(approval.get("request_key") or _approval_request_key(str(approval.get("tool") or ""), str(approval.get("kind") or ""), arguments))
+    if arguments:
+        return _approval_request_key(str(approval.get("tool") or ""), str(approval.get("kind") or ""), arguments)
+    return str(approval.get("request_key") or "")
 
 
 def _supersede_duplicate_pending_approvals(state: UiState, session_id: str, approval: JsonDict, *, action: str) -> None:
@@ -4207,6 +4555,58 @@ def _supersede_duplicate_pending_approvals(state: UiState, session_id: str, appr
         _write_agent_approvals(state, session_id, approvals)
 
 
+def _merge_duplicate_pending_approval_tool_calls(state: UiState, session_id: str, approval: JsonDict) -> JsonDict:
+    approval = dict(approval)
+    approval_id = str(approval.get("id") or "")
+    request_key = _approval_record_key(approval)
+    tool_call_ids = _approval_tool_call_ids(approval)
+    for item in _read_agent_approvals(state, session_id):
+        if item.get("status") != "pending" or str(item.get("id") or "") == approval_id:
+            continue
+        if _approval_record_key(item) != request_key:
+            continue
+        for tool_call_id in _approval_tool_call_ids(item):
+            if tool_call_id not in tool_call_ids:
+                tool_call_ids.append(tool_call_id)
+    approval["openhands_tool_call_ids"] = tool_call_ids
+    return approval
+
+
+def _approval_execution_context_allows_bypass(
+    state: UiState,
+    session_id: str,
+    *,
+    tool: str,
+    arguments: JsonDict,
+    execution_context: Optional[ToolExecutionContext],
+) -> bool:
+    if not execution_context or not execution_context.bypass_approval:
+        return False
+    if execution_context.source != "studio_approval_handler" or not execution_context.approval_id:
+        return False
+    approval = next(
+        (item for item in _read_agent_approvals(state, session_id) if item.get("id") == execution_context.approval_id),
+        None,
+    )
+    if not approval or approval.get("status") not in {"pending", "executing"}:
+        return False
+    if str(approval.get("tool") or "") != tool:
+        return False
+    approval_kind = str(approval.get("kind") or "")
+    return _approval_request_key(tool, approval_kind, arguments) == _approval_record_key(approval)
+
+
+def _approval_bypass_field_result(tool: str) -> JsonDict:
+    summary = "Approval bypass fields are ignored; use Studio's approval buttons to continue."
+    return _tool_result(
+        tool,
+        False,
+        summary,
+        data={"policy_error": "approval_bypass_rejected"},
+        events=[{"level": "error", "message": summary}],
+    )
+
+
 def _request_agent_approval(
     state: UiState,
     session_id: str,
@@ -4221,6 +4621,18 @@ def _request_agent_approval(
     request_key = _approval_request_key(tool, kind, arguments)
     for existing in _read_agent_approvals(state, session_id):
         if existing.get("status") == "pending" and _approval_record_key(existing) == request_key:
+            existing = dict(existing)
+            tool_call_id = str(arguments.get("_openhands_tool_call_id") or "")
+            if tool_call_id:
+                tool_call_ids = _approval_tool_call_ids(existing)
+                if tool_call_id not in tool_call_ids:
+                    tool_call_ids.append(tool_call_id)
+                    existing["openhands_tool_call_ids"] = tool_call_ids
+                    existing["updated_at"] = _now_iso()
+                    _upsert_agent_approval(state, session_id, existing)
+            session = _require_agent_session(state, session_id)
+            session["status"] = "awaiting_user_approval"
+            _upsert_agent_session(state, session)
             return _tool_result(
                 tool,
                 False,
@@ -4238,12 +4650,31 @@ def _request_agent_approval(
         "summary": summary,
         "targets": targets or [],
         "arguments": arguments,
+        "private_execution_payload": {
+            "arguments": arguments,
+            "normalized_arguments": {
+                str(key): value
+                for key, value in (arguments or {}).items()
+                if str(key) not in {"_openhands_tool_call_id", "approved", "description"}
+            },
+        },
+        "display_payload": {
+            "summary": summary,
+            "targets": targets or [],
+            "redacted_arguments": _approval_display_payload({"summary": summary, "targets": targets or [], "arguments": arguments})["redacted_arguments"],
+        },
         "status": "pending",
         "request_key": request_key,
         "openhands_tool_call_id": tool_call_id,
+        "openhands_tool_call_ids": [tool_call_id] if tool_call_id else [],
         "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "forwarding": {"status": "not_started", "attempts": []},
     }
     _upsert_agent_approval(state, session_id, approval)
+    session = _require_agent_session(state, session_id)
+    session["status"] = "awaiting_user_approval"
+    _upsert_agent_session(state, session)
     _append_jsonl(
         _agent_events_path(state, session_id),
         {
@@ -4262,61 +4693,316 @@ def _request_agent_approval(
     )
 
 
-def _approve_agent_action(state: UiState, session_id: str, approval_id: str) -> JsonDict:
-    approvals = _read_agent_approvals(state, session_id)
-    approval = next((item for item in approvals if item.get("id") == approval_id), None)
-    if not approval:
-        raise KeyError(approval_id)
-    if approval.get("status") != "pending":
-        return {"approval": approval, "result": approval.get("result"), "session": _agent_session_by_id(state, session_id)}
-    arguments = dict(approval.get("arguments", {}) if isinstance(approval.get("arguments"), dict) else {})
-    arguments["approved"] = True
-    result = _execute_agent_tool(state, session_id, str(approval["tool"]), arguments)
-    feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
-    _supersede_duplicate_pending_approvals(state, session_id, approval, action="approved")
-    approval["status"] = "approved"
-    approval["approved_at"] = _now_iso()
-    approval["result"] = result
-    approval["openhands_feedback"] = feedback
-    _upsert_agent_approval(state, session_id, approval)
-    _append_jsonl(
-        _agent_events_path(state, session_id),
-        {
-            "id": f"evt_{uuid.uuid4().hex[:10]}",
-            "type": "approval_approved",
-            "created_at": approval["approved_at"],
-            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "ok": result.get("ok"), "openhands_feedback": feedback},
-        },
+def _assistant_permission(state: UiState, key: str) -> str:
+    permissions = _assistant_permissions_from_settings(_read_ui_settings(state))
+    return str(permissions.get(key) or DEFAULT_ASSISTANT_PERMISSIONS[key])
+
+
+def _agent_permission_blocked_result(tool: str, key: str) -> JsonDict:
+    summary = f"Assistant permission '{key}' is disabled in Studio settings."
+    return _tool_result(
+        tool,
+        False,
+        summary,
+        data={"permission": key, "permission_status": "disabled"},
+        events=[{"level": "error", "message": summary}],
     )
-    return {"approval": approval, "result": result, "session": _agent_session_by_id(state, session_id)}
+
+
+def _agent_permission_gate(
+    state: UiState,
+    session_id: str,
+    *,
+    tool: str,
+    arguments: JsonDict,
+    permission_key: str,
+    approval_kind: str,
+    title: str,
+    summary: str,
+    targets: Optional[List[str]] = None,
+    require_approval: bool = True,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> Optional[JsonDict]:
+    mode = _assistant_permission(state, permission_key)
+    if mode == "disabled":
+        return _agent_permission_blocked_result(tool, permission_key)
+    bypass_allowed = _approval_execution_context_allows_bypass(
+        state,
+        session_id,
+        tool=tool,
+        arguments=arguments,
+        execution_context=execution_context,
+    )
+    if require_approval and mode in {"approval_required", "safe_without_approval"} and not bypass_allowed:
+        if any(key in arguments for key in {"approved", "bypass_approval", "approval_bypass"}):
+            return _approval_bypass_field_result(tool)
+        return _request_agent_approval(
+            state,
+            session_id,
+            tool=tool,
+            arguments=arguments,
+            kind=approval_kind,
+            title=title,
+            summary=summary,
+            targets=targets,
+        )
+    return None
+
+
+def _approve_agent_action(state: UiState, session_id: str, approval_id: str) -> JsonDict:
+    with _agent_session_operation_lock(state, session_id):
+        approvals = _read_agent_approvals(state, session_id)
+        approval = next((item for item in approvals if item.get("id") == approval_id), None)
+        if not approval:
+            raise KeyError(approval_id)
+        if approval.get("status") != "pending":
+            return {"approval": _public_agent_approval(approval), "result": approval.get("result"), "session": _agent_session_by_id(state, session_id)}
+        approval = _merge_duplicate_pending_approval_tool_calls(state, session_id, approval)
+        private_payload = approval.get("private_execution_payload") if isinstance(approval.get("private_execution_payload"), dict) else {}
+        arguments = dict(private_payload.get("arguments", {}) if isinstance(private_payload.get("arguments"), dict) else approval.get("arguments", {}) if isinstance(approval.get("arguments"), dict) else {})
+        approval["status"] = "executing"
+        approval["updated_at"] = _now_iso()
+        _upsert_agent_approval(state, session_id, approval)
+        try:
+            result = _execute_agent_tool(
+                state,
+                session_id,
+                str(approval["tool"]),
+                arguments,
+                execution_context=ToolExecutionContext(
+                    source="studio_approval_handler",
+                    approval_id=approval_id,
+                    bypass_approval=True,
+                ),
+            )
+        except Exception as exc:
+            result = _tool_result(
+                str(approval.get("tool") or "approval"),
+                False,
+                f"{type(exc).__name__}: {exc}",
+                data={"error": {"type": type(exc).__name__, "message": str(exc)}},
+                events=[{"level": "error", "message": str(exc)}],
+            )
+        feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
+        _supersede_duplicate_pending_approvals(state, session_id, approval, action="approved")
+        approval["status"] = "approved"
+        approval["approved_at"] = _now_iso()
+        approval["executed_at"] = approval["approved_at"]
+        approval["updated_at"] = approval["approved_at"]
+        approval["result"] = result
+        approval["openhands_feedback"] = feedback
+        approval["forwarding"] = _approval_forwarding_record(feedback)
+        _upsert_agent_approval(state, session_id, approval)
+        _update_session_after_approval_resolution(state, session_id, approval)
+        _append_jsonl(
+            _agent_events_path(state, session_id),
+            {
+                "id": f"evt_{uuid.uuid4().hex[:10]}",
+                "type": "approval_approved",
+                "created_at": approval["approved_at"],
+                "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "ok": result.get("ok"), "openhands_feedback": feedback},
+            },
+        )
+        return {"approval": _public_agent_approval(approval), "result": result, "session": _agent_session_by_id(state, session_id)}
 
 
 def _reject_agent_action(state: UiState, session_id: str, approval_id: str, reason: str = "") -> JsonDict:
-    approvals = _read_agent_approvals(state, session_id)
-    approval = next((item for item in approvals if item.get("id") == approval_id), None)
-    if not approval:
-        raise KeyError(approval_id)
-    if approval.get("status") != "pending":
-        return {"approval": approval, "session": _agent_session_by_id(state, session_id)}
-    approval["status"] = "rejected"
-    approval["rejected_at"] = _now_iso()
-    approval["rejection_reason"] = reason or "Rejected by user."
-    result = _tool_result(str(approval.get("tool") or "approval"), False, f"Approval rejected: {approval['rejection_reason']}")
-    feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
-    _supersede_duplicate_pending_approvals(state, session_id, approval, action="rejected")
-    approval["result"] = result
-    approval["openhands_feedback"] = feedback
-    _upsert_agent_approval(state, session_id, approval)
-    _append_jsonl(
-        _agent_events_path(state, session_id),
-        {
+    with _agent_session_operation_lock(state, session_id):
+        approvals = _read_agent_approvals(state, session_id)
+        approval = next((item for item in approvals if item.get("id") == approval_id), None)
+        if not approval:
+            raise KeyError(approval_id)
+        if approval.get("status") != "pending":
+            return {"approval": _public_agent_approval(approval), "session": _agent_session_by_id(state, session_id)}
+        approval = _merge_duplicate_pending_approval_tool_calls(state, session_id, approval)
+        approval["status"] = "rejected"
+        approval["rejected_at"] = _now_iso()
+        approval["updated_at"] = approval["rejected_at"]
+        approval["rejection_reason"] = reason or "Rejected by user."
+        result = _tool_result(str(approval.get("tool") or "approval"), False, f"Approval rejected: {approval['rejection_reason']}")
+        feedback = _forward_approved_tool_result_to_openhands(state, session_id, approval, result)
+        _supersede_duplicate_pending_approvals(state, session_id, approval, action="rejected")
+        approval["result"] = result
+        approval["openhands_feedback"] = feedback
+        approval["forwarding"] = _approval_forwarding_record(feedback)
+        _upsert_agent_approval(state, session_id, approval)
+        _update_session_after_approval_resolution(state, session_id, approval)
+        _append_jsonl(
+            _agent_events_path(state, session_id),
+            {
+                "id": f"evt_{uuid.uuid4().hex[:10]}",
+                "type": "approval_rejected",
+                "created_at": approval["rejected_at"],
+                "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "reason": approval["rejection_reason"], "openhands_feedback": feedback},
+            },
+        )
+        return {"approval": _public_agent_approval(approval), "session": _agent_session_by_id(state, session_id)}
+
+
+def _approval_forwarding_record(feedback: JsonDict) -> JsonDict:
+    results = feedback.get("results") if isinstance(feedback.get("results"), list) else []
+    if not results and not feedback.get("sent") and "No active OpenHands tool call" in str(feedback.get("reason") or ""):
+        return {"status": "not_applicable", "updated_at": _now_iso(), "attempts": []}
+    if not results and feedback:
+        results = [feedback]
+    sent_count = sum(1 for item in results if isinstance(item, dict) and item.get("sent"))
+    if not results:
+        status = "not_applicable"
+    elif sent_count == len(results):
+        if any(str(item.get("delivery_status") or "") == "confirmed_after_timeout" for item in results if isinstance(item, dict)):
+            status = "confirmed_after_timeout"
+        else:
+            status = "sent"
+    elif sent_count > 0:
+        status = "partial"
+    else:
+        status = "failed"
+    return {
+        "status": status,
+        "updated_at": _now_iso(),
+        "attempts": [
+            {
+                "sent": bool(item.get("sent")) if isinstance(item, dict) else False,
+                "reason": str(item.get("reason") or item.get("delivery_status") or "") if isinstance(item, dict) else "",
+                "tool_call_id": str(item.get("tool_call_id") or "") if isinstance(item, dict) else "",
+            }
+            for item in results
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _update_session_after_approval_resolution(state: UiState, session_id: str, approval: JsonDict) -> None:
+    if _agent_pending_approval_ids(state, session_id):
+        return
+    session = _require_agent_session(state, session_id)
+    forwarding = approval.get("forwarding") if isinstance(approval.get("forwarding"), dict) else {}
+    status = str(forwarding.get("status") or "")
+    if status in {"failed", "partial"}:
+        session["status"] = "approval_forwarding_failed"
+    elif status in {"sent", "confirmed_after_timeout"}:
+        session["status"] = "waiting_for_agent"
+    else:
+        session["status"] = "idle"
+        session.pop("active_turn_id", None)
+        session.pop("active_turn_started_at", None)
+        session.pop("openhands_pending_sync", None)
+    _upsert_agent_session(state, session)
+
+
+def _approval_tool_call_ids(approval: JsonDict) -> List[str]:
+    arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
+    values = [
+        *(approval.get("openhands_tool_call_ids") or [] if isinstance(approval.get("openhands_tool_call_ids"), list) else []),
+        approval.get("openhands_tool_call_id"),
+        arguments.get("_openhands_tool_call_id"),
+    ]
+    result: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _successful_openhands_forwarded_tool_call_ids(state: UiState, session_id: str) -> set[str]:
+    handled: set[str] = set()
+    for event in _read_agent_events(state, session_id):
+        event_type = str(event.get("type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if event_type == "optpilot_tool_result" and str(payload.get("delivery_status") or "") in {
+            "sent",
+            "confirmed_after_timeout",
+        }:
+            call_id = str(payload.get("tool_call_id") or "")
+            if call_id:
+                handled.add(call_id)
+            continue
+        if event_type != "openhands_tool_result_forwarded" or not payload.get("sent"):
+            continue
+        values = [
+            *(payload.get("tool_call_ids") if isinstance(payload.get("tool_call_ids"), list) else []),
+            payload.get("tool_call_id"),
+        ]
+        for value in values:
+            call_id = str(value or "")
+            if call_id:
+                handled.add(call_id)
+    return handled
+
+
+def _pending_tool_result_forward_records(state: UiState, session_id: str) -> List[JsonDict]:
+    successful = _successful_openhands_forwarded_tool_call_ids(state, session_id)
+    records: List[JsonDict] = []
+    seen: set[str] = set()
+    for event in _read_agent_events(state, session_id):
+        if event.get("type") != "optpilot_tool_result":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        call_id = str(payload.get("tool_call_id") or "")
+        delivery_status = str(payload.get("delivery_status") or "")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        if (
+            not call_id
+            or call_id in successful
+            or call_id in seen
+            or delivery_status not in {"timeout", "failed"}
+            or not result
+        ):
+            continue
+        seen.add(call_id)
+        records.append(
+            {
+                "tool": str(payload.get("tool") or ""),
+                "tool_call_id": call_id,
+                "result": result,
+                "delivery_status": delivery_status,
+                "delivery_error": str(payload.get("delivery_error") or ""),
+            }
+        )
+    return records
+
+
+def _retry_pending_tool_result_forwards(state: UiState, session_id: str, conversation_id: str) -> List[JsonDict]:
+    if not conversation_id:
+        return []
+    submit_tool_result = getattr(state.agent_adapter, "submit_tool_result", None)
+    if not callable(submit_tool_result):
+        return []
+    attempts: List[JsonDict] = []
+    for record in _pending_tool_result_forward_records(state, session_id):
+        tool = str(record.get("tool") or "")
+        call_id = str(record.get("tool_call_id") or "")
+        result = record.get("result") if isinstance(record.get("result"), dict) else {}
+        if not tool or not call_id or not result:
+            continue
+        try:
+            feedback = submit_tool_result(conversation_id, tool, call_id, result)
+        except Exception as exc:  # pragma: no cover - defensive adapter boundary
+            feedback = {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": call_id}
+        event = {
             "id": f"evt_{uuid.uuid4().hex[:10]}",
-            "type": "approval_rejected",
-            "created_at": approval["rejected_at"],
-            "payload": {"approval_id": approval_id, "tool": approval.get("tool"), "reason": approval["rejection_reason"], "openhands_feedback": feedback},
-        },
-    )
-    return {"approval": approval, "session": _agent_session_by_id(state, session_id)}
+            "type": "openhands_tool_result_forwarded" if feedback.get("sent") else "openhands_tool_result_forward_skipped",
+            "created_at": _now_iso(),
+            "payload": {
+                "tool": tool,
+                "tool_call_id": call_id,
+                "tool_call_ids": [call_id],
+                "conversation_id": conversation_id,
+                "sent": bool(feedback.get("sent")),
+                "reason": str(feedback.get("reason") or feedback.get("delivery_status") or ""),
+                "retry": True,
+                "previous_delivery_status": str(record.get("delivery_status") or ""),
+                "previous_delivery_error": str(record.get("delivery_error") or ""),
+                "feedback": feedback,
+            },
+        }
+        _append_agent_event_record(state, session_id, event)
+        attempts.append(event)
+    return attempts
 
 
 def _forward_approved_tool_result_to_openhands(
@@ -4327,16 +5013,27 @@ def _forward_approved_tool_result_to_openhands(
 ) -> JsonDict:
     session = _require_agent_session(state, session_id)
     conversation_id = str(session.get("openhands_conversation_id") or "")
-    arguments = approval.get("arguments") if isinstance(approval.get("arguments"), dict) else {}
-    tool_call_id = str(approval.get("openhands_tool_call_id") or arguments.get("_openhands_tool_call_id") or "")
+    tool_call_ids = _approval_tool_call_ids(approval)
     tool_name = str(approval.get("tool") or result.get("tool") or "")
-    feedback: JsonDict = {"sent": False, "reason": "No active OpenHands tool call to continue."}
+    feedback: JsonDict = {"sent": False, "reason": "No active OpenHands tool call to continue.", "results": []}
     submit_tool_result = getattr(state.agent_adapter, "submit_tool_result", None)
-    if conversation_id and tool_call_id and callable(submit_tool_result):
-        try:
-            feedback = submit_tool_result(conversation_id, tool_name, tool_call_id, result)
-        except Exception as exc:  # pragma: no cover - defensive adapter boundary
-            feedback = {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": tool_call_id}
+    if conversation_id and tool_call_ids and callable(submit_tool_result):
+        results = []
+        for tool_call_id in tool_call_ids:
+            try:
+                item = submit_tool_result(conversation_id, tool_name, tool_call_id, result)
+            except Exception as exc:  # pragma: no cover - defensive adapter boundary
+                item = {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": tool_call_id}
+            results.append(item)
+        sent_count = sum(1 for item in results if item.get("sent"))
+        feedback = {
+            "sent": sent_count > 0,
+            "sent_count": sent_count,
+            "results": results,
+            "conversation_id": conversation_id,
+            "tool_call_ids": tool_call_ids,
+            "reason": "" if sent_count else "; ".join(str(item.get("reason") or "") for item in results if item.get("reason")),
+        }
     _append_agent_event_record(
         state,
         session_id,
@@ -4346,7 +5043,8 @@ def _forward_approved_tool_result_to_openhands(
             "created_at": _now_iso(),
             "payload": {
                 "tool": tool_name,
-                "tool_call_id": tool_call_id,
+                "tool_call_id": tool_call_ids[0] if tool_call_ids else "",
+                "tool_call_ids": tool_call_ids,
                 "conversation_id": conversation_id,
                 "sent": bool(feedback.get("sent")),
                 "reason": feedback.get("reason") or "",
@@ -4359,7 +5057,14 @@ def _forward_approved_tool_result_to_openhands(
     return feedback
 
 
-def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: Optional[JsonDict] = None) -> JsonDict:
+def _execute_agent_tool(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: Optional[JsonDict] = None,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
     arguments = arguments or {}
     if tool == "optpilot_workspace_list":
         sessions = _read_agent_session_index(state)
@@ -4399,6 +5104,20 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
     if tool == "optpilot_file_write":
         workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
         _require_editable_workspace(workspace)
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "workspace_id": workspace["id"], "path": _relative_path(path, root)},
+            permission_key="file_write",
+            approval_kind="file_write",
+            title="Write workspace file",
+            summary=f"Write {_relative_path(path, root)} in {workspace.get('title') or workspace.get('id')}.",
+            targets=[str(root), _relative_path(path, root)],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
         content = str(arguments.get("content") or "")
         if len(content.encode("utf-8")) > 2_000_000:
             raise ValueError("Content is too large to write through the assistant tool.")
@@ -4413,7 +5132,11 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         diff = "".join(difflib.unified_diff(old_content.splitlines(True), new_content.splitlines(True), fromfile=f"a/{_relative_path(path, root)}", tofile=f"b/{_relative_path(path, root)}"))
         return _tool_result(tool, True, f"Prepared diff for {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "diff": diff})
     if tool == "optpilot_shell_run":
-        return _agent_tool_shell_run(state, session_id, tool, arguments)
+        return _agent_tool_shell_run(state, session_id, tool, arguments, execution_context=execution_context)
+    if tool in {"optpilot_terminal", "terminal"}:
+        return _agent_tool_openhands_terminal(state, session_id, tool, arguments, execution_context=execution_context)
+    if tool in {"optpilot_file_editor", "file_editor"}:
+        return _agent_tool_openhands_file_editor(state, session_id, tool, arguments, execution_context=execution_context)
     if tool == "optpilot_workspace_preview_open":
         return _agent_tool_workspace_preview_open(state, session_id, tool, arguments)
     if tool == "optpilot_catalog_list":
@@ -4457,7 +5180,11 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
     if tool == "optpilot_config_validate":
         path = _resolve_agent_or_allowed_path(state, session_id, arguments)
         validation = validate_authoring_config(path)
-        return _tool_result(tool, bool(validation.get("valid")), "Config validation passed." if validation.get("valid") else "Config validation failed.", data={"validation": validation, "path": str(path)})
+        if validation.get("valid"):
+            summary = "Config validation passed."
+        else:
+            summary = f"Config validation failed: {_validation_error_summary(validation)}. Repair the reported config/source issue and rerun validation."
+        return _tool_result(tool, bool(validation.get("valid")), summary, data={"validation": validation, "path": str(path)})
     if tool == "optpilot_registration_prepare":
         workspace_id = str(arguments.get("workspace_id") or _selected_agent_workspace_id(state, session_id))
         data = _create_registration_manifest(state, workspace_id, arguments)
@@ -4466,16 +5193,107 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         data = _validate_registration_manifest(state, str(arguments.get("workspace_id") or ""), str(arguments.get("registration_id") or ""))
         return _tool_result(tool, data.get("registration", {}).get("status") == "validated", "Registration validated.", data=data)
     if tool == "optpilot_registration_apply":
-        if not arguments.get("approved"):
-            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="registration_apply", title="Apply catalog registration", summary="Apply selected workspace files into catalog/local_package.", targets=[str(arguments.get("registration_id") or "")])
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments=arguments,
+            permission_key="catalog_registration",
+            approval_kind="registration_apply",
+            title="Apply catalog registration",
+            summary="Apply selected workspace files into catalog/local_package.",
+            targets=[str(arguments.get("registration_id") or "")],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
         data = _apply_registration_manifest(state, str(arguments.get("workspace_id") or ""), str(arguments.get("registration_id") or ""))
         return _tool_result(tool, bool(data.get("applied")), "Registration applied." if data.get("applied") else "Registration was not applied.", data=data)
+    if tool == "optpilot_package_plan_prepare":
+        workspace_id = str(arguments.get("workspace_id") or _selected_agent_workspace_id(state, session_id))
+        data = _prepare_package_plan(state, workspace_id, arguments)
+        plan = data.get("package_plan", {})
+        component_count = len(plan.get("components", []) or [])
+        study_count = len(plan.get("studies", []) or [])
+        return _tool_result(tool, True, f"Package plan prepared: {plan.get('classification', 'unknown')} with {component_count} component(s) and {study_count} study/studies. Next run package-plan validation.", data=data)
+    if tool == "optpilot_package_plan_update":
+        data = _update_package_plan(state, str(arguments.get("workspace_id") or ""), str(arguments.get("plan_id") or ""), arguments)
+        return _tool_result(tool, True, "Package plan updated.", data=data)
+    if tool == "optpilot_package_plan_validate":
+        data = _validate_package_plan(state, str(arguments.get("workspace_id") or ""), str(arguments.get("plan_id") or ""))
+        plan = data.get("package_plan", {})
+        ok = bool(plan.get("validation", {}).get("valid"))
+        if ok:
+            warnings = [str(item) for item in plan.get("warnings", []) or [] if str(item)]
+            summary = f"Package plan validated; readiness is {plan.get('readiness', 'unknown')}."
+            if warnings:
+                summary += f" Warning: {warnings[0]}"
+            if plan.get("classification") == "environment-plus-method" and not plan.get("studies"):
+                summary += " Next draft a minimal smoke study for the validated environment/method pair, save it under optpilot_configs/studies/, then prepare and validate the package plan again."
+            elif plan.get("classification") == "environment-plus-method" and not plan.get("smoke", {}).get("valid"):
+                summary += " Next request optpilot_package_plan_smoke and approve it in Studio when prompted."
+        else:
+            summary = f"Package plan validation failed: {_validation_error_summary(plan.get('validation', {}) or {})}. Repair missing adapters/source paths/setup files and rerun package-plan validation."
+        return _tool_result(tool, ok, summary, data=data)
+    if tool == "optpilot_package_plan_smoke":
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments=arguments,
+            permission_key="study_launch",
+            approval_kind="package_plan_smoke",
+            title="Run package plan smoke study",
+            summary="Materialize the package plan in a temporary folder and run the selected smoke study.",
+            targets=[str(arguments.get("plan_id") or "")],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
+        data = _smoke_package_plan(state, str(arguments.get("workspace_id") or ""), str(arguments.get("plan_id") or ""), arguments)
+        ok = bool(data.get("smoke", {}).get("valid"))
+        if ok:
+            summary = "Package plan smoke passed."
+        else:
+            summary = f"Package plan smoke failed: {_smoke_error_summary(data.get('smoke', {}) or {})}. Repair the failing config, adapter, dependency setup, or study path, then validate and smoke-run the package plan again."
+        return _tool_result(tool, ok, summary, data=data)
+    if tool == "optpilot_package_plan_apply":
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments=arguments,
+            permission_key="catalog_registration",
+            approval_kind="package_plan_apply",
+            title="Apply package plan",
+            summary="Write the normalized package into catalog/local_package.",
+            targets=[str(arguments.get("plan_id") or "")],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
+        data = _apply_package_plan(state, str(arguments.get("workspace_id") or ""), str(arguments.get("plan_id") or ""))
+        return _tool_result(tool, bool(data.get("applied")), "Package plan applied." if data.get("applied") else "Package plan was not applied.", data=data)
     if tool == "optpilot_study_draft":
         data = _draft_study(state, arguments)
         return _tool_result(tool, bool(data.get("validation", {}).get("valid")), "Study draft prepared.", data=data)
     if tool == "optpilot_study_save":
         workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
         _require_editable_workspace(workspace)
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "workspace_id": workspace["id"], "path": _relative_path(path, root)},
+            permission_key="file_write",
+            approval_kind="study_save",
+            title="Save study YAML",
+            summary=f"Save study YAML to {_relative_path(path, root)} in {workspace.get('title') or workspace.get('id')}.",
+            targets=[str(root), _relative_path(path, root)],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(arguments.get("yaml") or ""), encoding="utf-8")
         return _tool_result(tool, True, f"Saved study YAML to {_relative_path(path, root)}.", data={"workspace": workspace, "path": _relative_path(path, root), "validation": _validate_study(path)})
@@ -4484,14 +5302,38 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         validation = _validate_study(study_path)
         if not validation.get("valid"):
             return _tool_result(tool, False, "Study validation failed; launch blocked.", data={"validation": validation})
-        if not arguments.get("approved"):
-            return _request_agent_approval(state, session_id, tool=tool, arguments={**arguments, "study_path": str(study_path)}, kind="study_launch", title="Launch OptPilot study", summary=f"Launch {study_path.name} into the configured output root.", targets=[str(study_path)])
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "study_path": str(study_path)},
+            permission_key="study_launch",
+            approval_kind="study_launch",
+            title="Launch OptPilot study",
+            summary=f"Launch {study_path.name} into the configured output root.",
+            targets=[str(study_path)],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
         output_root = _optional_user_path(arguments.get("output_root"), state.cwd)
         job = state.launch_study(study_path, output_root, study_name=validation.get("name"), environment_id=validation.get("environment_id"))
         return _tool_result(tool, True, "Study launched.", data={"job": job.to_dict(), "validation": validation})
     if tool == "optpilot_job_stop":
-        if not arguments.get("approved"):
-            return _request_agent_approval(state, session_id, tool=tool, arguments=arguments, kind="job_stop", title="Stop OptPilot job", summary=f"Stop job {arguments.get('job_id')}.", targets=[str(arguments.get("job_id") or "")])
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments=arguments,
+            permission_key="job_stop",
+            approval_kind="job_stop",
+            title="Stop OptPilot job",
+            summary=f"Stop job {arguments.get('job_id')}.",
+            targets=[str(arguments.get("job_id") or "")],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
         return _tool_result(tool, True, "Job stopped.", data={"job": state.stop_job(str(arguments.get("job_id") or ""))})
     if tool == "optpilot_run_list":
         runs = _list_runs(state)
@@ -4526,7 +5368,7 @@ def _execute_agent_tool(state: UiState, session_id: str, tool: str, arguments: O
         runs = [_run_detail(_resolve_run_tool_path({"run_id": item})) for item in arguments.get("runs", []) or []]
         return _tool_result(tool, True, f"Compared {len(runs)} run(s).", data={"runs": [_run_compare_summary(run) for run in runs], "comparable": _runs_comparable(runs)})
     if tool == "optpilot_smoke_test_study":
-        return _agent_tool_smoke_test_study(state, session_id, tool, arguments)
+        return _agent_tool_smoke_test_study(state, session_id, tool, arguments, execution_context=execution_context)
     if tool == "optpilot_docs_search":
         results = _docs_search(state, str(arguments.get("query") or ""), limit=int(arguments.get("limit") or 5))
         return _tool_result(tool, True, f"Found {len(results)} doc result(s).", data={"results": results})
@@ -4620,6 +5462,17 @@ def _resolve_agent_or_allowed_path(state: UiState, session_id: str, arguments: J
     workspace_id = str(arguments.get("workspace_id") or "")
     if workspace_id:
         return _resolve_agent_workspace_path(state, session_id, {**arguments, "path": raw_path})[2]
+    requested = Path(str(raw_path)).expanduser()
+    if not requested.is_absolute():
+        try:
+            selected_workspace_id = _selected_agent_workspace_id(state, session_id)
+            workspace = _require_ui_workspace(state, selected_workspace_id)
+            root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+            workspace_candidate = (root / requested).resolve()
+            if _is_relative_to(workspace_candidate, root) and workspace_candidate.exists():
+                return workspace_candidate
+        except Exception:
+            pass
     candidate = _resolve_user_path(raw_path, state.cwd)
     allowed_roots = [
         state.cwd,
@@ -4670,7 +5523,233 @@ def _agent_tool_workspace_preview_open(state: UiState, session_id: str, tool: st
     )
 
 
-def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
+def _agent_tool_openhands_terminal(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: JsonDict,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
+    if arguments.get("is_input"):
+        raise ValueError("Studio-backed terminal does not support interactive stdin. Run a complete command instead.")
+    if arguments.get("reset"):
+        return _tool_result(tool, True, "Studio-backed terminal is stateless; reset is a no-op.", data={"reset": True})
+    command = str(arguments.get("command") or "").strip()
+    if not command:
+        raise ValueError("command is required.")
+    timeout_seconds = arguments.get("timeout_seconds")
+    if timeout_seconds in (None, ""):
+        timeout_seconds = arguments.get("timeout")
+    if timeout_seconds in (None, ""):
+        timeout_seconds = 30
+    return _agent_tool_shell_run(
+        state,
+        session_id,
+        tool,
+        {
+            **arguments,
+            "command": ["sh", "-lc", command],
+            "timeout_seconds": int(timeout_seconds),
+            "description": str(arguments.get("description") or f"Run terminal command: {_cap_text(command, 120)}"),
+        },
+        execution_context=execution_context,
+    )
+
+
+def _agent_tool_openhands_file_editor(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: JsonDict,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
+    command = str(arguments.get("command") or "").strip()
+    if command not in {"view", "create", "str_replace", "insert"}:
+        raise ValueError("file_editor command must be one of: view, create, str_replace, insert.")
+    workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+    if command == "view":
+        return _agent_file_editor_view(tool, workspace, root, path, arguments)
+    _require_editable_workspace(workspace)
+    gate = _agent_permission_gate(
+        state,
+        session_id,
+        tool=tool,
+        arguments={**arguments, "workspace_id": workspace["id"], "path": _relative_path(path, root)},
+        permission_key="file_write",
+        approval_kind="file_write",
+        title="Edit workspace file",
+        summary=f"Edit {_relative_path(path, root)} in {workspace.get('title') or workspace.get('id')}.",
+        targets=[str(root), _relative_path(path, root)],
+        execution_context=execution_context,
+    )
+    if gate is not None:
+        return gate
+    if command == "create":
+        return _agent_file_editor_create(tool, workspace, root, path, arguments)
+    if command == "str_replace":
+        return _agent_file_editor_str_replace(tool, workspace, root, path, arguments)
+    return _agent_file_editor_insert(tool, workspace, root, path, arguments)
+
+
+def _agent_file_editor_view(tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict) -> JsonDict:
+    if path.is_dir():
+        files = _workspace_file_tree(root, path, max_files=min(max(int(arguments.get("max_files") or 200), 1), 500))
+        return _tool_result(
+            tool,
+            True,
+            f"Listed directory {_relative_path(path, root)}.",
+            data={"workspace": workspace, "path": _relative_path(path, root), "type": "directory", "files": files},
+        )
+    if not path.is_file():
+        raise FileNotFoundError(_relative_path(path, root))
+    if path.stat().st_size > 1_000_000:
+        raise ValueError("File is too large to view through file_editor.")
+    content = path.read_text(encoding="utf-8", errors="replace")
+    start_line, end_line, view_content = _file_editor_view_slice(content, arguments.get("view_range"))
+    return _tool_result(
+        tool,
+        True,
+        f"Viewed {_relative_path(path, root)}.",
+        data={
+            "workspace": workspace,
+            "path": _relative_path(path, root),
+            "type": "file",
+            "content": view_content,
+            "numbered_content": _numbered_file_content(view_content, start_line),
+            "view_range": [start_line, end_line],
+            "total_lines": len(content.splitlines()),
+        },
+    )
+
+
+def _agent_file_editor_create(tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict) -> JsonDict:
+    if path.exists():
+        raise FileExistsError(f"File already exists: {_relative_path(path, root)}")
+    file_text = str(arguments.get("file_text") or "")
+    if len(file_text.encode("utf-8")) > 2_000_000:
+        raise ValueError("file_text is too large to write through file_editor.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(path, file_text)
+    return _tool_result(
+        tool,
+        True,
+        f"Created {_relative_path(path, root)}.",
+        data={"workspace": workspace, "path": _relative_path(path, root), "bytes": len(file_text.encode("utf-8"))},
+    )
+
+
+def _agent_file_editor_str_replace(tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict) -> JsonDict:
+    if not path.is_file():
+        raise FileNotFoundError(_relative_path(path, root))
+    old_str = arguments.get("old_str")
+    if old_str in (None, ""):
+        raise ValueError("old_str is required for str_replace.")
+    if "new_str" not in arguments:
+        raise ValueError("new_str is required for str_replace.")
+    old_str = str(old_str)
+    new_str = str(arguments.get("new_str") or "")
+    if new_str == old_str:
+        raise ValueError("new_str and old_str must be different.")
+    content = path.read_text(encoding="utf-8", errors="replace")
+    count = content.count(old_str)
+    if count == 0:
+        raise ValueError("old_str was not found in the file.")
+    if count > 1:
+        raise ValueError(f"old_str must match exactly once; found {count} matches.")
+    updated = content.replace(old_str, new_str, 1)
+    _atomic_write_text(path, updated)
+    diff = "".join(difflib.unified_diff(content.splitlines(True), updated.splitlines(True), fromfile=f"a/{_relative_path(path, root)}", tofile=f"b/{_relative_path(path, root)}"))
+    return _tool_result(
+        tool,
+        True,
+        f"Replaced text in {_relative_path(path, root)}.",
+        data={"workspace": workspace, "path": _relative_path(path, root), "diff": diff},
+    )
+
+
+def _agent_file_editor_insert(tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict) -> JsonDict:
+    if not path.is_file():
+        raise FileNotFoundError(_relative_path(path, root))
+    if "insert_line" not in arguments:
+        raise ValueError("insert_line is required for insert.")
+    if "new_str" not in arguments:
+        raise ValueError("new_str is required for insert.")
+    insert_line = int(arguments.get("insert_line"))
+    content = path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines(keepends=True)
+    if insert_line < 0 or insert_line > len(lines):
+        raise ValueError(f"insert_line must be between 0 and {len(lines)}.")
+    insert_lines = [line + "\n" for line in str(arguments.get("new_str") or "").split("\n")]
+    updated = "".join(lines[:insert_line]) + "".join(insert_lines) + "".join(lines[insert_line:])
+    _atomic_write_text(path, updated)
+    diff = "".join(difflib.unified_diff(content.splitlines(True), updated.splitlines(True), fromfile=f"a/{_relative_path(path, root)}", tofile=f"b/{_relative_path(path, root)}"))
+    return _tool_result(
+        tool,
+        True,
+        f"Inserted text in {_relative_path(path, root)}.",
+        data={"workspace": workspace, "path": _relative_path(path, root), "diff": diff},
+    )
+
+
+def _file_editor_view_slice(content: str, raw_range: Any) -> tuple[int, int, str]:
+    lines = content.splitlines()
+    total = len(lines)
+    if not isinstance(raw_range, list) or not raw_range:
+        start, end = 1, total
+    else:
+        if len(raw_range) != 2:
+            raise ValueError("view_range must be a list of two integers.")
+        start = int(raw_range[0]) if len(raw_range) >= 1 else 1
+        end = int(raw_range[1]) if len(raw_range) >= 2 else start
+        if end == -1:
+            end = total
+    if total == 0:
+        return 1, 0, ""
+    if start < 1 or start > total:
+        raise ValueError(f"view_range start must be between 1 and {total}.")
+    if end < start:
+        raise ValueError("view_range end must be greater than or equal to start.")
+    end = min(end, total)
+    return start, end, "\n".join(lines[start - 1 : end])
+
+
+def _numbered_file_content(content: str, start_line: int) -> str:
+    if not content:
+        return ""
+    return "\n".join(f"{index:6}\t{line}" for index, line in enumerate(content.splitlines(), start=start_line))
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        encoding="utf-8",
+        delete=False,
+    ) as handle:
+        handle.write(content)
+        tmp_path = Path(handle.name)
+    try:
+        if path.exists():
+            os.chmod(tmp_path, path.stat().st_mode & 0o7777)
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _agent_tool_shell_run(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: JsonDict,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
     workspace, root, cwd = _resolve_agent_workspace_path(
         state,
         session_id,
@@ -4686,17 +5765,22 @@ def _agent_tool_shell_run(state: UiState, session_id: str, tool: str, arguments:
     if not command:
         raise ValueError("command is required.")
     timeout_seconds = min(max(int(arguments.get("timeout_seconds") or 30), 1), 120)
-    if _shell_needs_approval(command) and not arguments.get("approved"):
-        return _request_agent_approval(
-            state,
-            session_id,
-            tool=tool,
-            arguments={**arguments, "command": command, "cwd": _relative_path(cwd, root), "timeout_seconds": timeout_seconds},
-            kind="shell_run",
-            title="Run workspace command",
-            summary=f"Run {' '.join(shlex.quote(part) for part in command)} in {workspace.get('title') or workspace.get('id')}.",
-            targets=[str(root), _relative_path(cwd, root)],
-        )
+    permission = _assistant_permission(state, "shell_run")
+    gate = _agent_permission_gate(
+        state,
+        session_id,
+        tool=tool,
+        arguments={**arguments, "workspace_id": workspace["id"], "command": command, "cwd": _relative_path(cwd, root), "timeout_seconds": timeout_seconds},
+        permission_key="shell_run",
+        approval_kind="shell_run",
+        title="Run workspace command",
+        summary=f"Run {' '.join(shlex.quote(part) for part in command)} in {workspace.get('title') or workspace.get('id')}.",
+        targets=[str(root), _relative_path(cwd, root)],
+        require_approval=permission == "approval_required" or (permission == "safe_without_approval" and _shell_needs_approval(command)),
+        execution_context=execution_context,
+    )
+    if gate is not None:
+        return gate
     env = {
         key: value
         for key, value in os.environ.items()
@@ -4736,12 +5820,29 @@ def _normalize_shell_command(raw: Any) -> List[str]:
 
 
 def _shell_needs_approval(command: List[str]) -> bool:
+    return _shell_needs_approval_inner(command, depth=0)
+
+
+def _shell_needs_approval_inner(command: List[str], *, depth: int) -> bool:
     if not command:
         return False
     first = Path(command[0]).name
     tokens = {item.lower() for item in command[1:]}
+    shell_payload = _shell_wrapper_payload(command)
+    if shell_payload and depth < 2:
+        if _shell_payload_text_needs_approval(shell_payload):
+            return True
+        try:
+            nested_command = shlex.split(shell_payload)
+        except ValueError:
+            nested_command = []
+        if nested_command and _shell_needs_approval_inner(nested_command, depth=depth + 1):
+            return True
     if first in {"curl", "wget", "brew", "docker", "podman", "pip", "pip3", "rm", "mv", "cp", "chmod", "chown"}:
         return True
+    if first in {"python", "python3", Path(sys.executable).name} and len(command) >= 4:
+        if command[1] == "-m" and command[2] in {"pip", "pip3"}:
+            return True
     if first in {"npm", "pnpm", "yarn"}:
         return True
     if first == "git":
@@ -4752,22 +5853,61 @@ def _shell_needs_approval(command: List[str]) -> bool:
     return False
 
 
-def _agent_tool_smoke_test_study(state: UiState, session_id: str, tool: str, arguments: JsonDict) -> JsonDict:
+def _shell_wrapper_payload(command: List[str]) -> str:
+    if not command:
+        return ""
+    first = Path(command[0]).name
+    if first not in {"sh", "bash", "zsh"}:
+        return ""
+    for index, token in enumerate(command[1:], start=1):
+        if token == "-c" or (token.startswith("-") and "c" in token):
+            if index + 1 < len(command):
+                return str(command[index + 1])
+            return ""
+    return ""
+
+
+def _shell_payload_text_needs_approval(payload: str) -> bool:
+    text = payload.strip().lower()
+    if not text:
+        return False
+    risky_patterns = [
+        r"(^|[;&|()])\s*(?:\.?/[\w./-]+/)?pip3?\s+",
+        r"(^|[;&|()])\s*(?:python3?|python[\w.-]*)\s+-m\s+pip3?\s+",
+        r"(^|[;&|()])\s*uv\s+(?:add|remove|sync|lock|tool|pip|build|publish)\b",
+        r"(^|[;&|()])\s*(?:npm|pnpm|yarn)\s+",
+        r"(^|[;&|()])\s*(?:curl|wget|brew|docker|podman|rm|mv|cp|chmod|chown)\s+",
+        r"(^|[;&|()])\s*git\s+(?:clone|push|pull|fetch|reset|checkout|clean|merge|rebase)\b",
+    ]
+    return any(re.search(pattern, text) for pattern in risky_patterns)
+
+
+def _agent_tool_smoke_test_study(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: JsonDict,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
     study_path = _resolve_agent_or_allowed_path(state, session_id, {"path": arguments.get("study_path"), "workspace_id": arguments.get("workspace_id")})
     validation = _validate_study(study_path)
     if not validation.get("valid"):
         return _tool_result(tool, False, "Study validation failed; smoke test blocked.", data={"validation": validation})
-    if not arguments.get("approved"):
-        return _request_agent_approval(
-            state,
-            session_id,
-            tool=tool,
-            arguments={**arguments, "study_path": str(study_path)},
-            kind="smoke_test_study",
-            title="Run study smoke test",
-            summary=f"Execute {study_path.name} into a temporary output directory.",
-            targets=[str(study_path)],
-        )
+    gate = _agent_permission_gate(
+        state,
+        session_id,
+        tool=tool,
+        arguments={**arguments, "study_path": str(study_path)},
+        permission_key="study_launch",
+        approval_kind="smoke_test_study",
+        title="Run study smoke test",
+        summary=f"Execute {study_path.name} into a temporary output directory.",
+        targets=[str(study_path)],
+        execution_context=execution_context,
+    )
+    if gate is not None:
+        return gate
     with tempfile.TemporaryDirectory(prefix="optpilot-assistant-smoke-") as tmp_dir:
         tmp = Path(tmp_dir)
         smoke_study = _smoke_study_file(study_path, tmp, int(arguments.get("max_trials") or 0))
@@ -4939,6 +6079,7 @@ def _append_agent_event_record(state: UiState, session_id: str, event: JsonDict)
 
 def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
     payload = dict(session)
+    payload.pop("openhands_pending_sync", None)
     session_id = str(session["id"])
     lock = _agent_session_operation_lock(state, session_id)
     lock_acquired = lock.acquire(blocking=False)
@@ -4954,8 +6095,8 @@ def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
         _append_jsonl(_agent_messages_path(state, session_id), messages[0])
     payload["messages"] = messages
     payload["events"] = _read_agent_events(state, session_id)
-    payload["approvals"] = _read_agent_approvals(state, session_id)
-    return payload
+    payload["approvals"] = _public_agent_approvals(state, session_id)
+    return _decorate_agent_session_status(state, payload)
 
 
 def _list_agent_sessions(state: UiState) -> List[JsonDict]:
@@ -5374,6 +6515,8 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
             session.pop("active_turn_id", None)
             session.pop("active_turn_started_at", None)
             session.pop("openhands_pending_sync", None)
+        elif dispatch_status == "awaiting_user_approval":
+            session["status"] = "awaiting_user_approval"
         elif dispatch_status == "failed":
             session["status"] = "error"
             session.pop("active_turn_id", None)
@@ -5389,35 +6532,54 @@ def _append_agent_message(state: UiState, session_id: str, payload: JsonDict) ->
 
 def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
     sync_started_at = _now_iso()
-    session = _require_agent_session(state, session_id)
-    conversation_id = str(session.get("openhands_conversation_id") or "")
-    turn_id = str(session.get("active_turn_id") or "")
-    turn_started_at = str(session.get("active_turn_started_at") or sync_started_at)
-    if not conversation_id or session.get("status") not in {"waiting_for_agent", "running"}:
-        return _agent_session_payload(state, session)
-    handled_tool_calls = _handled_optpilot_tool_call_ids(state, session_id)
-    pending_sync = session.get("openhands_pending_sync") if isinstance(session.get("openhands_pending_sync"), dict) else {}
-    ignored_event_ids = {
-        str(event_id)
-        for event_id in pending_sync.get("ignored_event_ids", [])
-        if event_id
-    }
-    ignored_response_texts = {
-        str(text)
-        for text in pending_sync.get("ignored_response_texts", [])
-        if text
-    }
-    ignored_response_texts.update(_assistant_response_texts(state, session_id))
-    dispatch = state.agent_adapter.sync_conversation(
-        conversation_id,
-        tool_executor=lambda tool_name, arguments: _execute_agent_tool(state, session_id, tool_name, arguments),
-        ignored_tool_calls=handled_tool_calls,
-        ignored_event_ids=ignored_event_ids,
-        ignored_response_texts=ignored_response_texts,
-        allow_final_response_fallback=bool(pending_sync.get("allow_final_response_fallback")),
-        poll_seconds=3.0,
-    )
     with _agent_session_operation_lock(state, session_id):
+        session = _require_agent_session(state, session_id)
+        conversation_id = str(session.get("openhands_conversation_id") or "")
+        turn_id = str(session.get("active_turn_id") or "")
+        turn_started_at = str(session.get("active_turn_started_at") or sync_started_at)
+        if not conversation_id or _agent_effective_status(state, session) not in {"waiting_for_agent", "running"}:
+            return _agent_session_payload(state, session)
+        _retry_pending_tool_result_forwards(state, session_id, conversation_id)
+        handled_tool_calls = _handled_optpilot_tool_call_ids(state, session_id)
+        pending_sync = session.get("openhands_pending_sync") if isinstance(session.get("openhands_pending_sync"), dict) else {}
+        ignored_event_ids = {
+            str(event_id)
+            for event_id in pending_sync.get("ignored_event_ids", [])
+            if event_id
+        }
+        ignored_response_texts = {
+            str(text)
+            for text in pending_sync.get("ignored_response_texts", [])
+            if text
+        }
+        ignored_response_texts.update(_assistant_response_texts(state, session_id))
+        try:
+            dispatch = state.agent_adapter.sync_conversation(
+                conversation_id,
+                tool_executor=lambda tool_name, arguments: _execute_agent_tool(state, session_id, tool_name, arguments),
+                ignored_tool_calls=handled_tool_calls,
+                ignored_event_ids=ignored_event_ids,
+                ignored_response_texts=ignored_response_texts,
+                poll_seconds=3.0,
+            )
+        except Exception as exc:
+            if not _is_timeout_like(exc):
+                raise
+            session["status"] = "waiting_for_agent"
+            _append_agent_event_record(
+                state,
+                session_id,
+                {
+                    "id": f"evt_{uuid.uuid4().hex[:10]}",
+                    "type": "openhands_sync_timeout",
+                    "created_at": _now_iso(),
+                    "payload": {
+                        "conversation_id": conversation_id,
+                        "reason": str(exc) or "Timed out while polling OpenHands.",
+                    },
+                },
+            )
+            return _agent_session_payload(state, _upsert_agent_session(state, session))
         cancelled_session = _cancelled_agent_turn_session(
             state,
             session_id,
@@ -5431,7 +6593,7 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
         latest_turn_id = str(latest_session.get("active_turn_id") or "")
         latest_conversation_id = str(latest_session.get("openhands_conversation_id") or "")
         if (
-            latest_session.get("status") not in {"waiting_for_agent", "running"}
+            _agent_effective_status(state, latest_session) not in {"waiting_for_agent", "running"}
             or latest_turn_id != turn_id
             or latest_conversation_id != conversation_id
         ):
@@ -5442,7 +6604,7 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
                 continue
             _append_agent_event_record(state, session_id, event)
         raw_assistant = dispatch.get("assistant_message") if isinstance(dispatch.get("assistant_message"), dict) else {}
-        if _append_agent_assistant_message_if_new(
+        appended_assistant_message = _append_agent_assistant_message_if_new(
             state,
             session_id,
             content=raw_assistant.get("content"),
@@ -5452,13 +6614,19 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
                 "transport": "openhands_http",
                 "conversation_id": conversation_id,
             },
-        ):
-            session["status"] = "idle"
+        )
+        if dispatch.get("status") == "failed":
+            session["status"] = "error"
             session.pop("active_turn_id", None)
             session.pop("active_turn_started_at", None)
             session.pop("openhands_pending_sync", None)
-        elif dispatch.get("status") == "failed":
-            session["status"] = "error"
+        elif dispatch.get("status") == "awaiting_user_approval":
+            session["status"] = "awaiting_user_approval"
+            sync_state = dispatch.get("sync_state") if isinstance(dispatch.get("sync_state"), dict) else {}
+            if sync_state:
+                session["openhands_pending_sync"] = sync_state
+        elif appended_assistant_message:
+            session["status"] = "idle"
             session.pop("active_turn_id", None)
             session.pop("active_turn_started_at", None)
             session.pop("openhands_pending_sync", None)
@@ -5468,6 +6636,30 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
             if sync_state:
                 session["openhands_pending_sync"] = sync_state
         return _upsert_agent_session(state, session)
+
+
+def _is_timeout_like(exc: Exception) -> bool:
+    return type(exc).__name__ in {"TimeoutError", "TimeoutExpired"} or "timed out" in str(exc).lower()
+
+
+def _mark_agent_session_waiting_after_sync_timeout(state: UiState, session_id: str, exc: Exception) -> JsonDict:
+    session = _require_agent_session(state, session_id)
+    conversation_id = str(session.get("openhands_conversation_id") or "")
+    session["status"] = "waiting_for_agent"
+    _append_agent_event_record(
+        state,
+        session_id,
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "openhands_sync_timeout",
+            "created_at": _now_iso(),
+            "payload": {
+                "conversation_id": conversation_id,
+                "reason": str(exc) or "Timed out while polling OpenHands.",
+            },
+        },
+    )
+    return _agent_session_payload(state, _upsert_agent_session(state, session))
 
 
 def _assistant_response_texts(state: UiState, session_id: str) -> set[str]:
@@ -5501,7 +6693,7 @@ def _agent_message_source(message: JsonDict) -> str:
 def _handled_optpilot_tool_call_ids(state: UiState, session_id: str) -> set[str]:
     handled = set()
     for event in _read_agent_events(state, session_id):
-        if event.get("type") != "optpilot_tool_result":
+        if event.get("type") not in {"optpilot_tool_result", "optpilot_approval_pause"}:
             continue
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         call_id = str(payload.get("tool_call_id") or "")
@@ -5619,6 +6811,7 @@ def _decorate_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
     item["delete_action"] = _workspace_delete_action(state, item)
     item["delete_label"] = _workspace_delete_label(item, item["delete_action"])
     item["runtime"] = _workspace_runtime_status(state, item)
+    item["interface"] = _workspace_interface_summary(state, item)
     return item
 
 
@@ -5966,6 +7159,50 @@ def _workspace_source_root(workspace: JsonDict) -> Path:
     return Path(str(workspace.get("source_root") or workspace.get("root") or ".")).resolve()
 
 
+def _workspace_registered_config_candidates(workspace: JsonDict) -> List[tuple[str, Path]]:
+    root = Path(str(workspace.get("root") or ".")).resolve()
+    candidates: List[tuple[str, Path]] = []
+    for entry in workspace.get("registered_entries", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("kind") or "")
+        if kind not in {"environment", "method", "resource"}:
+            continue
+        config_value = str(entry.get("config_path") or "").strip()
+        if not config_value:
+            continue
+        config_path = Path(config_value)
+        if not config_path.is_absolute():
+            config_path = root / config_path
+        candidates.append((kind, config_path.resolve()))
+    return candidates
+
+
+def _workspace_interface_config(state: UiState, workspace: JsonDict) -> tuple[str, Path, JsonDict, JsonDict]:
+    root = _safe_workspace_root(state, Path(str(workspace.get("root") or "")))
+    for kind, config_path in _workspace_registered_config_candidates(workspace):
+        if not config_path.exists() or not config_path.is_file() or not _is_relative_to(config_path, root):
+            continue
+        raw = _read_yaml(config_path)
+        if raw.get("apiVersion") != AUTHORING_API_VERSION or raw.get("config") != kind:
+            continue
+        interface = _normalize_interface_config(raw.get("interface"))
+        if interface:
+            return kind, config_path, raw, interface
+    raise ValueError("This workspace does not have a registered environment, method, or resource config with a launchable interface.")
+
+
+def _workspace_interface_summary(state: UiState, workspace: JsonDict) -> JsonDict:
+    try:
+        kind, config_path, _raw, interface = _workspace_interface_config(state, workspace)
+    except Exception:
+        return {}
+    summary = _interface_summary(interface)
+    summary["kind"] = kind
+    summary["config_path"] = _relative_path(config_path, Path(str(workspace.get("root") or ".")).resolve())
+    return summary
+
+
 def _catalog_component_source_root(kind: str, config_path: Path, raw: JsonDict) -> Path:
     if kind == "study":
         return config_path.parent.resolve()
@@ -6177,6 +7414,41 @@ def _start_catalog_interface_launch(state: UiState, kind: str, uid: str, *, conf
     return {"launch": job.to_dict()}
 
 
+def _start_workspace_interface_launch(state: UiState, workspace_id: str, *, setup_policy: str = "auto") -> JsonDict:
+    workspace = _require_ui_workspace(state, workspace_id)
+    kind, config_path, raw, interface = _workspace_interface_config(state, workspace)
+    _require_declared_env_from_host(
+        state,
+        _interface_launch_env_requirements(raw, interface),
+        action="interface launch",
+    )
+    launch_id = f"launch-{uuid.uuid4().hex[:12]}"
+    label = str(interface.get("label") or f"{kind} interface")
+    job = UiLaunchJob(
+        launch_id=launch_id,
+        kind=kind,
+        uid=str(config_path),
+        label=label,
+        port=int(interface.get("port") or 0),
+    )
+    job.steps.append(
+        {
+            "time": _now_iso(),
+            "status": "queued",
+            "title": "Queued launch",
+            "detail": "Preparing to start the workspace interface from the existing editable copy.",
+        }
+    )
+    with state._lock:
+        state.interface_launches[launch_id] = job
+    threading.Thread(
+        target=_run_workspace_interface_launch,
+        args=(state, launch_id, workspace_id, setup_policy),
+        daemon=True,
+    ).start()
+    return {"launch": job.to_dict()}
+
+
 def _run_catalog_interface_launch(state: UiState, launch_id: str, kind: str, uid: str, config_override: Optional[JsonDict] = None) -> None:
     try:
         result = _launch_catalog_interface(
@@ -6224,6 +7496,58 @@ def _run_catalog_interface_launch(state: UiState, launch_id: str, kind: str, uid
                     "status": "ready",
                     "title": "Preview ready",
                     "detail": f"Interface is reachable on port {job.port}.",
+                }
+            )
+            job.steps = job.steps[-80:]
+
+
+def _run_workspace_interface_launch(state: UiState, launch_id: str, workspace_id: str, setup_policy: str) -> None:
+    try:
+        result = _launch_workspace_interface(
+            state,
+            workspace_id,
+            setup_policy=setup_policy,
+            progress=lambda title, detail="", status="running", data=None: _record_interface_launch_step(
+                state,
+                launch_id,
+                title,
+                detail,
+                status=status,
+                data=data,
+            ),
+        )
+    except Exception as exc:  # pragma: no cover - defensive background boundary
+        with state._lock:
+            job = state.interface_launches.get(launch_id)
+            if job is not None:
+                job.status = "failed"
+                job.error = str(exc)
+                job.updated_at = time.time()
+                job.finished_at = time.time()
+                job.steps.append(
+                    {
+                        "time": _now_iso(),
+                        "status": "failed",
+                        "title": "Launch failed",
+                        "detail": str(exc),
+                    }
+                )
+                job.steps = job.steps[-80:]
+        return
+    with state._lock:
+        job = state.interface_launches.get(launch_id)
+        if job is not None:
+            job.status = "ready"
+            job.result = result
+            job.updated_at = time.time()
+            job.finished_at = time.time()
+            port = result.get("interface", {}).get("port") or job.port
+            job.steps.append(
+                {
+                    "time": _now_iso(),
+                    "status": "ready",
+                    "title": "Preview ready",
+                    "detail": f"Interface is reachable on port {port}.",
                 }
             )
             job.steps = job.steps[-80:]
@@ -6327,6 +7651,9 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
         "Ensuring the per-workspace container is running, then starting the interface command.",
     )
     setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw, source_root, interface, report)
+    workspace = dict(_require_ui_workspace(state, str(workspace["id"])))
+    workspace["setup"] = setup_result
+    workspace = _upsert_ui_workspace(state, workspace)
     launch = state.workspace_runtime.exec_detached(
         workspace,
         command,
@@ -6355,6 +7682,124 @@ def _launch_catalog_interface(state: UiState, kind: str, uid: str, progress: Opt
         )
     return {
         "workspace": workspace,
+        "interface": _interface_summary(interface),
+        "setup": setup_result,
+        "launch": launch,
+        "preview": preview,
+    }
+
+
+def _workspace_setup_already_ready(workspace: JsonDict) -> bool:
+    setup = workspace.get("setup") if isinstance(workspace.get("setup"), dict) else {}
+    return bool(setup.get("ran")) and not bool(setup.get("failed"))
+
+
+def _workspace_interface_setup_result(
+    state: UiState,
+    workspace: JsonDict,
+    raw: JsonDict,
+    source_root: Path,
+    interface: JsonDict,
+    setup_policy: str,
+    report: Any,
+) -> JsonDict:
+    policy = str(setup_policy or "auto").strip().lower()
+    if policy not in {"auto", "always", "skip"}:
+        raise ValueError("setup must be one of: auto, always, skip")
+    if not _component_setup_specs(raw, interface=interface):
+        return {"ran": False, "skipped": True, "reason": "No setup declared."}
+    if policy == "skip":
+        return {"ran": False, "skipped": True, "reason": "Setup skipped for workspace relaunch."}
+    if policy == "auto" and _workspace_setup_already_ready(workspace):
+        return {
+            "ran": False,
+            "skipped": True,
+            "reason": "Reusing previous workspace setup.",
+            "previous": workspace.get("setup"),
+        }
+    setup_result = _run_component_setup_in_workspace_runtime(state, workspace, raw, source_root, interface, report)
+    refreshed = dict(_require_ui_workspace(state, str(workspace["id"])))
+    refreshed["setup"] = setup_result
+    _upsert_ui_workspace(state, refreshed)
+    return setup_result
+
+
+def _launch_workspace_interface(
+    state: UiState,
+    workspace_id: str,
+    *,
+    setup_policy: str = "auto",
+    progress: Optional[Any] = None,
+) -> JsonDict:
+    def report(title: str, detail: str = "", status: str = "running", data: Optional[JsonDict] = None) -> None:
+        if progress:
+            progress(title, detail, status, data)
+
+    workspace = _require_ui_workspace(state, workspace_id)
+    root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+    report("Reading interface config", "Loading the launchable interface from the workspace config.")
+    _kind, config_path, raw, interface = _workspace_interface_config(state, workspace)
+    validation = validate_authoring_config(config_path)
+    if validation and not validation.get("valid"):
+        raise ValueError("Workspace config validation failed: " + "; ".join(str(error) for error in validation.get("errors", []) or ["invalid config"]))
+    source_root = _workspace_source_root(workspace)
+    if not _is_relative_to(source_root, root):
+        source_root = root
+    cwd = (source_root / str(interface.get("cwd") or ".")).resolve()
+    if not _is_relative_to(cwd, source_root):
+        raise ValueError("Interface cwd must stay inside the workspace source root.")
+    port = int(interface.get("port") or 0)
+    command = list(interface.get("command") or [])
+    env = {
+        str(key): str(value)
+        for key, value in (interface.get("env") or {}).items()
+        if str(key)
+    }
+    env.setdefault("HOST", "0.0.0.0")
+    env.setdefault("PORT", str(port))
+    env["OPTPILOT_INTERFACE_PORT"] = str(port)
+    env["OPTPILOT_WORKSPACE_ROOT"] = str(root)
+    env.update(
+        _require_declared_env_from_host(
+            state,
+            interface.get("envFromHost") or [],
+            action="interface launch",
+        )
+    )
+    report(
+        "Starting workspace runtime",
+        "Ensuring the per-workspace container is running, then starting the interface command.",
+    )
+    setup_result = _workspace_interface_setup_result(state, workspace, raw, source_root, interface, setup_policy, report)
+    launch = state.workspace_runtime.exec_detached(
+        workspace,
+        command,
+        cwd=cwd,
+        env=env,
+        name="interface",
+    )
+    report("Launch command started", "Interface stdout and stderr are being captured.", data=launch)
+    preview = state.workspace_preview_open(root, port, extra_ports=interface.get("extraPorts") or [])
+    report("Opening preview proxy", f"Routing workspace port {port} through Studio Preview.")
+    report(
+        "Waiting for preview port",
+        f"Checking {interface.get('readyPath') or '/'} until the interface becomes reachable.",
+    )
+    readiness = _wait_for_preview_ready(
+        str(preview.get("proxy_target") or ""),
+        str(interface.get("readyPath") or "/"),
+        int(interface.get("readyTimeoutSeconds") or 0),
+    )
+    preview["readiness"] = readiness
+    if not readiness.get("ready") and not readiness.get("skipped"):
+        raise ValueError(
+            "Interface started but did not become reachable "
+            f"on port {port} within {readiness.get('timeoutSeconds')}s: "
+            f"{readiness.get('error') or readiness.get('url')}"
+        )
+    refreshed_workspace = _require_ui_workspace(state, str(workspace["id"]))
+    return {
+        "workspace": refreshed_workspace,
         "interface": _interface_summary(interface),
         "setup": setup_result,
         "launch": launch,
@@ -6406,26 +7851,7 @@ def _discover_workspace_configs(state: UiState, workspace_id: str) -> JsonDict:
     workspace = _require_ui_workspace(state, workspace_id)
     root = Path(str(workspace["root"])).resolve()
     _safe_workspace_root(state, root)
-    configs = []
-    for path in _iter_yaml_files(root):
-        raw = _read_yaml(path)
-        config = raw.get("config")
-        if config not in REGISTERABLE_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
-            continue
-        validation = validate_authoring_config(path)
-        configs.append(
-            {
-                "path": str(path),
-                "relative_path": _relative_path(path, root),
-                "kind": config,
-                "id": str(raw.get("id") or raw.get("name") or path.stem),
-                "label": str(raw.get("name") or raw.get("id") or path.stem),
-                "valid": bool(validation.get("valid")),
-                "validation": validation,
-                "focus_paths": _focus_paths_for_config(root, path, raw),
-            }
-        )
-    return {"workspace": workspace, "configs": sorted(configs, key=lambda item: (item["kind"], item["relative_path"]))}
+    return {"workspace": workspace, "configs": _discover_workspace_package_configs(root)}
 
 
 def _create_registration_manifest(state: UiState, workspace_id: str, payload: JsonDict) -> JsonDict:
@@ -6437,7 +7863,12 @@ def _create_registration_manifest(state: UiState, workspace_id: str, payload: Js
         return _create_resource_registration_manifest(state, workspace, root, payload)
     discovered = _discover_workspace_configs(state, workspace_id)["configs"]
     requested_paths = {str(item) for item in payload.get("config_paths", []) or []}
-    selected = [item for item in discovered if not requested_paths or item["relative_path"] in requested_paths or item["path"] in requested_paths]
+    selected = [
+        item
+        for item in discovered
+        if item["kind"] in REGISTERABLE_CONFIGS
+        and (not requested_paths or item["relative_path"] in requested_paths or item["path"] in requested_paths)
+    ]
     if not selected:
         raise ValueError("No environment or method config files selected for registration.")
     registration_id = str(payload.get("id") or f"reg_{uuid.uuid4().hex[:10]}")
@@ -6448,11 +7879,13 @@ def _create_registration_manifest(state: UiState, workspace_id: str, payload: Js
         kind = str(item["kind"])
         destination = _default_registration_destination(state, kind, item["id"])
         include = _default_registration_include(root, config_path, raw)
+        registered_config_name = _registered_config_filename(kind, config_path.name)
         targets.append(
             {
                 "target_id": f"target_{uuid.uuid4().hex[:8]}",
                 "kind": kind,
                 "config_path": item["relative_path"],
+                "registered_config_path": registered_config_name,
                 "catalog_id": item["id"],
                 "destination": str(destination),
                 "focus_paths": item["focus_paths"],
@@ -6557,19 +7990,34 @@ def _apply_registration_manifest(state: UiState, workspace_id: str, registration
         destination = Path(str(target["destination"])).resolve()
         _require_catalog_destination(state, destination)
         destination.mkdir(parents=True, exist_ok=True)
+        config_source = (root / str(target.get("config_path") or "")).resolve() if target.get("config_path") else None
+        config_output: Optional[Path] = None
         for pattern in target.get("include", []):
             for source in _match_workspace_pattern(root, pattern):
                 relative = source.relative_to(root)
                 if _excluded_by_patterns(str(relative), target.get("exclude", [])):
                     continue
-                output = destination / relative
+                output_relative = _registration_output_relative(root, source, config_source, str(target.get("kind") or ""))
+                output = destination / output_relative
                 output.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, output)
+                if config_source is not None and source.resolve() == config_source:
+                    raw = _read_yaml(source)
+                    normalized = _normalize_registered_config(raw, root, source, destination)
+                    output.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+                    config_output = output
+                else:
+                    shutil.copy2(source, output)
+        if config_source is not None and config_output is None:
+            output = destination / _registered_config_filename(str(target.get("kind") or ""), config_source.name)
+            raw = _read_yaml(config_source)
+            normalized = _normalize_registered_config(raw, root, config_source, destination)
+            output.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+            config_output = output
         applied_entries.append(
             {
                 "kind": target["kind"],
                 "id": target["catalog_id"],
-                "config_path": str(destination / Path(target["config_path"]).name) if target.get("config_path") else "",
+                "config_path": str(config_output) if config_output is not None else "",
                 "registered_at": _now_iso(),
             }
         )
@@ -6580,6 +8028,959 @@ def _apply_registration_manifest(state: UiState, workspace_id: str, registration
     manifest["applied_at"] = _now_iso()
     _write_registration_manifest(state, workspace_id, manifest)
     return {"registration": manifest, "workspace": workspace, "applied": True}
+
+
+def _prepare_package_plan(state: UiState, workspace_id: str, payload: JsonDict) -> JsonDict:
+    workspace = _require_ui_workspace(state, workspace_id)
+    if not workspace.get("registration_enabled", True):
+        raise ValueError("This workspace cannot be registered to the catalog.")
+    root = Path(str(workspace["root"])).resolve()
+    configs = _discover_workspace_package_configs(root)
+    requested_paths = {str(item) for item in payload.get("config_paths", []) or []}
+    selected = [
+        item
+        for item in configs
+        if not requested_paths or item["relative_path"] in requested_paths or item["path"] in requested_paths
+    ]
+    plan_id = str(payload.get("id") or f"pkg_plan_{uuid.uuid4().hex[:10]}")
+    package_id = _slug_text(str(payload.get("package_id") or LOCAL_PACKAGE_NAME))
+    components = []
+    resources = []
+    studies = []
+    for item in selected:
+        config_path = Path(item["path"])
+        raw = _read_yaml(config_path)
+        kind = str(item["kind"])
+        if kind in {"environment", "method"}:
+            destination = _local_catalog_package_root(state) / ("environments" if kind == "environment" else "methods") / _slug_text(item["id"])
+            components.append(
+                {
+                    "target_id": f"target_{uuid.uuid4().hex[:8]}",
+                    "kind": kind,
+                    "id": item["id"],
+                    "label": item["label"],
+                    "config_path": item["relative_path"],
+                    "registered_config_path": _registered_config_filename(kind, config_path.name),
+                    "component_root": f"{'environments' if kind == 'environment' else 'methods'}/{_slug_text(item['id'])}",
+                    "destination": str(destination),
+                    "include": _default_registration_include(root, config_path, raw),
+                    "exclude": [".git/**", ".venv/**", "runs/**", "__pycache__/**", "node_modules/**"],
+                    "path_rewrites": [],
+                    "source_hints": [],
+                    "validation": item["validation"],
+                    "raw_config": raw,
+                }
+            )
+        elif kind == "resource":
+            resources.append(_package_plan_resource_target(state, root, item, raw))
+        elif kind == "study":
+            studies.append(_package_plan_study_target(root, item, raw))
+    if not selected and (payload.get("resource_id") or str(payload.get("kind") or "") == "resource"):
+        resource_id = _slug_text(str(payload.get("resource_id") or workspace.get("title") or workspace["id"]))
+        resources.append(
+            {
+                "target_id": f"target_{uuid.uuid4().hex[:8]}",
+                "kind": "resource",
+                "id": resource_id,
+                "label": str(payload.get("description") or workspace.get("title") or resource_id),
+                "config_path": "",
+                "component_root": f"resources/{resource_id}",
+                "destination": str(_local_catalog_package_root(state) / "resources" / resource_id),
+                "include": _default_resource_registration_include(root),
+                "exclude": [".git/**", ".venv/**", "runs/**", "__pycache__/**", "node_modules/**"],
+                "validation": {"valid": True, "errors": [], "warnings": []},
+                "synthesized": True,
+            }
+        )
+    classification = _package_plan_classification(components, resources)
+    readiness = "draft" if selected or resources else "not-yet-classifiable"
+    plan = {
+        "id": plan_id,
+        "workspace_id": workspace_id,
+        "package_id": package_id,
+        "classification": classification,
+        "readiness": readiness,
+        "status": "draft",
+        "destination": str(_local_catalog_package_root(state)),
+        "source_root": str(root),
+        "components": components,
+        "resources": resources,
+        "studies": studies,
+        "validation": {},
+        "smoke": {},
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+    _write_package_plan(state, workspace_id, plan)
+    return {"package_plan": plan}
+
+
+def _package_plan_resource_target(state: UiState, root: Path, item: JsonDict, raw: JsonDict) -> JsonDict:
+    resource_id = _slug_text(str(item["id"]))
+    config_path = Path(item["path"])
+    return {
+        "target_id": f"target_{uuid.uuid4().hex[:8]}",
+        "kind": "resource",
+        "id": resource_id,
+        "label": item["label"],
+        "config_path": item["relative_path"],
+        "registered_config_path": _registered_config_filename("resource", config_path.name),
+        "component_root": f"resources/{resource_id}",
+        "destination": str(_local_catalog_package_root(state) / "resources" / resource_id),
+        "include": _default_resource_config_include(root, config_path, raw),
+        "exclude": [".git/**", ".venv/**", "runs/**", "__pycache__/**", "node_modules/**"],
+        "validation": item["validation"],
+        "raw_config": raw,
+    }
+
+
+def _package_plan_study_target(root: Path, item: JsonDict, raw: JsonDict) -> JsonDict:
+    study_name = _slug_text(str(raw.get("name") or item["id"]))
+    return {
+        "target_id": f"target_{uuid.uuid4().hex[:8]}",
+        "kind": "study",
+        "id": study_name,
+        "label": str(raw.get("name") or item["label"]),
+        "config_path": item["relative_path"],
+        "registered_config_path": f"studies/{study_name}.yaml",
+        "include": [item["relative_path"]],
+        "environmentConfig": str(raw.get("environmentConfig") or ""),
+        "methodConfig": str(raw.get("methodConfig") or ""),
+        "smoke": "smoke" in study_name,
+        "validation": item["validation"],
+    }
+
+
+def _update_package_plan(state: UiState, workspace_id: str, plan_id: str, payload: JsonDict) -> JsonDict:
+    plan = _read_package_plan(state, workspace_id, plan_id)
+    if payload.get("package_id"):
+        plan["package_id"] = _slug_text(str(payload["package_id"]))
+    for collection_name in ("components", "resources", "studies"):
+        updates = payload.get(collection_name)
+        if not isinstance(updates, list):
+            continue
+        records = plan.get(collection_name, []) if isinstance(plan.get(collection_name), list) else []
+        by_id = {str(item.get("target_id") or item.get("id")): item for item in records if isinstance(item, dict)}
+        for update in updates:
+            if not isinstance(update, dict):
+                continue
+            key = str(update.get("target_id") or update.get("id") or "")
+            target = by_id.get(key)
+            if not target:
+                continue
+            for field in ("include", "exclude", "source_hints", "path_rewrites", "smoke"):
+                if field in update:
+                    target[field] = update[field]
+    plan["updated_at"] = _now_iso()
+    _write_package_plan(state, workspace_id, plan)
+    return {"package_plan": plan}
+
+
+def _validate_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:
+    plan = _read_package_plan(state, workspace_id, plan_id)
+    with tempfile.TemporaryDirectory(prefix="optpilot-package-plan-") as tmp_dir:
+        package_root = Path(tmp_dir) / str(plan.get("package_id") or LOCAL_PACKAGE_NAME)
+        _materialize_package_plan(state, plan, package_root)
+        validation = validate_package(package_root, check_source=True, check_setup_files=True, check_imports=True)
+        hint_errors = _package_plan_source_hint_errors(plan, package_root)
+        if hint_errors:
+            validation["errors"] = [*validation.get("errors", []), *hint_errors]
+            validation["valid"] = False
+        curation = _package_plan_curation_checks(plan, package_root)
+        if curation.get("errors"):
+            validation["errors"] = [*validation.get("errors", []), *curation.get("errors", [])]
+            validation["valid"] = False
+    warnings = _package_plan_warnings(plan, validation)
+    warnings.extend(str(item) for item in curation.get("warnings", []) or [] if str(item))
+    plan["validation"] = validation
+    plan["curation"] = curation
+    plan["warnings"] = warnings
+    plan["readiness"] = _package_plan_readiness(plan, validation)
+    plan["status"] = "validated" if validation.get("valid") else "invalid"
+    plan["updated_at"] = _now_iso()
+    _write_package_plan(state, workspace_id, plan)
+    return {"package_plan": plan}
+
+
+def _smoke_package_plan(state: UiState, workspace_id: str, plan_id: str, payload: JsonDict) -> JsonDict:
+    plan = _read_package_plan(state, workspace_id, plan_id)
+    with tempfile.TemporaryDirectory(prefix="optpilot-package-plan-smoke-") as tmp_dir:
+        tmp = Path(tmp_dir)
+        package_root = tmp / str(plan.get("package_id") or LOCAL_PACKAGE_NAME)
+        _materialize_package_plan(state, plan, package_root)
+        validation = validate_package(package_root, check_source=True, check_setup_files=True, check_imports=True)
+        hint_errors = _package_plan_source_hint_errors(plan, package_root)
+        if hint_errors:
+            validation["errors"] = [*validation.get("errors", []), *hint_errors]
+            validation["valid"] = False
+        curation = _package_plan_curation_checks(plan, package_root)
+        if curation.get("errors"):
+            validation["errors"] = [*validation.get("errors", []), *curation.get("errors", [])]
+            validation["valid"] = False
+        if not validation.get("valid"):
+            result = {"valid": False, "errors": ["Package plan validation failed."], "validation": validation, "curation": curation}
+        else:
+            study_path = _select_plan_study(package_root, plan, str(payload.get("study") or payload.get("study_path") or ""))
+            if study_path is None:
+                result = {"valid": False, "errors": ["No study is available for a smoke run."]}
+            else:
+                max_trials = int(payload.get("max_trials") or 0)
+                smoke_study = _smoke_study_file(study_path, tmp, max_trials)
+                output_root = tmp / "runs"
+                try:
+                    smoke_env = _study_subprocess_env(state, smoke_study)
+                    completed = subprocess.run(
+                        [sys.executable, "-m", "optpilot", "run", str(smoke_study), "--output-root", str(output_root)],
+                        cwd=str(state.cwd),
+                        env=smoke_env,
+                        text=True,
+                        capture_output=True,
+                        timeout=int(payload.get("timeout_seconds") or 120),
+                        check=False,
+                    )
+                    summary_payload = _parse_smoke_summary(completed.stdout)
+                    smoke_errors = _smoke_summary_errors(completed, summary_payload, smoke_study)
+                    result = {
+                        "valid": not smoke_errors,
+                        "study": str(study_path),
+                        "returncode": completed.returncode,
+                        "stdout": completed.stdout[-8000:],
+                        "stderr": completed.stderr[-8000:],
+                        "output_root": str(output_root),
+                        "summary": summary_payload,
+                        "errors": smoke_errors,
+                    }
+                except subprocess.TimeoutExpired as exc:
+                    result = {
+                        "valid": False,
+                        "study": str(study_path),
+                        "stdout": _cap_text(exc.stdout, 8000),
+                        "stderr": _cap_text(exc.stderr, 8000),
+                        "output_root": str(output_root),
+                        "errors": [f"Smoke study timed out after {int(payload.get('timeout_seconds') or 120)} seconds."],
+                    }
+                except Exception as exc:
+                    result = {
+                        "valid": False,
+                        "study": str(study_path),
+                        "output_root": str(output_root),
+                        "errors": [str(exc) or type(exc).__name__],
+                    }
+    plan["smoke"] = result
+    plan["curation"] = curation
+    warnings = _package_plan_warnings(plan, validation)
+    warnings.extend(str(item) for item in curation.get("warnings", []) or [] if str(item))
+    plan["warnings"] = warnings
+    if result.get("valid"):
+        plan["readiness"] = "run-ready"
+    plan["updated_at"] = _now_iso()
+    _write_package_plan(state, workspace_id, plan)
+    return {"package_plan": plan, "smoke": result}
+
+
+def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:
+    plan = _validate_package_plan(state, workspace_id, plan_id)["package_plan"]
+    if not plan.get("validation", {}).get("valid"):
+        return {"package_plan": plan, "applied": False}
+    if plan.get("classification") == "environment-plus-method" and not plan.get("smoke", {}).get("valid"):
+        plan.setdefault("warnings", []).append("Run and pass a smoke study before applying an environment-plus-method package.")
+        plan["readiness"] = "component-ready"
+        plan["status"] = "blocked"
+        _write_package_plan(state, workspace_id, plan)
+        return {"package_plan": plan, "applied": False}
+    package_root = _local_catalog_package_root(state)
+    _require_catalog_destination(state, package_root / ".write-check")
+    if package_root.exists():
+        shutil.rmtree(package_root)
+    _materialize_package_plan(state, plan, package_root)
+    applied_entries = []
+    for item in [*plan.get("components", []), *plan.get("resources", [])]:
+        if not isinstance(item, dict):
+            continue
+        config_name = item.get("registered_config_path") or _registered_config_filename(str(item.get("kind") or ""), "")
+        config_path = package_root / str(item.get("component_root") or "") / str(config_name)
+        applied_entries.append({"kind": item.get("kind"), "id": item.get("id"), "config_path": str(config_path) if config_path.exists() else "", "registered_at": _now_iso()})
+    for item in plan.get("studies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        config_path = package_root / str(item.get("registered_config_path") or "")
+        applied_entries.append({"kind": "study", "id": item.get("id"), "config_path": str(config_path) if config_path.exists() else "", "registered_at": _now_iso()})
+    workspace = _require_ui_workspace(state, workspace_id)
+    workspace["registered_entries"] = applied_entries
+    _upsert_ui_workspace(state, workspace)
+    _refresh_catalog_package_roots(state)
+    plan["status"] = "applied"
+    plan["applied_at"] = _now_iso()
+    plan["updated_at"] = _now_iso()
+    _write_package_plan(state, workspace_id, plan)
+    return {"package_plan": plan, "workspace": workspace, "applied": True}
+
+
+def _discover_workspace_package_configs(root: Path) -> List[JsonDict]:
+    configs: List[JsonDict] = []
+    for path in _iter_yaml_files(root):
+        raw = _read_yaml(path)
+        config = raw.get("config")
+        if config not in OPT_CONFIGS or raw.get("apiVersion") != AUTHORING_API_VERSION:
+            continue
+        validation = validate_authoring_config(path)
+        configs.append(
+            {
+                "path": str(path),
+                "relative_path": _relative_path(path, root),
+                "kind": config,
+                "id": str(raw.get("id") or raw.get("name") or path.stem),
+                "label": str(raw.get("name") or raw.get("id") or path.stem),
+                "valid": bool(validation.get("valid")),
+                "validation": validation,
+                "focus_paths": _focus_paths_for_config(root, path, raw),
+            }
+        )
+    return sorted(configs, key=lambda item: (item["kind"], item["relative_path"]))
+
+
+def _package_plan_classification(components: List[JsonDict], resources: List[JsonDict]) -> str:
+    has_environment = any(item.get("kind") == "environment" for item in components)
+    has_method = any(item.get("kind") == "method" for item in components)
+    if has_environment and has_method:
+        return "environment-plus-method"
+    if has_environment:
+        return "environment-only"
+    if has_method:
+        return "method-only"
+    if resources:
+        return "resource-only"
+    return "not-yet-classifiable"
+
+
+def _package_plan_readiness(plan: JsonDict, validation: JsonDict) -> str:
+    if not validation.get("valid"):
+        return "schema-invalid"
+    classification = str(plan.get("classification") or "")
+    if classification == "resource-only":
+        return "resource-ready"
+    if classification in {"environment-only", "method-only"}:
+        return "component-ready"
+    if classification == "environment-plus-method":
+        return "run-ready" if plan.get("smoke", {}).get("valid") else "component-ready"
+    return "not-yet-classifiable"
+
+
+def _package_plan_warnings(plan: JsonDict, validation: JsonDict) -> List[str]:
+    warnings: List[str] = []
+    if plan.get("classification") == "environment-plus-method" and not plan.get("studies"):
+        warnings.append("Environment-plus-method package has no study to smoke-run.")
+    elif plan.get("classification") == "environment-plus-method" and not plan.get("smoke", {}).get("valid"):
+        warnings.append("Environment-plus-method package is component-ready; run a smoke study before applying it.")
+    if validation.get("valid") and plan.get("classification") in {"environment-only", "method-only"}:
+        warnings.append("Package is component-ready; pair it with a compatible counterpart before claiming run-ready.")
+    return warnings
+
+
+def _materialize_package_plan(state: UiState, plan: JsonDict, package_root: Path) -> None:
+    root = Path(str(plan["source_root"])).resolve()
+    package_root.mkdir(parents=True, exist_ok=True)
+    for item in plan.get("components", []) or []:
+        if not isinstance(item, dict):
+            continue
+        destination = package_root / str(item.get("component_root") or "")
+        _copy_plan_target(root, item, destination)
+    for item in plan.get("resources", []) or []:
+        if not isinstance(item, dict):
+            continue
+        destination = package_root / str(item.get("component_root") or "")
+        if item.get("synthesized"):
+            destination.mkdir(parents=True, exist_ok=True)
+            _copy_plan_files(root, item, destination)
+        else:
+            _copy_plan_target(root, item, destination)
+    studies_root = package_root / "studies"
+    studies_root.mkdir(parents=True, exist_ok=True)
+    component_config_map = _package_plan_component_config_map(plan)
+    for item in plan.get("studies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        config_path = (root / str(item.get("config_path") or "")).resolve()
+        if not config_path.exists():
+            continue
+        raw = _read_yaml(config_path)
+        normalized = _normalize_registered_study(raw, root, config_path, component_config_map)
+        output = package_root / str(item.get("registered_config_path") or f"studies/{_slug_text(str(raw.get('name') or config_path.stem))}.yaml")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+
+
+def _copy_plan_target(root: Path, item: JsonDict, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    config_source = (root / str(item.get("config_path") or "")).resolve() if item.get("config_path") else None
+    _copy_plan_files(root, item, destination, config_source=config_source)
+    if config_source is not None and config_source.exists():
+        output = destination / str(item.get("registered_config_path") or _registered_config_filename(str(item.get("kind") or ""), config_source.name))
+        if not output.exists():
+            raw = _read_yaml(config_source)
+            normalized = _normalize_registered_config(raw, root, config_source, destination, item)
+            output.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+
+
+def _copy_plan_files(root: Path, item: JsonDict, destination: Path, *, config_source: Optional[Path] = None) -> None:
+    for pattern in _plan_include_patterns(item):
+        for source in _match_workspace_pattern(root, str(pattern)):
+            relative = source.relative_to(root)
+            if _excluded_by_patterns(str(relative), item.get("exclude", [])):
+                continue
+            if config_source is not None and source.resolve() == config_source:
+                output_relative = Path(str(item.get("registered_config_path") or _registered_config_filename(str(item.get("kind") or ""), config_source.name)))
+                output = destination / output_relative
+                raw = _read_yaml(source)
+                normalized = _normalize_registered_config(raw, root, source, destination, item)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(yaml.safe_dump(normalized, sort_keys=False), encoding="utf-8")
+            else:
+                output_relative = _registration_output_relative(root, source, config_source, str(item.get("kind") or ""), item) if config_source is not None else _path_rewrite_for_item(item, str(relative), relative)
+                output = destination / output_relative
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, output)
+
+
+def _package_plan_component_config_map(plan: JsonDict) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for item in plan.get("components", []) or []:
+        if not isinstance(item, dict):
+            continue
+        config_path = str(item.get("config_path") or "")
+        registered = f"../{item.get('component_root')}/{item.get('registered_config_path') or _registered_config_filename(str(item.get('kind') or ''), '')}"
+        if config_path:
+            mapping[config_path] = registered
+    return mapping
+
+
+def _normalize_registered_study(raw: JsonDict, root: Path, config_source: Path, component_config_map: Dict[str, str]) -> JsonDict:
+    normalized = deepcopy(raw)
+    for key in ("environmentConfig", "methodConfig"):
+        value = normalized.get(key)
+        if not isinstance(value, str):
+            continue
+        resolved = (config_source.parent / value).resolve()
+        relative = _relative_path(resolved, root) if _is_relative_to(resolved, root.resolve()) else value
+        if relative in component_config_map:
+            normalized[key] = component_config_map[relative]
+    return normalized
+
+
+def _select_plan_study(package_root: Path, plan: JsonDict, requested: str) -> Optional[Path]:
+    if requested:
+        requested = requested.strip()
+        path = Path(requested).expanduser()
+        candidate = path.resolve() if path.is_absolute() else (package_root / path).resolve()
+        if candidate.exists():
+            return candidate
+        normalized_requested = _slug_text(requested)
+        for item in plan.get("studies", []) or []:
+            if not isinstance(item, dict):
+                continue
+            registered = str(item.get("registered_config_path") or "")
+            candidates = {
+                str(item.get("id") or ""),
+                str(item.get("label") or ""),
+                str(item.get("target_id") or ""),
+                str(item.get("config_path") or ""),
+                registered,
+                Path(registered).name if registered else "",
+                Path(registered).stem if registered else "",
+            }
+            if requested in candidates or normalized_requested in {_slug_text(value) for value in candidates if value}:
+                return (package_root / registered).resolve() if registered else None
+        return None
+    smoke_studies = [item for item in plan.get("studies", []) or [] if isinstance(item, dict) and item.get("smoke")]
+    studies = smoke_studies or [item for item in plan.get("studies", []) or [] if isinstance(item, dict)]
+    if not studies:
+        return None
+    return (package_root / str(studies[0].get("registered_config_path") or "")).resolve()
+
+
+def _parse_smoke_summary(stdout: str) -> JsonDict:
+    text = (stdout or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+        return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    start = text.rfind("\n{")
+    if start >= 0:
+        try:
+            payload = json.loads(text[start + 1 :])
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _smoke_summary_errors(completed: subprocess.CompletedProcess[str], summary: JsonDict, study_path: Path) -> List[str]:
+    errors: List[str] = []
+    if completed.returncode != 0:
+        errors.append(completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}")
+        return errors
+    if not summary:
+        return ["Smoke study completed without a parseable JSON summary."]
+    completed_trials = int(summary.get("completed_trials") or 0)
+    failure_count = int(summary.get("failure_count") or 0)
+    if completed_trials < 1:
+        errors.append("Smoke study completed no trials.")
+    if failure_count != 0:
+        errors.append(f"Smoke study reported failure_count={failure_count}.")
+    objective_metric = _study_objective_metric(study_path)
+    if objective_metric:
+        run_dir = Path(str(summary.get("run_dir") or ""))
+        if not run_dir.is_absolute():
+            run_dir = (study_path.parent / run_dir).resolve()
+        if not _observations_include_metric(run_dir / "observations.jsonl", objective_metric):
+            errors.append(f"Smoke study observations did not include objective metric {objective_metric!r}.")
+    return errors
+
+
+def _study_objective_metric(study_path: Path) -> str:
+    try:
+        raw = _read_yaml(study_path)
+    except Exception:
+        return ""
+    objective = raw.get("objective", {}) if isinstance(raw.get("objective"), dict) else {}
+    return str(objective.get("metric") or "")
+
+
+def _observations_include_metric(path: Path, metric: str) -> bool:
+    if not path.exists():
+        return False
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        values = item.get("metric_values", {}) if isinstance(item, dict) else {}
+        if isinstance(values, dict) and metric in values:
+            return True
+    return False
+
+
+def _default_resource_config_include(root: Path, config_path: Path, raw: JsonDict) -> List[str]:
+    include = {_relative_path(config_path, root)}
+    for item in _focus_paths_for_config(root, config_path, raw):
+        include.add(item)
+    for name in ("README.md", "readme.md", "assets", "docs", "data"):
+        path = config_path.parent / name
+        if path.exists():
+            include.add(_relative_path(path, root) + ("/**" if path.is_dir() else ""))
+    return sorted(include)
+
+
+def _plan_include_patterns(item: JsonDict) -> List[str]:
+    patterns = [str(value) for value in item.get("include", []) or [] if str(value)]
+    for hint in item.get("source_hints", []) or []:
+        path = hint.get("path") if isinstance(hint, dict) else hint
+        if path:
+            patterns.append(str(path))
+    return list(dict.fromkeys(patterns))
+
+
+def _package_plan_source_hint_errors(plan: JsonDict, package_root: Path) -> List[str]:
+    errors: List[str] = []
+    for item in [*(plan.get("components", []) or []), *(plan.get("resources", []) or [])]:
+        if not isinstance(item, dict):
+            continue
+        component_root = package_root / str(item.get("component_root") or "")
+        for hint in item.get("source_hints", []) or []:
+            path_value = hint.get("path") if isinstance(hint, dict) else hint
+            if not path_value:
+                continue
+            expected = component_root / _path_rewrite_for_item(item, str(path_value), Path(str(path_value)))
+            if not expected.exists():
+                errors.append(f"{item.get('kind')} {item.get('id')} source_hints path was not materialized: {path_value}")
+    return errors
+
+
+def _package_plan_curation_checks(plan: JsonDict, package_root: Path) -> JsonDict:
+    errors: List[str] = []
+    warnings: List[str] = []
+    checks: List[JsonDict] = []
+    source_root = Path(str(plan.get("source_root") or "")).resolve()
+    source_top_level = _source_top_level_names(source_root)
+    for item in plan.get("components", []) or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "")
+        component_id = str(item.get("id") or "")
+        component_root = package_root / str(item.get("component_root") or "")
+        config_path = _package_plan_component_config_path(package_root, item)
+        if not config_path.exists():
+            continue
+        raw = _read_yaml(config_path)
+        entry_errors: List[str] = []
+        entry_warnings: List[str] = []
+        if kind == "environment":
+            entry_errors.extend(_curation_environment_callable_errors(component_id, raw, config_path, package_root))
+        elif kind == "method":
+            entry_errors.extend(_curation_method_protocol_errors(component_id, raw, config_path, package_root))
+        entry_errors.extend(
+            _curation_local_import_errors(
+                component_id=component_id,
+                component_root=component_root,
+                config_path=config_path,
+                raw=raw,
+                package_root=package_root,
+                source_top_level=source_top_level,
+            )
+        )
+        entry_warnings.extend(_curation_env_var_warnings(kind, component_id, raw, component_root))
+        errors.extend(entry_errors)
+        warnings.extend(entry_warnings)
+        checks.append(
+            {
+                "kind": kind,
+                "id": component_id,
+                "path": str(config_path),
+                "valid": not entry_errors,
+                "errors": entry_errors,
+                "warnings": entry_warnings,
+            }
+        )
+    return {"valid": not errors, "errors": errors, "warnings": warnings, "checks": checks}
+
+
+def _package_plan_component_config_path(package_root: Path, item: JsonDict) -> Path:
+    return package_root / str(item.get("component_root") or "") / str(
+        item.get("registered_config_path") or _registered_config_filename(str(item.get("kind") or ""), "")
+    )
+
+
+def _curation_environment_callable_errors(
+    component_id: str,
+    raw: JsonDict,
+    config_path: Path,
+    package_root: Path,
+) -> List[str]:
+    evaluator = raw.get("evaluator", {}) if isinstance(raw.get("evaluator"), dict) else {}
+    ref = evaluator.get("python")
+    if not isinstance(ref, str) or not ref:
+        return []
+    return _curation_python_callable_shape_errors(
+        label=f"environment {component_id} evaluator.python",
+        ref=ref,
+        python_paths=_config_python_paths(config_path, evaluator.get("pythonPath", []) or []),
+        package_root=package_root,
+        mode="environment",
+    )
+
+
+def _curation_method_protocol_errors(
+    component_id: str,
+    raw: JsonDict,
+    config_path: Path,
+    package_root: Path,
+) -> List[str]:
+    entrypoint = raw.get("entrypoint", {}) if isinstance(raw.get("entrypoint"), dict) else {}
+    ref = entrypoint.get("python")
+    if not isinstance(ref, str) or not ref:
+        return []
+    protocol = str(entrypoint.get("protocol") or "batch")
+    return _curation_python_callable_shape_errors(
+        label=f"method {component_id} entrypoint.python",
+        ref=ref,
+        python_paths=_config_python_paths(config_path, entrypoint.get("pythonPath", []) or []),
+        package_root=package_root,
+        mode=f"method:{protocol}",
+    )
+
+
+def _curation_python_callable_shape_errors(
+    *,
+    label: str,
+    ref: str,
+    python_paths: List[Path],
+    package_root: Path,
+    mode: str,
+) -> List[str]:
+    script = r"""
+import importlib
+import inspect
+import sys
+
+label, ref, mode = sys.argv[1:4]
+try:
+    module_name, sep, attr_path = ref.partition(":")
+    if not sep:
+        raise ValueError("Python reference must use module:attribute")
+    module = importlib.import_module(module_name)
+    value = module
+    for part in attr_path.split("."):
+        value = getattr(value, part)
+    errors = []
+    if mode == "environment":
+        sig = inspect.signature(value)
+        params = list(sig.parameters.values())
+        positional = [
+            p for p in params
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            and p.default is inspect.Parameter.empty
+        ]
+        has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        if not has_varargs and len(positional) > 2:
+            errors.append(f"{label} must be callable as evaluate(candidate_runtime, context); signature is {sig}")
+    elif mode.startswith("method:"):
+        protocol = mode.split(":", 1)[1] or "batch"
+        init = value.__init__ if inspect.isclass(value) else value
+        sig = inspect.signature(init)
+        params = list(sig.parameters.values())
+        required_positional = [
+            p for p in params
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            and p.default is inspect.Parameter.empty
+        ]
+        if inspect.isclass(value) and required_positional and required_positional[0].name == "self":
+            required_positional = required_positional[1:]
+        has_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
+        if not has_varargs and len(required_positional) > 3:
+            errors.append(f"{label} must be constructible as Method(definition, study_spec, rng); signature is {sig}")
+        if not has_varargs and inspect.isclass(value) and len(required_positional) < 3:
+            errors.append(f"{label} must accept definition, study_spec, and rng; signature is {sig}")
+        if protocol == "session":
+            if inspect.isclass(value):
+                has_run = callable(getattr(value, "run", None))
+                has_call = callable(getattr(value, "__call__", None))
+            else:
+                has_run = False
+                has_call = callable(value)
+            if not (has_run or has_call):
+                errors.append(f"{label} protocol session requires run(session) or a callable method object")
+        else:
+            has_propose = callable(getattr(value, "propose", None))
+            has_lifecycle = all(callable(getattr(value, name, None)) for name in ("start", "poll", "finalize"))
+            if inspect.isclass(value) and not (has_propose or has_lifecycle):
+                errors.append(f"{label} protocol batch requires propose(...) or start/poll/finalize lifecycle methods")
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        raise SystemExit(2)
+except SystemExit:
+    raise
+except Exception as exc:
+    print(f"{label} could not be inspected: {type(exc).__name__}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+"""
+    env = dict(os.environ)
+    path_values = [str(path) for path in python_paths]
+    env["PYTHONPATH"] = os.pathsep.join(path_values) if path_values else ""
+    completed = subprocess.run(
+        [sys.executable, "-c", script, label, ref, mode],
+        cwd=str(package_root),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode == 0:
+        return []
+    detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
+    return [detail]
+
+
+def _curation_local_import_errors(
+    *,
+    component_id: str,
+    component_root: Path,
+    config_path: Path,
+    raw: JsonDict,
+    package_root: Path,
+    source_top_level: set[str],
+) -> List[str]:
+    if not component_root.exists():
+        return []
+    python_paths = _component_python_paths(config_path, raw)
+    search_roots = _dedupe_existing_paths([component_root, *python_paths])
+    errors: List[str] = []
+    for path in sorted(component_root.rglob("*.py")):
+        if _path_has_part(path, {".venv", "__pycache__", "node_modules"}):
+            continue
+        for module_name in _python_imports_in_file(path):
+            top_level = module_name.split(".", 1)[0]
+            if not top_level or top_level in _stdlib_module_names():
+                continue
+            if _module_exists_under_roots(module_name, search_roots):
+                continue
+            if top_level in source_top_level:
+                relative = _relative_path(path, package_root)
+                errors.append(
+                    f"{component_id}: local import {module_name!r} in {relative} is not materialized in the package. "
+                    f"Add the needed source directory/file to the package plan include or source_hints."
+                )
+    return list(dict.fromkeys(errors))
+
+
+def _curation_env_var_warnings(kind: str, component_id: str, raw: JsonDict, component_root: Path) -> List[str]:
+    declared = _declared_component_env_from_host(raw)
+    used = _source_env_var_names(component_root)
+    warnings: List[str] = []
+    for name in sorted(used):
+        if name in declared:
+            continue
+        if _looks_like_required_secret(name):
+            warnings.append(
+                f"{kind} {component_id} reads environment variable {name!r} but does not declare it in runtime.envFromHost or interface.envFromHost."
+            )
+    label = f"{component_id} {' '.join(str(value) for value in raw.get('tags', []) or [])} {raw.get('description', '')}".lower()
+    if any(token in label for token in ("llm", "openai", "openrouter", "anthropic")):
+        provider_vars = {name for name in used if _looks_like_required_secret(name)}
+        if not provider_vars:
+            warnings.append(
+                f"{kind} {component_id} is described as provider/LLM-related but no provider API key usage was detected. "
+                "If it is only a seed or baseline method, rename it clearly."
+            )
+    return warnings
+
+
+def _component_python_paths(config_path: Path, raw: JsonDict) -> List[Path]:
+    if raw.get("config") == "environment":
+        evaluator = raw.get("evaluator", {}) if isinstance(raw.get("evaluator"), dict) else {}
+        return _config_python_paths(config_path, evaluator.get("pythonPath", []) or [])
+    if raw.get("config") == "method":
+        entrypoint = raw.get("entrypoint", {}) if isinstance(raw.get("entrypoint"), dict) else {}
+        return _config_python_paths(config_path, entrypoint.get("pythonPath", []) or [])
+    return [_config_dir(config_path)]
+
+
+def _config_python_paths(config_path: Path, values: Iterable[Any]) -> List[Path]:
+    roots = [_config_dir(config_path)]
+    for value in values:
+        if isinstance(value, str) and value:
+            candidate = Path(value).expanduser()
+            roots.append(candidate.resolve() if candidate.is_absolute() else (_config_dir(config_path) / candidate).resolve())
+    return _dedupe_existing_paths(roots)
+
+
+def _dedupe_existing_paths(paths: Iterable[Path]) -> List[Path]:
+    result: List[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            result.append(resolved)
+    return result
+
+
+def _config_dir(path: Path) -> Path:
+    return path.parent if path.is_file() else path
+
+
+def _source_top_level_names(source_root: Path) -> set[str]:
+    ignored = {".git", ".venv", "__pycache__", "node_modules", "runs", ".optpilot"}
+    if not source_root.exists() or not source_root.is_dir():
+        return set()
+    names = set()
+    for child in source_root.iterdir():
+        if child.name in ignored or child.name.startswith("."):
+            continue
+        if child.is_dir() or child.suffix == ".py":
+            names.add(child.stem if child.is_file() else child.name)
+    return names
+
+
+def _python_imports_in_file(path: Path) -> List[str]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return []
+    modules: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name:
+                    modules.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:
+                modules.append(node.module)
+    return modules
+
+
+def _module_exists_under_roots(module_name: str, roots: Iterable[Path]) -> bool:
+    parts = module_name.split(".")
+    for root in roots:
+        current = root.joinpath(*parts)
+        if current.with_suffix(".py").exists() or (current / "__init__.py").exists():
+            return True
+        top = root / parts[0]
+        if len(parts) == 1 and (top.with_suffix(".py").exists() or (top / "__init__.py").exists()):
+            return True
+    return False
+
+
+def _declared_component_env_from_host(raw: JsonDict) -> set[str]:
+    names: set[str] = set()
+    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    names.update(str(item) for item in runtime.get("envFromHost", []) or [] if str(item))
+    setup = runtime.get("setup", {}) if isinstance(runtime.get("setup"), dict) else {}
+    names.update(str(item) for item in setup.get("envFromHost", []) or [] if str(item))
+    interface = raw.get("interface", {}) if isinstance(raw.get("interface"), dict) else {}
+    names.update(str(item) for item in interface.get("envFromHost", []) or [] if str(item))
+    interface_setup = interface.get("setup", {}) if isinstance(interface.get("setup"), dict) else {}
+    names.update(str(item) for item in interface_setup.get("envFromHost", []) or [] if str(item))
+    return names
+
+
+def _source_env_var_names(component_root: Path) -> set[str]:
+    names: set[str] = set()
+    if not component_root.exists():
+        return names
+    pattern = re.compile(
+        r"(?:os\.getenv|os\.environ\.get|environ\.get)\(\s*['\"]([A-Z][A-Z0-9_]{2,})['\"]|"
+        r"(?:os\.)?environ\[\s*['\"]([A-Z][A-Z0-9_]{2,})['\"]\s*\]"
+    )
+    for path in component_root.rglob("*.py"):
+        if _path_has_part(path, {".venv", "__pycache__", "node_modules"}):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in pattern.finditer(text):
+            for group in match.groups():
+                if group:
+                    names.add(group)
+    return names
+
+
+def _looks_like_required_secret(name: str) -> bool:
+    upper = name.upper()
+    return any(token in upper for token in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "OPENAI", "OPENROUTER", "ANTHROPIC"))
+
+
+def _stdlib_module_names() -> set[str]:
+    return set(getattr(sys, "stdlib_module_names", set())) | set(sys.builtin_module_names)
+
+
+def _path_has_part(path: Path, names: set[str]) -> bool:
+    return any(part in names for part in path.parts)
+
+
+def _package_plan_path(state: UiState, workspace_id: str, plan_id: str) -> Path:
+    return state.workspaces_dir / workspace_id / "package_plans" / f"{plan_id}.json"
+
+
+def _read_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:
+    path = _package_plan_path(state, workspace_id, plan_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Package plan not found: {plan_id}")
+    return _read_json(path)
+
+
+def _write_package_plan(state: UiState, workspace_id: str, plan: JsonDict) -> None:
+    plan_id = str(plan.get("id") or "")
+    if not plan_id:
+        raise ValueError("Package plan id is required.")
+    path = _package_plan_path(state, workspace_id, plan_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _now_iso() -> str:
@@ -6631,9 +9032,13 @@ def _focus_paths_for_config(root: Path, config_path: Path, raw: JsonDict) -> Lis
         command = evaluator.get("command")
         if isinstance(command, list):
             focus.extend(_command_focus_paths(root, config_path, command))
-        for item in raw.get("methodContext", {}).get("references", []) or []:
+        method_context = raw.get("methodContext", {}) if isinstance(raw.get("methodContext"), dict) else {}
+        for item in method_context.get("instructions", []) or []:
+            if isinstance(item, str):
+                focus.append(_focus_path_value(root, config_path, item))
+        for item in method_context.get("references", []) or []:
             if isinstance(item, dict) and item.get("path"):
-                focus.append(str(item["path"]))
+                focus.append(_focus_path_value(root, config_path, str(item["path"])))
     elif config == "method":
         entrypoint = raw.get("entrypoint", {}) if isinstance(raw.get("entrypoint"), dict) else {}
         focus.extend(_likely_python_focus_paths(root, config_path, entrypoint.get("python")))
@@ -6668,6 +9073,13 @@ def _likely_python_focus_paths(root: Path, config_path: Path, import_ref: Any) -
     return result
 
 
+def _focus_path_value(root: Path, config_path: Path, value: str) -> str:
+    config_relative = (config_path.parent / value).resolve()
+    if config_relative.exists() and _is_relative_to(config_relative, root.resolve()):
+        return _relative_path(config_relative, root)
+    return value
+
+
 def _command_focus_paths(root: Path, config_path: Path, command: List[Any]) -> List[str]:
     result = []
     for item in command:
@@ -6688,13 +9100,225 @@ def _default_registration_destination(state: UiState, kind: str, catalog_id: str
     raise ValueError(f"{kind} configs are not catalog registration targets.")
 
 
+def _registered_config_filename(kind: str, fallback: str) -> str:
+    if kind == "environment":
+        return "environment.yaml"
+    if kind == "method":
+        return "method.yaml"
+    if kind == "resource":
+        return "optpilot.resource.yaml"
+    return fallback or "config.yaml"
+
+
+def _registration_output_relative(root: Path, source: Path, config_source: Optional[Path], kind: str, item: Optional[JsonDict] = None) -> Path:
+    workspace_relative = str(source.resolve().relative_to(root.resolve()))
+    if item is not None:
+        rewritten = _path_rewrite_for_item(item, workspace_relative, Path(workspace_relative))
+        if str(rewritten) != workspace_relative:
+            return rewritten
+    if config_source is not None and source.resolve() == config_source.resolve():
+        return Path(_registered_config_filename(kind, config_source.name))
+    if config_source is not None and _is_relative_to(source.resolve(), config_source.parent.resolve()):
+        return source.resolve().relative_to(config_source.parent.resolve())
+    return source.resolve().relative_to(root.resolve())
+
+
+def _normalize_registered_config(raw: JsonDict, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict] = None) -> JsonDict:
+    config = str(raw.get("config") or "")
+    normalized = deepcopy(raw)
+    if config == "environment":
+        _normalize_python_path(normalized.get("evaluator"), "pythonPath")
+        _rewrite_optional_path(normalized.get("evaluator"), "cwd", root, config_source, destination, item)
+        _rewrite_command_paths(normalized.get("evaluator"), "command", root, config_source, destination, item)
+        _rewrite_method_context_paths(normalized.get("methodContext"), root, config_source, destination, item)
+        for workspace_item in normalized.get("trialWorkspace", []) or []:
+            if isinstance(workspace_item, dict):
+                _rewrite_optional_path(workspace_item, "from", root, config_source, destination, item)
+        _rewrite_component_runtime_paths(normalized.get("runtime"), root, config_source, destination, item)
+        _rewrite_interface_paths(normalized.get("interface"), root, config_source, destination, item)
+    elif config == "method":
+        _normalize_python_path(normalized.get("entrypoint"), "pythonPath")
+        _rewrite_command_paths(normalized.get("entrypoint"), "command", root, config_source, destination, item)
+        _rewrite_component_runtime_paths(normalized.get("runtime"), root, config_source, destination, item)
+        _rewrite_interface_paths(normalized.get("interface"), root, config_source, destination, item)
+    elif config == "resource":
+        _rewrite_interface_paths(normalized.get("interface"), root, config_source, destination, item)
+    return normalized
+
+
+def _normalize_python_path(section: Any, key: str) -> None:
+    if not isinstance(section, dict):
+        return
+    ref = str(section.get("python") or section.get("adapter") or "")
+    module_name = ref.partition(":")[0]
+    if section.get(key):
+        section[key] = ["."]
+    elif module_name and "." not in module_name:
+        section[key] = ["."]
+
+
+def _rewrite_method_context_paths(method_context: Any, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(method_context, dict):
+        return
+    instructions = method_context.get("instructions")
+    if isinstance(instructions, list):
+        method_context["instructions"] = [
+            _registered_path_value(value, root, config_source, destination, item) if isinstance(value, str) else value
+            for value in instructions
+        ]
+    for reference in method_context.get("references", []) or []:
+        if isinstance(reference, dict):
+            _rewrite_optional_path(reference, "path", root, config_source, destination, item)
+
+
+def _rewrite_component_runtime_paths(runtime: Any, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(runtime, dict):
+        return
+    _rewrite_optional_path(runtime, "workdir", root, config_source, destination, item)
+    _rewrite_setup_paths(runtime.get("setup"), root, config_source, destination, item)
+    container = runtime.get("container") if isinstance(runtime.get("container"), dict) else None
+    build = container.get("build") if isinstance(container, dict) and isinstance(container.get("build"), dict) else None
+    if isinstance(build, dict):
+        _rewrite_optional_path(build, "context", root, config_source, destination, item)
+        _rewrite_optional_path(build, "dockerfile", root, config_source, destination, item)
+
+
+def _rewrite_interface_paths(interface: Any, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(interface, dict):
+        return
+    _rewrite_optional_path(interface, "cwd", root, config_source, destination, item)
+    _rewrite_command_paths(interface, "command", root, config_source, destination, item)
+    _rewrite_setup_paths(interface.get("setup"), root, config_source, destination, item)
+
+
+def _rewrite_setup_paths(setup: Any, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(setup, dict):
+        return
+    for step in setup.get("steps", []) or []:
+        if not isinstance(step, dict):
+            continue
+        _rewrite_optional_path(step, "cwd", root, config_source, destination, item)
+        requirements = step.get("requirements")
+        if isinstance(requirements, list):
+            step["requirements"] = [
+                _registered_path_value(value, root, config_source, destination, item) if isinstance(value, str) else value
+                for value in requirements
+            ]
+        _rewrite_command_paths(step, "command", root, config_source, destination, item)
+
+
+def _rewrite_command_paths(section: Any, key: str, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(section, dict) or not isinstance(section.get(key), list):
+        return
+    rewritten = []
+    for value in section[key]:
+        if isinstance(value, str) and _looks_like_command_file_token(value):
+            rewritten.append(_registered_path_value(value, root, config_source, destination, item))
+        else:
+            rewritten.append(value)
+    section[key] = rewritten
+
+
+def _rewrite_optional_path(section: Any, key: str, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> None:
+    if not isinstance(section, dict) or not isinstance(section.get(key), str):
+        return
+    section[key] = _registered_path_value(str(section[key]), root, config_source, destination, item)
+
+
+def _registered_path_value(value: str, root: Path, config_source: Path, destination: Path, item: Optional[JsonDict]) -> str:
+    value_path = Path(value).expanduser()
+    if value_path.is_absolute():
+        return value
+    config_relative = (config_source.parent / value_path).resolve()
+    root_relative = (root / value_path).resolve()
+    if config_relative.exists():
+        output_relative = _registration_output_relative(root, config_relative, config_source, str(_read_yaml(config_source).get("config") or ""), item)
+        return str(output_relative)
+    if root_relative.exists():
+        workspace_relative = str(root_relative.relative_to(root.resolve()))
+        return str(_path_rewrite_for_item(item, workspace_relative, Path(workspace_relative)))
+    return value
+
+
 def _default_registration_include(root: Path, config_path: Path, raw: JsonDict) -> List[str]:
     include = set(_focus_paths_for_config(root, config_path, raw))
+    include.update(_declared_python_path_includes(root, config_path, raw))
+    include.update(_import_source_root_includes(root, config_path, include))
     for name in ("assets", "prompts", "data", "cases"):
         if (config_path.parent / name).exists():
             include.add(_relative_path(config_path.parent / name, root) + "/**")
     include.add(_relative_path(config_path, root))
     return sorted(include)
+
+
+def _declared_python_path_includes(root: Path, config_path: Path, raw: JsonDict) -> List[str]:
+    config = raw.get("config")
+    section: JsonDict = {}
+    if config == "environment" and isinstance(raw.get("evaluator"), dict):
+        section = raw["evaluator"]
+    elif config == "method" and isinstance(raw.get("entrypoint"), dict):
+        section = raw["entrypoint"]
+    result: List[str] = []
+    for value in section.get("pythonPath", []) or []:
+        if not isinstance(value, str) or value in {"", "."}:
+            continue
+        path = (config_path.parent / value).resolve()
+        if not _is_relative_to(path, root.resolve()) or not path.exists():
+            continue
+        if path.is_dir():
+            result.append(_relative_path(path, root) + "/**")
+        elif path.is_file():
+            result.append(_relative_path(path, root))
+    return result
+
+
+def _import_source_root_includes(root: Path, config_path: Path, focus_paths: Iterable[str]) -> List[str]:
+    includes: List[str] = []
+    for relative in focus_paths:
+        path = (root / str(relative)).resolve()
+        if not path.exists() or not path.is_file() or path.suffix != ".py":
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for module in _top_level_imports(tree):
+            candidate_dir = root / module
+            candidate_file = root / f"{module}.py"
+            if candidate_dir.exists() and candidate_dir.is_dir():
+                includes.append(f"{module}/**")
+            elif candidate_file.exists() and candidate_file.is_file():
+                includes.append(f"{module}.py")
+    return sorted(set(includes))
+
+
+def _top_level_imports(tree: ast.AST) -> List[str]:
+    modules: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name.split(".", 1)[0] for alias in node.names if alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.append(node.module.split(".", 1)[0])
+    return modules
+
+
+def _path_rewrite_for_item(item: Optional[JsonDict], relative: str, fallback: Path) -> Path:
+    if isinstance(item, dict):
+        for rewrite in item.get("path_rewrites", []) or []:
+            if not isinstance(rewrite, dict):
+                continue
+            if str(rewrite.get("from") or "") == relative and rewrite.get("to"):
+                return Path(str(rewrite["to"]))
+    return fallback
+
+
+def _looks_like_command_file_token(value: str) -> bool:
+    if not value or value.startswith("{") or "://" in value:
+        return False
+    if value in {"python", "python3", "uv", "npm", "node", "bash", "sh", "cmd", "powershell"}:
+        return False
+    suffix = Path(value).suffix.lower()
+    return suffix in {".py", ".js", ".mjs", ".cjs", ".sh", ".bash", ".json", ".yaml", ".yml", ".toml", ".txt"} or "/" in value or "\\" in value
 
 
 def _registration_manifest_path(state: UiState, workspace_id: str, registration_id: str) -> Path:
@@ -6846,12 +9470,17 @@ def _list_run_files(run_dir: Path) -> List[JsonDict]:
 
 
 def _iter_yaml_files(root: Path) -> Iterable[Path]:
+    root = root.resolve()
     if root.is_file():
         if root.suffix.lower() in {".yaml", ".yml"}:
-            yield root.resolve()
+            yield root
         return
     for path in root.rglob("*"):
-        if any(part in EXCLUDED_SCAN_DIRS for part in path.parts):
+        try:
+            relative_parts = path.resolve().relative_to(root).parts
+        except ValueError:
+            continue
+        if any(part in EXCLUDED_SCAN_DIRS for part in relative_parts):
             continue
         if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}:
             yield path.resolve()
@@ -6960,6 +9589,13 @@ def _encode_id(path: Path) -> str:
 def _decode_id(value: str) -> Path:
     padding = "=" * (-len(value) % 4)
     return Path(base64.urlsafe_b64decode((value + padding).encode("ascii")).decode("utf-8")).resolve()
+
+
+def _try_decode_id(value: str) -> Optional[Path]:
+    try:
+        return _decode_id(value)
+    except Exception:
+        return None
 
 
 def _path_mtime(path: Path) -> float:

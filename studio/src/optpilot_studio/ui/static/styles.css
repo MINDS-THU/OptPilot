@@ -1388,6 +1388,18 @@ th {
   color: var(--accent-strong);
 }
 
+.catalog-package-select {
+  min-height: 32px;
+  max-width: 190px;
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 6px 28px 6px 10px;
+  font: inherit;
+}
+
 .tab-content {
   padding: 14px;
 }

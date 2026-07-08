@@ -1,5 +1,5 @@
 {
-  "name": "xdevs-visualizer",
+  "name": "devs-generator-interface",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^1.33.0",
     "d3": "^7.9.0",
     "lucide-react": "^0.560.0",
     "prismjs": "^1.30.0",

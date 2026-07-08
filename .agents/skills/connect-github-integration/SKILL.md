@@ -18,13 +18,16 @@ Before editing code, read the current project docs that define the public contra
 - `docs/candidate-contracts.md`
 - `docs/concepts.md`
 - `docs/configuration.md`
-- The closest example page: job-shop, LLM code methods, LLM heuristic repositories, DEVS-Gen, or UI docs as relevant.
+- The closest example page: job-shop environment, dispatch-rule methods,
+  solver-code methods, reinforcement-learning methods, or Studio docs as
+  relevant.
 
 Prefer existing examples over inventing patterns:
 
-- Environments: `examples/environments/job_shop_scheduling/`, `examples/environments/strategic_airlift_devs/`
-- Methods: `examples/methods/*`
-- Studies: `examples/studies/*.yaml`
+- Package examples: `catalog/example_package/environments/`,
+  `catalog/example_package/methods/`, and `catalog/example_package/studies/`
+- Draft workspace configs: `optpilot_configs/environments/`,
+  `optpilot_configs/methods/`, and `optpilot_configs/studies/`
 
 ## Upstream Recon
 
@@ -72,7 +75,9 @@ The environment owns what can be evaluated. The method owns how candidates are p
 
 ## Environment Pattern
 
-Create or copy an environment directory under `user_catalog/environments/...` or `examples/environments/...` depending on whether this should be a public example.
+Create or copy an environment directory under the draft workspace's
+`optpilot_configs/environments/...`. Studio registration materializes it into a
+catalog package such as `catalog/local_package/environments/...`.
 
 Minimum environment config shape:
 
@@ -82,7 +87,8 @@ config: environment
 id: my-environment
 
 evaluator:
-  python: user_catalog.environments.my_environment.evaluator:evaluate
+  python: evaluator:evaluate
+  pythonPath: [.]
   settings: {}
 
 candidate:
@@ -113,7 +119,8 @@ Use `trialWorkspace` only for files that must be copied into each disposable tri
 
 ## Method Pattern
 
-Create or copy a method directory under `user_catalog/methods/...` or `examples/methods/...`.
+Create or copy a method directory under the draft workspace's
+`optpilot_configs/methods/...`.
 
 For a small Python method:
 
@@ -123,7 +130,8 @@ config: method
 id: my-method
 
 entrypoint:
-  python: user_catalog.methods.my_method.method:MyMethod
+  python: method:MyMethod
+  pythonPath: [.]
   protocol: batch
 
 settings: {}
@@ -186,12 +194,20 @@ Keep core OptPilot dependencies small.
 
 Run the smallest useful verification set for the integration:
 
-1. `uv run optpilot validate path/to/study.yaml`
-2. `uv run optpilot run path/to/study.yaml --output-root /tmp/optpilot-<name>-check`
-3. Inspect the final summary for `failure_count: 0`, expected metric keys, and expected output files.
-4. Run focused unit tests if code paths are shared.
-5. Run `uv run --extra docs mkdocs build --strict` if public docs changed.
-6. Run the repo smoke test when changing core behavior or public examples.
+1. Prepare a package plan in Studio when working from an attached external
+   workspace.
+2. Run package-plan validation and repair every reported schema, source,
+   setup-file, import, method-protocol, evaluator-shape, or source-closure
+   error.
+3. If the package contains both an environment and a method, create the
+   smallest smoke study and run package-plan smoke before applying.
+4. Inspect the final smoke summary for `failure_count: 0`, expected metric
+   keys, and expected output files.
+5. For CLI-only work, run `uv run optpilot validate path/to/study.yaml` and
+   `uv run optpilot run path/to/study.yaml --output-root /tmp/optpilot-<name>-check`.
+6. Run focused unit tests if code paths are shared.
+7. Run `uv run --extra docs mkdocs build --strict` if public docs changed.
+8. Run the repo smoke test when changing core behavior or public examples.
 
 If an example cannot be run without external clone, API key, license, GPU, or long training, make that explicit in docs and ensure at least its config validates.
 
@@ -220,3 +236,8 @@ For each integration, state:
 - Do not make the environment depend on the optimizer just because a tutorial method uses that optimizer.
 - Do not hide method-readable files in evaluator-only settings; expose them through `methodContext.references`.
 - Do not turn one upstream repository into many OptPilot concepts. Usually it is one environment or one method.
+- Do not apply an environment-plus-method package until package-plan smoke
+  passes. Schema validation alone is not run readiness.
+- Do not name a method as LLM/OpenAI/OpenRouter/Anthropic unless it actually
+  uses that provider path and declares the required secret variables in
+  `runtime.envFromHost`.

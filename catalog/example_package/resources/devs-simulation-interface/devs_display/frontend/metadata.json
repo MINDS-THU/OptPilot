@@ -1,5 +1,0 @@
-{
-  "name": "xDEVS Visualizer",
-  "description": "A visualization tool for xDEVS Python simulation models using Gemini AI to parse structure and D3.js to render hierarchical coupled models.",
-  "requestFramePermissions": []
-}

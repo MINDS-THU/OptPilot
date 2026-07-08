@@ -1079,35 +1079,24 @@ or a launchable interface. README-only resources do not need this YAML file.
 apiVersion: optpilot.io/v1
 config: resource
 
-id: devs-simulation-interface
-name: DEVS Simulation Interface
-description: Build discrete-event simulation projects from natural-language descriptions.
+id: devs-gen-interface
+name: DEVS Simulation Generator Interface
+description: Generate, run, and visualize xDEVS discrete-event simulation projects.
 tags: [resource, simulation, frontend, devs]
 
 interface:
-  label: DEVS Interface
-  description: Start the backend API and frontend, then open the UI.
-  setup:
-    steps:
-      - uses: python-venv
-        cwd: .
-        requirements: [requirements.txt]
-      - uses: npm
-        cwd: devs_display/frontend
-        install: ci
-    env:
-      PYTHONUNBUFFERED: "1"
-      NPM_CONFIG_FUND: "false"
-      NPM_CONFIG_AUDIT: "false"
-    timeoutSeconds: 900
-  command: [bash, -lc, ./scripts/start_interface.sh]
+  label: DEVS Generator
+  description: Start the generation backend and graphical frontend, then open the UI.
+  command: [bash, -lc, ./_optpilot_launch_interface.sh]
   port: 3000
   cwd: .
   env:
-    HOST: 0.0.0.0
+    DEVS_INTERFACE_MODEL_ID: openrouter/openai/gpt-5.4
+    DEVS_INTERFACE_CONCURRENCY: "8"
+    DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS: "240"
+    DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS: "6"
   envFromHost:
-    - OPENAI_API_KEY
-    - OPENAI_BASE_URL
+    - OPENROUTER_API_KEY
   extraPorts:
     - 8000
   readyPath: /

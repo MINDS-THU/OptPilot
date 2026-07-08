@@ -19,12 +19,15 @@ its Python 3.10/3.11 runtime:
 
 - OpenHands agent-server mode: `POST /api/conversations`, then
   `POST /api/conversations/{id}/events`, then read
-  `GET /api/conversations/{id}/events/search` and
-  `GET /api/conversations/{id}/agent_final_response`.
-- OptPilot sends the `client_tools` manifest in the conversation payload.
-  OpenHands `ActionEvent` client-tool requests are executed by the OptPilot UI
-  server, then returned as a follow-up `run: true` message containing the
-  structured tool result.
+  `GET /api/conversations/{id}/events/search`. Studio treats the OpenHands
+  `finish` action as the user-facing final answer; plain assistant
+  `MessageEvent` text is retained as event history, not as task completion.
+- OptPilot sends safe native OpenHands tools in `agent.tools` for codebase
+  inspection and planning, and sends Studio-specific actions plus
+  OpenHands-compatible `optpilot_terminal` and `optpilot_file_editor` entries
+  in the `client_tools` manifest. OpenHands `ActionEvent` client-tool requests
+  are executed by the OptPilot UI server, then returned as a follow-up
+  `run: true` message containing the structured tool result.
 - OpenAI-compatible mode: `POST /v1/chat/completions` when the configured
   endpoint is a chat-completions endpoint.
 - Local model-chat fallback: use OpenRouter chat completions when no
@@ -38,9 +41,15 @@ The verified OpenHands 1.29.0 payload uses:
 - `agent.kind: Agent`
 - `agent.llm.model: openrouter/<provider>/<model>` for OpenRouter-backed
   models
+- `agent.tools` for native OpenHands tools such as `grep`, `glob`, and
+  `task_tracker`
+- `client_tools` for OptPilot actions and Studio-backed OpenHands-compatible
+  `optpilot_terminal` / `optpilot_file_editor`
 - `agent.agent_context.system_message_suffix` for the OptPilot prompt
 - `workspace.kind: LocalWorkspace`
-- `confirmation_policy.kind: AlwaysConfirm`
+- `confirmation_policy.kind: NeverConfirm`; Studio-owned client tools still
+  enforce OptPilot approval gates for risky shell commands, registration, study
+  launch, smoke tests, and job stops.
 - `SendMessageRequest.content` as text content with `run: true`
 
 OptPilot, not OpenHands, enforces:

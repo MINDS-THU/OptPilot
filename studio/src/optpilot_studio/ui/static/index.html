@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260630d" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260702a" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -224,6 +224,7 @@
                           <span>Port</span>
                           <input id="workspacePreviewPort" type="number" min="1" max="65535" inputmode="numeric" value="5173" />
                         </label>
+                        <button id="launchWorkspaceInterfaceButton" class="ghost-button" type="button" hidden>Launch Interface</button>
                         <button id="openWorkspacePreviewButton" class="primary-button" type="button">Open Preview</button>
                         <button id="reloadWorkspacePreviewButton" class="ghost-button" type="button">Reload</button>
                       </div>
@@ -260,11 +261,14 @@
                 <input id="componentSearch" class="search-input panel-search-input" type="search" placeholder="Search catalog" aria-label="Search catalog" />
               </div>
               <div class="tabs">
-	                <button class="tab active" data-component-filter="all" type="button">All</button>
-	                <button class="tab" data-component-filter="environment" type="button">Environments</button>
-	                <button class="tab" data-component-filter="method" type="button">Methods</button>
-	                <button class="tab" data-component-filter="resource" type="button">Resources</button>
-	              </div>
+                <button class="tab active" data-component-filter="all" type="button">All</button>
+                <button class="tab" data-component-filter="environment" type="button">Environments</button>
+                <button class="tab" data-component-filter="method" type="button">Methods</button>
+                <button class="tab" data-component-filter="resource" type="button">Resources</button>
+                <select id="componentPackageFilter" class="catalog-package-select" aria-label="Filter catalog by package">
+                  <option value="all">All packages</option>
+                </select>
+              </div>
               <div id="componentList" class="entity-list"></div>
             </section>
             <section class="panel detail-panel">
@@ -489,6 +493,6 @@
 	      </section>
 	    </div>
 
-    <script src="/static/app.js?v=studio-20260630d"></script>
+    <script src="/static/app.js?v=studio-20260702a"></script>
   </body>
 </html>

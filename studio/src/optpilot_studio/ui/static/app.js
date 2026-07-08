@@ -19,15 +19,18 @@ const state = {
   selectedWorkspaceByAgentSession: {},
   assistantMessagesBySession: {},
   agentApprovalsBySession: {},
+  assistantApprovalKeysBySession: {},
   agentEventsBySession: {},
   handledPreviewEventIds: new Set(),
   cancellingAgentSessionIds: new Set(),
+  syncingAgentSessionIds: new Set(),
   agentSessionSeq: 1,
   plans: [],
   selectedSessionId: null,
   selectedFileKey: null,
   selectedComponentKey: null,
   componentFilter: "all",
+  componentPackageFilter: "all",
   componentSearch: "",
   componentConfigDrafts: {},
   componentConfigOpenSections: {},
@@ -152,6 +155,7 @@ function cacheElements() {
     "workspacePreviewStatus",
     "workspacePreviewTitle",
     "workspacePreviewBody",
+    "launchWorkspaceInterfaceButton",
     "openWorkspacePreviewButton",
     "reloadWorkspacePreviewButton",
     "agentTimeline",
@@ -168,6 +172,7 @@ function cacheElements() {
     "failureCount",
     "runFilter",
     "componentSearch",
+    "componentPackageFilter",
     "planSearch",
     "runsTable",
     "runDetail",
@@ -295,6 +300,7 @@ function bindEvents() {
   on(els.reloadEmbeddedCodeButton, "click", reloadEmbeddedCodeWorkspace);
   on(els.pauseCodeWorkspaceButton, "click", stopCodeServer);
   on(els.workspacePreviewPort, "input", updateWorkspacePreviewPort);
+  on(els.launchWorkspaceInterfaceButton, "click", launchWorkspaceInterface);
   on(els.openWorkspacePreviewButton, "click", openWorkspacePreview);
   on(els.reloadWorkspacePreviewButton, "click", reloadWorkspacePreview);
   on(els.primaryActionButton, "click", primaryAction);
@@ -306,6 +312,10 @@ function bindEvents() {
   on(els.runFilter, "input", renderRuns);
   on(els.componentSearch, "input", () => {
     state.componentSearch = els.componentSearch.value;
+    renderCatalog();
+  });
+  on(els.componentPackageFilter, "change", () => {
+    state.componentPackageFilter = els.componentPackageFilter.value || "all";
     renderCatalog();
   });
   on(els.planSearch, "input", () => {
@@ -389,6 +399,10 @@ async function loadAgentSessions() {
       title: session.title,
       description: session.description,
       status: session.status || "idle",
+      effective_status: session.effective_status || session.status || "idle",
+      pending_approval_count: Number(session.pending_approval_count || 0),
+      active_approval_ids: session.active_approval_ids || [],
+      queued_approval_count: Number(session.queued_approval_count || 0),
       createdAt: session.created_at || session.createdAt || "",
     }));
     state.agentWorkspaceAttachments = {};
@@ -599,6 +613,10 @@ function currentAgentSession() {
   return state.agentSessions.find((session) => session.id === state.selectedAgentSessionId) || state.agentSessions[0] || null;
 }
 
+function assistantSessionStatus(session = currentAgentSession()) {
+  return session && (session.effective_status || session.status) || "";
+}
+
 function currentAssistantMessages() {
   const session = currentAgentSession();
   if (!session) return defaultAssistantMessages();
@@ -609,9 +627,11 @@ function currentAssistantMessages() {
 function currentAssistantApprovals() {
   const session = currentAgentSession();
   if (!session) return [];
+  const activeIds = new Set((session.active_approval_ids || []).map(String));
   const seen = new Set();
   return (state.agentApprovalsBySession[session.id] || []).filter((approval) => {
     if (approval.status !== "pending") return false;
+    if (activeIds.size && !activeIds.has(String(approval.id))) return false;
     const key = approvalDisplayKey(approval);
     if (seen.has(key)) return false;
     seen.add(key);
@@ -619,18 +639,32 @@ function currentAssistantApprovals() {
   });
 }
 
+function pendingApprovalKeyForSession(sessionId) {
+  if (!sessionId) return "";
+  const seen = new Set();
+  const keys = [];
+  (state.agentApprovalsBySession[sessionId] || []).forEach((approval) => {
+    if (!approval || approval.status !== "pending") return;
+    const key = approvalDisplayKey(approval);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    keys.push(key);
+  });
+  return keys.sort().join("\n");
+}
+
 function approvalDisplayKey(approval) {
   if (!approval || typeof approval !== "object") return "";
-  if (approval.request_key) return String(approval.request_key);
-  const args = approval.arguments && typeof approval.arguments === "object" ? { ...approval.arguments } : {};
+  const displayPayload = approval.display_payload && typeof approval.display_payload === "object" ? approval.display_payload : {};
+  const args = displayPayload.redacted_arguments && typeof displayPayload.redacted_arguments === "object"
+    ? { ...displayPayload.redacted_arguments }
+    : approval.arguments && typeof approval.arguments === "object" ? { ...approval.arguments } : {};
   delete args._openhands_tool_call_id;
   delete args.approved;
+  delete args.description;
   return stableJsonStringify({
     tool: approval.tool || "",
     kind: approval.kind || "",
-    title: approval.title || "",
-    summary: approval.summary || "",
-    targets: approval.targets || [],
     arguments: args,
   });
 }
@@ -653,7 +687,9 @@ async function syncActiveAgentSession() {
   if (!state.assistantOpen) return;
   const session = currentAgentSession();
   if (!session || session.id.startsWith("agent-session-")) return;
-  if (!["waiting_for_agent", "running"].includes(session.status || "")) return;
+  if (!["waiting_for_agent", "running"].includes(assistantSessionStatus(session))) return;
+  if (state.syncingAgentSessionIds.has(session.id)) return;
+  state.syncingAgentSessionIds.add(session.id);
   try {
     const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/sync`, {});
     if (payload.session) {
@@ -661,6 +697,8 @@ async function syncActiveAgentSession() {
     }
   } catch (error) {
     // Keep the transcript stable; the next poll or refresh can retry.
+  } finally {
+    state.syncingAgentSessionIds.delete(session.id);
   }
 }
 
@@ -760,6 +798,11 @@ function assistantVisibleContext() {
     registration_menu: isRegistrationMode && state.registrationDraft ? {
       workspace_id: state.registrationDraft.backendWorkspaceId || state.registrationDraft.workspaceId,
       status: state.registrationDraft.status,
+      package_plan_id: state.registrationDraft.packagePlanId || "",
+      classification: state.registrationDraft.classification || "",
+      readiness: state.registrationDraft.readiness || "",
+      package_plan: state.registrationDraft.packagePlan ? packagePlanContextSummary(state.registrationDraft.packagePlan) : null,
+      warnings: state.registrationDraft.packagePlan && state.registrationDraft.packagePlan.warnings || [],
       selected_configs: (state.registrationDraft.configs || [])
         .filter((config) => config.selected)
         .map((config) => ({ path: config.backendPath || config.label, kind: config.kind, validation: config.validation })),
@@ -816,6 +859,10 @@ function mergeAgentSessionPayload(session) {
     title: session.title,
     description: session.description,
     status: session.status || "idle",
+    effective_status: session.effective_status || session.status || "idle",
+    pending_approval_count: Number(session.pending_approval_count || 0),
+    active_approval_ids: session.active_approval_ids || [],
+    queued_approval_count: Number(session.queued_approval_count || 0),
     createdAt: session.created_at || "",
   };
   state.agentSessions = existing
@@ -884,7 +931,7 @@ async function updateAgentSessionFromPayload(session) {
     await refreshAgentWorkspaceState();
   }
   const previewActivated = adoptWorkspacePreviewToolResults(session, {
-    activate: ["waiting_for_agent", "running"].includes(session && session.status || ""),
+    activate: ["waiting_for_agent", "running"].includes(assistantSessionStatus(session)),
   });
   if (previewActivated) {
     if (state.view !== "workspace") {
@@ -905,8 +952,9 @@ function sameStringList(left, right) {
 }
 
 async function refreshAgentWorkspaceState() {
-  await loadUiWorkspaces();
+  await Promise.all([loadUiWorkspaces(), loadCatalogAndCompatibility()]);
   rebuildDerivedState();
+  if (state.view === "catalog") renderCatalog();
   renderWorkspace();
   renderAssistant();
 }
@@ -1356,6 +1404,9 @@ function renderAssistant() {
   const attachedCount = session ? attachedWorkspaceIds(session.id).length : 0;
   const pageLabel = currentViewLabel();
   const isRegistration = state.assistantMode === "registration";
+  const nextApprovalKey = session && !isSessionList && !isRegistration ? pendingApprovalKeyForSession(session.id) : "";
+  const previousApprovalKey = session ? state.assistantApprovalKeysBySession[session.id] || "" : "";
+  const shouldScrollToApprovals = state.assistantOpen && Boolean(nextApprovalKey) && nextApprovalKey !== previousApprovalKey;
   if (els.assistantBackButton) els.assistantBackButton.hidden = isSessionList;
   if (els.assistantTitle) {
     els.assistantTitle.textContent = isSessionList ? "Assistant Sessions" : isRegistration ? "Register to Catalog" : session ? session.title : "OptPilot Assistant";
@@ -1384,7 +1435,11 @@ function renderAssistant() {
   renderAssistantSessionList();
   bindAssistantApprovals();
   bindRegistrationMenu();
+  if (session && !isSessionList && !isRegistration) {
+    state.assistantApprovalKeysBySession[session.id] = nextApprovalKey;
+  }
   queueAssistantStepAutoScroll();
+  if (shouldScrollToApprovals) queueAssistantApprovalAutoScroll();
 }
 
 function queueAssistantStepAutoScroll() {
@@ -1401,6 +1456,22 @@ function scrollWorkingAssistantStepsToBottom() {
   });
 }
 
+function queueAssistantApprovalAutoScroll() {
+  if (!els.agentTimeline) return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(scrollAssistantApprovalIntoView);
+  });
+}
+
+function scrollAssistantApprovalIntoView() {
+  if (!els.agentTimeline) return;
+  const cards = els.agentTimeline.querySelectorAll(".approval-card");
+  const lastCard = cards[cards.length - 1];
+  if (!lastCard) return;
+  lastCard.scrollIntoView({ block: "end", inline: "nearest" });
+  els.agentTimeline.scrollTop = els.agentTimeline.scrollHeight;
+}
+
 function assistantTimelineHtml(session) {
   return `${assistantInterleavedTimelineHtml(session)}${assistantApprovalsHtml()}`;
 }
@@ -1408,15 +1479,18 @@ function assistantTimelineHtml(session) {
 function assistantApprovalsHtml() {
   const approvals = currentAssistantApprovals();
   if (!approvals.length) return "";
+  const session = currentAgentSession();
+  const queuedCount = Number(session && session.queued_approval_count || 0);
   return `
     <div class="approval-stack">
       ${approvals.map((approval) => `
         <div class="approval-card">
           <div>
             <span>${escapeHtml(approval.kind || "approval")}</span>
-            <strong>${escapeHtml(approval.title || "Approval requested")}</strong>
-            <p>${escapeHtml(approval.summary || "")}</p>
-            ${(approval.targets || []).length ? `<small>${escapeHtml((approval.targets || []).join(" - "))}</small>` : ""}
+            <strong>${escapeHtml(approval.title || "Assistant paused for approval")}</strong>
+            <p>${escapeHtml((approval.display_payload && approval.display_payload.summary) || approval.summary || "")}</p>
+            ${((approval.display_payload && approval.display_payload.targets) || approval.targets || []).length ? `<small>${escapeHtml(((approval.display_payload && approval.display_payload.targets) || approval.targets || []).join(" - "))}</small>` : ""}
+            ${queuedCount ? `<small>${escapeHtml(`${queuedCount} more approval request${queuedCount === 1 ? "" : "s"} queued after this one.`)}</small>` : ""}
           </div>
           <div class="approval-actions">
             <button class="ghost-button" data-reject-approval="${escapeHtml(approval.id)}" type="button">Reject</button>
@@ -1452,7 +1526,7 @@ function assistantInterleavedTimelineHtml(session) {
     const turnMessages = messages.slice(index + 1, turnEndIndex);
     const hasAssistantReply = turnMessages.some((candidate) => candidate[0] === "assistant" || candidate[0] === "agent");
     const isLatestUserTurn = turnEndIndex === messages.length;
-    const isWorking = isLatestUserTurn && !hasAssistantReply && Boolean(session && ["waiting_for_agent", "running"].includes(session.status || ""));
+    const isWorking = isLatestUserTurn && !hasAssistantReply && Boolean(session && ["waiting_for_agent", "running", "resuming_after_approval"].includes(assistantSessionStatus(session)));
     const nextUserTime = messages
       .slice(index + 1)
       .filter((candidate) => candidate[0] === "user")
@@ -1614,10 +1688,10 @@ function assistantStepSummary(event) {
     return { ...base, title: "Approval rejected", detail: payload.reason || payload.tool || "" };
   }
   if (event.type === "openhands_tool_result_forwarded") {
-    return { ...base, title: "Approved result sent to OpenHands", detail: payload.tool || payload.tool_call_id || "" };
+    return { ...base, title: "Tool result sent to OpenHands", detail: payload.tool || payload.tool_call_id || "" };
   }
   if (event.type === "openhands_tool_result_forward_skipped") {
-    return { ...base, title: "Approved result kept in Studio", detail: payload.reason || payload.tool || "" };
+    return { ...base, title: "Tool result kept in Studio", detail: payload.reason || payload.tool || "" };
   }
   if (event.type === "openhands_dispatch_failed") {
     return { ...base, title: "OpenHands dispatch failed", detail: payload.error || "" };
@@ -1783,7 +1857,7 @@ function updateAssistantInputPlaceholder() {
 function handleAgentInputKeydown(event) {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    if (assistantIsBusy()) return;
+    if (assistantIsBusy() || assistantIsAwaitingApproval()) return;
     sendAgentMessage();
   }
 }
@@ -1791,12 +1865,21 @@ function handleAgentInputKeydown(event) {
 function updateAssistantComposerState() {
   if (!els.sendAgentButton) return;
   const busy = assistantIsBusy();
+  const awaitingApproval = assistantIsAwaitingApproval();
   const session = currentAgentSession();
   const cancelling = Boolean(session && state.cancellingAgentSessionIds.has(session.id));
-  els.sendAgentButton.disabled = cancelling;
+  if (els.agentInput) {
+    els.agentInput.disabled = awaitingApproval;
+    if (awaitingApproval) {
+      els.agentInput.placeholder = "Resolve the pending approval before sending another message.";
+    } else {
+      updateAssistantInputPlaceholder();
+    }
+  }
+  els.sendAgentButton.disabled = cancelling || awaitingApproval;
   els.sendAgentButton.classList.toggle("stopping", busy);
-  els.sendAgentButton.setAttribute("aria-label", busy ? "Stop assistant" : "Send message");
-  els.sendAgentButton.setAttribute("title", busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("aria-label", awaitingApproval ? "Approval required" : busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("title", awaitingApproval ? "Resolve the pending approval first" : busy ? "Stop assistant" : "Send message");
   els.sendAgentButton.innerHTML = busy
     ? `<span aria-hidden="true" class="stop-icon"></span>`
     : `<span aria-hidden="true">&uarr;</span>`;
@@ -1804,7 +1887,12 @@ function updateAssistantComposerState() {
 
 function assistantIsBusy() {
   const session = currentAgentSession();
-  return Boolean(session && ["waiting_for_agent", "running"].includes(session.status || ""));
+  return Boolean(session && ["waiting_for_agent", "running", "resuming_after_approval"].includes(assistantSessionStatus(session)));
+}
+
+function assistantIsAwaitingApproval() {
+  const session = currentAgentSession();
+  return Boolean(session && assistantSessionStatus(session) === "awaiting_user_approval");
 }
 
 function assistantPromptForContext() {
@@ -1915,6 +2003,7 @@ function uiWorkspaceSession(workspace) {
     tools: workspaceCapabilities(workspace),
     registrationEnabled: workspace.registration_enabled !== false,
     registeredEntries: entries,
+    interface: workspace.interface || null,
     attachedSessions: workspace.attached_sessions || [],
     ownership: workspace.ownership || (workspace.managed_by_studio ? "studio-owned" : "external-reference"),
     managedByStudio: Boolean(workspace.managed_by_studio),
@@ -2119,11 +2208,11 @@ async function openRegistrationMenu() {
     return;
   }
   try {
-    const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/discover-configs`, {});
-    state.registrationDraft = buildRegistrationDraft(session, payload.configs || []);
+    const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/package-plans`, {});
+    state.registrationDraft = buildRegistrationDraftFromPackagePlan(session, payload.package_plan || {});
     renderAssistant();
   } catch (error) {
-    pushAssistantMessage(["tool", "Config discovery failed", String(error.message || error)]);
+    pushAssistantMessage(["tool", "Package plan preparation failed", String(error.message || error)]);
     renderAssistant();
   }
 }
@@ -2158,45 +2247,269 @@ function buildRegistrationDraft(session, discoveredConfigs = null) {
   };
 }
 
+function buildRegistrationDraftFromPackagePlan(session, plan) {
+  const targets = [
+    ...(plan.components || []),
+    ...(plan.resources || []),
+    ...(plan.studies || []),
+  ];
+  const validationEntries = (plan.validation && plan.validation.entries || []);
+  const configs = targets.map((target) => {
+    const path = target.config_path || target.registered_config_path || target.id;
+    const validation = validationEntries.find((entry) => entry.id === target.id || entry.config === target.kind && path && entry.path && entry.path.endsWith(path));
+    return {
+      key: target.target_id || path,
+      label: path,
+      kind: target.kind,
+      id: target.id || target.label,
+      selected: true,
+      validation: validation ? (validation.valid ? "valid" : "invalid") : "not checked",
+      backendPath: path,
+      discoveredValid: target.validation ? Boolean(target.validation.valid) : true,
+      target,
+    };
+  });
+  return {
+    workspaceId: session.id,
+    backendWorkspaceId: session.backendWorkspaceId || "",
+    workspaceTitle: session.title,
+    status: plan.status || "draft",
+    packagePlanId: plan.id,
+    packagePlan: plan,
+    classification: plan.classification || "not-yet-classifiable",
+    readiness: plan.readiness || "draft",
+    configs,
+    resourceId: slug(session.title || session.id || "resource"),
+    resourceDescription: session.context && session.context[1] || "",
+    note: `Package plan: ${plan.classification || "not-yet-classifiable"}; readiness: ${plan.readiness || "draft"}.`,
+  };
+}
+
+function packagePlanContextSummary(plan) {
+  return {
+    id: plan.id || "",
+    package_id: plan.package_id || "",
+    classification: plan.classification || "",
+    readiness: plan.readiness || "",
+    destination: plan.destination || "",
+    source_root: plan.source_root || "",
+    validation: plan.validation ? {
+      valid: Boolean(plan.validation.valid),
+      errors: plan.validation.errors || [],
+      entries: (plan.validation.entries || []).map((entry) => ({
+        config: entry.config,
+        id: entry.id,
+        valid: Boolean(entry.valid),
+        errors: entry.errors || [],
+        warnings: entry.warnings || [],
+      })),
+    } : null,
+    smoke: plan.smoke || {},
+    components: (plan.components || []).map(packagePlanTargetContext),
+    resources: (plan.resources || []).map(packagePlanTargetContext),
+    studies: (plan.studies || []).map((study) => ({
+      id: study.id,
+      path: study.config_path,
+      registered_config_path: study.registered_config_path,
+      smoke: Boolean(study.smoke),
+    })),
+  };
+}
+
+function packagePlanTargetContext(target) {
+  return {
+    kind: target.kind,
+    id: target.id,
+    config_path: target.config_path,
+    component_root: target.component_root,
+    include: target.include || [],
+    exclude: target.exclude || [],
+    source_hints: target.source_hints || [],
+    path_rewrites: target.path_rewrites || [],
+    runtime: componentExecutionSummary(target.raw_config || {}),
+  };
+}
+
 function registrationMenuHtml() {
   const session = currentSession();
   const draft = state.registrationDraft || (session ? buildRegistrationDraft(session) : null);
   if (!draft) return emptyState("Select a workspace before registering to the catalog.");
   state.registrationDraft = draft;
   const configs = draft.configs || [];
+  const plan = draft.packagePlan || null;
+  const canApply = planCanApply(draft);
   return `
     <div class="registration-panel">
       <div class="registration-summary">
         <span class="mini-label">Workspace</span>
         <strong>${escapeHtml(draft.workspaceTitle)}</strong>
         <p>${escapeHtml(draft.note)}</p>
+        ${plan ? `<p><span class="tag">${escapeHtml(draft.classification)}</span> <span class="tag">${escapeHtml(draft.readiness)}</span> <span class="tag">${escapeHtml(plan.package_id || "local_package")}</span></p>` : ""}
+        ${draft.packagePlan && (draft.packagePlan.warnings || []).length ? `<p>${escapeHtml((draft.packagePlan.warnings || []).join(" "))}</p>` : ""}
       </div>
       <div class="registration-steps">
         ${registrationStep("1", "Discover configs", configs.length ? `${configs.length} candidate config${configs.length === 1 ? "" : "s"} found` : "No config discovered", configs.length ? "ready" : "review")}
-        ${registrationStep("2", "Select targets", configs.filter((item) => item.selected).length ? "Targets selected" : "Choose at least one target", configs.some((item) => item.selected) ? "ready" : "review")}
-        ${registrationStep("3", "Validate", validationSummary(configs), configs.every((item) => item.validation === "valid" || item.validation === "read-only source") && configs.length ? "ready" : "review")}
-        ${registrationStep("4", "Register", draft.status === "applied" ? "Applied to catalog" : "Waiting for validation", draft.status === "applied" ? "ready" : "review")}
+        ${registrationStep("2", "Review package plan", plan ? `${packagePlanTargetCount(plan)} targets, ${packagePlanIncludeCount(plan)} source include rules` : "Prepare a package plan", plan ? "ready" : "review")}
+        ${registrationStep("3", "Validate package", packageValidationSummary(plan, configs), plan && plan.validation && plan.validation.valid ? "passed" : "review")}
+        ${registrationStep("4", "Smoke run", packageSmokeSummary(plan), plan && plan.smoke && plan.smoke.valid ? "passed" : "review")}
+        ${registrationStep("5", "Apply", draft.status === "applied" ? "Applied to catalog" : canApply ? "Ready to apply" : "Waiting for validation", draft.status === "applied" ? "ready" : canApply ? "review" : "review")}
       </div>
+      ${packagePlanDetailsHtml(plan)}
       <div class="registration-targets">
         ${configs.map(registrationTarget).join("") || emptyInline("No config files yet.")}
       </div>
       ${resourceRegistrationHtml(draft)}
       <div class="registration-actions">
-        <button class="ghost-button registration-discover" type="button">Discover configs</button>
-        <button class="ghost-button registration-validate" type="button" ${configs.length ? "" : "disabled"}>Validate selected</button>
-        <button class="primary-button registration-apply" type="button" ${configs.some((item) => item.validation === "valid") ? "" : "disabled"}>Register selected</button>
+        <button class="ghost-button registration-discover" type="button">Prepare Package Plan</button>
+        <button class="ghost-button registration-validate" type="button" ${configs.length ? "" : "disabled"}>Validate Package</button>
+        <button class="ghost-button registration-smoke" type="button" ${plan && (plan.studies || []).length ? "" : "disabled"}>Run Smoke</button>
+        <button class="primary-button registration-apply" type="button" ${canApply ? "" : "disabled"}>Apply Package</button>
       </div>
+    </div>
+  `;
+}
+
+function packagePlanTargetCount(plan) {
+  if (!plan) return 0;
+  return (plan.components || []).length + (plan.resources || []).length + (plan.studies || []).length;
+}
+
+function packagePlanIncludeCount(plan) {
+  if (!plan) return 0;
+  return [...(plan.components || []), ...(plan.resources || [])].reduce((count, item) => count + (item.include || []).length + (item.source_hints || []).length, 0);
+}
+
+function packageValidationSummary(plan, configs) {
+  if (plan && plan.validation) {
+    const entries = plan.validation.entries || [];
+    const invalid = entries.filter((entry) => !entry.valid).length + (plan.validation.errors || []).length;
+    if (plan.validation.valid) return `${entries.length} entries passed source, setup, and import checks`;
+    return invalid ? `${invalid} blocker${invalid === 1 ? "" : "s"} found` : "Validation did not pass";
+  }
+  return validationSummary(configs);
+}
+
+function packageSmokeSummary(plan) {
+  if (!plan) return "Prepare package first";
+  if (plan.smoke && plan.smoke.valid) return "Smoke study passed";
+  if (plan.smoke && plan.smoke.errors && plan.smoke.errors.length) return plan.smoke.errors[0];
+  if (!(plan.studies || []).length) return "No study available";
+  return "Not run yet";
+}
+
+function planCanApply(draft) {
+  const plan = draft && draft.packagePlan;
+  if (!plan || !(plan.validation && plan.validation.valid)) return false;
+  if (plan.classification === "environment-plus-method" && !(plan.smoke && plan.smoke.valid)) return false;
+  return true;
+}
+
+function packagePlanDetailsHtml(plan) {
+  if (!plan) return "";
+  const targets = [...(plan.components || []), ...(plan.resources || [])];
+  const validationEntries = plan.validation && plan.validation.entries || [];
+  return `
+    <div class="registration-plan">
+      <div class="config-section-title">
+        <div>
+          <span class="mini-label">Package Plan</span>
+          <strong>${escapeHtml(plan.package_id || "local_package")}</strong>
+        </div>
+        <small>${escapeHtml(plan.destination || "catalog/local_package")}</small>
+      </div>
+      ${targets.map((target) => packagePlanTargetHtml(target, validationEntries)).join("") || emptyInline("No package targets yet.")}
+      ${(plan.studies || []).length ? `
+        <div class="registration-plan-block">
+          <strong>Studies</strong>
+          ${(plan.studies || []).map((study) => `
+            <label class="registration-target compact">
+              <input type="checkbox" data-package-plan-study-smoke="${escapeHtml(study.target_id || study.id)}" ${study.smoke ? "checked" : ""} />
+              <span><strong>${escapeHtml(study.registered_config_path || study.config_path || study.id)}</strong><small>${study.smoke ? "selected for smoke" : "not selected for smoke"}</small></span>
+            </label>
+          `).join("")}
+        </div>
+      ` : ""}
+      ${plan.validation ? packagePlanValidationHtml(plan.validation) : ""}
+      ${plan.smoke && (plan.smoke.valid || plan.smoke.errors) ? packagePlanSmokeHtml(plan.smoke) : ""}
+    </div>
+  `;
+}
+
+function packagePlanTargetHtml(target, validationEntries) {
+  const validation = validationEntries.find((entry) => entry.id === target.id && entry.config === target.kind);
+  return `
+    <div class="registration-plan-block">
+      <div class="config-section-title">
+        <div><strong>${escapeHtml(target.id || target.label || target.kind)}</strong><small>${escapeHtml(target.kind || "")} -> ${escapeHtml(target.component_root || "")}</small></div>
+        ${statusPill(validation ? (validation.valid ? "passed" : "failed") : "review")}
+      </div>
+      ${targetSetupSummaryHtml(target)}
+      <label class="control-field">
+        <span>Include paths</span>
+        <textarea data-package-plan-list="include" data-package-plan-target="${escapeHtml(target.target_id || target.id)}">${escapeHtml((target.include || []).join("\\n"))}</textarea>
+      </label>
+      <label class="control-field">
+        <span>Exclude paths</span>
+        <textarea data-package-plan-list="exclude" data-package-plan-target="${escapeHtml(target.target_id || target.id)}">${escapeHtml((target.exclude || []).join("\\n"))}</textarea>
+      </label>
+      <label class="control-field">
+        <span>Source hints</span>
+        <textarea data-package-plan-list="source_hints" data-package-plan-target="${escapeHtml(target.target_id || target.id)}">${escapeHtml((target.source_hints || []).map((hint) => typeof hint === "string" ? hint : hint.path || "").join("\\n"))}</textarea>
+      </label>
+      <label class="control-field">
+        <span>Path rewrites JSON</span>
+        <textarea data-package-plan-json="path_rewrites" data-package-plan-target="${escapeHtml(target.target_id || target.id)}">${escapeHtml(JSON.stringify(target.path_rewrites || [], null, 2))}</textarea>
+      </label>
+      ${validation && validation.errors && validation.errors.length ? `<p class="error-text">${escapeHtml(validation.errors.join(" "))}</p>` : ""}
+    </div>
+  `;
+}
+
+function targetSetupSummaryHtml(target) {
+  const raw = target.raw_config || {};
+  const runtime = raw.runtime || {};
+  const setup = runtime.setup || (raw.interface && raw.interface.setup);
+  const envFromHost = [
+    ...(runtime.envFromHost || []),
+    ...((runtime.setup && runtime.setup.envFromHost) || []),
+    ...((raw.interface && raw.interface.envFromHost) || []),
+    ...((raw.interface && raw.interface.setup && raw.interface.setup.envFromHost) || []),
+  ];
+  if (!setup && !envFromHost.length) return "";
+  return `<p><small>${setup ? "setup declared" : "no setup"}${envFromHost.length ? `; env: ${escapeHtml(envFromHost.join(", "))}` : ""}</small></p>`;
+}
+
+function packagePlanValidationHtml(validation) {
+  const entries = validation.entries || [];
+  return `
+    <div class="registration-plan-block">
+      <strong>Validation</strong>
+      <p>${escapeHtml(validation.valid ? "Schema, source paths, setup files, and Python imports passed." : "Package validation found blockers.")}</p>
+      ${entries.map((entry) => `<p><small>${escapeHtml(entry.config)} ${escapeHtml(entry.id)}: ${escapeHtml(entry.valid ? "passed" : (entry.errors || []).join(" "))}</small></p>`).join("")}
+      ${(validation.errors || []).length ? `<p class="error-text">${escapeHtml(validation.errors.join(" "))}</p>` : ""}
+    </div>
+  `;
+}
+
+function packagePlanSmokeHtml(smoke) {
+  return `
+    <div class="registration-plan-block">
+      <strong>Smoke</strong>
+      <p>${escapeHtml(smoke.valid ? "Smoke run passed." : "Smoke run failed.")}</p>
+      ${smoke.study ? `<p><small>${escapeHtml(smoke.study)}</small></p>` : ""}
+      ${smoke.errors && smoke.errors.length ? `<p class="error-text">${escapeHtml(smoke.errors.join(" "))}</p>` : ""}
     </div>
   `;
 }
 
 function resourceRegistrationHtml(draft) {
   if (!draft || draft.status === "applied") return "";
+  if ((draft.configs || []).length) return "";
   return `
     <div class="registration-resource">
       <div>
-        <strong>Register as Resource</strong>
-        <p>Copy this draft into <code>catalog/local_package/resources/</code> as a reusable reference workspace.</p>
+        <strong>No OptPilot configs found</strong>
+        <p>If this workspace is only a dataset, document set, helper app, or reference codebase, register it as a resource. If it should become an environment or method, add config files under <code>optpilot_configs/</code> and prepare the package plan again.</p>
       </div>
       <label class="control-field">
         <span>Resource id</span>
@@ -2206,7 +2519,7 @@ function resourceRegistrationHtml(draft) {
         <span>Description</span>
         <input data-resource-registration-field="resourceDescription" type="text" value="${escapeHtml(draft.resourceDescription || "")}" />
       </label>
-      <button class="ghost-button registration-resource-apply" type="button">Register Resource</button>
+      <button class="ghost-button registration-resource-apply" type="button">Register as Resource</button>
     </div>
   `;
 }
@@ -2216,7 +2529,7 @@ function registrationStep(number, title, text, status) {
     <div class="registration-step">
       <span>${escapeHtml(number)}</span>
       <div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(text)}</p></div>
-      ${statusPill(status === "ready" ? "ready" : "review")}
+      ${statusPill(status || "review")}
     </div>
   `;
 }
@@ -2239,7 +2552,7 @@ function validationSummary(configs) {
   if (!configs.length) return "No configs";
   if (configs.every((item) => item.validation === "read-only source")) return "Already registered";
   const valid = configs.filter((item) => item.validation === "valid").length;
-  return valid ? `${valid} valid target${valid === 1 ? "" : "s"}` : "Not validated";
+  return valid ? `${valid} schema-valid target${valid === 1 ? "" : "s"}` : "Not validated";
 }
 
 function bindRegistrationMenu() {
@@ -2260,15 +2573,47 @@ function bindRegistrationMenu() {
       draft[input.dataset.resourceRegistrationField] = input.value;
     });
   });
+  document.querySelectorAll("[data-package-plan-list]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const target = findPackagePlanTarget(input.dataset.packagePlanTarget);
+      if (!target) return;
+      const values = splitLines(input.value);
+      if (input.dataset.packagePlanList === "source_hints") {
+        target.source_hints = values.map((path) => ({ path, reason: "Added in Studio package plan review." }));
+      } else {
+        target[input.dataset.packagePlanList] = values;
+      }
+    });
+  });
+  document.querySelectorAll("[data-package-plan-json]").forEach((input) => {
+    input.addEventListener("input", () => {
+      const target = findPackagePlanTarget(input.dataset.packagePlanTarget);
+      if (!target) return;
+      try {
+        target[input.dataset.packagePlanJson] = JSON.parse(input.value || "[]");
+        input.classList.remove("field-error");
+      } catch (_error) {
+        input.classList.add("field-error");
+      }
+    });
+  });
+  document.querySelectorAll("[data-package-plan-study-smoke]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const plan = state.registrationDraft && state.registrationDraft.packagePlan;
+      if (!plan) return;
+      const study = (plan.studies || []).find((item) => String(item.target_id || item.id) === input.dataset.packagePlanStudySmoke);
+      if (study) study.smoke = input.checked;
+    });
+  });
   const discover = document.querySelector(".registration-discover");
   if (discover) discover.addEventListener("click", async () => {
     const session = currentSession();
     if (!session || !session.backendWorkspaceId) return;
     try {
-      const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/discover-configs`, {});
-      state.registrationDraft = buildRegistrationDraft(session, payload.configs || []);
+      const payload = await postJson(`/api/workspaces/${encodeURIComponent(session.backendWorkspaceId)}/package-plans`, {});
+      state.registrationDraft = buildRegistrationDraftFromPackagePlan(session, payload.package_plan || {});
     } catch (error) {
-      pushAssistantMessage(["tool", "Config discovery failed", String(error.message || error)]);
+      pushAssistantMessage(["tool", "Package plan preparation failed", String(error.message || error)]);
     }
     renderAssistant();
   });
@@ -2285,21 +2630,33 @@ function bindRegistrationMenu() {
       return;
     }
     try {
-      const selectedPaths = draft.configs.filter((item) => item.selected).map((item) => item.backendPath || item.label);
-      const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, { config_paths: selectedPaths });
-      draft.manifestId = created.registration && created.registration.id;
-      const validated = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/validate`, {});
-      const targets = validated.registration && validated.registration.targets || [];
-      draft.configs.forEach((item) => {
-        const target = targets.find((candidate) => candidate.config_path === (item.backendPath || item.label));
-        item.validation = target && target.validation && target.validation.valid ? "valid" : "invalid";
-      });
-      draft.status = validated.registration && validated.registration.status || "validated";
-      pushAssistantMessage(["tool", "Registration validation", "Selected configs were validated against the OptPilot authoring schema."]);
+      if (!draft.packagePlanId) {
+        const selectedPaths = draft.configs.filter((item) => item.selected).map((item) => item.backendPath || item.label);
+        const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans`, { config_paths: selectedPaths });
+        Object.assign(draft, buildRegistrationDraftFromPackagePlan(currentSession(), created.package_plan || {}));
+      }
+      await syncPackagePlanEdits(draft);
+      const validated = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/validate`, {});
+      state.registrationDraft = buildRegistrationDraftFromPackagePlan(currentSession(), validated.package_plan || {});
+      pushAssistantMessage(["tool", "Package plan validation", "Package plan was materialized and checked for schema, public source paths, setup files, and Python imports."]);
     } catch (error) {
-      pushAssistantMessage(["tool", "Registration validation failed", String(error.message || error)]);
+      pushAssistantMessage(["tool", "Package plan validation failed", String(error.message || error)]);
     }
     keepWorkspaceSelected(originalWorkspaceId);
+    renderAssistant();
+  });
+  const smoke = document.querySelector(".registration-smoke");
+  if (smoke) smoke.addEventListener("click", async () => {
+    const draft = state.registrationDraft;
+    if (!draft || !draft.backendWorkspaceId || !draft.packagePlanId) return;
+    try {
+      await syncPackagePlanEdits(draft);
+      const result = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/smoke`, { max_trials: 1, timeout_seconds: 120 });
+      state.registrationDraft = buildRegistrationDraftFromPackagePlan(currentSession(), result.package_plan || {});
+      pushAssistantMessage(["tool", result.smoke && result.smoke.valid ? "Package smoke passed" : "Package smoke failed", result.smoke && result.smoke.valid ? "The selected smoke study ran successfully." : ((result.smoke && result.smoke.errors || []).join(" ") || "Smoke run did not pass.")]);
+    } catch (error) {
+      pushAssistantMessage(["tool", "Package smoke failed", String(error.message || error)]);
+    }
     renderAssistant();
   });
   const apply = document.querySelector(".registration-apply");
@@ -2313,18 +2670,21 @@ function bindRegistrationMenu() {
       return;
     }
     try {
-      if (!draft.manifestId) {
+      if (!draft.packagePlanId) {
         const selectedPaths = draft.configs.filter((item) => item.selected).map((item) => item.backendPath || item.label);
-        const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, { config_paths: selectedPaths });
-        draft.manifestId = created.registration && created.registration.id;
+        const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans`, { config_paths: selectedPaths });
+        draft.packagePlanId = created.package_plan && created.package_plan.id;
       }
-      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/apply`, {});
+      await syncPackagePlanEdits(draft);
+      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/apply`, {});
       if (applied.workspace) {
         const refreshed = mergeUiWorkspace(applied.workspace);
         if (refreshed) Object.assign(session, refreshed);
       }
-      draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
-      pushAssistantMessage(["assistant", applied.applied ? "Registration applied" : "Registration blocked", applied.applied ? "Selected targets were copied into the user catalog." : "Validation must pass before registration can be applied."]);
+      state.registrationDraft = buildRegistrationDraftFromPackagePlan(session, applied.package_plan || draft.packagePlan || {});
+      await loadCatalogAndCompatibility();
+      pushAssistantMessage(["assistant", applied.applied ? "Package plan applied" : "Package plan blocked", applied.applied ? "The normalized package was copied into catalog/local_package." : "Validation must pass before the package plan can be applied."]);
+      renderCatalog();
       renderWorkspace();
     } catch (error) {
       pushAssistantMessage(["tool", "Registration failed", String(error.message || error)]);
@@ -2337,20 +2697,20 @@ function bindRegistrationMenu() {
     const session = currentSession();
     if (!draft || !session || !draft.backendWorkspaceId) return;
     try {
-      const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations`, {
+      const created = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans`, {
         kind: "resource",
         resource_id: draft.resourceId || slug(session.title || session.id || "resource"),
         description: draft.resourceDescription || "",
       });
-      draft.manifestId = created.registration && created.registration.id;
-      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/registrations/${encodeURIComponent(draft.manifestId)}/apply`, {});
+      draft.packagePlanId = created.package_plan && created.package_plan.id;
+      const applied = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/apply`, {});
       if (applied.workspace) {
         const refreshed = mergeUiWorkspace(applied.workspace);
         if (refreshed) Object.assign(session, refreshed);
       }
-      draft.status = applied.registration && applied.registration.status || (applied.applied ? "applied" : "invalid");
+      state.registrationDraft = buildRegistrationDraftFromPackagePlan(session, applied.package_plan || created.package_plan || {});
       await loadCatalogAndCompatibility();
-      pushAssistantMessage(["assistant", applied.applied ? "Resource registered" : "Resource registration blocked", applied.applied ? "The draft was copied into catalog/local_package/resources." : "Validation must pass before registration can be applied."]);
+      pushAssistantMessage(["assistant", applied.applied ? "Resource package applied" : "Resource package blocked", applied.applied ? "The draft was copied into catalog/local_package/resources." : "Validation must pass before package apply."]);
       renderCatalog();
       renderWorkspace();
     } catch (error) {
@@ -2358,6 +2718,46 @@ function bindRegistrationMenu() {
     }
     renderAssistant();
   });
+}
+
+function splitLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function findPackagePlanTarget(targetId) {
+  const plan = state.registrationDraft && state.registrationDraft.packagePlan;
+  if (!plan || !targetId) return null;
+  return [...(plan.components || []), ...(plan.resources || [])].find((item) => String(item.target_id || item.id) === String(targetId)) || null;
+}
+
+async function syncPackagePlanEdits(draft) {
+  const plan = draft && draft.packagePlan;
+  if (!draft || !draft.backendWorkspaceId || !draft.packagePlanId || !plan) return null;
+  const payload = {
+    components: (plan.components || []).map(packagePlanTargetUpdate),
+    resources: (plan.resources || []).map(packagePlanTargetUpdate),
+    studies: (plan.studies || []).map((study) => ({
+      target_id: study.target_id,
+      smoke: Boolean(study.smoke),
+    })),
+  };
+  const updated = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/update`, payload);
+  draft.packagePlan = updated.package_plan || plan;
+  draft.packagePlanId = draft.packagePlan.id || draft.packagePlanId;
+  return draft.packagePlan;
+}
+
+function packagePlanTargetUpdate(target) {
+  return {
+    target_id: target.target_id,
+    include: target.include || [],
+    exclude: target.exclude || [],
+    source_hints: target.source_hints || [],
+    path_rewrites: target.path_rewrites || [],
+  };
 }
 
 function renderEmptyWorkspace() {
@@ -2475,27 +2875,17 @@ async function selectAgentSession(sessionId) {
 }
 
 async function createAgentSession() {
-  const currentAttachedIds = attachedWorkspaceIds();
-  const attached = currentAttachedIds
-    .map((workspaceId) => state.sessions.find((session) => session.id === workspaceId))
-    .map((session) => session && session.backendWorkspaceId)
-    .filter(Boolean);
-  const selectedWorkspace = currentSession();
-  const selectedWorkspaceId = selectedWorkspace && attached.includes(selectedWorkspace.backendWorkspaceId)
-    ? selectedWorkspace.backendWorkspaceId
-    : state.view === "workspace"
-    ? attached[0] || ""
-    : "";
   try {
     const payload = await postJson("/api/agent-sessions", {
       title: `Session ${state.agentSessions.length + 1}`,
       description: "New conversation",
-      attached_workspace_ids: attached,
-      selected_workspace_id: selectedWorkspaceId,
+      attached_workspace_ids: [],
+      selected_workspace_id: "",
     });
     await updateAgentSessionFromPayload(payload.session);
     state.selectedAgentSessionId = payload.session.id;
     storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+    setSelectedWorkspace(null);
   } catch (error) {
     const id = `agent-session-${Date.now().toString(36)}`;
     const index = state.agentSessionSeq++;
@@ -2506,14 +2896,13 @@ async function createAgentSession() {
       createdAt: "now",
     };
     state.agentSessions = [session, ...state.agentSessions];
-    state.agentWorkspaceAttachments[id] = currentAttachedIds.slice();
-    state.selectedWorkspaceByAgentSession[id] = state.view === "workspace" && currentAttachedIds.includes(state.selectedSessionId)
-      ? state.selectedSessionId
-      : null;
+    state.agentWorkspaceAttachments[id] = [];
+    state.selectedWorkspaceByAgentSession[id] = null;
     state.assistantMessagesBySession[id] = defaultAssistantMessages();
     state.agentEventsBySession[id] = [];
     state.selectedAgentSessionId = id;
     storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+    setSelectedWorkspace(null);
   }
   state.assistantMode = "chat";
   renderWorkspace();
@@ -3024,6 +3413,9 @@ function renderPreviewWorkbench() {
   const hasWorkspace = Boolean(session);
   const hasPreview = Boolean(hasWorkspace && preview.url);
   const opening = preview.status === "opening";
+  const workspaceInterface = workspaceInterfaceConfig(session);
+  const launchKey = workspaceInterfaceLaunchKey(session);
+  const launchingInterface = Boolean(workspaceInterface && state.interfaceLaunch && state.interfaceLaunch.key === launchKey);
   if (els.workspacePreviewPort && document.activeElement !== els.workspacePreviewPort) {
     els.workspacePreviewPort.value = String(preview.port || 5173);
   }
@@ -3067,8 +3459,23 @@ function renderPreviewWorkbench() {
       ? preview.message || "The preview could not be opened."
       : "Start a frontend server in the workspace terminal, make it listen on 0.0.0.0, then enter the port here.";
   }
+  if (els.launchWorkspaceInterfaceButton) {
+    if (workspaceInterface) {
+      els.launchWorkspaceInterfaceButton.hidden = false;
+      els.launchWorkspaceInterfaceButton.disabled = !hasWorkspace || launchingInterface;
+      els.launchWorkspaceInterfaceButton.textContent = launchingInterface
+        ? "Launching..."
+        : hasPreview
+        ? "Relaunch Interface"
+        : "Launch Interface";
+      els.launchWorkspaceInterfaceButton.title = "Start the interface declared by this workspace config, reusing the existing workspace runtime.";
+    } else {
+      els.launchWorkspaceInterfaceButton.hidden = true;
+      els.launchWorkspaceInterfaceButton.disabled = true;
+    }
+  }
   if (els.openWorkspacePreviewButton) {
-    els.openWorkspacePreviewButton.disabled = !hasWorkspace || opening;
+    els.openWorkspacePreviewButton.disabled = !hasWorkspace || opening || launchingInterface;
     els.openWorkspacePreviewButton.textContent = opening ? "Opening..." : "Open Preview";
   }
   if (els.reloadWorkspacePreviewButton) {
@@ -3099,14 +3506,16 @@ function renderCatalog() {
   if (els.componentSearch && els.componentSearch.value !== state.componentSearch) {
     els.componentSearch.value = state.componentSearch;
   }
+  renderCatalogPackageFilter();
   document.querySelectorAll("[data-component-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.componentFilter === state.componentFilter);
   });
   const query = normalizeSearch(state.componentSearch);
   const components = allComponents().filter((item) => {
     const matchesFilter = state.componentFilter === "all" || item.kind === state.componentFilter;
+    const matchesPackage = state.componentPackageFilter === "all" || componentPackageId(item) === state.componentPackageFilter;
     const matchesSearch = !query || catalogSearchText(item).includes(query);
-    return matchesFilter && matchesSearch;
+    return matchesFilter && matchesPackage && matchesSearch;
   });
   if (!components.some((item) => item.key === state.selectedComponentKey)) {
     state.selectedComponentKey = components[0] && components[0].key;
@@ -3119,6 +3528,42 @@ function renderCatalog() {
     });
   });
   renderComponentDetail();
+}
+
+function renderCatalogPackageFilter() {
+  if (!els.componentPackageFilter) return;
+  const packages = catalogPackageOptions();
+  if (state.componentPackageFilter !== "all" && !packages.some((item) => item.id === state.componentPackageFilter)) {
+    state.componentPackageFilter = "all";
+  }
+  const options = [
+    { id: "all", label: "All packages" },
+    ...packages,
+  ];
+  const html = options.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
+  if (els.componentPackageFilter.innerHTML !== html) {
+    els.componentPackageFilter.innerHTML = html;
+  }
+  if (els.componentPackageFilter.value !== state.componentPackageFilter) {
+    els.componentPackageFilter.value = state.componentPackageFilter;
+  }
+}
+
+function catalogPackageOptions() {
+  const counts = new Map();
+  allComponents().forEach((component) => {
+    const id = componentPackageId(component);
+    if (!id) return;
+    counts.set(id, (counts.get(id) || 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([id, count]) => ({ id, label: `${id} (${count})` }));
+}
+
+function componentPackageId(component) {
+  const entry = component && component.entry || {};
+  return String(entry.package_id || entry.package || "unpackaged");
 }
 
 function renderComponentDetail() {
@@ -4515,6 +4960,8 @@ function catalogSearchText(component) {
     component.entry && component.entry.label,
     component.entry && component.entry.id,
     component.entry && component.entry.path,
+    component.entry && component.entry.package,
+    component.entry && component.entry.package_id,
     component.entry && component.entry.qualified_id,
     component.entry && component.entry.catalog_key,
     summary.description,
@@ -5218,6 +5665,16 @@ function workspacePreviewKey(session = currentSession()) {
   return session ? session.backendWorkspaceId || session.id : "";
 }
 
+function workspaceInterfaceConfig(session = currentSession()) {
+  const iface = session && session.interface && typeof session.interface === "object" ? session.interface : null;
+  return iface && iface.command && iface.port ? iface : null;
+}
+
+function workspaceInterfaceLaunchKey(session = currentSession()) {
+  const workspaceId = session && (session.backendWorkspaceId || session.id);
+  return workspaceId ? `workspace:${workspaceId}:interface` : "";
+}
+
 function currentWorkspacePreview(session = currentSession()) {
   const key = workspacePreviewKey(session);
   if (!key) return { port: 5173, url: "", status: "idle", message: "" };
@@ -5316,6 +5773,73 @@ function reloadEmbeddedCodeWorkspace() {
   }
 }
 
+async function launchWorkspaceInterface() {
+  const session = currentSession();
+  const workspaceInterface = workspaceInterfaceConfig(session);
+  if (!session || !workspaceInterface) return;
+  const launchKey = workspaceInterfaceLaunchKey(session);
+  if (state.interfaceLaunch) return;
+  const preview = currentWorkspacePreview(session);
+  state.interfaceLaunch = {
+    key: launchKey,
+    label: workspaceInterface.label || "interface",
+    port: workspaceInterface.port,
+    startedAt: Date.now(),
+  };
+  preview.status = "opening";
+  preview.message = `Launching ${workspaceInterface.label || "interface"} from this workspace.`;
+  preview.url = "";
+  state.workbenchMode = "preview";
+  session.timeline.push(["tool", "interface launch", `Starting ${workspaceInterface.label || "interface"} on port ${workspaceInterface.port}.`]);
+  renderWorkspace();
+  try {
+    const workspaceId = session.backendWorkspaceId || session.id;
+    const payload = await postJson(`/api/workspaces/${encodeURIComponent(workspaceId)}/launch-interface-job`, { setup: "auto" });
+    const launch = payload.launch || {};
+    state.interfaceLaunch = { ...state.interfaceLaunch, ...launch, key: launchKey };
+    renderWorkspace();
+    await pollWorkspaceInterfaceLaunch(launchKey, launch.launch_id);
+  } catch (error) {
+    if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
+      state.interfaceLaunch = null;
+    }
+    preview.status = "error";
+    preview.message = String(error.message || error);
+    session.timeline.push(["tool", "interface launch failed", preview.message]);
+    renderWorkspace();
+  }
+}
+
+async function pollWorkspaceInterfaceLaunch(launchKey, launchId) {
+  if (!launchId) throw new Error("Interface launch did not return a launch id.");
+  while (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
+    const payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
+    const launch = payload.launch || {};
+    state.interfaceLaunch = { ...state.interfaceLaunch, ...launch, key: launchKey };
+    const session = currentSession();
+    const preview = currentWorkspacePreview(session);
+    const step = (launch.steps || []).slice(-1)[0];
+    preview.status = "opening";
+    preview.message = step && (step.detail || step.title) || "Launching workspace interface.";
+    renderWorkspace();
+    if (launch.status === "ready") {
+      const result = launch.result || {};
+      if (!result.workspace) throw new Error("Interface launch completed without a workspace.");
+      state.interfaceLaunch = null;
+      const updatedSession = mergeUiWorkspace(result.workspace);
+      state.selectedSessionId = updatedSession.id;
+      applyWorkspacePreviewPayload(updatedSession, result.preview, result.interface);
+      state.workbenchMode = "preview";
+      setView("workspace");
+      return;
+    }
+    if (launch.status === "failed") {
+      throw new Error(launch.error || "Interface launch failed.");
+    }
+    await sleep(1000);
+  }
+}
+
 async function openWorkspacePreview() {
   const session = currentSession();
   if (!session) return;
@@ -5400,6 +5924,7 @@ async function handleAgentActionButton() {
     await cancelAgentMessage();
     return;
   }
+  if (assistantIsAwaitingApproval()) return;
   await sendAgentMessage();
 }
 
@@ -5422,7 +5947,7 @@ async function cancelAgentMessage() {
 }
 
 async function sendAgentMessage() {
-  if (assistantIsBusy()) return;
+  if (assistantIsBusy() || assistantIsAwaitingApproval()) return;
   const message = els.agentInput.value.trim();
   if (!message) return;
   const userMessage = ["user", "User", message];
@@ -5812,11 +6337,17 @@ function workspaceTypeLabel(session) {
 
 function agentSessionCard(session) {
   const attachedCount = attachedWorkspaceIds(session.id).length;
+  const status = assistantSessionStatus(session);
+  const statusLabel = status === "awaiting_user_approval"
+    ? "paused for approval"
+    : status === "approval_forwarding_failed"
+      ? "result send failed"
+      : status && status !== "idle" ? status.replaceAll("_", " ") : "";
   return `
     <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button">
       <strong>${escapeHtml(session.title)}</strong>
       <span>${escapeHtml(session.description || "Conversation")}</span>
-      <span class="path-text">${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached</span>
+      <span class="path-text">${attachedCount} workspace${attachedCount === 1 ? "" : "s"} attached${statusLabel ? ` - ${escapeHtml(statusLabel)}` : ""}</span>
     </button>
   `;
 }
@@ -6093,7 +6624,7 @@ function capabilityItem(capability) {
 
 function statusClass(status) {
   const value = String(status || "unknown");
-  if (["success", "completed", "compatible", "ready", "valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "configured", "docker", "podman"].includes(value)) return "status-ready";
+  if (["success", "completed", "compatible", "ready", "valid", "schema valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "configured", "docker", "podman"].includes(value)) return "status-ready";
   if (["failed", "invalid", "incompatible", "unavailable", "offline", "missing", "off", "setup"].includes(value)) return "status-failed";
   if (["running", "validating", "opening"].includes(value)) return "status-running";
   if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited", "pending"].includes(value)) return "status-review";

@@ -22,6 +22,26 @@ jobs:
       - name: Install source checkout
         run: python -m pip install -e . -e ./studio
 
+      - name: Build and inspect core distribution
+        run: |
+          python -m pip install build
+          rm -rf dist-check
+          python -m build --wheel --sdist --outdir dist-check
+          python scripts/check_release_artifacts.py dist-check
+
+      - name: Verify core package without Studio
+        run: |
+          python -m venv /tmp/optpilot-core-check
+          /tmp/optpilot-core-check/bin/python -m pip install --upgrade pip
+          /tmp/optpilot-core-check/bin/python -m pip install dist-check/optpilot-*.whl
+          /tmp/optpilot-core-check/bin/optpilot --help
+          /tmp/optpilot-core-check/bin/optpilot validate tests/fixtures/catalog/studies/toy_random_search.yaml
+          /tmp/optpilot-core-check/bin/optpilot package validate tests/fixtures/catalog
+          /tmp/optpilot-core-check/bin/python - <<'PY'
+          import importlib.util
+          raise SystemExit(1 if importlib.util.find_spec("optpilot_studio") else 0)
+          PY
+
       - name: Run unit tests
         run: python -m unittest discover -s tests -p 'test_*.py'
 

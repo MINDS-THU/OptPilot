@@ -25,6 +25,11 @@ Studio can run the assistant in several modes:
 The OpenHands bridge has been checked with
 `openhands-agent-server==1.29.0`. OpenHands currently expects Python 3.12, so
 run it from a Python 3.12 environment when enabling tool execution.
+Studio gives OpenHands a small native inspection/planning tool set for codebase
+search. Terminal and file-editing calls use OpenHands-compatible Studio tool
+names, but they are still Studio client tools: Studio executes them through
+attached workspace checks, editable-copy rules, runtime execution, and approvals
+instead of letting OpenHands edit files or run shell commands directly.
 
 Install the runtime packages in the source-checkout environment:
 
@@ -101,6 +106,7 @@ The assistant works with attached workspaces.
 It can inspect read-only context such as:
 
 - visible Studio page state
+- attached workspace code through native OpenHands search tools
 - catalog entries
 - study configs
 - run summaries and evidence files
@@ -127,6 +133,12 @@ Higher-impact actions are approval-gated in Studio. This includes:
 - launching studies
 - stopping jobs
 - applying catalog registrations
+
+OpenHands-native tools are limited to low-risk inspection and planning, such as
+`grep`, `glob`, and `task_tracker`. Studio exposes OpenHands-compatible
+`optpilot_terminal` and `optpilot_file_editor` as client tools so the model gets
+familiar software-engineering interfaces while OptPilot keeps control of paths,
+workspace runtime, and approvals.
 
 Approval records are stored under `.optpilot-ui/` with the local assistant
 session state.

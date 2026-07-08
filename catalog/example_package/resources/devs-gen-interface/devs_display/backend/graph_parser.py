@@ -14,34 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import litellm
 from pydantic import BaseModel, Field
 
+from devs_settings import (
+    graph_parse_max_workers as configured_graph_parse_max_workers,
+    model_presets,
+    openrouter_api_key,
+    visualizer_parse_timeout_seconds as configured_visualizer_parse_timeout_seconds,
+)
 
-FRONTEND_MODEL_PRESETS = [
-    {
-        "provider": "openai",
-        "label": "OpenRouter GPT 5.4 Mini",
-        "model": "openrouter/openai/gpt-5.4-mini",
-    },
-    {
-        "provider": "openai",
-        "label": "OpenRouter DeepSeek V3.2",
-        "model": "openrouter/deepseek/deepseek-v3.2",
-    },
-    {
-        "provider": "openai",
-        "label": "OpenRouter GLM 4.7",
-        "model": "openrouter/z-ai/glm-4.7",
-    },
-    {
-        "provider": "openai",
-        "label": "OpenRouter GPT 5.4",
-        "model": "openrouter/openai/gpt-5.4",
-    },
-    {
-        "provider": "gemini",
-        "label": "Gemini 2.5 Flash",
-        "model": "gemini-2.5-flash",
-    },
-]
+FRONTEND_MODEL_PRESETS = model_presets()
 
 VISUALIZER_SYSTEM_INSTRUCTION = """
 You are an expert Python Static Analysis tool for xDEVS simulation models.
@@ -67,10 +47,6 @@ Return ONLY valid JSON:
   "couplings": [{"source_model": "string", "source_port": "string", "target_model": "string", "target_port": "string"}]
 }
 """.strip()
-
-
-DEFAULT_VISUALIZER_PARSE_TIMEOUT_SECONDS = 240
-DEFAULT_GRAPH_PARSE_MAX_WORKERS = 6
 
 
 class VisualizerComponent(BaseModel):
@@ -109,23 +85,11 @@ def looks_like_devs_project(abs_path: str) -> bool:
 
 
 def visualizer_parse_timeout_seconds() -> float:
-    raw = os.getenv("DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS", "")
-    if not raw:
-        return DEFAULT_VISUALIZER_PARSE_TIMEOUT_SECONDS
-    try:
-        return max(1.0, float(raw))
-    except ValueError:
-        return DEFAULT_VISUALIZER_PARSE_TIMEOUT_SECONDS
+    return configured_visualizer_parse_timeout_seconds()
 
 
 def graph_parse_max_workers() -> int:
-    raw = os.getenv("DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS", "")
-    if not raw:
-        return DEFAULT_GRAPH_PARSE_MAX_WORKERS
-    try:
-        return max(1, min(16, int(raw)))
-    except ValueError:
-        return DEFAULT_GRAPH_PARSE_MAX_WORKERS
+    return configured_graph_parse_max_workers()
 
 
 def model_dump_compat(model: BaseModel) -> Dict[str, Any]:
@@ -190,7 +154,7 @@ def parse_model_for_visualizer(
     if provider != "openai":
         raise ValueError("Backend visualizer proxy currently supports OpenRouter/OpenAI-compatible models only")
 
-    effective_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
+    effective_key = api_key or openrouter_api_key()
     if not effective_key:
         raise ValueError("OPENROUTER_API_KEY is not configured")
 
@@ -224,7 +188,7 @@ def parse_model_for_visualizer(
         max_tokens=4096,
         extra_headers={
             "HTTP-Referer": "http://localhost:3000",
-            "X-Title": "HAMLET devs_display",
+            "X-Title": "DEVS Generator Interface",
         },
     )
 
@@ -493,7 +457,7 @@ def extract_ports(body: str, direction: str) -> List[str]:
 
 
 def parse_model_structure(class_name: str, code: str, provider: str, model: str, api_key: Optional[str]) -> Dict[str, Any]:
-    if api_key or os.getenv("OPENROUTER_API_KEY", ""):
+    if api_key or openrouter_api_key():
         try:
             parsed = parse_model_for_visualizer(class_name, code, provider, model, api_key)
             normalized = {

@@ -17,6 +17,9 @@ ToolExecutor = Callable[[str, JsonDict], JsonDict]
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENHANDS_SESSION_ENDPOINT = "/api/conversations"
+DEFAULT_OPENHANDS_NATIVE_TOOLS = ("grep", "glob", "task_tracker")
+ALLOWED_OPENHANDS_NATIVE_TOOLS = frozenset(DEFAULT_OPENHANDS_NATIVE_TOOLS)
+OPENHANDS_COMPAT_AGENT_TOOLS = ("optpilot_terminal", "optpilot_file_editor")
 FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT = """You are OptPilot Assistant inside OptPilot Studio.
 Answer using the OptPilot context packet provided by the GUI. Keep public
 OptPilot explanations centered on environment-owned evaluator.settings and
@@ -40,6 +43,8 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_file_write",
     "optpilot_file_diff",
     "optpilot_shell_run",
+    "optpilot_terminal",
+    "optpilot_file_editor",
     "optpilot_workspace_preview_open",
     "optpilot_catalog_list",
     "optpilot_catalog_detail",
@@ -49,6 +54,11 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_registration_prepare",
     "optpilot_registration_validate",
     "optpilot_registration_apply",
+    "optpilot_package_plan_prepare",
+    "optpilot_package_plan_update",
+    "optpilot_package_plan_validate",
+    "optpilot_package_plan_smoke",
+    "optpilot_package_plan_apply",
     "optpilot_study_draft",
     "optpilot_study_save",
     "optpilot_study_launch",
@@ -63,6 +73,18 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_capability_list",
     "optpilot_capability_detail",
 ]
+SUPPORTED_CLIENT_TOOL_NAMES = {*OPTPILOT_AGENT_TOOLS, *OPENHANDS_COMPAT_AGENT_TOOLS}
+
+
+def sanitize_openhands_native_tools(raw_tools: Any) -> tuple[str, ...]:
+    if not isinstance(raw_tools, list):
+        return DEFAULT_OPENHANDS_NATIVE_TOOLS
+    tools: List[str] = []
+    for name in raw_tools:
+        normalized = str(name).strip()
+        if normalized and normalized in ALLOWED_OPENHANDS_NATIVE_TOOLS and normalized not in tools:
+            tools.append(normalized)
+    return tuple(tools)
 
 
 def _tool_schema(properties: JsonDict, required: Optional[List[str]] = None) -> JsonDict:
@@ -110,7 +132,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_file_tree",
-        "description": "List files under an attached workspace root. Use path='.' for the workspace root; omitted or null path also defaults to '.'.",
+        "description": "List files under an attached workspace path. For package curation, prefer focused paths such as optpilot_configs, src, docs, or package directories before a root-wide scan.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "path": {"type": "string"}, "max_files": {"type": "integer"}}),
         "annotations": {"readOnlyHint": True},
     },
@@ -139,7 +161,37 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
             "cwd": {"type": "string"},
             "command": {"type": "array", "items": {"type": "string"}},
             "timeout_seconds": {"type": "integer"},
+            "description": {"type": "string"},
         }, ["command"]),
+    },
+    {
+        "name": "optpilot_terminal",
+        "description": "OpenHands-compatible terminal interface executed by OptPilot Studio inside the selected editable workspace runtime. Runs one bounded shell command; risky commands return a Studio approval request.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "cwd": {"type": "string"},
+            "command": {"type": "string"},
+            "description": {"type": "string"},
+            "timeout": {"type": "integer"},
+            "timeout_seconds": {"type": "integer"},
+            "is_input": {"type": "boolean"},
+            "reset": {"type": "boolean"},
+        }, ["command"]),
+    },
+    {
+        "name": "optpilot_file_editor",
+        "description": "OpenHands-compatible file editor executed by OptPilot Studio under attached-workspace and editable-copy rules. Supports view, create, exact str_replace, and insert.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "command": {"type": "string", "enum": ["view", "create", "str_replace", "insert"]},
+            "path": {"type": "string"},
+            "view_range": {"type": "array", "items": {"type": "integer"}},
+            "max_files": {"type": "integer"},
+            "file_text": {"type": "string"},
+            "old_str": {"type": "string"},
+            "new_str": {"type": "string"},
+            "insert_line": {"type": "integer"},
+        }, ["command", "path"]),
     },
     {
         "name": "optpilot_workspace_preview_open",
@@ -176,7 +228,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_config_validate",
-        "description": "Validate an OptPilot environment, method, or study YAML file in an attached workspace or allowed catalog path.",
+        "description": "Validate an OptPilot environment, method, resource, or study YAML file. Validation errors are actionable repair instructions: fix the reported config/source/import/setup issue and rerun validation.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "path": {"type": "string"}}, ["path"]),
         "annotations": {"readOnlyHint": True},
     },
@@ -197,9 +249,54 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "registration_id": {"type": "string"}}, ["workspace_id", "registration_id"]),
     },
     {
-        "name": "optpilot_study_draft",
-        "description": "Draft a study from selected environment and method configs.",
+        "name": "optpilot_package_plan_prepare",
+        "description": "Prepare a package-level curation plan for an attached external workspace, including environments, methods, resources, and studies. After preparing, call optpilot_package_plan_validate before broad source reading.",
         "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "package_id": {"type": "string"},
+            "config_paths": {"type": "array", "items": {"type": "string"}},
+            "resource_id": {"type": "string"},
+        }),
+    },
+    {
+        "name": "optpilot_package_plan_update",
+        "description": "Update package plan includes, excludes, source hints, package id, or smoke-study choices before validation.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "package_id": {"type": "string"},
+            "components": {"type": "array", "items": {"type": "object"}},
+            "resources": {"type": "array", "items": {"type": "object"}},
+            "studies": {"type": "array", "items": {"type": "object"}},
+        }, ["workspace_id", "plan_id"]),
+    },
+    {
+        "name": "optpilot_package_plan_validate",
+        "description": "Materialize a package plan in a temporary folder and run schema, source, setup-file, import, method-protocol, evaluator-shape, and local source-closure checks. If it fails, repair missing adapters, source hints, setup files, imports, or protocol signatures in the editable workspace, then rerun validation.",
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "optpilot_package_plan_smoke",
+        "description": "Request an approval-gated smoke study for a validated package plan in a temporary package. Studio pauses the assistant and asks the user to approve or reject before the study runs.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
+            "plan_id": {"type": "string"},
+            "study": {"type": "string"},
+            "max_trials": {"type": "integer", "minimum": 1},
+            "timeout_seconds": {"type": "integer", "minimum": 1},
+        }, ["workspace_id", "plan_id"]),
+    },
+    {
+        "name": "optpilot_package_plan_apply",
+        "description": "Apply a validated package plan into catalog/local_package after approval. Environment-plus-method packages must pass a smoke study first; one-sided packages must at least be component-ready.",
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
+    },
+    {
+        "name": "optpilot_study_draft",
+        "description": "Draft a study from selected environment and method configs. For attached workspaces, pass workspace_id and workspace-relative config paths, then save the returned YAML under optpilot_configs/studies/ before package-plan validation.",
+        "parameters": _tool_schema({
+            "workspace_id": {"type": "string"},
             "environment_path": {"type": "string"},
             "method_path": {"type": "string"},
             "name": {"type": "string"},
@@ -298,6 +395,7 @@ class OpenHandsRuntimeConfig:
     model: str = ""
     api_key: str = ""
     enabled: bool = False
+    native_tools: tuple[str, ...] = DEFAULT_OPENHANDS_NATIVE_TOOLS
 
     @classmethod
     def from_env(cls) -> "OpenHandsRuntimeConfig":
@@ -321,6 +419,7 @@ class OpenHandsRuntimeConfig:
             model=str(payload.get("model") or "").strip(),
             api_key=str(payload.get("api_key") or "").strip(),
             enabled=bool(payload.get("enabled")),
+            native_tools=sanitize_openhands_native_tools(payload.get("native_tools")),
         )
 
 
@@ -371,6 +470,8 @@ class OpenHandsAdapter:
             "model": self.config.model,
             "api_key_configured": api_key_configured,
             "available_tools": OPTPILOT_AGENT_TOOLS,
+            "client_tools": sorted(SUPPORTED_CLIENT_TOOL_NAMES),
+            "native_tools": list(self._openhands_native_tools()),
             "mode": mode,
             "dispatch": dispatch,
         }
@@ -493,6 +594,7 @@ class OpenHandsAdapter:
             "visible_state": visible_state or {},
             "assistant_capabilities": assistant_capabilities or {},
             "available_tools": OPTPILOT_AGENT_TOOLS,
+            "client_tools": sorted(SUPPORTED_CLIENT_TOOL_NAMES),
             "runtime": self.status(),
         }
 
@@ -629,16 +731,55 @@ class OpenHandsAdapter:
             "run": True,
         }
         self._request_json("POST", f"{conversations_url}/{next_conversation_id}/events", payload=send_payload)
-        answer, tool_events = self._poll_openhands_answer(
+        answer, tool_events, runtime_error, paused_approval_id = self._poll_openhands_answer(
             conversations_url,
             next_conversation_id,
             tool_executor=tool_executor,
             ignored_tool_calls=ignored_tool_calls,
             ignored_event_ids=ignored_event_ids,
             ignored_response_texts=ignored_texts,
-            allow_final_response_fallback=created,
             poll_seconds=3.0,
         )
+        if paused_approval_id:
+            return {
+                "status": "awaiting_user_approval",
+                "mode": "openhands agent server",
+                "dispatch": "openhands_http",
+                "conversation_id": next_conversation_id,
+                "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                "events": [
+                    *tool_events,
+                    {
+                        "type": "openhands_dispatch_paused_for_approval",
+                        "payload": {"conversation_id": next_conversation_id, "approval_id": paused_approval_id},
+                    },
+                ],
+                "sync_state": {
+                    "ignored_event_ids": sorted(ignored_event_ids),
+                    "ignored_tool_call_ids": sorted(ignored_tool_calls),
+                    "ignored_response_texts": sorted(ignored_texts),
+                    "paused_approval_id": paused_approval_id,
+                },
+            }
+        if runtime_error:
+            return {
+                "status": "failed",
+                "mode": "openhands agent server",
+                "dispatch": "openhands_http",
+                "conversation_id": next_conversation_id,
+                "assistant_message": {
+                    "role": "assistant",
+                    "title": "OpenHands error",
+                    "content": f"OpenHands reported an error: {runtime_error}",
+                },
+                "events": [
+                    *tool_events,
+                    {
+                        "type": "openhands_dispatch_failed",
+                        "payload": {"conversation_id": next_conversation_id, "error": runtime_error},
+                    },
+                ],
+            }
         return {
             "status": "answered" if answer else "running",
             "mode": "openhands agent server",
@@ -660,7 +801,6 @@ class OpenHandsAdapter:
                 "ignored_event_ids": sorted(ignored_event_ids),
                 "ignored_tool_call_ids": sorted(ignored_tool_calls),
                 "ignored_response_texts": sorted(ignored_texts),
-                "allow_final_response_fallback": created,
             },
         }
 
@@ -672,23 +812,48 @@ class OpenHandsAdapter:
         ignored_tool_calls: Optional[set[str]] = None,
         ignored_event_ids: Optional[set[str]] = None,
         ignored_response_texts: Optional[set[str]] = None,
-        allow_final_response_fallback: bool = False,
         poll_seconds: float = 3.0,
     ) -> JsonDict:
         status = self.status()
         if not conversation_id or status.get("dispatch") != "openhands_http":
             return {"status": "unavailable", "events": []}
         conversations_url = self._join_url(self.config.base_url, self.session_endpoint)
-        answer, tool_events = self._poll_openhands_answer(
+        answer, tool_events, runtime_error, paused_approval_id = self._poll_openhands_answer(
             conversations_url,
             conversation_id,
             tool_executor=tool_executor,
             ignored_tool_calls=ignored_tool_calls,
             ignored_event_ids=ignored_event_ids,
             ignored_response_texts=ignored_response_texts,
-            allow_final_response_fallback=allow_final_response_fallback,
             poll_seconds=poll_seconds,
         )
+        if paused_approval_id:
+            return {
+                "status": "awaiting_user_approval",
+                "conversation_id": conversation_id,
+                "assistant_message": {"role": "assistant", "title": "OpenHands", "content": ""},
+                "events": tool_events,
+                "sync_state": {
+                    "ignored_event_ids": sorted(ignored_event_ids or []),
+                    "ignored_response_texts": sorted(ignored_response_texts or []),
+                    "paused_approval_id": paused_approval_id,
+                },
+            }
+        if runtime_error:
+            return {
+                "status": "failed",
+                "conversation_id": conversation_id,
+                "assistant_message": {
+                    "role": "assistant",
+                    "title": "OpenHands error",
+                    "content": f"OpenHands reported an error: {runtime_error}",
+                },
+                "events": tool_events,
+                "sync_state": {
+                    "ignored_event_ids": sorted(ignored_event_ids or []),
+                    "ignored_response_texts": sorted(ignored_response_texts or []),
+                },
+            }
         return {
             "status": "answered" if answer else "running",
             "conversation_id": conversation_id,
@@ -697,7 +862,6 @@ class OpenHandsAdapter:
             "sync_state": {
                 "ignored_event_ids": sorted(ignored_event_ids or []),
                 "ignored_response_texts": sorted(ignored_response_texts or []),
-                "allow_final_response_fallback": allow_final_response_fallback,
             },
         }
 
@@ -743,12 +907,12 @@ class OpenHandsAdapter:
             "agent": {
                 "kind": "Agent",
                 "llm": self._openhands_llm_payload(),
-                "tools": [],
+                "tools": self._openhands_tool_records(),
                 "agent_context": {"system_message_suffix": self.system_prompt},
             },
             "client_tools": self._client_tool_specs(),
             "workspace": {"kind": "LocalWorkspace", "working_dir": working_dir},
-            "confirmation_policy": {"kind": "AlwaysConfirm"},
+            "confirmation_policy": {"kind": "NeverConfirm"},
             "initial_message": None,
             "max_iterations": 20,
             "stuck_detection": True,
@@ -768,6 +932,12 @@ class OpenHandsAdapter:
     def _client_tool_specs(self) -> List[JsonDict]:
         return OPTPILOT_AGENT_TOOL_SPECS
 
+    def _openhands_native_tools(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(name for name in self.config.native_tools if name))
+
+    def _openhands_tool_records(self) -> List[JsonDict]:
+        return [{"name": name, "params": {}} for name in self._openhands_native_tools()]
+
     def _poll_openhands_answer(
         self,
         conversations_url: str,
@@ -777,11 +947,9 @@ class OpenHandsAdapter:
         ignored_tool_calls: Optional[set[str]] = None,
         ignored_event_ids: Optional[set[str]] = None,
         ignored_response_texts: Optional[set[str]] = None,
-        allow_final_response_fallback: bool = True,
         poll_seconds: float = 75.0,
-    ) -> tuple[str, List[JsonDict]]:
+    ) -> tuple[str, List[JsonDict], str, str]:
         search_url = f"{conversations_url}/{conversation_id}/events/search?limit=50&sort_order=TIMESTAMP_DESC"
-        final_response_url = f"{conversations_url}/{conversation_id}/agent_final_response"
         deadline = time.monotonic() + max(float(poll_seconds), 0.1)
         handled_tool_calls: set[str] = set(ignored_tool_calls or set())
         ignored_events: set[str] = set(ignored_event_ids or set())
@@ -799,8 +967,14 @@ class OpenHandsAdapter:
                 data = {}
             events = data.get("items", []) if isinstance(data, dict) else []
             tool_events.extend(self._trace_openhands_events(events, seen_openhands_events))
+            runtime_error = self._best_runtime_error(events, ignored_events)
+            if runtime_error:
+                return "", tool_events, runtime_error, ""
+            finish_text = self._best_finish_text(events, ignored_events, ignored_texts)
+            if finish_text:
+                return finish_text, tool_events, "", ""
             if tool_executor:
-                new_tool_events = self._execute_openhands_client_tools(
+                new_tool_events, paused_approval_id = self._execute_openhands_client_tools(
                     events,
                     conversations_url,
                     conversation_id,
@@ -808,23 +982,24 @@ class OpenHandsAdapter:
                     handled_tool_calls,
                 )
                 tool_events.extend(new_tool_events)
+                if paused_approval_id:
+                    return "", tool_events, "", paused_approval_id
                 if new_tool_events:
                     continue
-            text = self._best_user_facing_answer(events, ignored_events, ignored_texts)
-            if text:
-                return text, tool_events
-            if allow_final_response_fallback:
-                try:
-                    data, _headers = self._request_json("GET", final_response_url, payload=None, timeout=15.0)
-                    text = self._user_facing_assistant_text(
-                        str(data.get("response") or data.get("content") or data.get("text") or "")
-                    )
-                    if text and self._normalize_response_text(text) not in ignored_texts:
-                        return text, tool_events
-                except Exception:
-                    pass
             time.sleep(2.0)
-        return "", tool_events
+        return "", tool_events, "", ""
+
+    def _best_finish_text(self, events: Any, ignored_events: set[str], ignored_texts: set[str]) -> str:
+        source_events = events if isinstance(events, list) else []
+        for event in source_events:
+            event_id = self._openhands_event_id(event)
+            if event_id and event_id in ignored_events:
+                continue
+            text = self._event_finish_text(event)
+            normalized = self._normalize_response_text(text)
+            if text and normalized and normalized not in ignored_texts:
+                return text
+        return ""
 
     def _trace_openhands_events(self, events: Any, seen_event_ids: set[str]) -> List[JsonDict]:
         traced: List[JsonDict] = []
@@ -899,6 +1074,9 @@ class OpenHandsAdapter:
             text = self._content_text(value).strip()
             if text:
                 return self._compact_text(text, 300)
+        runtime_error = self._event_runtime_error_text(event)
+        if runtime_error:
+            return self._compact_text(runtime_error, 300)
         action = event.get("action")
         if isinstance(action, dict):
             keys = [str(key) for key in action.keys() if key != "security_risk"]
@@ -906,23 +1084,23 @@ class OpenHandsAdapter:
                 return f"Action fields: {', '.join(keys[:8])}"
         return str(event.get("kind") or event.get("type") or "OpenHands event")
 
-    def _best_user_facing_answer(
-        self,
-        events: Any,
-        ignored_events: set[str],
-        ignored_texts: set[str],
-    ) -> str:
+    def _best_runtime_error(self, events: Any, ignored_events: set[str]) -> str:
         source_events = events if isinstance(events, list) else []
-        for extractor in (self._event_finish_text, self._event_assistant_text):
-            for event in source_events:
-                event_id = self._openhands_event_id(event)
-                if event_id and event_id in ignored_events:
-                    continue
-                text = extractor(event)
-                normalized = self._normalize_response_text(text)
-                if text and normalized and normalized not in ignored_texts:
-                    return text
-        return ""
+        generic_status_error = ""
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            event_id = self._openhands_event_id(event)
+            if event_id and event_id in ignored_events:
+                continue
+            error_text = self._event_runtime_error_text(event)
+            if not error_text:
+                continue
+            if error_text == "OpenHands conversation entered error state.":
+                generic_status_error = error_text
+                continue
+            return error_text
+        return generic_status_error
 
     def _openhands_event_category(
         self,
@@ -943,7 +1121,7 @@ class OpenHandsAdapter:
             return "user_message"
         if assistant_text:
             return "assistant_message"
-        if str(event.get("error") or ""):
+        if str(event.get("error") or "") or self._event_runtime_error_text(event):
             return "error"
         return "status"
 
@@ -989,11 +1167,11 @@ class OpenHandsAdapter:
         conversation_id: str,
         tool_executor: ToolExecutor,
         handled_tool_calls: set[str],
-    ) -> List[JsonDict]:
+    ) -> tuple[List[JsonDict], str]:
         tool_events: List[JsonDict] = []
         for event in events if isinstance(events, list) else []:
             name, arguments, call_id = self._openhands_tool_call(event)
-            if not name or name not in OPTPILOT_AGENT_TOOLS or not call_id or call_id in handled_tool_calls:
+            if not name or name not in SUPPORTED_CLIENT_TOOL_NAMES or not call_id or call_id in handled_tool_calls:
                 continue
             handled_tool_calls.add(call_id)
             try:
@@ -1005,24 +1183,66 @@ class OpenHandsAdapter:
                     "summary": str(exc),
                     "error": {"type": type(exc).__name__, "message": str(exc)},
                 }
+            approval_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            if approval_data.get("approval_required") or result.get("status") == "approval_required":
+                approval = approval_data.get("approval") if isinstance(approval_data.get("approval"), dict) else {}
+                approval_id = str(approval.get("id") or approval_data.get("approval_id") or "")
+                tool_events.append(
+                    {
+                        "id": f"optpilot-approval-pause-{call_id}",
+                        "type": "optpilot_approval_pause",
+                        "payload": {
+                            "tool": name,
+                            "tool_call_id": call_id,
+                            "approval_id": approval_id,
+                            "summary": str(result.get("summary") or ""),
+                            "delivery_status": "paused",
+                        },
+                    }
+                )
+                return tool_events, approval_id
             result = self._redact_tool_result(result)
             result_preview = self._json_preview(result, 2400)
+            delivery_status = "sent"
+            delivery_error = ""
+            try:
+                self._send_tool_result_message(conversations_url, conversation_id, name, call_id, result, timeout=2.0)
+            except Exception as exc:
+                if self._is_timeout_error(exc) and self._tool_result_feedback_exists(conversations_url, conversation_id, call_id):
+                    delivery_status = "confirmed_after_timeout"
+                else:
+                    delivery_status = "timeout" if self._is_timeout_error(exc) else "failed"
+                    delivery_error = str(exc) or type(exc).__name__
+            payload = {
+                "tool": name,
+                "tool_call_id": call_id,
+                "ok": bool(result.get("ok")),
+                "summary": str(result.get("summary") or ""),
+                "result_preview": result_preview,
+                "delivery_status": delivery_status,
+                "delivery_error": delivery_error,
+            }
+            if delivery_status in {"timeout", "failed"}:
+                payload["result"] = result
             tool_events.append(
                 {
+                    "id": f"optpilot-tool-result-{call_id}",
                     "type": "optpilot_tool_result",
-                    "payload": {
-                        "tool": name,
-                        "tool_call_id": call_id,
-                        "ok": bool(result.get("ok")),
-                        "summary": str(result.get("summary") or ""),
-                        "result_preview": result_preview,
-                    },
+                    "payload": payload,
                 }
             )
-            self._send_tool_result_message(conversations_url, conversation_id, name, call_id, result)
-        return tool_events
+        return tool_events, ""
 
-    def _send_tool_result_message(self, conversations_url: str, conversation_id: str, name: str, call_id: str, result: JsonDict) -> None:
+    def _send_tool_result_message(
+        self,
+        conversations_url: str,
+        conversation_id: str,
+        name: str,
+        call_id: str,
+        result: JsonDict,
+        *,
+        timeout: float = 15.0,
+    ) -> None:
         result_json = json.dumps(result, indent=2, sort_keys=True, default=str)
         if len(result_json) > 18000:
             result_json = result_json[:18000] + "\n... truncated ..."
@@ -1041,7 +1261,7 @@ class OpenHandsAdapter:
             ],
             "run": True,
         }
-        self._request_json("POST", f"{conversations_url}/{conversation_id}/events", payload=payload, timeout=15.0)
+        self._request_json("POST", f"{conversations_url}/{conversation_id}/events", payload=payload, timeout=timeout)
 
     def submit_tool_result(self, conversation_id: str, name: str, call_id: str, result: JsonDict) -> JsonDict:
         if not conversation_id:
@@ -1055,8 +1275,36 @@ class OpenHandsAdapter:
         try:
             self._send_tool_result_message(conversations_url, conversation_id, name, call_id, self._redact_tool_result(result))
         except Exception as exc:
+            if self._is_timeout_error(exc) and self._tool_result_feedback_exists(conversations_url, conversation_id, call_id):
+                return {
+                    "sent": True,
+                    "conversation_id": conversation_id,
+                    "tool_call_id": call_id,
+                    "delivery_status": "confirmed_after_timeout",
+                }
             return {"sent": False, "reason": str(exc), "conversation_id": conversation_id, "tool_call_id": call_id}
         return {"sent": True, "conversation_id": conversation_id, "tool_call_id": call_id}
+
+    def _is_timeout_error(self, exc: Exception) -> bool:
+        return type(exc).__name__ in {"TimeoutError", "TimeoutExpired"} or "timed out" in str(exc).lower()
+
+    def _tool_result_feedback_exists(self, conversations_url: str, conversation_id: str, call_id: str) -> bool:
+        if not call_id:
+            return False
+        search_url = f"{conversations_url}/{conversation_id}/events/search?limit=100&sort_order=TIMESTAMP_DESC"
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            try:
+                data, _headers = self._request_json("GET", search_url, payload=None, timeout=5.0)
+            except Exception:
+                return False
+            events = data.get("items", []) if isinstance(data, dict) else []
+            for event in events if isinstance(events, list) else []:
+                text = self._event_user_text(event)
+                if "OptPilot tool result for " in text and f"({call_id})" in text:
+                    return True
+            time.sleep(0.25)
+        return False
 
     def _openhands_tool_call(self, event: Any) -> tuple[str, JsonDict, str]:
         if not isinstance(event, dict):
@@ -1216,6 +1464,36 @@ class OpenHandsAdapter:
                 return text
         return ""
 
+    def _event_runtime_error_text(self, event: JsonDict) -> str:
+        if not isinstance(event, dict):
+            return ""
+        event_kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+        if event_kind == "ConversationErrorEvent":
+            detail = self._content_text(
+                event.get("detail")
+                or event.get("message")
+                or event.get("error")
+                or event.get("content")
+                or event.get("text")
+            ).strip()
+            code = str(event.get("code") or "").strip()
+            message = detail or code or "OpenHands conversation failed."
+            if code and detail and not detail.startswith(code):
+                message = f"{code}: {detail}"
+            return self._redact_secret_text(self._compact_text(message, 1200))
+        if event_kind == "ConversationStateUpdateEvent":
+            key = str(event.get("key") or "")
+            value = str(event.get("value") or "").lower()
+            if key == "execution_status" and value == "error":
+                return "OpenHands conversation entered error state."
+        error = self._content_text(event.get("error")).strip()
+        return self._redact_secret_text(self._compact_text(error, 1200)) if error else ""
+
+    def _redact_secret_text(self, text: str) -> str:
+        if self.config.api_key:
+            return text.replace(self.config.api_key, "[redacted]")
+        return text
+
     def _event_user_text(self, event: JsonDict) -> str:
         if not isinstance(event, dict):
             return ""
@@ -1278,27 +1556,6 @@ class OpenHandsAdapter:
             return ""
         normalized = self._normalize_response_text(text).lower()
         if not normalized:
-            return ""
-        if "(waiting for your next message" in normalized or normalized == "waiting for your next message.":
-            return ""
-        if normalized.startswith((
-            "the user hasn't replied",
-            "the user still hasn't sent a new message",
-            "the task is complete on my side",
-        )):
-            return ""
-        if "delayed tool result" in normalized and "prior" in normalized:
-            return ""
-        planning_markers = (
-            " i should ",
-            " i need ",
-            " let me ",
-            " the user ",
-            " now i have ",
-            "there's nothing more to do except wait",
-        )
-        marker_count = sum(1 for marker in planning_markers if marker in f" {normalized} ")
-        if marker_count >= 2:
             return ""
         return text
 

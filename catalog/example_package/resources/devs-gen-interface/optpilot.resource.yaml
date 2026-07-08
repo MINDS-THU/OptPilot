@@ -1,0 +1,27 @@
+apiVersion: optpilot.io/v1
+config: resource
+id: devs-gen-interface
+name: DEVS Simulation Generator Interface
+description: Natural-language interface for generating, running, and visualizing xDEVS discrete-event simulation projects.
+tags:
+  - resource
+  - simulation
+  - frontend
+  - devs
+
+interface:
+  label: DEVS Generator
+  description: Launch the DEVS generation backend and graphical frontend, then open the Vite UI in Studio Preview.
+  command: [bash, -lc, ./_optpilot_launch_interface.sh]
+  port: 3000
+  cwd: .
+  env:
+    DEVS_INTERFACE_MODEL_ID: openrouter/openai/gpt-5.4
+    DEVS_INTERFACE_CONCURRENCY: "8"
+    DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS: "240"
+    DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS: "6"
+  envFromHost:
+    - OPENROUTER_API_KEY
+  extraPorts: [8000]
+  readyPath: /
+  readyTimeoutSeconds: 420

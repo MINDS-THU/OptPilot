@@ -25,6 +25,34 @@ To validate a whole package folder, use:
 optpilot package validate path/to/package
 ```
 
+For package source paths, setup files, and Python import targets, run the
+explicit deeper checks:
+
+```bash
+optpilot package validate path/to/package \
+  --check-source \
+  --check-setup-files \
+  --check-imports
+```
+
+These checks are intentionally stricter than normal runtime path resolution:
+package source paths must stay inside the package being validated. This is what
+lets a package keep working after it is moved from an attached external project
+into `catalog/my_package/` or Studio's local `catalog/local_package/`.
+
+To check or execute setup declarations:
+
+```bash
+optpilot package setup-check path/to/package
+optpilot package setup-check path/to/package --run-setup
+```
+
+To smoke-run a package study:
+
+```bash
+optpilot package smoke path/to/package --study studies/smoke.yaml
+```
+
 It covers the three public experiment config roles: `environment`, `method`,
 and `study`. Catalog packages may also include optional `resource` manifests
 for support material and launchable helper interfaces. Resources are secondary

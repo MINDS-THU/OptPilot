@@ -19,7 +19,7 @@ PY
       return 0
     fi
   done
-  echo "Python 3.10+ is required to launch the DEVS Simulation Interface." >&2
+  echo "Python 3.10+ is required to launch the DEVS Simulation Generator Interface." >&2
   return 1
 }
 

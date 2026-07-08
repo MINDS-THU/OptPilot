@@ -2,6 +2,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
+from devs_settings import DEFAULT_VISUALIZER_MODEL_ID
+
 
 class AuthLoginRequest(BaseModel):
     password: str
@@ -54,7 +56,7 @@ class ParseModelRequest(BaseModel):
 
 class GraphParseRequest(BaseModel):
     provider: str = "openai"
-    model: str = "openrouter/openai/gpt-5.4-mini"
+    model: str = DEFAULT_VISUALIZER_MODEL_ID
     api_key: Optional[str] = None
     force: bool = False
 

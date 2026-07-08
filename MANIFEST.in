@@ -1,4 +1,12 @@
+prune .agents
+prune .github
+prune catalog
+prune designs
+prune docs
+prune resource
+prune scripts
 prune studio
+prune tests
 prune .optpilot-ui
 prune .pytest_cache
 prune .venv

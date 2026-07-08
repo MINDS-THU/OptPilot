@@ -136,15 +136,15 @@ export interface ChatRequestInfo {
 }
 
 export interface ModelPreset {
-    provider: 'gemini' | 'openai';
+    provider: 'openai';
     label: string;
     model: string;
 }
 
 export interface FrontendConfig {
-    default_provider: 'gemini' | 'openai';
+    default_provider: 'openai';
     default_model: string;
-    api_key_available: Record<'gemini' | 'openai', boolean>;
+    api_key_available: Record<string, boolean>;
     model_presets: ModelPreset[];
 }
 

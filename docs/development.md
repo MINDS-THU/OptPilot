@@ -41,6 +41,8 @@ Before publishing:
 - Confirm public docs point users to `config: study`, `config: environment`, and `config: method`.
 - Confirm generated run directories are not committed.
 - Confirm `.optpilot-ui/`, `.venv/`, `dist/`, `site/`, and `*.egg-info/` are absent from commits.
+- Confirm `catalog/local_package/` is absent from commits unless it has been
+  intentionally promoted to a named, release-quality package.
 - Confirm the PyPI core package does not include Studio UI code or assistant assets.
 - Confirm source-checkout installs still expose `optpilot ui`.
 - Confirm only intentional internal Markdown notes are committed under

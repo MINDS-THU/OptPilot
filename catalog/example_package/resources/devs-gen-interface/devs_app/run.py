@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from smolagents import LiteLLMModel, CodeAgent, ToolCallingAgent, Tool
 from devs_display.backend.server import DEFAULT_REGISTRY_PATH, run_devs_display_backend
+from devs_settings import agent_concurrency, agent_model_id, agent_strong_model_id
 from src.monitoring import AgentLogger, LogLevel
 from datetime import datetime
 
@@ -64,16 +65,14 @@ load_dotenv(override=True)
 
 class TokenTracker:
     def __init__(self):
-        # 结构: {model_name: {'input': 0, 'output': 0, 'thinking': 0, 'calls': 0, 'total': 0}}
+        # Shape: {model_name: {'input': 0, 'output': 0, 'thinking': 0, 'calls': 0, 'total': 0}}
         self.stats = defaultdict(
             lambda: {"input": 0, "output": 0, "thinking": 0, "calls": 0, "total": 0}
         )
 
     def track(self, kwargs, completion_response, start_time, end_time):
-        """LiteLLM 成功回调函数"""
+        """LiteLLM success callback."""
         try:
-            # 1. 获取模型名称 (优先取 response 中的，如果没有则取调用参数中的)
-            # 兼容对象属性访问 (response.model) 和字典访问 (response['model'])
             model_name = (
                 getattr(completion_response, "model", None)
                 or completion_response.get("model")
@@ -81,8 +80,6 @@ class TokenTracker:
                 or "unknown-model"
             )
 
-            # 2. 获取 usage 对象
-            # usage 可能是一个对象 (Pydantic) 也可能是一个字典
             if hasattr(completion_response, "usage"):
                 usage = completion_response.usage
             else:
@@ -91,31 +88,24 @@ class TokenTracker:
             if not usage:
                 return
 
-            # 3. 提取标准 Token (兼容 对象.属性 和 字典.get)
             if hasattr(usage, "prompt_tokens"):
                 input_tokens = getattr(usage, "prompt_tokens", 0)
                 output_tokens = getattr(usage, "completion_tokens", 0)
                 total_tokens = getattr(usage, "total_tokens", 0)
-                # 获取 details 对象
                 details = getattr(usage, "completion_tokens_details", None)
             else:
                 input_tokens = usage.get("prompt_tokens", 0)
                 output_tokens = usage.get("completion_tokens", 0)
                 total_tokens = usage.get("total_tokens", 0)
-                # 获取 details 字典
                 details = usage.get("completion_tokens_details", None)
 
-            # 4. 提取 "思考/推理" Token (修复点)
             thinking_tokens = 0
             if details:
                 if isinstance(details, dict):
-                    # 如果是字典，用 get
                     thinking_tokens = details.get("reasoning_tokens", 0)
                 else:
-                    # 如果是 Wrapper 对象，用 getattr
                     thinking_tokens = getattr(details, "reasoning_tokens", 0)
 
-            # 5. 累加数据
             self.stats[model_name]["input"] += input_tokens
             self.stats[model_name]["output"] += output_tokens
             self.stats[model_name]["thinking"] += thinking_tokens
@@ -123,15 +113,14 @@ class TokenTracker:
             self.stats[model_name]["total"] += total_tokens
 
         except Exception as e:
-            # 打印错误但不中断程序，方便排查
             print(f"[TokenTracker Error] {str(e)}")
 
     def get_report(self):
-        """返回最终需要的 dict 格式"""
+        """Return token usage by model."""
         return dict(self.stats)
 
     def print_summary(self):
-        """打印易读的统计信息"""
+        """Print a readable token-usage summary."""
         print("\n" + "=" * 30)
         print("  TOKEN USAGE SUMMARY")
         print("=" * 30)
@@ -146,7 +135,6 @@ class TokenTracker:
             print("-" * 30)
 
 
-# --- 初始化并注册回调 ---
 token_tracker = TokenTracker()
 litellm.success_callback = [token_tracker.track]
 
@@ -280,13 +268,13 @@ if __name__ == "__main__":
     argparser.add_argument(
         "--model_id",
         type=str,
-        default="gpt-4.1",
+        default=agent_model_id(),
         help="The ID of the model to use for the agent.",
     )
     argparser.add_argument(
         "--model_id_strong",
         type=str,
-        default="gpt-5.2",
+        default=agent_strong_model_id(),
         help="The ID of the model to use for the agent.",
     )
     argparser.add_argument(
@@ -350,7 +338,7 @@ if __name__ == "__main__":
     argparser.add_argument(
         "--concur_num",
         type=int,
-        default=4,
+        default=agent_concurrency(),
         help="Concurrency used by devs_construct_tree concurrent mode.",
     )
     argparser.add_argument(
