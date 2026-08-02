@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: production-agv-exhaustive-rule-grid
+description: Evaluate all 135 line/task/AGV rule combinations over the baseline replication set.
+tags: [production, agv, baseline, exhaustive-search, files]
+
+environmentConfig: ../environments/production_agv_scheduling/environment_baselines.yaml
+methodConfig: ../methods/rule_grid/method.yaml
+
+objective:
+  metric: mean_total_score
+  direction: maximize
+  secondaryMetrics: [std_total_score, min_total_score, max_total_score, mean_efficiency_score, mean_quality_cost_score, mean_agv_score]
+
+budget:
+  maxTrials: 135
+
+execution:
+  parallelism: 8
+  timeoutSeconds: 10800
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 42

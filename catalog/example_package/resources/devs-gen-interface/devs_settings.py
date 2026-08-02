@@ -1,17 +1,17 @@
 """Shared settings for the DEVS generator interface.
 
-Only secret or machine-local values should come from the host through
-``envFromHost``. Public defaults live here and can be overridden by
-``interface.env`` in the OptPilot resource config.
+Model selections come from the host through ``interface.grants.envFromHost``;
+provider credentials use ``interface.grants.secretsFromHost``. The constants
+below remain useful defaults for direct manual launches.
 """
 
 import os
 from typing import Iterable
 
 
-DEFAULT_AGENT_MODEL_ID = "openrouter/openai/gpt-5.4"
+DEFAULT_AGENT_MODEL_ID = "deepseek/deepseek-v4-pro"
 DEFAULT_AGENT_CONCURRENCY = 8
-DEFAULT_VISUALIZER_MODEL_ID = "openrouter/openai/gpt-5.4-mini"
+DEFAULT_VISUALIZER_MODEL_ID = "deepseek/deepseek-v4-pro"
 DEFAULT_VISUALIZER_PARSE_TIMEOUT_SECONDS = 240
 DEFAULT_GRAPH_PARSE_MAX_WORKERS = 6
 
@@ -49,6 +49,10 @@ def agent_strong_model_id() -> str:
     return env_string("DEVS_INTERFACE_STRONG_MODEL_ID", agent_model_id())
 
 
+def visualizer_model_id() -> str:
+    return env_string("DEVS_DISPLAY_MODEL_ID", DEFAULT_VISUALIZER_MODEL_ID)
+
+
 def agent_concurrency() -> int:
     return env_int("DEVS_INTERFACE_CONCURRENCY", DEFAULT_AGENT_CONCURRENCY, minimum=1, maximum=32)
 
@@ -73,11 +77,12 @@ def graph_parse_max_workers() -> int:
 
 
 def model_presets() -> list[dict[str, str]]:
+    configured_model = visualizer_model_id()
     return [
         {
             "provider": "openai",
-            "label": "OpenRouter GPT 5.4 Mini",
-            "model": DEFAULT_VISUALIZER_MODEL_ID,
+            "label": "Configured graph model",
+            "model": configured_model,
         },
         {
             "provider": "openai",
@@ -92,7 +97,7 @@ def model_presets() -> list[dict[str, str]]:
         {
             "provider": "openai",
             "label": "OpenRouter GPT 5.4",
-            "model": DEFAULT_AGENT_MODEL_ID,
+            "model": "openrouter/openai/gpt-5.4",
         },
     ]
 
@@ -102,4 +107,4 @@ def first_preset_model(presets: Iterable[dict[str, str]]) -> str:
         model = preset.get("model")
         if model:
             return model
-    return DEFAULT_VISUALIZER_MODEL_ID
+    return visualizer_model_id()

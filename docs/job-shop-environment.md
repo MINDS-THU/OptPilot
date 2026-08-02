@@ -5,13 +5,24 @@ description: The main OptPilot example environment used to demonstrate multiple 
 
 # Job-Shop Environment
 
+!!! note "OpenAI editor setup"
+
+    `job_shop_rule_parameters_baseline.yaml` and
+    `job_shop_tune_dispatch_weights.yaml` are dependency-free retained CLI
+    studies. The dispatch-rule and solver-code file baselines are also
+    dependency-free retained studies. Four parameter studies become
+    retained-launchable with the optional example dependencies. The
+    OpenAI-compatible file editor is launchable after `OPENROUTER_API_KEY` is
+    configured in Studio Settings or exported for a CLI launch.
+
+
 The job-shop scheduling example is the main cross-method tutorial environment.
 It demonstrates the core OptPilot idea: keep evaluation stable, then connect
 different methods by changing only the candidate contract.
 
 ## Shared Comparison Setup
 
-The runnable job-shop studies are designed as a comparison set. Where the candidate contract allows it, they use the same:
+The authored job-shop studies are designed as a comparison set. Where the candidate contract allows it, they use the same:
 
 - validation cases: `ft06_small.yaml`, `la01_tiny.yaml`, and `ft06_standard.yaml`
 - objective: minimize `normalized_makespan`
@@ -65,8 +76,8 @@ listed in `evaluator.settings.cases`. Lower `normalized_makespan` is better.
 ![Compact Gantt chart for the ft06_small baseline schedule](assets/job-shop-schedule-example.svg)
 
 The figure is generated from the baseline evaluator output for one tutorial
-case. The docs use it only as a visual cue: the actual run evidence is written
-under each run's `trials/<trial-id>/attempt-1/` directory.
+case. The docs use it only as a visual cue: the Realm retains the actual run
+evidence, and the Run Workbench exposes it through Observations and Artifacts.
 
 ## Job-Shop Contract Matrix
 
@@ -184,10 +195,11 @@ Start with the dependency-free parameter baseline:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package
 ```
 
-Then use the method pages for the track you want: [Dispatching Rule Methods](dispatching-rule-methods.md), [Simulated Annealing Methods](simulated-annealing-methods.md), [OR-Tools CP-SAT Methods](cp-sat-methods.md), [Reinforcement Learning Methods](reinforcement-learning-methods.md), or [LLM Code-Writing Methods](llm-code-methods.md). Dependency-free baseline and tuning studies run from a fresh checkout. JobShopLib, CP-SAT, simulated annealing, and Stable-Baselines examples require `uv sync --all-packages --group examples`.
+Then use the method pages for the track you want: [Dispatching Rule Methods](dispatching-rule-methods.md), [Simulated Annealing Methods](simulated-annealing-methods.md), [OR-Tools CP-SAT Methods](cp-sat-methods.md), [Reinforcement Learning Methods](reinforcement-learning-methods.md), or [LLM Code-Writing Methods](llm-code-methods.md). The fixed weighted-rule baseline, deterministic tuner, dispatch-rule file baseline, and solver-code file baseline are dependency-free retained studies. The JobShopLib, simulated-annealing, CP-SAT, and RL parameter tracks are retained-launchable after `uv sync --all-packages --group examples`; the OpenAI-compatible file editor is retained-launchable after its declared `OPENROUTER_API_KEY` local value is configured.
 
 ## Weighted-Rule Parameter Contract
 

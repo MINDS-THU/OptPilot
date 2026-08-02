@@ -1,288 +1,295 @@
 ---
 title: How a Run Works
-description: Runtime sequence from public YAML configs to candidates, trials, observations, and evidence.
+description: Retained runtime sequence from one package snapshot to canonical Realm evidence.
 ---
 
 # How a Run Works
 
-This page explains the runtime sequence after you already have one successful OptPilot run. For the recommended first walkthrough, use [First Job-Shop Run](getting-started.md).
+An OptPilot study connects one method to one environment through a candidate
+contract:
 
-At a high level, OptPilot loads the study config, resolves the referenced environment and method configs, validates compatibility, compiles an internal run spec, and runs the propose-evaluate-record loop until the study budget stops.
+```text
+method proposes a candidate
+environment evaluates that candidate
+OptPilot owns admission, execution, evidence, and recovery
+```
 
-## Runtime Sequence
+The current public runner implements this model for a bounded retained batch
+slice.
+
+## Launch sequence
 
 ```mermaid
 sequenceDiagram
   participant CLI as "optpilot run"
-  participant Compiler as "Config compiler"
-  participant Runner as "Runner"
-  participant Method as "Method"
-  participant CandidateStore as "Candidate store"
-  participant Trial as "Trial workspace"
-  participant Evaluator as "Environment evaluator"
-  participant Evidence as "Evidence store"
+  participant Capture as "Package capture"
+  participant Compiler as "Retained compiler"
+  participant Realm as "RealmLedger"
+  participant Driver as "Retained batch driver"
+  participant Method as "Long-lived method worker"
+  participant Runtime as "Attempt runtime"
+  participant Studio as "Run Workbench"
 
-  CLI->>Compiler: load study config
-  Compiler->>Compiler: load environmentConfig and methodConfig
-  Compiler->>Compiler: validate JSON Schema and compatibility
-  Compiler-->>Runner: compiled study spec
-  Runner->>Evidence: create run directory and write run metadata
+  CLI->>Capture: authored study + explicit package root
+  Capture->>Realm: seal exact package tree
+  Capture->>Compiler: lease read-only projection
+  Compiler->>Realm: retain reusable study definition
+  CLI->>Realm: create guarded run
 
-  loop until budget stops
-    Runner->>Method: request candidates with study state, context, and evidence
-    Method-->>Runner: candidate manifests
+  loop while run accepts proposals
+    Driver->>Realm: checkpoint proposal request
+    Driver->>Method: propose(batch width, context, evidence)
+    Method-->>Driver: parameter candidates or frozen file drafts
+    Driver->>Realm: atomically admit proposal + retained content
 
-    opt file candidates
-      Method->>CandidateStore: write generated files
-      Runner->>CandidateStore: read contentRef files
+    loop each accepted logical trial
+      Driver->>Realm: prepare exact EvaluationSpec
+      Driver->>Runtime: bind and launch fresh process attempt
+      Runtime-->>Driver: evaluator result envelope
+      Driver->>Realm: adopt attempt, observation, artifacts, events
     end
 
-    Runner->>Trial: create fresh workspace
-    Runner->>Trial: copy trialWorkspace entries
-    Runner->>Trial: materialize candidate
-    Runner->>Evaluator: evaluate candidate in trial workspace
-    Evaluator-->>Runner: status, metrics, output files, records
-    Runner->>Evidence: write candidate, trial, observation, and event records
-    Runner->>Method: send observations when supported
+    Driver->>Realm: checkpoint filtered observation delivery
+    Driver->>Method: observe(completed observations)
+    Method-->>Driver: acknowledge exchange
   end
 
-  Runner->>Evidence: write summary
+  Driver->>Realm: derive terminal status and retire runtime ownership
+  Studio->>Realm: read summary, bounded pages, exact-head timeline
 ```
 
-The method proposes candidates. The runner does not invent them. The runner
-supplies the method with study state, candidate context, method-visible
-references or instructions, and evidence that the method is allowed to rely on.
+## 1. Capture one package
 
-## Config Compilation
+`optpilot run` requires `--package-root`. OptPilot captures that root into
+immutable content before compiling the study. Environment and method config
+paths, Python import roots, and source-backed callables must resolve inside the
+captured package.
 
-The public YAML files are authoring configs. The runner executes a compiled internal spec.
+The environment and method remain different semantic roles, but they can refer
+to the same retained package snapshot. OptPilot does not make separate source
+copies for each role or each run.
 
-Compilation performs these checks:
+## 2. Retain an exact study definition
 
-- load `config: study`
-- resolve `environmentConfig` and `methodConfig` from the study file
-- validate all three files against JSON Schema
-- resolve config-relative paths
-- check that the method accepts the environment candidate format
-- check required context paths and capabilities
-- check that the study objective metric is declared by the environment when metric keys are provided
+The compiler loads the authored study, environment, and method configs from a
+leased read-only projection. It validates their candidate compatibility and
+builds a path-free `RunDefinitionManifest` containing:
 
-The compiled spec is written to:
+- environment and method revisions
+- candidate contract and evaluation template
+- objective, budget, retry, evidence, and reproducibility policy
+- logical runtime scopes, optional ordered `trialWorkspace` input layers, and
+  required retained content
+- prepared-runtime and execution requirements
 
-```text
-run_dir/study_spec.json
-```
+The reusable study definition is retained independently of the mutable package
+directory. Run creation loads that definition; a caller cannot resubmit or
+replace its semantics during launch.
 
-Users normally do not edit this file. It is evidence for what OptPilot actually ran.
+## 3. Create a canonical Realm run
 
-Some field names change during compilation because public YAML is optimized for authoring while the internal spec is optimized for execution.
+A run id names a Realm ledger namespace, not a directory. The first transaction
+creates the run owner, definition reference, controller generation, control
+manifest, and revision zero.
 
-| Public authoring field | Internal runtime field | Why it changes |
-| --- | --- | --- |
-| `objective.metric` | `objective.primaryMetric.name` | Runtime can also hold secondary metrics and aggregation details. |
-| `objective.direction` | `objective.primaryMetric.direction` | The runner compares metrics using the compiled primary metric. |
-| `budget.maxTrials` | `stopping.maxTrials` | Budget becomes a stopping policy. |
-| `evaluator.settings` | `environment.adapter.config.evaluate.config` | Environment-owned inputs remain attached to the evaluator. |
-| `method.settings` | `method.config` and `method.settings` | Method implementations read runtime config; original settings remain available for audit. |
-| `environment.candidate` | `candidate.context.candidate` plus validation/materialization specs | The runner needs both the public contract and executable validation/materialization rules. |
+The Realm then owns all durable changes:
 
-When in doubt, treat public YAML as the source you edit and `study_spec.json` as the exact run record you inspect.
+- candidate admission
+- logical-trial lifecycle
+- attempt binding, launch, reconciliation, and cleanup
+- observations and retained artifacts
+- method request/response checkpoints
+- stopping, finalization, and retirement
+- ordered timeline events
 
-Environment evaluator inputs are normal configuration, carried as `evaluator.settings` in public YAML and passed to Python evaluators as `context["settings"]`. OptPilot does not interpret those settings beyond validation and path resolution. An evaluator may run one fixed case, use settings as simulator arguments, or loop over multiple benchmark cases internally and return aggregated metrics plus per-case records.
+The controller is the only canonical writer.
 
-## Method Execution
+## 4. Propose and admit a batch
 
-The method owns the search algorithm. It can be a small Python class, a
-command-line optimizer, an LLM agent, or a wrapper around a full upstream
-repository.
+The retained Python worker stays alive across proposal rounds. Before each
+callback, the driver records the request. A proposal is normalized and checked
+as one unit; an oversized or invalid proposal is rejected without partially
+consuming budget.
 
-Python and command methods receive the same conceptual information, but the
-transport shape is different.
+One accepted candidate can back multiple logical trials. A logical trial is the
+budget identity. A retry creates another attempt under that logical trial rather
+than another budget slot.
 
-Python methods implement a `propose` method. The common signature is:
+For file candidates, the method receives one generation-bound staging inbox.
+The worker validates the complete response and atomically moves the selected
+exchange from writable to frozen state. The run authority then seals each tree
+under a retry-scoped provisional owner change. One transaction commits the
+immutable content membership, candidate records, logical trials, budget change,
+method-exchange completion, and run revision. A lost commit response is recovered
+from that exact historical receipt before another capture begins; an aborted
+capture can be retried without poisoning the stable exchange coordinate.
 
-```python
-def propose(self, n_candidates, study_state, evidence_view=None):
-    ...
-```
+## 5. Bind and execute an attempt
 
-For Python methods:
+Canonical attempt preparation derives an immutable `EvaluationSpec` from the
+retained environment closure and exact candidate. The runtime compiler turns it
+into a path-free portable spec, then the local provider creates:
 
-- `study_state` contains completed trials, failure count, best metric, and the
-  compiled `candidate_context`.
-- `study_state["candidate_context"]` contains the environment candidate
-  contract and method-visible `methodContext`.
-- `evidence_view`, when accepted by the method, provides previous observations,
-  candidates, trials, records, calls, events, and artifacts.
-- method settings are available through the method definition passed to the
-  class constructor.
+- an exact read-only input realization
+- fresh bounded writable trial/control volumes; when declared, the trial volume
+  is initialized from ordered immutable `trialWorkspace` lowers that alias the
+  same retained package snapshot
+- for a file candidate, one final `replace` layer mapping its exact immutable
+  tree under the environment-owned candidate root
+- a token-bound process launch
+- durable binding, launch, heartbeat, and cleanup authority
 
-Command methods receive request and response JSON files. Their request JSON
-breaks out fields such as `candidate`, `methodContext`,
-`candidate_context`, `settings`, and `runtime_context` for convenience. Those
-fields describe the same environment-provided contract and per-call paths, but
-they are transported as files because the method runs as a subprocess.
+Provider paths, process ids, leases, and volume ids are operational. They do not
+enter candidate, evaluation, or run identity.
 
-Parameter candidates look like:
+The local provider validates candidate bytes against the sealed declaration and
+exposes that already-realized layer in place; it does not copy the candidate a
+second time for materialization. Every attempt still gets a new writable upper,
+so evaluator mutation is private and retries start from the retained bytes.
+The current process provider has advisory read-only enforcement, so native
+attempts receive private realizations and all local code must be trusted. A
+future enforcing provider may safely share immutable lower layers without
+changing the public model.
 
-```json
-{
-  "candidate_id": "candidate-001",
-  "format": "parameters",
-  "spec": {"x": 4.2, "mode": "balanced"},
-  "generator": {"method_id": "my-method"}
-}
-```
+## 6. Adopt evidence transactionally
 
-File candidates reference files generated by the method:
+An evaluator returns a bounded result envelope. The controller atomically adopts
+the terminal attempt, observation, retained artifacts, logical transition,
+owner membership, revision, and events. A failed worker cannot append evidence
+directly.
 
-```json
-{
-  "candidate_id": "candidate-001",
-  "format": "files",
-  "spec": {
-    "bundleRef": "/path/to/run/candidates/candidate-001/files",
-    "files": [
-      {
-        "path": "src/policy.py",
-        "contentRef": "/path/to/run/candidates/candidate-001/files/src/policy.py",
-        "sha256": "..."
-      }
-    ]
-  },
-  "generator": {"method_id": "my-method"}
-}
-```
+Methods receive a filtered observation view. Operator-only diagnostics,
+secrets, backend identity, host paths, and unrelated artifacts are excluded.
 
-`optpilot.candidate_files.CandidateFileStore` creates this file-candidate shape for Python methods.
+## 7. Recover from exact checkpoints
 
-## Candidate Store And Trial Workspace
+Schema v16 introduced durable execution launch/cleanup, lost-attempt
+reconciliation, and ordered method exchanges. Schema v17-v20 add durable
+Operator Jobs, hard-stop cleanup evidence, shared operator capacity, and
+interface-output sessions. After interruption, recovery checks the schema-v20
+durable prefix:
 
-The run directory contains distinct storage areas:
+- completed exchanges can be replayed and verified
+- an unacknowledged response is delivered again without duplicating its effect
+- prepared or launched work is reconciled from its binding/launch authority
+- stale controllers and process identities are fenced
+- missing or divergent method responses fail closed
 
-| Location | Purpose |
-| --- | --- |
-| `run_dir/candidates/` | Durable method-produced candidate files before evaluation. |
-| `run_dir/method_calls/` | Per-call method request, response, stdout, and stderr files. |
-| `run_dir/trials/` | Per-trial workspaces used by evaluators. |
-| `run_dir/evidence_files/` | Optional copies of evaluator output files when `evidence.outputFileStorage: copy` is enabled. |
+Recovery never infers progress from a partial output file.
 
-For file candidates, materialization has one extra handoff:
+## 8. Read the run
 
-```text
-method writes generated files to candidate store
-method returns candidate manifest with contentRef and sha256
-runner validates the manifest
-runner copies contentRef files into the trial workspace
-evaluator reads the trial workspace
-```
+The CLI prints an immutable summary projection. Studio reads the same Realm and
+shows the generic Run Workbench:
 
-The trial workspace is what gets evaluated. The candidate store is a handoff area before evaluation. The evaluator normally reads the trial workspace, not the candidate store.
+- status, stop code, objective, budget, counts, and the best single-trial
+  observation
+- candidate aggregates and matching-plan ranks derived from final logical-trial
+  evidence at one exact head
+- bounded candidate, logical-trial, attempt, observation, and artifact pages
+- one exact-head correlated timeline
 
-## Trial Workspace Preparation
+Candidate aggregation is a read projection, not new run authority. It includes
+only final-attempt observations and publishes a value only for a fully terminal,
+successful, finite evaluation plan. Active, failed, missing, and non-finite
+evidence stays explicit. The browser neither joins observations nor computes a
+leaderboard from a partial page.
 
-Each candidate evaluation gets a fresh attempt workspace under
-`run_dir/trials/<trial-id>/attempt-<n>/`. The first evaluation uses
-`attempt-1`; retries append later attempt folders without overwriting earlier
-evaluator work.
+Selecting a Run opens that recorded evidence directly. Runs are never listed as
+editable Workspaces and require no intermediate “Open as Workspace” step.
 
-For parameter candidates:
+## Candidate inspection
 
-- the candidate `spec` is passed directly as runtime input
-- no environment source tree is required unless the evaluator itself needs copied files
+OptPilot resolves a selected Candidate together with the exact retained
+evaluation closure and compiles the same `EvaluationSpec` used by canonical
+attempts. Studio presents the available modes under **Try Candidate**:
+**Run headless** executes a noninteractive inspection, while **Open interactive
+interface** opens the Environment's live interface when the retained profile and provider
+support it. Under the hood, both execute as durable, noncanonical Operator
+Jobs.
 
-The parameter baseline from [First Job-Shop Run](getting-started.md) follows this
-simpler path.
+Content inspection uses the same immutable selection but a smaller operation.
+**Inspect** reads semantic inputs without launching. **View files**
+reauthorizes the exact Run head, then serves a bounded project page or file/blob
+byte range through a short-lived opaque handle. Neither derives an owner,
+starts a runtime, exposes a provider path, or materializes a Workspace.
+Viewability and editability are separate capabilities: a retained file is
+viewable, while **Edit in Workspace** is offered only for an eligible complete
+project.
 
-For file candidates:
+For presentation, Studio resolves content, derivable-tree, and candidate-target
+facts for all bounded first-page selections in one actor-bound exact-head
+batch. These facts only explain which buttons are currently available; the
+actual View, Edit, and Try paths reauthorize independently.
 
-1. OptPilot creates a fresh trial workspace.
-2. It copies every `environment.trialWorkspace` entry into that workspace.
-3. It validates the method's file manifest.
-4. It copies method-generated files into `candidate.materialize.root`.
-5. It writes `workspace_manifest.json`.
-6. It calls the evaluator with the workspace and candidate root.
+These actions never consume source-run budget or alter its observations.
+Studio reports exact capability reasons for ineligible selections.
 
-File-candidate environments may copy a complete source tree when evaluation
-intentionally runs workspace-local code after candidate edits are applied. If
-an evaluator uses an installed package, a prebuilt image, an external service,
-or only JSON input files, it does not need to copy the complete environment
-implementation.
+**Compare** follows the same exact-head rule without minting execution or byte
+authority. Core reads one authorized snapshot, validates two distinct candidate
+selections, and returns independently eligible outcome and candidate-input
+sections. Outcome rows cover the primary objective and authored secondary
+metrics for every candidate format, but Core emits a numeric relation only when
+both operands have complete, matching evaluation plans. Boolean constraint rows
+report exact satisfied/violated coverage and rank only feasible versus
+infeasible when both sides are complete. Input presenters provide a bounded
+contract-first parameter diff, a path-free sealed-file-manifest diff, or
+bounded/redacted opaque top-level metadata. Studio does not expose file hashes/
+content refs, infer domain semantics, or calculate comparison facts in the
+browser. File comparison begins with the manifest so it does not eagerly read
+candidate trees. **View text diff** then reauthorizes the two exact retained
+selections and reads only the selected relative path. Core returns a complete
+bounded unified diff for strict UTF-8 files up to 48 KiB and 4,000 lines per
+side, or an explicit unavailable reason; it never returns a silently truncated
+patch or creates a disposable workspace.
 
-## Environment Evaluation
+The Overview separately visualizes metrics and boolean constraints from its
+bounded loaded observation page. Its metric selector, chart, and coverage text
+name that partial scope and exact Realm head; loading more observation pages
+extends the visible evidence without changing canonical candidate aggregation.
 
-The environment config chooses one evaluator mode:
+The same run-head read model provides conservative environment-evaluation and
+objective fingerprints with a structured reproducibility report. It records
+which dimensions are identified, not assessed, or unverified and keeps
+automatic cross-run ranking ineligible. A matching digest is therefore a useful
+filter, not proof that two runs are reproducibly comparable. Eligible candidates
+from sealed terminal runs can be re-evaluated through a canonical methodless
+child using their exact parent seed/repetition plan.
 
-Evaluator field fragment:
+**Save to Shortlist** records a human decision inside the source Run without
+making a Workspace. Notes, order, and membership are edited as one draft;
+**Save changes** commits them together, while **More** contains bounded saved
+history, export, and **Delete Shortlist**. A terminal Try result can be saved
+with its Candidate through **Save Candidate and inspection** or attached later
+through **Save inspection to Shortlist**. Neither action retains a live runtime
+or presentation endpoint.
 
-```yaml
-evaluator:
-  python: evaluator:evaluate
-```
+Under the hood, the first save creates a Realm-owned `decision` Review
+Collection, freezes bounded Candidate/evidence/comparability facts, and retains
+already-sealed Candidate and artifact content by adding memberships to the same
+CAS refs. Each save creates an immutable revision; its dedicated owner continues
+retaining those refs if the source Run retires. Deleting the Shortlist uses an
+exact revision/digest fence, removes that revision chain, retires only its
+dedicated owner, and releases only that owner's memberships. It does not delete
+the source Run or shared CAS content.
+Runnable closure retention, cross-run collections, and broader follow-up/branch
+presets remain future work.
 
-Alternative evaluator field fragment:
+## Current executable boundary
 
-```yaml
-evaluator:
-  command: [python, evaluate.py, "{candidate_json}", "{settings_file}", "{metrics_file}"]
-```
-
-Alternative evaluator field fragment:
-
-```yaml
-evaluator:
-  adapter: adapter:MyAdapter
-  pythonPath: [.]
-```
-
-The evaluator receives the materialized candidate and `context["settings"]`. It returns or writes:
-
-- status
-- metric values
-- optional constraint results
-- optional output-file descriptors
-- optional record streams
-
-The configured adapter normalizes those values into observations.
-
-## Parallelism And Runtimes
-
-Study execution controls the experiment loop:
-
-Study `execution` fragment:
-
-```yaml
-execution:
-  parallelism: 2
-```
-
-Environment and method runtime belongs to the component configs:
-
-```yaml
-runtime:
-  sandbox: process        # process | container
-```
-
-`process` runs component code in local subprocess workers. `container` runs it
-through a Docker/Podman-compatible runtime when the component declares a
-container image or build.
-
-Method runtime is separate from environment execution:
-
-Method `runtime` fragment:
-
-```yaml
-runtime:
-  sandbox: container
-  container:
-    image: my-method-image:latest
-    executable: docker
-```
-
-Use a method runtime container when the optimizer or agent needs different dependencies from the evaluator.
-
-## Evidence
-
-Every run directory records the compiled spec, trial results, candidate records, method calls, scheduler events, output files, and final summary.
-
-Use [Evidence](evidence.md) for the run file catalog and resume/branch behavior.
+The retained runner currently supports parameter and bounded file candidates,
+source-backed Python batch methods and evaluators, package-owned
+`methodContext`, optional `trialWorkspace` seeds, bounded vendored and
+hash-locked pure-Python dependencies, and local process runtime. It rejects
+opaque candidates, command/session methods, arbitrary setup/build execution,
+Environment/backend host-derived values, containers, and other unsupported
+combinations rather than falling back to the removed execution path. A process
+Method may receive only its declared `runtime.envFromHost` values as
+launch-scoped operational input. A Studio Run retains the declared names and
+opaque local Settings revisions, never the values. The values travel to a new
+Method worker through a transient provider channel and are excluded from the
+durable process request and semantic Run records. Changing a saved value creates
+a revision for later Runs; an older Run waits rather than silently rebinding if
+its original revision is no longer available. The file slice currently relies
+on trusted native code and a locally available common content store for the
+environment, seeds, and candidate layers.

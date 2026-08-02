@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: production-agv-rolling-milp
+description: Compare the original and two-stage event-triggered rolling MILP controller candidates.
+tags: [production, agv, baseline, milp, gurobi, files]
+
+environmentConfig: ../environments/production_agv_scheduling/environment_baselines.yaml
+methodConfig: ../methods/rolling_milp/method.yaml
+
+objective:
+  metric: mean_total_score
+  direction: maximize
+  secondaryMetrics: [std_total_score, min_total_score, max_total_score, mean_efficiency_score, mean_quality_cost_score, mean_agv_score]
+
+budget:
+  maxTrials: 2
+
+execution:
+  parallelism: 2
+  timeoutSeconds: 10800
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 42

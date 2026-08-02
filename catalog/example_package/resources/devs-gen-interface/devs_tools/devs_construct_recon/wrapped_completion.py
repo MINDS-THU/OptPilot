@@ -6,6 +6,7 @@ import litellm
 from litellm import completion as original_completion
 from typing import Optional
 from .llm_call_logger import log_llm_call, get_llm_logger
+from src.llm_resilience import apply_litellm_retry_defaults
 
 
 def completion_with_logging(
@@ -27,7 +28,7 @@ def completion_with_logging(
         response = original_completion(
             model=model,
             messages=messages,
-            **kwargs
+            **apply_litellm_retry_defaults(kwargs)
         )
         duration = time.time() - start_time
         

@@ -5,6 +5,13 @@ description: How the JobShopLib OR-Tools CP-SAT example connects to OptPilot.
 
 # OR-Tools CP-SAT Methods
 
+!!! warning "Current runtime status"
+
+    This study is retained-launchable after the optional example dependencies
+    are installed. Its environment-owned case references are captured from the
+    package and projected read-only into the retained method worker.
+
+
 Constraint programming is a natural fit for job-shop scheduling. The example
 reuses JobShopLib's OR-Tools CP-SAT wrapper instead of building a new model in
 OptPilot.
@@ -49,19 +56,25 @@ Install optional example dependencies:
 uv sync --all-packages --group examples
 ```
 
-Run the study:
+Validate and run the study:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_ortools_cpsat.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml \
+  --package-root catalog/example_package
 ```
+
+The retained runner resolves `methodContext.references` from the captured
+package snapshot. This study uses only that read-only method context; it does
+not require the supported parameter `trialWorkspace` seed path, and it does not
+depend on the still-pending file-candidate path.
 
 Expected result:
 
 - the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `parameters` candidate whose `spec`
+- the Workbench Candidates page should contain a `parameters` candidate whose `spec`
   contains `solutions`
-- `observations.jsonl` should contain the shared job-shop metrics, including
+- the Workbench Observations page should contain the shared job-shop metrics, including
   `normalized_makespan`
 - import failures usually mean the optional examples dependency group has not
   been installed in the current source checkout

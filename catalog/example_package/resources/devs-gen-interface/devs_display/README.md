@@ -17,8 +17,10 @@ The frontend owns:
 - project selection and upload
 - source preview
 - graph visualization
+- parameterized simulation execution with summaries and a readable event-trace
+  table
 
 The service is launched through the resource-level
-`_optpilot_launch_interface.sh` script. Runtime files are written under
-`devs_display/.storage/` and `devs_app/working_dirs/` inside the editable
-workspace copy.
+`_optpilot_launch_interface.sh` script. Studio writes runtime files into its
+launch-owned runtime root. Direct execution uses the resource's ignored
+`.runtime/` directory, so sessions and logs never mix with authored source.

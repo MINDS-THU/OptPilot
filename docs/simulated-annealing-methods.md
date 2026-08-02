@@ -5,6 +5,13 @@ description: How the JobShopLib simulated annealing example connects to OptPilot
 
 # Simulated Annealing Methods
 
+!!! warning "Current runtime status"
+
+    This study is retained-launchable after the optional example dependencies
+    are installed. Its environment-owned case references are captured from the
+    package and projected read-only into the retained method worker.
+
+
 Simulated annealing is a method-side search algorithm. In this example,
 OptPilot does not implement the annealer and the environment does not import
 it. The method wraps JobShopLib's `SimulatedAnnealingSolver` and returns
@@ -43,19 +50,25 @@ Install optional example dependencies:
 uv sync --all-packages --group examples
 ```
 
-Run the study:
+Validate and run the study:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_simulated_annealing.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml \
+  --package-root catalog/example_package
 ```
+
+The retained runner resolves `methodContext.references` from the captured
+package snapshot. This study uses only that read-only method context; it does
+not require the supported parameter `trialWorkspace` seed path, and it does not
+depend on the still-pending file-candidate path.
 
 Expected result:
 
 - the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `parameters` candidate whose `spec`
+- the Workbench Candidates page should contain a `parameters` candidate whose `spec`
   contains `solutions`
-- `observations.jsonl` should contain the shared job-shop metrics, including
+- the Workbench Observations page should contain the shared job-shop metrics, including
   `normalized_makespan`
 - import failures usually mean the optional examples dependency group has not
   been installed in the current source checkout

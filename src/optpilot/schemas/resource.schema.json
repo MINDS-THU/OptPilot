@@ -11,6 +11,10 @@
     "name": {"type": "string"},
     "description": {"$ref": "defs/common.schema.json#/definitions/description"},
     "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
+    "purpose": {
+      "type": "string",
+      "enum": ["generator", "viewer", "template", "reference"]
+    },
     "interface": {"$ref": "defs/common.schema.json#/definitions/interface"}
   }
 }

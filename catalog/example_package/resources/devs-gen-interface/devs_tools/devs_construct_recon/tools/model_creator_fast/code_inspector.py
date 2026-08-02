@@ -1,9 +1,10 @@
-from smolagents import Tool, LiteLLMModel
+from smolagents import Tool
 from pathlib import Path
 import os
 import yaml
 from ...utils import get_content_strict
 from litellm import completion
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 
 # ==============================================================================
 # INSPECTOR PROMPT (注入专家知识)
@@ -70,7 +71,11 @@ class CodeInspector(Tool):
         super().__init__()
         self.model_id = model_id
         self.working_directory = Path(working_directory)
-        self.model = LiteLLMModel(model_id=model_id, temperature=0.1)
+        self.model = ResilientLiteLLMModel(
+            model_id=model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         self.tool_dir = Path(__file__).parent.parent.parent
         sub_path = os.path.join("materials")
         self.util_desc_file = self.tool_dir / sub_path / "util_desc.yaml"
@@ -121,6 +126,7 @@ Please inspect the following DEVS Model Code.
             model=self.model_id,
             messages=messages,
             temperature=0.5,
+            **litellm_retry_options(),
         )
         result = get_content_strict(response)
 

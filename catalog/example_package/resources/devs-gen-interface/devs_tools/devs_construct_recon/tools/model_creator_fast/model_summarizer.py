@@ -14,6 +14,15 @@ from ...base_types import StandardContextModel, PlanResult, ModelSpecification, 
 from .unified_model_creator import process_sub_models
 from ...utils import get_content_strict
 from ...wrapped_completion import completion_with_logging
+from .generated_interface import extract_generated_python_interface
+
+
+# Cache entries are only reusable when both the serialized contract and the
+# prompt that produced its semantic summary are unchanged. Keep these explicit
+# rather than relying on incidental source hashes so releases can invalidate old
+# summaries deliberately.
+_SUMMARY_CACHE_SCHEMA_VERSION = "standard-context-with-generated-interface-v1"
+_SUMMARY_PROMPT_VERSION = "devs-model-summary-v2"
 
 
 # ====== Output format section (aligned with pydantic schema) ======
@@ -147,10 +156,21 @@ class ModelSummarizer:
             print(f"⚠️ Cache DB Init Failed: {e}")
 
     def _compute_hash(self, code_content: str, model_plan: PlanResult) -> str:
-        """计算唯一标识 Hash"""
-        plan_str = model_plan.model_dump_json() 
-        combined_content = code_content + plan_str
-        return hashlib.sha256(combined_content.encode('utf-8')).hexdigest()
+        """Return a cache key scoped to source, contract, prompt, and model."""
+        cache_input = {
+            "schema_version": _SUMMARY_CACHE_SCHEMA_VERSION,
+            "prompt_version": _SUMMARY_PROMPT_VERSION,
+            "model_id": self.model_id,
+            "code_sha256": hashlib.sha256(code_content.encode("utf-8")).hexdigest(),
+            "model_plan": model_plan.model_dump(mode="json"),
+        }
+        canonical_input = json.dumps(
+            cache_input,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()
 
     def _load_from_cache(self, cache_key: str) -> Optional[StandardContextModel]:
         """[Changed] 从 SQLite 读取缓存 (并发安全)"""
@@ -223,9 +243,28 @@ class ModelSummarizer:
         with open(full_path, "r", encoding="utf-8") as f:
             code_content = f.read()
 
+        generated_interface = extract_generated_python_interface(
+            code_content,
+            model_plan.model_info.class_name,
+            filename=str(full_path),
+            child_class_names=(child.class_name for child in model_plan.children_plan),
+        )
+
         cache_key = self._compute_hash(code_content, model_plan)
         cached_result = self._load_from_cache(cache_key)
         if cached_result:
+            cached_result = cached_result.model_copy(
+                update={
+                    # Planning owns model identity. A summary—especially one
+                    # loaded from an older cache—must never rename or relocate
+                    # the generated file in the system registry.
+                    "class_name": model_plan.model_info.class_name,
+                    "file_path": model_plan.model_info.file_path,
+                    "logic_path": model_plan.model_info.logic_path,
+                    "generated_interface": generated_interface,
+                }
+            )
+            self._save_to_cache(cache_key, cached_result)
             return cached_result
 
         sub_models_str = process_sub_models(
@@ -267,7 +306,9 @@ class ModelSummarizer:
         # 4. 构建最终输出
         val_spec = validated_data.specification
         result = StandardContextModel(
-            class_name=validated_data.class_name,
+            # The LLM summarizes behavior; the plan remains the sole authority
+            # for stable model identity.
+            class_name=model_plan.model_info.class_name,
             file_path=model_plan.model_info.file_path,
             logic_path=model_plan.model_info.logic_path,
             specification=ModelSpecification(
@@ -277,6 +318,7 @@ class ModelSummarizer:
                 external_io=val_spec.external_io,
                 model_init_args=val_spec.model_init_args,
             ),
+            generated_interface=generated_interface,
         )
 
         self._save_to_cache(cache_key, result)

@@ -1,17 +1,24 @@
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
 from pathlib import Path
 import os
 import yaml
 import json
 from .devs_execute import DEVSExecute
+from .result_summary_contract import (
+    require_event_trace_contract,
+    require_result_summary_contract,
+)
+from .runner_argument_contract import require_runner_argument_contract
+from ..generated_member_contract import require_generated_member_contract
 from typing import Optional
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 
 
 class DEVSExecuteWrapper(Tool):
     name = "devs_execute"
     description = (
-        "Execute the target DEVS model project within a controlled temporary environment. "
-        "The tool captures stdout/stderr, manages timeouts, and provides a basic sandbox to restrict imports to allowed libraries only. "
+        "Execute the target DEVS model project from a credential-free temporary copy. "
+        "Execution uses the credential-free, network-disabled generated-code container boundary. "
     )
     inputs = {
         "timeout": {
@@ -26,7 +33,7 @@ class DEVSExecuteWrapper(Tool):
         },
         "allowed_libraries": {
             "type": "string",
-            "description": "Comma-separated list of allowed root packages (default: numpy,xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib).",
+            "description": "Deprecated compatibility input. The outer isolated runtime owns import and execution policy.",
             "nullable": True,
         },
         "stdin_content": {
@@ -59,17 +66,22 @@ class DEVSExecuteWrapper(Tool):
         self,
         timeout: int = 30,
         command_args: Optional[str] = None,
-        allowed_libraries: str = "numpy,xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib",
+        allowed_libraries: str = "xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib,statistics,dataclasses,typing",
         stdin_content: Optional[str] = None,
     ) -> str:
-        self.has_executed = True
-        return self.core.forward(
+        self.has_executed = False
+        result = self.core.forward(
             timeout=timeout,
             command_args=command_args,
             allowed_libraries=allowed_libraries,
             stdin_content=stdin_content,
             **self.fixed_args,
         )
+        uses_suggested_defaults = command_args is None or not command_args.strip()
+        self.has_executed = (
+            result.startswith("STATUS: SUCCESS") and uses_suggested_defaults
+        )
+        return result
 
 
 class SpecificFileSaver(Tool):
@@ -114,7 +126,7 @@ You are an expert DEVS simulation engineer using the `xdevs` framework.
 You must do one step at one code block, do not mix them up.
 1. Generate a Python simulation runner script for `{class_name}` using `argparse` for parameterization.
 2. **SAVE** the script using the tool `{save_tool_name}`.
-3. **SMOKE TEST** Use `{execute_tool_name}` to run the simulation and check for crashes (construct one minimal setting), if crashed, try to fix the script. Once the simulation runs with Exit Code 0, it's completed.
+3. **SMOKE TEST** Use `{execute_tool_name}` with no command-line overrides so the exact suggested defaults are tested. If it crashes, fix the script and run it again. Once the simulation runs with Exit Code 0 using its defaults, it is complete.
 4. **ANALYZE** the `argparse` arguments you created.
 5. **RETURN** a structured JSON description of these arguments as your Final Answer.
 
@@ -142,6 +154,8 @@ You must construct the script in the following **exact order**.
 ### 1. Imports
 - **General**: Import `Coordinator`, `SimulationClock` from `xdevs.sim`.
 - **Utils**: Import `set_global_clock` from `devs_project.devs_utils.devs_context`.
+- **Event trace**: Import `attach_event_trace` from
+  `devs_project.devs_utils.event_trace`.
 - **Injection (Conditional)**: IF the scenario requires external event injection:
     - Import `ReliableInjectionSystem` from `devs_project.devs_utils.inject`.
     - Import `get_raw_input_content` from `devs_project.devs_utils.inject`.
@@ -152,6 +166,18 @@ You must construct the script in the following **exact order**.
 - **Step 2.1**: Initialize `argparse.ArgumentParser`.
     - Create arguments for `{class_name}` initialization parameters and `simulate_time` (or other name like `simulation_time` if specified in the scenario). Make sure the parameters do exists in the model specification. 
     - **CRITICAL**: Set `default` values based on the **Simulation Scenario**.
+    - Treat these defaults as one small, meaningful demonstration scenario for
+      a first-time student. Every `add_argument` call must use an optional
+      literal `--long-name` and an explicit finite literal scalar `default`
+      (`str`, `bool`, `int`, or `float`). The Run form and smoke test both use
+      these exact values.
+    - Do not use `required=True`, positional arguments, `nargs`, collection
+      defaults/types, or list-building actions such as `append`. External
+      stdin/file content belongs to the model's existing external-IO path, not
+      to a required generated CLI argument.
+    - Do not use `type=bool`. For a one-way boolean flag, use
+      `action="store_true", default=False` or
+      `action="store_false", default=True`; otherwise use a scalar parser.
     - **CRITICAL**: if the args are specified in the `Simulation Scenario`, ensure their names match exactly.
     - Parse the arguments into variables (e.g., `args = parser.parse_args()`).
 - **Step 2.2 (Input Parsing)**: IF the Model Specification has input_ports, and **Simulation Scenario** clearly specified them (e.g., "inject X at time T"):
@@ -171,14 +197,49 @@ You must construct the script in the following **exact order**.
     - **ELSE**:
         - Use the core model directly: `model = {class_name}_instance`.
 - **Step 3.5**: Create the Simulator: `sim = Coordinator(model, clock)`.
+- **Step 3.6**: Immediately call `attach_event_trace(sim, model)`. This standard
+  generated utility records atomic-model output ports as bounded JSONL when a
+  managed result directory is available. Do not replace it with custom logging.
 
 ### 4. Simulation Execution
-- Call `sim.initialize()`.
+- Call `sim.initialize()` only after `attach_event_trace(sim, model)`.
 - To avoid missing end-of-horizon internal events at exactly `t==simulate_time`, run with a tiny epsilon horizon:
   - `effective_end = float(simulate_time) + 1e-9`
   - `sim.simulate_time(effective_end)`
   - Keep all emitted business timestamps and KPI semantics anchored to `simulate_time`.
 - Call `sim.exit()`.
+
+### 5. Result Summary (Required)
+- Business-event output stays in the DEVS model. The runner additionally writes
+  one small post-run summary for students and downstream tools.
+- At module scope, declare exactly:
+  `OPTPILOT_RESULT_FILE = "summary.json"`.
+- Implement `write_simulation_summary(metrics, simulated_time, metric_note=None)`.
+  It must be dependency-free and must:
+  - Return without writing when `OPTPILOT_SIMULATION_RESULTS_DIR` is absent.
+  - Keep only explicitly supplied `bool`, `int`, or finite `float` metric values.
+    Convert model counters or NumPy-like scalars explicitly before passing them;
+    never serialize NaN or infinity.
+  - Create the supplied result directory and atomically write
+    `summary.json` as UTF-8 JSON with this shape:
+    `{{"schema_version": "devs.simulation-result.v1", "metrics": {{...}},
+    "run": {{"completed": true, "simulated_time": <finite number>}}}}`.
+  - Include `metric_note` outside `metrics` when supplied.
+- After `sim.exit()`, collect stable, domain-meaningful outcome KPIs that the
+  generated model really exposes, then call `write_simulation_summary(...)`.
+  The System Registry contains a `generated_interface` extracted
+  deterministically from each generated class. Before directly accessing a
+  model or child attribute, property, or method, read the applicable registry
+  entry and use only an exact member listed there. Follow `child_instances`
+  mappings when traversing from the root to a child. Never derive a member name
+  from prose, domain conventions, or a similar-looking name in another class.
+- Use the model specification and exact generated interface to choose metric
+  names and extraction expressions. Do not use reflection, attribute-name guessing,
+  placeholder values, or a generic `"score"`.
+- If the model exposes no trustworthy outcome KPI, write an empty `metrics`
+  object and a clear `metric_note` explaining what model state should be exposed
+  before optimization. Do not present an input such as the requested horizon as
+  an optimization outcome.
 
 ## **[Reference Code]**
 Use this code as your strict template. Do not change the logic flow. 
@@ -264,11 +325,12 @@ class TopSimulationCreator(Tool):
         self.tool_dir = Path(__file__).parent.parent.parent
         sub_path = os.path.join("materials")
         self.example_files = [
-            self.tool_dir / sub_path / "devs_project/runner_example_inject.py"
+            self.tool_dir / sub_path / "devs_project/runner_example.py"
         ]
         self.util_desc_file = self.tool_dir / sub_path / "util_desc.yaml"
         self.injected_utils = [
             "set_global_clock",
+            "attach_event_trace",
             "injection_tools",
             "get_raw_input_content",
             "logger",
@@ -334,7 +396,11 @@ class TopSimulationCreator(Tool):
         )
 
         # Instantiate the model and the agent
-        model = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         agent = CodeAgent(
             tools=[self.read_file_tool, current_save_tool, execute_wrapper],
             model=model,
@@ -366,12 +432,24 @@ class TopSimulationCreator(Tool):
             execute_tool_name=execute_wrapper.name,
         )
 
+        system_info_path = Path(system_info_file_path)
+        if not system_info_path.is_absolute():
+            system_info_path = self.working_directory / system_info_path
+        try:
+            system_registry = json.loads(
+                system_info_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            system_registry = {}
+
         # 5. 运行
         max_retries = 3
         current_input = prompt
         should_reset = True
         for attempt in range(max_retries):
             print(f"Attempt {attempt + 1} of {max_retries}")
+            current_save_tool.has_executed = False
+            execute_wrapper.has_executed = False
             result_json_string = str(agent.run(current_input, reset=should_reset))
             validation_errors = []
 
@@ -381,11 +459,35 @@ class TopSimulationCreator(Tool):
                     f"CRITICAL ERROR: You forgot to save the code! "
                     f"You MUST call the tool '{current_save_tool.name}' to write the file to disk."
                 )
+            else:
+                try:
+                    generated_source = full_save_path.read_text(encoding="utf-8")
+                    require_result_summary_contract(
+                        generated_source,
+                        filename=str(full_save_path),
+                    )
+                    require_event_trace_contract(
+                        generated_source,
+                        filename=str(full_save_path),
+                    )
+                    require_generated_member_contract(
+                        generated_source,
+                        system_registry,
+                        model_class_name,
+                        filename=str(full_save_path),
+                    )
+                    require_runner_argument_contract(
+                        generated_source,
+                        filename=str(full_save_path),
+                    )
+                except (OSError, UnicodeError, ValueError) as exc:
+                    validation_errors.append(f"CRITICAL ERROR: {exc}")
 
             if not execute_wrapper.has_executed:
                 validation_errors.append(
-                    f"CRITICAL ERROR: You generated the code but forgot to execute it! "
-                    f"You MUST call the tool '{execute_wrapper.name}' to execute the file."
+                    f"CRITICAL ERROR: You must prove the suggested scenario works. "
+                    f"Call '{execute_wrapper.name}' without command_args and fix "
+                    "the runner until that default execution succeeds."
                 )
 
             # B2. 校验返回格式

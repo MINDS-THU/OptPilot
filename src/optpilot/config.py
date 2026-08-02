@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, Tuple
 
 import yaml
 
+from .realm.run_closure import InterfaceLaunchProfile
 from .schema_validation import require_public_config_schema, validate_public_config_schema
 
 
@@ -32,9 +33,9 @@ AGGREGATIONS = {"mean", "median", "min", "max", "sum", "last", "weighted_mean"}
 RUNTIME_SANDBOXES = {"process", "container"}
 SETUP_STEP_TYPES = {"uv", "python-venv", "npm", "command"}
 EVIDENCE_LEVELS = {"minimal", "standard", "full"}
-OUTPUT_FILE_STORAGE_MODES = {"reference", "copy"}
 RECORD_SOURCES = {"custom", "jsonl", "csv", "sqlite_table", "sqlite_query"}
 PARAMETER_VALUE_TYPES = {"float", "int", "categorical", "bool", "string", "array", "object"}
+RESOURCE_PURPOSES = {"generator", "viewer", "template", "reference"}
 
 
 def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
@@ -86,7 +87,7 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
         "candidate": _compile_candidate_contract(environment, environment_path, candidate),
         "method": compiled_method,
         "execution": execution,
-        "evidence": _compile_evidence(study, config_path),
+        "evidence": _compile_evidence(study),
         "reproducibility": _compile_reproducibility(study),
         "stopping": _compile_stopping(study),
         "extensions": {
@@ -191,7 +192,11 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
     runtime = environment.get("runtime", {}) or {}
     _validate_runtime(runtime, f"{location} runtime")
     if environment.get("interface") is not None:
-        _validate_interface(environment["interface"], f"{location} interface")
+        _validate_interface(
+            environment["interface"],
+            f"{location} interface",
+            component_kind="environment",
+        )
 
     if candidate["format"] == "parameters":
         _validate_parameter_schema(candidate.get("parameters", {}).get("schema", {}), location)
@@ -275,7 +280,11 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
         if requires.get(key) is not None:
             _require_string_list(requires[key], f"{location} accepts.requires.{key}")
     if method.get("interface") is not None:
-        _validate_interface(method["interface"], f"{location} interface")
+        _validate_interface(
+            method["interface"],
+            f"{location} interface",
+            component_kind="method",
+        )
     _validate_runtime(method.get("runtime", {}) or {}, f"{location} runtime")
 
 
@@ -283,7 +292,11 @@ def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) ->
     location = str(path or "<inline resource>")
     _require_field(resource, "id", location)
     if resource.get("interface") is not None:
-        _validate_interface(resource["interface"], f"{location} interface")
+        _validate_interface(
+            resource["interface"],
+            f"{location} interface",
+            component_kind="resource",
+        )
 
 
 def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
@@ -306,10 +319,6 @@ def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     evidence = study.get("evidence", {}) or {}
     if evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
-    if evidence.get("outputFileStorage", "reference") not in OUTPUT_FILE_STORAGE_MODES:
-        raise ValueError(
-            f"{location} evidence.outputFileStorage must be one of {sorted(OUTPUT_FILE_STORAGE_MODES)}."
-        )
 
 
 def _validate_method_environment_compatibility(
@@ -629,15 +638,19 @@ def _validate_runtime(runtime: Any, location: str) -> None:
             _require_string_list(value, f"{location}.{key}")
 
 
-def _validate_interface(interface: Any, location: str) -> None:
-    if not isinstance(interface, dict):
-        raise ValueError(f"{location} must be an object.")
-    if interface.get("setup") is not None:
-        _validate_setup(interface["setup"], f"{location}.setup")
-    if interface.get("envFromHost") is not None:
-        _require_string_list(interface["envFromHost"], f"{location}.envFromHost")
-    if interface.get("env") is not None and not isinstance(interface["env"], dict):
-        raise ValueError(f"{location}.env must be an object.")
+def _validate_interface(
+    interface: Any,
+    location: str,
+    *,
+    component_kind: str,
+) -> None:
+    try:
+        compile_interface_launch_profiles(
+            interface,
+            component_kind=component_kind,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{location} is invalid: {error}") from error
 
 
 def _validate_setup(setup: Any, location: str) -> None:
@@ -653,6 +666,9 @@ def _validate_setup(setup: Any, location: str) -> None:
     timeout = setup.get("timeoutSeconds")
     if timeout is not None and int(timeout) < 1:
         raise ValueError(f"{location}.timeoutSeconds must be a positive integer.")
+    cache = setup.get("cache")
+    if cache is not None and cache != "prepared":
+        raise ValueError(f"{location}.cache must be 'prepared'.")
     for index, step in enumerate(steps):
         step_location = f"{location}.steps[{index}]"
         if not isinstance(step, dict):
@@ -699,9 +715,14 @@ def _build_candidate_context(
 
 
 def _public_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {"format": candidate["format"]}
-    if candidate.get("description"):
-        payload["description"] = candidate["description"]
+    # Candidate normalization makes the optional description explicit.  Keep
+    # that canonical empty value here as well so the environment adapter and
+    # the study candidate contract remain byte-for-byte identical for retained
+    # compilation.
+    payload = {
+        "format": candidate["format"],
+        "description": candidate.get("description", ""),
+    }
     for key in ("parameters", "files", "materialize", "opaque"):
         if key in candidate:
             payload[key] = deepcopy(candidate[key])
@@ -769,12 +790,217 @@ def _configured_environment_adapter_config(
         "evaluate": evaluator,
         "candidate": deepcopy(candidate),
         "context": _build_candidate_context(candidate, environment, environment_path),
-        "interfaces": [],
+        "interfaces": _compile_environment_interface_profiles(
+            environment.get("interface")
+        ),
         "metrics": _compile_metrics_config(environment["metrics"]),
         "workspace": workspace,
         "outputFiles": _compile_output_file_rules(environment.get("outputFiles", []) or []),
         "records": _compile_record_rules(environment.get("records", []) or []),
     }
+
+
+def _compile_environment_interface_profiles(interface: Any) -> list[Dict[str, Any]]:
+    """Compile target interface authoring to complete retained profiles."""
+
+    return [
+        profile.to_dict()
+        for profile in compile_interface_launch_profiles(
+            interface,
+            component_kind="environment",
+        )
+    ]
+
+
+_INTERFACE_PROFILE_FIELDS = frozenset(
+    {
+        "accepts",
+        "command",
+        "cwd",
+        "description",
+        "env",
+        "grants",
+        "label",
+        "outputs",
+        "presentation",
+        "resources",
+        "runtime",
+        "timeoutSeconds",
+    }
+)
+
+
+def compile_interface_launch_profiles(
+    interface: Any,
+    *,
+    component_kind: str,
+) -> list[InterfaceLaunchProfile]:
+    """Compile one public component interface to complete typed profiles."""
+
+    if interface in (None, {}):
+        return []
+    if not isinstance(interface, dict):
+        raise TypeError("interface must be an object.")
+    if component_kind not in {"environment", "method", "resource"}:
+        raise ValueError("interface component kind is unsupported.")
+
+    if "launchProfiles" in interface:
+        if set(interface) != {"launchProfiles"}:
+            raise ValueError(
+                "interface.launchProfiles is mutually exclusive with top-level profile fields."
+            )
+        raw_profiles = interface["launchProfiles"]
+        if not isinstance(raw_profiles, list) or not raw_profiles:
+            raise ValueError("interface.launchProfiles must be a non-empty list.")
+        if len(raw_profiles) > 32:
+            raise ValueError("interface.launchProfiles contains too many profiles.")
+        profiles = [
+            _compile_interface_launch_profile(
+                raw_profile,
+                component_kind=component_kind,
+                named=True,
+            )
+            for raw_profile in raw_profiles
+        ]
+    else:
+        profiles = [
+            _compile_interface_launch_profile(
+                interface,
+                component_kind=component_kind,
+                named=False,
+            )
+        ]
+    if len({profile.profile_id for profile in profiles}) != len(profiles):
+        raise ValueError("interface launch profile ids must be unique.")
+    return sorted(profiles, key=lambda profile: profile.profile_id.encode("utf-8"))
+
+
+def _compile_interface_launch_profile(
+    raw_profile: Any,
+    *,
+    component_kind: str,
+    named: bool,
+) -> InterfaceLaunchProfile:
+    if not isinstance(raw_profile, dict):
+        raise TypeError("interface launch profile must be an object.")
+    allowed = set(_INTERFACE_PROFILE_FIELDS)
+    if named:
+        allowed.add("id")
+    actual = set(raw_profile)
+    required = {"command", "presentation"} | ({"id"} if named else set())
+    if not actual <= allowed or not required <= actual:
+        raise ValueError(
+            "interface launch profile fields differ; "
+            f"missing={sorted(required - actual)!r}, "
+            f"extra={sorted(actual - allowed)!r}."
+        )
+    raw_outputs = raw_profile.get("outputs")
+    if (
+        "outputs" in raw_profile
+        and raw_outputs is not True
+        and not isinstance(raw_outputs, dict)
+    ):
+        raise ValueError(
+            "interface outputs must be true or an actions object when declared."
+        )
+
+    profile_id = raw_profile["id"] if named else "default"
+    default_label = {
+        "environment": "Environment Preview",
+        "method": "Method Interface",
+        "resource": "Resource Interface",
+    }[component_kind]
+    if named:
+        default_label = profile_id.replace("-", " ").title()
+
+    grants = _complete_interface_section(
+        raw_profile.get("grants", {}),
+        allowed={"envFromHost", "network", "secretsFromHost"},
+        defaults={
+            "envFromHost": [],
+            "network": "disabled",
+            "secretsFromHost": [],
+        },
+        label="interface grants",
+    )
+    resources = _complete_interface_section(
+        raw_profile.get("resources", {}),
+        allowed={"cpu", "gpus", "memoryMiB"},
+        defaults={"cpu": 1, "gpus": 0, "memoryMiB": 2048},
+        label="interface resources",
+    )
+    presentation = _complete_interface_section(
+        raw_profile["presentation"],
+        allowed={"extraPorts", "kind", "port", "readyPath", "readyTimeoutSeconds"},
+        defaults={"extraPorts": [], "readyPath": "/", "readyTimeoutSeconds": 60},
+        required={"kind", "port"},
+        label="interface presentation",
+    )
+    default_selection_kinds = {
+        "environment": ["candidate", "trial"],
+        "method": ["workspace"],
+        "resource": ["workspace"],
+    }[component_kind]
+    accepts = _complete_interface_section(
+        raw_profile.get("accepts", {}),
+        allowed={"mediaTypes", "selectionKinds"},
+        defaults={
+            "mediaTypes": [],
+            "selectionKinds": default_selection_kinds,
+        },
+        label="interface accepts",
+    )
+    profile = {
+        "accepts": accepts,
+        "command": raw_profile["command"],
+        "cwd": raw_profile.get("cwd", "."),
+        "description": raw_profile.get("description", ""),
+        "env": raw_profile.get("env", {}),
+        "grants": grants,
+        "id": profile_id,
+        "label": raw_profile.get("label") or default_label,
+        "presentation": presentation,
+        "resources": resources,
+        "runtime": deepcopy(raw_profile.get("runtime", {})),
+        "timeoutSeconds": raw_profile.get("timeoutSeconds", 3600),
+    }
+    if "outputs" in raw_profile:
+        profile["outputs"] = deepcopy(raw_profile["outputs"])
+    compiled = InterfaceLaunchProfile.from_authoring_dict(profile)
+    allowed_selection_kinds = {
+        "environment": {"candidate", "trial"},
+        "method": {"workspace"},
+        "resource": {"artifact", "workspace"},
+    }[component_kind]
+    unsupported = set(compiled.accepts.selection_kinds) - allowed_selection_kinds
+    if unsupported:
+        raise ValueError(
+            f"{component_kind} interface profile {compiled.profile_id!r} accepts "
+            f"unsupported selection kinds {sorted(unsupported)!r}."
+        )
+    return compiled
+
+
+def _complete_interface_section(
+    value: Any,
+    *,
+    allowed: set[str],
+    defaults: Dict[str, Any],
+    label: str,
+    required: set[str] | None = None,
+) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} must be an object.")
+    actual = set(value)
+    required = set() if required is None else required
+    if not actual <= allowed or not required <= actual:
+        raise ValueError(
+            f"{label} fields differ; missing={sorted(required - actual)!r}, "
+            f"extra={sorted(actual - allowed)!r}."
+        )
+    result = deepcopy(defaults)
+    result.update(deepcopy(value))
+    return result
 
 
 def _compile_evaluator_config(evaluator: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
@@ -868,35 +1094,29 @@ def _compile_candidate_contract(
                 "implementation": "builtin.schema_validation",
                 "config": {
                     "enforceBounds": bool(parameters.get("schema")),
+                    "searchSpace": _internal_parameter_schema(
+                        parameters.get("schema", {})
+                    ),
                     "constraints": deepcopy(parameters.get("constraints", [])),
                 },
             },
         }
     if candidate["format"] == "files":
         files = candidate.get("files", {})
-        workspace = _resolve_trial_workspace(environment.get("trialWorkspace", []) or [], environment_path or Path.cwd())
-        materializer_config = {
-            "candidateRoot": candidate.get("materialize", {}).get("root", "."),
-            "seedFiles": [
-                {"source": item["from"], "destination": item["to"]}
-                for item in workspace
-            ],
-            "readonlyFiles": [],
-            "allowAbsoluteContentRefs": True,
-        }
         return {
             "format": "files",
             "context": _build_candidate_context(candidate, environment, environment_path),
             "materialization": {
                 "implementation": "builtin.workspace_bundle",
-                "config": materializer_config,
+                "config": {
+                    "candidateRoot": candidate.get("materialize", {}).get(
+                        "root", "."
+                    ),
+                },
             },
             "validation": {
                 "implementation": "builtin.workspace_policy",
                 "config": {
-                    "requireHashes": True,
-                    "requireExistingRefs": True,
-                    "allowAbsoluteContentRefs": True,
                     "requiredFiles": list(files.get("required", []) or []),
                     "allow": list(files.get("allow", []) or []),
                     "deny": list(files.get("deny", []) or []),
@@ -1031,15 +1251,10 @@ def _compile_execution(
     }
 
 
-def _compile_evidence(study: Dict[str, Any], study_path: Path) -> Dict[str, Any]:
+def _compile_evidence(study: Dict[str, Any]) -> Dict[str, Any]:
     evidence = dict(study.get("evidence", {}) or {})
     level = evidence.get("level", "standard")
-    compiled = {
-        "store": {
-            "metadataBackend": "local_json",
-            "outputFileBackend": "local_fs",
-        },
-        "outputFileStorage": evidence.get("outputFileStorage", "reference"),
+    return {
         "retention": _retention_for_level(level),
         "capture": {
             "methodCalls": level in {"standard", "full"},
@@ -1049,11 +1264,6 @@ def _compile_evidence(study: Dict[str, Any], study_path: Path) -> Dict[str, Any]
             "resourceAssignments": level in {"standard", "full"},
         },
     }
-    if evidence.get("outputDir"):
-        output_dir = _resolve_launch_path(str(evidence["outputDir"]))
-        _reject_catalog_run_root(output_dir, f"{study_path} evidence.outputDir")
-        compiled["outputDir"] = str(output_dir)
-    return compiled
 
 
 def _retention_for_level(level: str) -> Dict[str, str]:
@@ -1181,22 +1391,6 @@ def _resolve_path(value: Any, base_path: Path) -> Path:
         return path.resolve()
     base_dir = base_path.parent if base_path.is_file() else base_path
     return (base_dir / path).resolve()
-
-
-def _resolve_launch_path(value: Any) -> Path:
-    path = Path(str(value)).expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    return (Path.cwd() / path).resolve()
-
-
-def _reject_catalog_run_root(path: Path, location: str) -> None:
-    if _is_catalog_source_path(path):
-        raise ValueError(f"{location} must not resolve inside catalog source: {path}")
-
-
-def _is_catalog_source_path(path: Path) -> bool:
-    return any(part == "catalog" for part in path.resolve().parts)
 
 
 def _require_field(data: Dict[str, Any], field: str, location: str) -> Any:

@@ -25,9 +25,9 @@ Answer using the OptPilot context packet provided by the GUI. Keep public
 OptPilot explanations centered on environment-owned evaluator.settings and
 method-visible methodContext.references. On the Runs page, use
 optpilot_run_detail for status, metrics, failures, candidates, and evidence
-before reading raw run files; only open a run workspace when the user asks for a
-workspace. Do not claim you modified files, launched studies, or registered
-catalog entries unless the runtime confirms it. For frontend services, start
+instead of reading raw run files or creating a Workspace for a recorded Run.
+Do not claim you modified files, launched studies, or registered catalog
+entries unless the runtime confirms it. For frontend services, start
 them in the attached workspace runtime on 0.0.0.0 and use
 optpilot_workspace_preview_open with the service port to open Studio Preview."""
 
@@ -51,9 +51,6 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_compatibility_check",
     "optpilot_config_discover",
     "optpilot_config_validate",
-    "optpilot_registration_prepare",
-    "optpilot_registration_validate",
-    "optpilot_registration_apply",
     "optpilot_package_plan_prepare",
     "optpilot_package_plan_update",
     "optpilot_package_plan_validate",
@@ -62,11 +59,8 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_study_draft",
     "optpilot_study_save",
     "optpilot_study_launch",
-    "optpilot_job_stop",
     "optpilot_run_list",
     "optpilot_run_detail",
-    "optpilot_run_file_read",
-    "optpilot_run_open_workspace",
     "optpilot_run_compare",
     "optpilot_smoke_test_study",
     "optpilot_docs_search",
@@ -95,7 +89,35 @@ CONFIG_KIND_SCHEMA = {"type": "string", "enum": ["environment", "method", "resou
 OBJECTIVE_DIRECTION_SCHEMA = {"type": "string", "enum": ["maximize", "minimize"]}
 OBJECTIVE_AGGREGATION_SCHEMA = {"type": "string", "enum": ["mean", "median", "min", "max", "sum", "last", "weighted_mean"]}
 EVIDENCE_LEVEL_SCHEMA = {"type": "string", "enum": ["minimal", "standard", "full"]}
-EVIDENCE_STORAGE_SCHEMA = {"type": "string", "enum": ["reference", "copy"]}
+CATALOG_ENTRY_REF_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "schema": {"type": "string", "enum": ["optpilot.catalog-entry-ref.v1"]},
+        "source_kind": {
+            "type": "string",
+            "enum": ["realm-catalog", "configured-filesystem-import"],
+        },
+        "source_id": {"type": "string"},
+        "source_revision": {"type": ["integer", "null"]},
+        "source_digest": {"type": ["string", "null"]},
+        "kind": CONFIG_KIND_SCHEMA,
+        "entry_id": {"type": "string"},
+        "focus_path": {"type": "string"},
+        "ref_digest": {"type": "string"},
+    },
+    "required": [
+        "schema",
+        "source_kind",
+        "source_id",
+        "source_revision",
+        "source_digest",
+        "kind",
+        "entry_id",
+        "focus_path",
+        "ref_digest",
+    ],
+}
 
 
 OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
@@ -210,14 +232,14 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_catalog_detail",
-        "description": "Inspect one reusable catalog entry or saved study plan by kind and uid/path.",
-        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string"}, "path": {"type": "string"}}, ["config_kind"]),
+        "description": "Inspect one reusable catalog entry or saved study plan by kind and its exact uid token.",
+        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string"}}, ["config_kind", "uid"]),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_compatibility_check",
         "description": "Check method/environment compatibility, optionally for a selected pair.",
-        "parameters": _tool_schema({"environment_path": {"type": "string"}, "method_path": {"type": "string"}}),
+        "parameters": _tool_schema({"environment_ref": CATALOG_ENTRY_REF_SCHEMA, "method_ref": CATALOG_ENTRY_REF_SCHEMA}),
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -231,22 +253,6 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Validate an OptPilot environment, method, resource, or study YAML file. Validation errors are actionable repair instructions: fix the reported config/source/import/setup issue and rerun validation.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "path": {"type": "string"}}, ["path"]),
         "annotations": {"readOnlyHint": True},
-    },
-    {
-        "name": "optpilot_registration_prepare",
-        "description": "Create a registration manifest for selected configs in an attached workspace.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "config_paths": {"type": "array", "items": {"type": "string"}}}, ["workspace_id"]),
-    },
-    {
-        "name": "optpilot_registration_validate",
-        "description": "Validate a prepared registration manifest.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "registration_id": {"type": "string"}}, ["workspace_id", "registration_id"]),
-        "annotations": {"readOnlyHint": True},
-    },
-    {
-        "name": "optpilot_registration_apply",
-        "description": "Apply a validated registration manifest into catalog/local_package after approval.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "registration_id": {"type": "string"}}, ["workspace_id", "registration_id"]),
     },
     {
         "name": "optpilot_package_plan_prepare",
@@ -272,7 +278,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_package_plan_validate",
-        "description": "Materialize a package plan in a temporary folder and run schema, source, setup-file, import, method-protocol, evaluator-shape, and local source-closure checks. If it fails, repair missing adapters, source hints, setup files, imports, or protocol signatures in the editable workspace, then rerun validation.",
+        "description": "Materialize and seal a package plan, then run non-executing schema, source, setup-file, retained-study semantic, and local source-closure checks. Python imports and callable construction are deliberately deferred to the approval-gated package smoke. If validation fails, repair missing adapters, source hints, setup files, or unsupported study semantics, then rerun validation.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
         "annotations": {"readOnlyHint": True},
     },
@@ -289,16 +295,17 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_package_plan_apply",
-        "description": "Apply a validated package plan into catalog/local_package after approval. Environment-plus-method packages must pass a smoke study first; one-sided packages must at least be component-ready.",
+        "description": "Publish a validated package artifact as the next canonical Realm catalog package revision after approval. Environment-plus-method packages must pass a smoke study first; one-sided packages must at least be component-ready.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
     },
     {
         "name": "optpilot_study_draft",
-        "description": "Draft a study from selected environment and method configs. For attached workspaces, pass workspace_id and workspace-relative config paths, then save the returned YAML under optpilot_configs/studies/ before package-plan validation.",
+        "description": "Create or update a durable managed study workspace from exact catalog environment and method refs.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
-            "environment_path": {"type": "string"},
-            "method_path": {"type": "string"},
+            "expected_workspace_revision": {"type": "integer", "minimum": 1},
+            "environment_ref": CATALOG_ENTRY_REF_SCHEMA,
+            "method_ref": CATALOG_ENTRY_REF_SCHEMA,
             "name": {"type": "string"},
             "description": {"type": "string"},
             "tags": {"type": "array", "items": {"type": "string"}},
@@ -313,10 +320,8 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
             "timeoutSeconds": {"type": "integer", "minimum": 1},
             "maxRetries": {"type": "integer", "minimum": 0},
             "evidenceLevel": EVIDENCE_LEVEL_SCHEMA,
-            "evidenceStorage": EVIDENCE_STORAGE_SCHEMA,
-            "evidenceOutputDir": {"type": "string"},
             "seed": {"type": "integer"},
-        }, ["environment_path", "method_path"]),
+        }, ["environment_ref", "method_ref"]),
     },
     {
         "name": "optpilot_study_save",
@@ -325,12 +330,17 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_study_launch",
-        "description": "Launch a validated study after approval.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "output_root": {"type": "string"}}, ["study_path"]),
+        "description": "Launch either an exact saved catalog study ref or an exact managed-workspace study revision into the local Realm after approval.",
+        "parameters": _tool_schema({
+            "study_ref": CATALOG_ENTRY_REF_SCHEMA,
+            "workspace_id": {"type": "string"},
+            "study_relative_path": {"type": "string"},
+            "expected_workspace_revision": {"type": "integer", "minimum": 1},
+        }),
     },
     {
         "name": "optpilot_job_stop",
-        "description": "Stop a live OptPilot UI job after approval.",
+        "description": "Request cancellation of one durable study launch or its handed-off canonical run.",
         "parameters": _tool_schema({"job_id": {"type": "string"}}, ["job_id"]),
     },
     {
@@ -341,30 +351,19 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_run_detail",
-        "description": "Read a compact, assistant-ready run summary for a run id/path, including status, trials, failures, best metric/candidate, observation previews, and available evidence files. Prefer this before reading raw run files.",
-        "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}),
+        "description": "Read one bounded, path-free Realm Workbench head with candidates, logical trials, attempts, observations, and artifacts for a canonical run id. Use workbench.overview.best_candidate for Run-wide Candidate decisions; summary.best is only a low-level observation.",
+        "parameters": _tool_schema({"run_id": {"type": "string"}}, ["run_id"]),
         "annotations": {"readOnlyHint": True},
-    },
-    {
-        "name": "optpilot_run_file_read",
-        "description": "Read one text file from a run directory. The path must be one of the relative paths advertised by optpilot_run_detail evidence_files; call optpilot_run_detail first if unsure.",
-        "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}, ["path"]),
-        "annotations": {"readOnlyHint": True},
-    },
-    {
-        "name": "optpilot_run_open_workspace",
-        "description": "Open and auto-attach a run directory as a read-only analysis workspace. Use only when the user wants to browse the run files as a workspace; run summaries should use optpilot_run_detail.",
-        "parameters": _tool_schema({"run_id": {"type": "string"}, "path": {"type": "string"}}),
     },
     {
         "name": "optpilot_run_compare",
-        "description": "Compare compatible runs by id/path and summarize metrics and compatibility caveats.",
+        "description": "Compare canonical Realm runs by run id and summarize each run's best comparable Candidate plus compatibility caveats.",
         "parameters": _tool_schema({"runs": {"type": "array", "items": {"type": "string"}}}, ["runs"]),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_smoke_test_study",
-        "description": "Run a small validated study into a temporary output directory.",
+        "description": "Run a small validated study in a temporary private Realm.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "max_trials": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 10}}, ["study_path"]),
     },
     {

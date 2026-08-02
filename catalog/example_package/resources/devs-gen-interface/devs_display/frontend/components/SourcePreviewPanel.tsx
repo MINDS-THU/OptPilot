@@ -6,8 +6,10 @@ import { FileMap, GraphNode, SystemModelInfo } from '../types';
 
 interface Props {
   selectedNode: GraphNode | null;
+  selectedFilePath?: string | null;
   modelInfo: SystemModelInfo | null;
   files: FileMap;
+  workspace?: boolean;
 }
 
 const normalizePath = (path: string) => path.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/^\/+/, '');
@@ -51,41 +53,53 @@ const resolveSourceFile = (
   return null;
 };
 
-export const SourcePreviewPanel: React.FC<Props> = ({ selectedNode, modelInfo, files }) => {
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+export const SourcePreviewPanel: React.FC<Props> = ({ selectedNode, selectedFilePath, modelInfo, files, workspace = false }) => {
   const source = useMemo(() => {
+    if (selectedFilePath && files[selectedFilePath] !== undefined) {
+      return { path: selectedFilePath, content: files[selectedFilePath] };
+    }
     if (!selectedNode) return null;
     return resolveSourceFile(selectedNode.className, modelInfo, files);
-  }, [selectedNode, modelInfo, files]);
+  }, [selectedNode, selectedFilePath, modelInfo, files]);
   const highlightedSource = useMemo(() => {
-    return source ? highlightPython(source.content) : '';
+    if (!source) return '';
+    return source.path.endsWith('.py') ? highlightPython(source.content) : escapeHtml(source.content);
   }, [source]);
 
   return (
-    <div className="space-y-3 border-t border-slate-100 pt-4">
-      <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+    <div className={workspace ? 'flex h-full min-h-0 flex-col bg-white' : 'space-y-3 border-t border-slate-100 pt-4'}>
+      <div className={`${workspace ? 'border-b border-slate-200 px-4 py-3' : ''} flex items-center justify-between gap-3 text-sm font-semibold text-slate-700`}>
+        <div className="flex min-w-0 items-center gap-2">
         <Code2 size={16} />
-        Source
+          <span className="truncate">{source?.path || 'File preview'}</span>
+        </div>
+        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Read-only</span>
       </div>
 
-      {!selectedNode ? (
-        <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-          Select a model node to view its source.
+      {!selectedNode && !selectedFilePath ? (
+        <div className={`${workspace ? 'm-4 flex flex-1 items-center justify-center' : ''} rounded border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500`}>
+          Select a file to view its source.
         </div>
       ) : !source ? (
         <div className="rounded border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-700">
-          Source not found for {selectedNode.className}.
+          Source not found for {selectedNode?.className || selectedFilePath || 'the selected file'}.
         </div>
       ) : (
-        <div className="overflow-hidden rounded border border-slate-200 bg-white">
-          <div className="space-y-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs">
-            <div className="truncate font-semibold text-slate-800" title={selectedNode.id}>
+        <div className={`${workspace ? 'min-h-0 flex-1 rounded-none border-0' : 'rounded border border-slate-200'} overflow-hidden bg-white`}>
+          {!workspace && <div className="space-y-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs">
+            {selectedNode && <div className="truncate font-semibold text-slate-800" title={selectedNode.id}>
               {selectedNode.name} <span className="font-normal text-slate-500">({selectedNode.className})</span>
-            </div>
+            </div>}
             <div className="truncate text-[11px] text-slate-500" title={source.path}>
               {source.path}
             </div>
-          </div>
-          <pre className="source-code max-h-96 overflow-auto bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+          </div>}
+          <pre className={`source-code ${workspace ? 'h-full' : 'max-h-96'} overflow-auto bg-slate-950 p-4 text-[12px] leading-5 text-slate-100`}>
             <code
               className="language-python"
               dangerouslySetInnerHTML={{ __html: highlightedSource }}

@@ -5,6 +5,15 @@ description: How LLM agents that write dispatch rules or solver code connect to 
 
 # LLM Code-Writing Methods
 
+!!! note "OpenAI editor setup"
+
+    The dependency-free dispatch-rule and solver-code baselines are launchable
+    through the retained local-process file-candidate slice. The
+    OpenAI-compatible editor is also launchable after `OPENROUTER_API_KEY` is
+    added under Studio Settings → Local environment variables, or exported for
+    a CLI launch.
+
+
 LLM code-writing methods produce file candidates. OptPilot does not need to
 know the prompting strategy or agent loop. It only needs a file manifest that
 matches the environment's file-candidate contract.
@@ -33,34 +42,41 @@ def score(operation, machine, state):
 
 Higher scores are scheduled first.
 
-Run the baseline file-copy study before connecting an LLM:
+Validate the baseline file-copy fixture:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
 ```
 
-Then run the OpenAI-compatible file editor binding:
+Then validate the OpenAI-compatible file-editor binding:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
 ```
 
-The included study has `budget.maxTrials: 1` and
-`includeBaselineCandidate: true`, so it is executable without provider
-credentials. To request a real LLM edit, set a provider key such as
+Both studies are retained-launchable. The OpenAI-compatible Method declares
+`runtime.envFromHost: [OPENROUTER_API_KEY]`. Studio shows that name as a local
+setup requirement and supplies the configured value only to the Method process
+for the Run being launched. The Run records the requirement name and an opaque
+local Settings revision, not the credential value. Changing the setting creates
+a revision for later Runs; it does not silently change an existing Run.
+
+The included OpenAI study has `budget.maxTrials: 1` and
+`includeBaselineCandidate: true`, so its method can produce a baseline without
+calling a provider. The declared key is still required at launch because
+OptPilot prepares the complete Method runtime rather than guessing which branch
+the Method will take. To request a real LLM edit, configure
 `OPENROUTER_API_KEY`, increase the study budget, or set
 `includeBaselineCandidate: false`.
 
-Expected result:
+For the retained baseline run, the expected result is:
 
-- the baseline file-copy run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `files` candidate with `dispatch_rule.py`
-- with the default OpenAI-compatible study settings, the baseline candidate can
-  run even without provider credentials
-- a real LLM edit requires the provider key requested by the method config and
-  enough budget to propose the edited candidate
+- a supported baseline file-copy run should complete one trial with `failure_count: 0`
+- the Workbench Candidates page should contain a `files` candidate with `dispatch_rule.py`
+- the template is supplied through a package-backed
+  `methodContext.references` entry rather than a copied trial seed
+- a real LLM edit requires the declared local provider key and enough budget to
+  propose the edited candidate
 
 ## Solver-Code Writing
 
@@ -80,17 +96,16 @@ def solve(instance, time_limit_seconds, context):
 The evaluator independently checks schedule feasibility. Invalid solver output
 fails the trial instead of producing a misleading score.
 
-Run the baseline first:
+Validate the baseline fixture:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_solver_code_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
 ```
 
-Expected result:
+This dependency-free study is a retained launch smoke. The expected result is:
 
-- the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `files` candidate with `solver.py`
+- a supported run should complete one trial with `failure_count: 0`
+- the Workbench Candidates page should contain a `files` candidate with `solver.py`
 - evaluator failures usually mean the generated solver returned an infeasible
   or malformed schedule
 
@@ -116,7 +131,10 @@ The method can read:
 - evaluator artifacts such as logs, JSON reports, plots, CSV files, or SQLite
   databases when they are recorded as evidence
 
-It returns file candidates through `CandidateFileStore`.
+It returns provisional file candidates through `CandidateBundleStager`, using
+the generation-bound `runtime_context.candidate_staging_dir` supplied to each
+proposal call. OptPilot freezes and seals the proposal before it becomes a
+durable candidate; methods never choose immutable-store paths or copy modes.
 
 ## OpenAI-Compatible Editor
 

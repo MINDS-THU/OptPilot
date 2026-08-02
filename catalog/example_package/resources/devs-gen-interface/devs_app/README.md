@@ -7,9 +7,11 @@ Interface. The shipped resource uses server mode:
 python -m devs_app.run --mode server
 ```
 
-The server creates per-session workspaces under `devs_app/working_dirs/`,
+The server creates per-session workspaces under the launch-owned runtime root,
 builds DEVS/xDEVS projects from natural-language requests, and exposes them to
-the frontend through the FastAPI service in `devs_display/backend/`.
+the frontend through the FastAPI service in `devs_display/backend/`. Studio
+supplies that root; direct execution defaults to `.runtime/` at the resource
+root.
 
 The active generation path is intentionally small:
 

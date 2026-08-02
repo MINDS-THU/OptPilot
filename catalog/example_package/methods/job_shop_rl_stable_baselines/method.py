@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -33,7 +32,7 @@ class StableBaselinesJobShopMethod:
         solutions = self._roll_out_policy(model, study_state, adapter_cls)
         return [
             {
-                "candidate_id": f"job-shop-sb3-{uuid.uuid4().hex[:12]}",
+                "candidate_id": "job-shop-sb3-0000",
                 "format": "parameters",
                 "spec": {"solutions": solutions},
                 "generator": {
@@ -42,7 +41,6 @@ class StableBaselinesJobShopMethod:
                     "algorithm": "PPO",
                     "training_instances": len(train_payloads),
                 },
-                "metadata": {"summary": "Schedules produced by a Stable-Baselines3 policy rollout."},
             }
         ]
 

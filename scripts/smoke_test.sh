@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUTPUT_ROOT="${OPTPILOT_SMOKE_OUTPUT_ROOT:-/tmp/optpilot-smoke}"
 
 cd "$ROOT_DIR"
 
@@ -12,18 +11,37 @@ fi
 
 PYTHON_BIN="${PYTHON:-python}"
 export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-/tmp/optpilot-pycache}"
+SMOKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/optpilot-smoke.XXXXXX")"
 
-"$PYTHON_BIN" -m unittest discover -s tests -p 'test_*.py'
-"$PYTHON_BIN" -m compileall src/optpilot
+cleanup() {
+  # Retained Realm evidence is intentionally sealed read-only. Restore owner
+  # write access inside this script-owned temporary tree before removing it.
+  chmod -R u+w "$SMOKE_ROOT" 2>/dev/null || true
+  rm -rf -- "$SMOKE_ROOT"
+}
 
-for study in \
-  tests/fixtures/catalog/studies/toy_random_search.yaml \
-  tests/fixtures/catalog/studies/toy_cli_random_search.yaml \
-  tests/fixtures/catalog/studies/toy_user_method.yaml \
-  tests/fixtures/catalog/studies/toy_lifecycle_method.yaml \
-  tests/fixtures/catalog/studies/toy_evidence_aware_method.yaml
-do
-  optpilot run "$study" --output-root "$OUTPUT_ROOT" >/dev/null
-done
+trap cleanup EXIT
+
+"$PYTHON_BIN" -m compileall -q src/optpilot studio/src/optpilot_studio
+"$PYTHON_BIN" -m optpilot package validate \
+  catalog/example_package \
+  --check-source >/dev/null
+"$PYTHON_BIN" -m optpilot validate \
+  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  >/dev/null
+
+"$PYTHON_BIN" -m optpilot run \
+  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package \
+  --realm-root "$SMOKE_ROOT/realm" \
+  | "$PYTHON_BIN" -c '
+import json
+import sys
+
+summary = json.load(sys.stdin)
+assert summary["run_status"] == "succeeded", summary
+assert summary["counts"]["logical_trials"]["successful"] == 1, summary
+assert summary["best"]["metric"] is not None, summary
+'
 
 echo "OptPilot smoke test passed."

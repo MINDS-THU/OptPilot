@@ -6,11 +6,12 @@ FastAPI backend through the Studio preview proxy.
 
 The frontend provides:
 
-- session selection and creation
+- compact design history and conversation views
 - chat with the backend DEVS generation agent
-- generated project upload and selection
-- source preview for generated files
-- graph visualization of xDEVS model structure
+- generated simulation upload and selection
+- interactive structure visualization
+- bounded simulation runs and result inspection
+- read-only browsing of generated files
 
 Graph visualization runs a lightweight local parser first. If local parsing is
 not enough, the frontend asks the backend to parse the model using the
@@ -37,14 +38,15 @@ For normal OptPilot use, launch the parent resource instead:
 ```text
 components/
   ChatInterface.tsx
+  FileTreeBrowser.tsx
   GraphVisualizer.tsx
-  ProjectPanel.tsx
+  SimulationRunPanel.tsx
   SessionSelectorPanel.tsx
   SourcePreviewPanel.tsx
-  VisualizationControls.tsx
 services/
   agentService.ts
   graphParseService.ts
+  sourceFileService.ts
 App.tsx
 types.ts
 ```

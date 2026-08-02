@@ -5,6 +5,15 @@ description: How dispatching-rule methods connect to the job-shop example.
 
 # Dispatching Rule Methods
 
+!!! warning "Current runtime status"
+
+    The fixed weighted-rule baseline and deterministic tuner are dependency-free
+    retained CLI studies. The JobShopLib study is retained-launchable after the
+    optional example dependencies are installed. The dependency-free
+    file-candidate baseline is also retained-launchable through the trusted
+    local-process slice.
+
+
 Dispatching rules are the simplest useful job-shop method family. They choose
 which available operation to schedule next. The examples show three OptPilot
 patterns with increasing strength:
@@ -13,8 +22,8 @@ patterns with increasing strength:
 - tune bounded dispatch-rule weights over several trials
 - wrap JobShopLib's dispatching-rule solver and return complete schedules
 
-The file-copy baseline is also included as a smoke test for file candidates. It
-does not optimize by itself.
+The file-copy baseline is also included as the concrete retained
+file-candidate smoke. It does not optimize by itself.
 
 ## Which Contract To Use
 
@@ -31,14 +40,16 @@ Run the fixed baseline:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package
 ```
 
 Run the deterministic tuner:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml \
+  --package-root catalog/example_package
 ```
 
 Both studies use `environment_rule_parameters.yaml`. The environment exposes a
@@ -54,31 +65,31 @@ Expected result:
 - the fixed baseline should complete one trial with `failure_count: 0`
 - the tuner should complete up to 12 trials and record one observation per
   evaluated parameter setting
-- `candidates.jsonl` should show `parameters` candidates with the four weight
+- the Workbench Candidates page should show `parameters` candidates with the four weight
   fields
-- `observations.jsonl` should show whether the tuned grid found a lower
+- the Workbench Observations page should show whether the tuned grid found a lower
   `normalized_makespan` than the first fixed setting
 
-## File-Candidate Smoke Test
+## File-Candidate Baseline
 
-Run:
+Run the retained study:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml \
+  --package-root catalog/example_package
 ```
 
 This study uses `baseline-file-copy` with `environment_dispatch_rule.yaml`. The
-method copies the environment's template `dispatch_rule.py` into the candidate
-store, and OptPilot materializes it into the trial workspace before evaluation.
-
-Use this to verify file-candidate materialization before trying an LLM or a
-larger heuristic-code generator.
+environment exposes its template `dispatch_rule.py` as a package-backed
+`methodContext.references` entry. The method stages that file, OptPilot freezes
+and seals it atomically, and the attempt projects the immutable candidate under
+the environment-owned candidate root in a fresh writable trial volume.
 
 Expected result:
 
-- the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `files` candidate with `dispatch_rule.py`
+- a supported run should complete one trial with `failure_count: 0`
+- the Workbench Candidates page should contain a `files` candidate with `dispatch_rule.py`
 - the trial workspace should contain a materialized candidate file under the
   environment's configured candidate root
 - this smoke test is not expected to optimize; it proves the file-candidate
@@ -92,12 +103,18 @@ Install the optional example dependencies:
 uv sync --all-packages --group examples
 ```
 
-Then run:
+Then validate and run the study:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml \
+  --package-root catalog/example_package
 ```
+
+The retained runner captures the environment-owned case files from the package
+snapshot and projects them read-only into the method worker as
+`methodContext.references`. It does not expose a live package path or require a
+trial-workspace seed.
 
 This method uses `environment_schedule_solution.yaml`. It reads validation
 cases from `methodContext.references`, calls JobShopLib's
@@ -126,9 +143,9 @@ and computes the same metrics used by every other job-shop method.
 Expected result:
 
 - the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain a `parameters` candidate whose `spec`
+- the Workbench Candidates page should contain a `parameters` candidate whose `spec`
   contains `solutions`
-- `observations.jsonl` should report the same job-shop metrics as the
+- the Workbench Observations page should report the same job-shop metrics as the
   dependency-free studies
 
 To use a different built-in rule, change the method setting:

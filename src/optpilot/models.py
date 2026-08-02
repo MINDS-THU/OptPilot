@@ -123,6 +123,57 @@ class Observation:
 
 
 @dataclass
+class AttemptResult:
+    """All raw observations produced by one attempt of a logical trial."""
+
+    attempt_index: int
+    trial_id: str
+    handle: Any
+    state: Optional[str]
+    observations: List[Observation]
+    worker: JsonDict = field(default_factory=dict)
+    error: JsonDict = field(default_factory=dict)
+
+    @property
+    def observation_count(self) -> int:
+        return len(self.observations)
+
+    def to_event_dict(self) -> JsonDict:
+        return {
+            "handle": self.handle,
+            "trial_id": self.trial_id,
+            "state": self.state,
+            "observation_count": self.observation_count,
+            "attempt_index": self.attempt_index,
+            "worker": dict(self.worker),
+            "error": dict(self.error),
+            "statuses": [observation.status for observation in self.observations],
+        }
+
+
+@dataclass
+class LogicalTrialResult:
+    """Terminal scheduler result for one accepted logical budget slot."""
+
+    logical_trial_id: str
+    candidate_id: str
+    attempts: List[AttemptResult]
+    error: JsonDict = field(default_factory=dict)
+
+    @property
+    def attempt_count(self) -> int:
+        return len(self.attempts)
+
+    @property
+    def observation_count(self) -> int:
+        return sum(attempt.observation_count for attempt in self.attempts)
+
+    @property
+    def final_observations(self) -> List[Observation]:
+        return list(self.attempts[-1].observations) if self.attempts else []
+
+
+@dataclass
 class RunSummary:
     study_id: str
     run_dir: str
@@ -131,9 +182,17 @@ class RunSummary:
     best_metric: Optional[float]
     best_candidate_id: Optional[str]
     started_at: str
-    finished_at: str
+    finished_at: Optional[str]
     failure_count: int = 0
     policy: JsonDict = field(default_factory=dict)
+    schema_version: str = "optpilot.run.summary.v2"
+    run_status: str = "running"
+    stop_code: Optional[str] = None
+    accepted_trials: int = 0
+    terminal_trials: int = 0
+    attempt_count: int = 0
+    observation_count: int = 0
+    final_failure_count: int = 0
 
     def to_dict(self) -> JsonDict:
         return asdict(self)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, List
 
 from job_shop_lib_solvers import solve_job_shop_cases
@@ -29,7 +28,7 @@ class JobShopLibDispatchingRuleMethod:
         solutions = solve_job_shop_cases(study_state, lambda: DispatchingRuleSolver(rule))
         return [
             {
-                "candidate_id": f"job-shop-lib-dispatch-{uuid.uuid4().hex[:12]}",
+                "candidate_id": "job-shop-lib-dispatch-0000",
                 "format": "parameters",
                 "spec": {"solutions": solutions},
                 "generator": {
@@ -37,7 +36,6 @@ class JobShopLibDispatchingRuleMethod:
                     "strategy": "job_shop_lib_dispatching_rule",
                     "dispatching_rule": rule,
                 },
-                "metadata": {"summary": f"Schedules produced by JobShopLib DispatchingRuleSolver({rule!r})."},
             }
         ]
 

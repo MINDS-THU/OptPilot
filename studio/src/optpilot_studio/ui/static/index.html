@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260702a" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260731j" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -64,36 +64,54 @@
             <span class="nav-icon nav-icon-studies" aria-hidden="true"></span>
             <span class="nav-label">
               <strong>Studies</strong>
-              <small aria-hidden="true">Experiment Configurations</small>
+              <small aria-hidden="true">Configure and launch Runs</small>
             </span>
           </button>
           <button class="nav-button" data-view="runs" type="button">
             <span class="nav-icon nav-icon-runs" aria-hidden="true"></span>
             <span class="nav-label">
               <strong>Runs</strong>
-              <small aria-hidden="true">Running and Completed Experiments</small>
+              <small aria-hidden="true">Progress and results</small>
+            </span>
+          </button>
+          <button class="nav-button" data-view="workspace" type="button">
+            <span class="nav-icon nav-icon-workspaces" aria-hidden="true"></span>
+            <span class="nav-label">
+              <strong>Workspaces</strong>
+              <small aria-hidden="true">Editable work</small>
             </span>
           </button>
         </nav>
+
+        <section id="activeInterfaceBar" class="active-interface-bar" aria-label="Running interface" hidden>
+          <button id="activeInterfaceOpenButton" class="active-interface-open" type="button">
+            <span class="active-interface-dot" aria-hidden="true"></span>
+            <span class="active-interface-copy">
+              <strong id="activeInterfaceLabel">Interface</strong>
+              <small id="activeInterfaceSubtitle">Running in this tab</small>
+            </span>
+          </button>
+          <button id="activeInterfaceStopButton" class="active-interface-stop" type="button">Stop</button>
+        </section>
 
           <button id="assistantToggleButton" class="assistant-launcher" type="button">
             <span class="nav-icon nav-icon-assistant" aria-hidden="true"></span>
             <span class="assistant-launcher-label">
               <strong>Assistant</strong>
-              <small id="assistantLauncherSubtitle">Context-aware project agent</small>
+              <small id="assistantLauncherSubtitle">Context-aware assistant</small>
             </span>
           </button>
 
         <section class="sidebar-workspaces">
           <div class="sidebar-workspaces-header">
-            <div>
+            <div class="sidebar-workspaces-title">
               <h2>Workspaces</h2>
-              <span class="path-text">Click Attach to Give Assistant Access</span>
+              <span id="sessionCount" class="status-pill">0</span>
             </div>
             <div class="header-actions">
-              <span id="sessionCount" class="status-pill">0</span>
-              <button id="refreshButton" class="ghost-button rail-action-button" type="button" aria-label="Refresh" title="Refresh">&#8635;</button>
-              <button id="newWorkspaceButton" class="ghost-button icon-small-button" type="button" title="Create workspace">+</button>
+              <button id="refreshButton" class="ghost-button rail-action-button" type="button" aria-label="Refresh Workspaces" title="Refresh Workspaces">&#8635;</button>
+              <button id="openLocalFolderButton" class="ghost-button rail-text-button" type="button" title="Add an existing local folder to Workspaces">Add folder</button>
+              <button id="newWorkspaceButton" class="ghost-button rail-text-button" type="button" aria-label="Create Workspace" title="Create a new Workspace">New</button>
             </div>
           </div>
           <div id="sessionList" class="session-list"></div>
@@ -116,24 +134,24 @@
         <header class="topbar">
           <div>
             <div class="eyebrow">OptPilot Studio</div>
-            <h1 id="pageTitle">Editor</h1>
-            <p id="pageSubtitle">Open, preview, and register the selected workspace.</p>
+            <h1 id="pageTitle">Workspaces</h1>
+            <p id="pageSubtitle">Edit code, run its interface, and publish reusable versions.</p>
           </div>
         </header>
 
         <aside class="panel agent-panel">
           <div id="assistantResizeHandle" class="assistant-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize assistant"></div>
           <div class="panel-header">
-            <button id="assistantBackButton" class="ghost-button assistant-back-button" type="button" aria-label="Back to sessions">&larr;</button>
+            <button id="assistantBackButton" class="ghost-button assistant-back-button" type="button" aria-label="Back to conversations">&larr;</button>
 	            <div class="assistant-heading">
 	              <h2 id="assistantTitle">OptPilot Assistant</h2>
-	              <span id="assistantSubtitle" class="path-text">Project assistant</span>
+	              <span id="assistantSubtitle" class="path-text">Context-aware assistant</span>
 	            </div>
 	            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
 	          </div>
           <div id="assistantSessionList" class="assistant-session-list">
             <div class="assistant-session-actions">
-              <button id="newSessionButton" class="primary-button" type="button">New Session</button>
+              <button id="newSessionButton" class="primary-button" type="button">New conversation</button>
             </div>
             <div id="assistantSessionCards" class="assistant-session-cards"></div>
           </div>
@@ -159,6 +177,7 @@
                 </div>
                 <span id="sessionStatus" class="status-pill">draft</span>
               </div>
+              <div id="workspaceContextNotice" class="workspace-context-notice" hidden></div>
               <div id="sessionSummary" class="session-summary"></div>
               <div class="workspace-body">
                 <aside class="workspace-files">
@@ -191,19 +210,19 @@
                     </div>
                   </div>
                   <div class="workbench-mode-bar">
-                    <div class="workbench-mode-tabs">
-                      <button class="workbench-mode" data-workbench-mode="code" type="button">Code</button>
-                      <button class="workbench-mode" data-workbench-mode="preview" type="button">Preview</button>
+                    <div class="workbench-mode-tabs" role="tablist" aria-label="Workspace views">
+                      <button id="workspaceCodeTab" class="workbench-mode" data-workbench-mode="code" type="button" role="tab" aria-controls="codeWorkbench">Code</button>
+                      <button id="workspaceInterfaceTab" class="workbench-mode" data-workbench-mode="preview" type="button" role="tab" aria-controls="previewWorkbench">Interface</button>
+                      <button id="workspacePublishTab" class="workbench-mode" data-workbench-mode="setup" type="button" role="tab" aria-controls="setupWorkbench">Publish</button>
                     </div>
                     <div class="workbench-title-control">
                       <input id="workspaceTitleInput" class="workspace-title-input" type="text" value="" aria-label="Workspace name" />
                     </div>
                     <div class="workbench-toolbar-actions">
-                      <button id="primaryActionButton" class="primary-button" type="button">Register to Catalog</button>
-                      <button id="openWorkspaceExternalButton" class="ghost-button" type="button">Open Separate Window</button>
+                      <button id="openWorkspaceExternalButton" class="ghost-button" type="button">Open editor in new window</button>
                     </div>
                   </div>
-                  <div id="codeWorkbench" class="workbench-pane code-workbench active-workbench">
+                  <div id="codeWorkbench" class="workbench-pane code-workbench active-workbench" role="tabpanel" aria-labelledby="workspaceCodeTab">
                     <iframe id="embeddedCodeWorkspace" class="code-workspace-frame" title="Embedded code workspace"></iframe>
                     <div id="embeddedCodeWorkspaceEmpty" class="embedded-empty">
                       <div>
@@ -213,31 +232,33 @@
                       </div>
                     </div>
                   </div>
-                  <div id="previewWorkbench" class="workbench-pane preview-workbench">
+                  <div id="previewWorkbench" class="workbench-pane preview-workbench" role="tabpanel" aria-labelledby="workspaceInterfaceTab">
                     <div class="preview-toolbar">
                       <div class="workspace-crumb">
-                        <strong>Workspace Preview</strong>
-                        <span id="workspacePreviewStatus" class="path-text">Run your app in the workspace runtime, then open its port here.</span>
+                        <strong>Interface</strong>
+                        <span id="workspacePreviewStatus" class="path-text">Run the interface declared by the current files.</span>
                       </div>
                       <div class="preview-actions">
-                        <label class="preview-port-control">
-                          <span>Port</span>
-                          <input id="workspacePreviewPort" type="number" min="1" max="65535" inputmode="numeric" value="5173" />
-                        </label>
-                        <button id="launchWorkspaceInterfaceButton" class="ghost-button" type="button" hidden>Launch Interface</button>
-                        <button id="openWorkspacePreviewButton" class="primary-button" type="button">Open Preview</button>
-                        <button id="reloadWorkspacePreviewButton" class="ghost-button" type="button">Reload</button>
+                        <button id="launchWorkspaceInterfaceButton" class="primary-button" type="button" hidden>Launch interface</button>
                       </div>
                     </div>
+                    <div id="workspaceInterfaceLaunchStatus" class="workspace-interface-launch-status" hidden></div>
                     <div class="preview-stage live-preview-stage">
                       <iframe id="workspacePreviewFrame" class="workspace-preview-frame" title="Workspace preview"></iframe>
                       <div id="workspacePreviewEmpty" class="embedded-empty preview-empty">
                         <div>
-                          <h2 id="workspacePreviewTitle">Open a workspace preview</h2>
-                          <p id="workspacePreviewBody">Start a frontend server in the workspace terminal, make it listen on 0.0.0.0, then enter the port here.</p>
+                          <h2 id="workspacePreviewTitle">Launch this Workspace’s interface</h2>
+                          <p id="workspacePreviewBody">Run the interface declared by the current editable files.</p>
+                          <div id="workspaceInterfaceConflictActions" class="preview-conflict-actions" hidden>
+                            <button id="returnToActiveInterfaceButton" class="primary-button" type="button">Return to running interface</button>
+                            <button id="stopActiveInterfaceButton" class="ghost-button" type="button">Stop interface</button>
+                          </div>
                         </div>
                       </div>
                     </div>
+                  </div>
+                  <div id="setupWorkbench" class="workbench-pane setup-workbench" role="tabpanel" aria-labelledby="workspacePublishTab">
+                    <div id="workspaceSetupContent" class="workspace-setup-content"></div>
                   </div>
                 </section>
               </div>
@@ -255,20 +276,23 @@
         </section>
 
         <section id="catalogView" class="view">
-          <div class="entity-layout">
+          <div class="entity-layout catalog-entity-layout">
             <section class="panel">
               <div class="panel-header panel-search-header">
                 <input id="componentSearch" class="search-input panel-search-input" type="search" placeholder="Search catalog" aria-label="Search catalog" />
               </div>
-              <div class="tabs">
-                <button class="tab active" data-component-filter="all" type="button">All</button>
-                <button class="tab" data-component-filter="environment" type="button">Environments</button>
-                <button class="tab" data-component-filter="method" type="button">Methods</button>
-                <button class="tab" data-component-filter="resource" type="button">Resources</button>
+              <div class="catalog-filter-toolbar">
+                <div class="catalog-kind-filters" aria-label="Catalog item type">
+                  <button class="tab active" data-component-filter="all" type="button">All</button>
+                  <button class="tab" data-component-filter="environment" type="button">Environments</button>
+                  <button class="tab" data-component-filter="method" type="button">Methods</button>
+                  <button class="tab" data-component-filter="resource" type="button">Resources</button>
+                </div>
                 <select id="componentPackageFilter" class="catalog-package-select" aria-label="Filter catalog by package">
                   <option value="all">All packages</option>
                 </select>
               </div>
+              <div id="catalogSources" class="catalog-source-list"></div>
               <div id="componentList" class="entity-list"></div>
             </section>
             <section class="panel detail-panel">
@@ -301,6 +325,8 @@
                 <button class="tab active" data-run-filter="all" type="button">All</button>
                 <button class="tab" data-run-filter="running" type="button">Running</button>
                 <button class="tab" data-run-filter="completed" type="button">Completed</button>
+                <button class="tab" data-run-filter="failed" type="button">Failed</button>
+                <button class="tab" data-run-filter="cancelled" type="button">Cancelled</button>
                 <button class="tab" data-run-filter="incomplete" type="button">Incomplete</button>
               </div>
               <div id="runsTable" class="run-list" role="list"></div>
@@ -324,7 +350,7 @@
         </header>
         <div class="settings-tabs" role="tablist" aria-label="Studio settings sections">
           <button class="settings-tab active" data-settings-tab="assistant" type="button" role="tab" aria-selected="true" aria-controls="settingsAssistantPanel">Assistant</button>
-          <button class="settings-tab" data-settings-tab="environment" type="button" role="tab" aria-selected="false" aria-controls="settingsEnvironmentPanel">Environment &amp; Secrets</button>
+          <button class="settings-tab" data-settings-tab="environment" type="button" role="tab" aria-selected="false" aria-controls="settingsEnvironmentPanel">Local environment variables</button>
         </div>
         <div class="settings-body">
           <div id="settingsAssistantPanel" class="settings-tab-panel" data-settings-panel="assistant" role="tabpanel">
@@ -346,7 +372,7 @@
                   <input id="openHandsBaseUrl" type="url" placeholder="http://127.0.0.1:8781" autocomplete="off" />
                 </label>
                 <label class="control-field">
-                  <span>Session endpoint</span>
+                  <span>Conversation endpoint</span>
                   <input id="openHandsSessionEndpoint" type="text" placeholder="/api/conversations" autocomplete="off" />
                 </label>
                 <label class="control-field">
@@ -406,7 +432,7 @@
 	              <label class="control-field">
 	                <span>File writes</span>
 	                <select id="assistantPermissionFileWrite">
-	                  <option value="attached_editable">Attached editable workspaces only</option>
+	                  <option value="attached_editable">Workspaces available to this conversation</option>
 	                  <option value="approval_required">Always request approval</option>
 	                  <option value="disabled">Disabled</option>
 	                </select>
@@ -420,7 +446,7 @@
 	                </select>
 	              </label>
 	              <label class="control-field">
-	                <span>Catalog registration</span>
+	                <span>Catalog publishing</span>
 	                <select id="assistantPermissionCatalogRegistration">
 	                  <option value="approval_required">Approval required</option>
 	                  <option value="disabled">Disabled</option>
@@ -434,7 +460,7 @@
 	                </select>
 	              </label>
 	              <label class="control-field">
-	                <span>Job stop</span>
+	                <span>Stop Runs and Candidate tries</span>
 	                <select id="assistantPermissionJobStop">
 	                  <option value="approval_required">Approval required</option>
 	                  <option value="disabled">Disabled</option>
@@ -447,8 +473,8 @@
             <section class="settings-section">
               <div class="settings-section-heading">
                 <div>
-                  <h3>Environment &amp; Secrets</h3>
-                  <p>Store local values that OptPilot may inject into component setup, study execution, or interface launch when configs declare matching envFromHost names.</p>
+                  <h3>Local environment variables</h3>
+                  <p>Store local values that configs may request by name. A new Run binds the current saved revision; changing it later affects new Runs, not that Run.</p>
                 </div>
               </div>
               <div id="environmentVariablesList" class="env-secret-list"></div>
@@ -466,7 +492,7 @@
                   <span class="settings-note">Add each variable here, then save settings to persist the changes.</span>
                 </div>
               </div>
-              <p class="settings-note">Values stay on this machine and are write-only in the browser. Use remove to clear a stored value.</p>
+              <p class="settings-note">Values are write-only in the browser, but OptPilot stores them as plaintext in its local settings file. Run records contain only the variable name and an opaque local revision—not the value. This is not a secret vault. Use remove to clear a stored value.</p>
             </section>
           </div>
 	        </div>
@@ -481,18 +507,137 @@
 	      <section class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="workspaceCleanupTitle">
 	        <header class="modal-header">
 	          <div>
-	            <h2 id="workspaceCleanupTitle">Detach Workspace</h2>
-	            <p id="workspaceCleanupBody">This workspace is no longer attached to any assistant session.</p>
+	            <h2 id="workspaceCleanupTitle">Delete Workspace</h2>
+	            <p id="workspaceCleanupBody">Review what OptPilot will remove.</p>
 	          </div>
 	        </header>
 	        <footer class="modal-actions">
-	          <button id="workspaceCleanupKeepButton" class="ghost-button" type="button">Keep Workspace</button>
-	          <button id="workspaceCleanupRegisterButton" class="ghost-button" type="button">Register...</button>
-	          <button id="workspaceCleanupDeleteButton" class="danger-button" type="button">Delete Draft</button>
+	          <button id="workspaceCleanupKeepButton" class="ghost-button" type="button">Cancel</button>
+	          <button id="workspaceCleanupDeleteButton" class="danger-button" type="button">Delete Workspace</button>
 	        </footer>
 	      </section>
 	    </div>
 
-    <script src="/static/app.js?v=studio-20260702a"></script>
+      <div id="openLocalFolderModal" class="modal-backdrop" hidden>
+        <section id="openLocalFolderDialog" class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="openLocalFolderTitle" aria-describedby="openLocalFolderIntro" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="openLocalFolderTitle">Open local folder</h2>
+              <p id="openLocalFolderIntro">Add an existing folder as editable work. OptPilot will not copy it, and removing the Workspace will not delete the folder.</p>
+            </div>
+          </header>
+          <div class="compact-modal-body">
+            <label class="control-field">
+              <span>Folder path</span>
+              <input id="openLocalFolderPath" type="text" autocomplete="off" placeholder="Path to a local folder" />
+            </label>
+            <label class="control-field">
+              <span>Workspace name <small>(optional)</small></span>
+              <input id="openLocalFolderName" type="text" autocomplete="off" placeholder="Uses the folder name" />
+            </label>
+            <p id="openLocalFolderError" class="error-text" role="alert" hidden></p>
+          </div>
+          <footer class="modal-actions">
+            <button id="openLocalFolderCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="openLocalFolderSubmitButton" class="primary-button" type="button">Open folder</button>
+          </footer>
+        </section>
+      </div>
+
+      <div id="registrationConfirmationModal" class="modal-backdrop" hidden>
+        <section class="registration-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="registrationConfirmationTitle" aria-describedby="registrationConfirmationIntro" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="registrationConfirmationTitle">Publish checked version?</h2>
+              <p id="registrationConfirmationIntro">Confirm the exact files that passed Check and, when supported, Test.</p>
+            </div>
+            <button id="registrationConfirmationCloseButton" class="ghost-button" type="button" aria-label="Close publication confirmation">Close</button>
+          </header>
+          <div class="registration-confirmation-body">
+            <div id="registrationConfirmationBody"></div>
+            <p id="registrationConfirmationError" class="error-text" role="alert" hidden></p>
+          </div>
+          <footer class="modal-actions">
+            <button id="registrationConfirmationCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="registrationConfirmationSubmitButton" class="primary-button" type="button">Publish</button>
+          </footer>
+        </section>
+      </div>
+
+      <div id="candidateTryModal" class="modal-backdrop" hidden>
+        <section id="candidateTryDialog" class="child-run-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="candidateTryTitle" aria-describedby="candidateTryIntro" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="candidateTryTitle">Candidate try options</h2>
+              <p id="candidateTryIntro">Review the available ways to try this Candidate. The source Run and its recorded results will not change.</p>
+            </div>
+            <button id="candidateTryCloseButton" class="ghost-button" type="button" aria-label="Close Candidate try options">Close</button>
+          </header>
+          <div id="candidateTryBody" class="child-run-confirmation-body"></div>
+          <footer id="candidateTryActions" class="modal-actions">
+            <button id="candidateTryCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="candidateTrySubmitButton" class="primary-button" type="button">Run headless</button>
+          </footer>
+        </section>
+      </div>
+
+      <div id="childRunConfirmationModal" class="modal-backdrop" hidden>
+        <section id="childRunConfirmationDialog" class="child-run-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="childRunConfirmationTitle" aria-describedby="childRunConfirmationIntro" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="childRunConfirmationTitle">Evaluate Candidate again?</h2>
+              <p id="childRunConfirmationIntro">Try this exact Candidate again using the same Environment version and trial settings. The source Run will not change.</p>
+            </div>
+            <button id="childRunConfirmationCloseButton" class="ghost-button" type="button" aria-label="Close re-evaluation confirmation">Close</button>
+          </header>
+          <div id="childRunConfirmationBody" class="child-run-confirmation-body"></div>
+          <footer class="modal-actions">
+            <button id="childRunConfirmationCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="childRunConfirmationSubmitButton" class="primary-button" type="button">Start re-evaluation</button>
+          </footer>
+        </section>
+      </div>
+
+      <div id="runStopModal" class="modal-backdrop" hidden>
+        <section id="runStopDialog" class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="runStopTitle" aria-describedby="runStopBody" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="runStopTitle">Stop this Run?</h2>
+              <p>Stopping ends future work. It does not delete results already recorded.</p>
+            </div>
+          </header>
+          <div class="compact-modal-body">
+            <div id="runStopBody"></div>
+            <p id="runStopError" class="error-text" role="alert" hidden></p>
+          </div>
+          <footer class="modal-actions">
+            <button id="runStopCancelButton" class="ghost-button" type="button">Keep Running</button>
+            <button id="runStopSubmitButton" class="danger-button" type="button">Stop Run</button>
+          </footer>
+        </section>
+      </div>
+
+      <div id="interfaceStopModal" class="modal-backdrop" hidden>
+        <section id="interfaceStopDialog" class="interface-stop-modal" role="dialog" aria-modal="true" aria-labelledby="interfaceStopTitle" aria-describedby="interfaceStopBody" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="interfaceStopTitle">Save interface outputs before stopping?</h2>
+              <p>Unsaved outputs are removed when this interface stops. Existing Workspaces are kept.</p>
+            </div>
+          </header>
+          <div class="compact-modal-body">
+            <div id="interfaceStopBody"></div>
+            <p id="interfaceStopError" class="error-text" role="alert" hidden></p>
+          </div>
+          <footer class="modal-actions interface-stop-actions">
+            <button id="interfaceStopCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="interfaceStopDiscardButton" class="danger-button" type="button">Stop without saving</button>
+            <button id="interfaceStopSaveButton" class="primary-button" type="button">Save as Workspace</button>
+          </footer>
+        </section>
+      </div>
+
+    <div id="selectionContentDrawerHost"></div>
+    <script src="/static/app.js?v=studio-20260731j"></script>
   </body>
 </html>

@@ -17,3 +17,4 @@ accepts:
   requires:
     context:
       - candidate.files.editable
+      - methodContext.references

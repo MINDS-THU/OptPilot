@@ -8,6 +8,8 @@ __pycache__/
 .coverage
 htmlcov/
 build/
+!catalog/production_agv_scheduling/environments/production_agv_scheduling/unity_webgl/Build/
+!catalog/production_agv_scheduling/environments/production_agv_scheduling/unity_webgl/Build/**
 dist/
 site/
 resource/*
@@ -17,6 +19,8 @@ catalog/*/runs/
 catalog/*/**/runs/
 catalog/local_package/
 catalog/*/resources/**/.venv/
+catalog/*/resources/**/.runtime/
+catalog/*/resources/**/.uv-cache/
 catalog/*/resources/**/node_modules/
 catalog/*/resources/**/.storage/
 catalog/*/resources/**/.devs_display_sessions/

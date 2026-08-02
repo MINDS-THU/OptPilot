@@ -6,9 +6,10 @@ requests
 rich
 smolagents==1.16.1
 litellm==1.77.0
+tenacity==9.1.4
 pandas
 pillow
 networkx
 numpy
 scipy
-xdevs
+xdevs==3.0.0

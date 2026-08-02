@@ -7,11 +7,10 @@ methods such as LLM file editors.
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from optpilot.candidate_files import CandidateFileStore, CandidateFileMapping
+from optpilot.candidate_staging import CandidateBundleStager, CandidateFileMapping
 
 
 class BaselineFileCopyMethod:
@@ -22,33 +21,29 @@ class BaselineFileCopyMethod:
         self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
             raise ValueError("BaselineFileCopyMethod requires files.editable or files.required candidate context.")
-        self.source_dir = _resolve_source_dir(self.candidate_context)
-        self.source_files = _resolve_source_files(self.target_files, self.candidate_context, self.source_dir)
+        self.source_files = _resolve_source_files(self.target_files, self.candidate_context)
         self._emitted = False
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         if self._emitted or n_candidates <= 0:
             return []
         runtime_context = dict(study_state.get("runtime_context", {}))
-        candidate_store_dir = runtime_context.get("candidate_store_dir")
-        if not candidate_store_dir:
-            raise ValueError("BaselineFileCopyMethod requires runtime_context.candidate_store_dir.")
-        candidate_store = CandidateFileStore(
-            candidate_store_dir,
-            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
-        )
+        candidate_staging_dir = runtime_context.get("candidate_staging_dir")
+        if not candidate_staging_dir:
+            raise ValueError("BaselineFileCopyMethod requires runtime_context.candidate_staging_dir.")
+        candidate_stager = CandidateBundleStager(candidate_staging_dir)
         self._emitted = True
         return [
-            candidate_store.store_files(
+            candidate_stager.stage_files(
                 [CandidateFileMapping(source=self.source_files[path], path=path) for path in self.target_files],
-                candidate_id=f"baseline-{uuid.uuid4().hex[:12]}",
+                candidate_id=f"{self.definition['id']}-baseline",
                 lineage={"parents": [], "source": "baseline_source_tree"},
                 generator={
                     "method_id": self.definition["id"],
                     "strategy": "baseline_file_copy",
                     "owned_by": "example",
+                    "summary": "Unmodified source files declared by the environment.",
                 },
-                metadata={"summary": "Unmodified source files declared by the environment."},
             )
         ]
 
@@ -65,42 +60,31 @@ def _editable_paths_from_context(candidate_context: Dict[str, Any]) -> List[str]
     return [str(path) for path in files.get("required", []) or []]
 
 
-def _resolve_source_dir(candidate_context: Dict[str, Any]) -> Path | None:
-    files = candidate_context.get("files", {})
-    root = str(files.get("root", "."))
-    for entry in candidate_context.get("workspace", {}).get("copy", []) or []:
-        if str(entry.get("to", ".")) == root:
-            source_dir = Path(str(entry["from"])).resolve()
-            if source_dir.is_dir():
-                return source_dir
-    return None
-
-
 def _resolve_source_files(
     target_files: List[str],
     candidate_context: Dict[str, Any],
-    source_dir: Path | None,
 ) -> Dict[str, Path]:
-    copy_entries = candidate_context.get("workspace", {}).get("copy", []) or []
+    method_context = candidate_context.get("methodContext", {})
+    references = (
+        method_context.get("references", [])
+        if isinstance(method_context, dict)
+        else []
+    )
+    templates = {
+        str(reference.get("name")): Path(str(reference.get("path")))
+        for reference in references
+        if isinstance(reference, dict)
+        and reference.get("type") == "candidate_template"
+        and reference.get("name")
+        and reference.get("path")
+    }
     source_files: Dict[str, Path] = {}
     for relative_path in target_files:
-        source = source_dir / relative_path if source_dir is not None else _source_for_workspace_file(relative_path, copy_entries)
-        if source is None or not source.exists():
-            raise FileNotFoundError(f"Could not resolve source for editable file {relative_path!r}.")
+        source = templates.get(relative_path)
+        if source is None or not source.is_file():
+            raise FileNotFoundError(
+                "BaselineFileCopyMethod requires one candidate_template "
+                f"methodContext reference named {relative_path!r}."
+            )
         source_files[relative_path] = source
     return source_files
-
-
-def _source_for_workspace_file(relative_path: str, copy_entries: List[Dict[str, Any]]) -> Path | None:
-    for entry in copy_entries:
-        source = Path(str(entry.get("from", ""))).resolve()
-        destination = str(entry.get("to", ""))
-        if destination == relative_path and source.is_file():
-            return source
-        if source.is_dir():
-            try:
-                rel = Path(relative_path).relative_to(destination)
-            except ValueError:
-                continue
-            return source / rel
-    return None

@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react
 import * as d3 from 'd3';
 import { GraphNode, GraphLink } from '../types';
 import { ZoomIn, ZoomOut, Move } from 'lucide-react';
+import { hierarchyDepthById } from '../services/graphHierarchyService.js';
 
 interface Props {
   nodes: GraphNode[];
@@ -44,8 +45,6 @@ const COLORS = {
   text: '#1e293b'
 };
 
-const getDepth = (id: string) => id.split('/').length;
-
 export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({ 
     nodes, 
     links, 
@@ -64,6 +63,57 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
   
   // Ref to hold the current working set of nodes (with mutable x,y)
   const visualNodesRef = useRef<any[]>([]);
+  const lastFitKeyRef = useRef('');
+  const pendingFitKeyRef = useRef<string | null>(null);
+  const fitFrameRef = useRef<number | null>(null);
+
+  const fitGraphToViewport = (): boolean => {
+      const container = containerRef.current;
+      const group = gSelection.current?.node();
+      const svg = svgSelection.current;
+      const zoom = zoomBehavior.current;
+      if (!container || !group || !svg || !zoom) return false;
+
+      const viewportWidth = container.clientWidth;
+      const viewportHeight = container.clientHeight;
+      if (viewportWidth <= 0 || viewportHeight <= 0) return false;
+
+      const bounds = group.getBBox();
+      if (bounds.width <= 0 || bounds.height <= 0) return false;
+
+      const padding = Math.max(28, Math.min(viewportWidth, viewportHeight) * 0.07);
+      const availableWidth = Math.max(1, viewportWidth - padding * 2);
+      const availableHeight = Math.max(1, viewportHeight - padding * 2);
+      const scale = Math.max(
+          0.1,
+          Math.min(1.25, availableWidth / bounds.width, availableHeight / bounds.height)
+      );
+      const centerX = bounds.x + bounds.width / 2;
+      const centerY = bounds.y + bounds.height / 2;
+      const transform = d3.zoomIdentity
+          .translate(viewportWidth / 2 - centerX * scale, viewportHeight / 2 - centerY * scale)
+          .scale(scale);
+
+      svg.call(zoom.transform, transform);
+      return true;
+  };
+
+  const scheduleFitToViewport = (attempt = 0) => {
+      if (fitFrameRef.current !== null) {
+          window.cancelAnimationFrame(fitFrameRef.current);
+      }
+      fitFrameRef.current = window.requestAnimationFrame(() => {
+          fitFrameRef.current = null;
+          if (fitGraphToViewport()) {
+              if (pendingFitKeyRef.current) {
+                  lastFitKeyRef.current = pendingFitKeyRef.current;
+                  pendingFitKeyRef.current = null;
+              }
+              return;
+          }
+          if (attempt < 4) scheduleFitToViewport(attempt + 1);
+      });
+  };
 
   // Expose Export Function
   useImperativeHandle(ref, () => ({
@@ -129,6 +179,26 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
     svgSelection.current.call(zoomBehavior.current);
   }, []);
 
+  // The Structure view can first render while its tab is still being sized.
+  // Retry a pending fit once the container has usable dimensions, without
+  // re-centering after the user has deliberately panned or zoomed the graph.
+  useEffect(() => {
+    const container = containerRef.current;
+    const observer = container && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          if (pendingFitKeyRef.current) scheduleFitToViewport();
+        })
+      : null;
+    if (container && observer) observer.observe(container);
+    return () => {
+      observer?.disconnect();
+      if (fitFrameRef.current !== null) {
+        window.cancelAnimationFrame(fitFrameRef.current);
+        fitFrameRef.current = null;
+      }
+    };
+  }, []);
+
   // Main Render Logic
   useEffect(() => {
     if (!gSelection.current || !svgRef.current) return;
@@ -139,13 +209,14 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
     // Convert props to mutable D3 objects.
     // Important: We perform the sort HERE (Parents -> Children) so DOM order is correct (Children on top).
     // This avoids needing to call .sort() or .raise() during drag interactions.
+    const hierarchyDepths = hierarchyDepthById(nodes);
     const simNodes = nodes.map(n => ({
           ...n,
           x: n.x ?? width/2,
           y: n.y ?? height/2,
           visualWidth: n.expanded ? DEFAULT_EXPANDED_WIDTH : ATOMIC_WIDTH, 
           visualHeight: n.expanded ? DEFAULT_EXPANDED_HEIGHT : ATOMIC_HEIGHT
-    })).sort((a, b) => getDepth(a.id) - getDepth(b.id));
+    })).sort((a, b) => (hierarchyDepths.get(a.id) || 0) - (hierarchyDepths.get(b.id) || 0));
 
     visualNodesRef.current = simNodes;
     const simLinks = links.map(l => ({ ...l }));
@@ -155,6 +226,33 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
     
     // 3. Render
     render();
+
+    // Fit only when the graph's structure changes. Position-only updates from
+    // dragging and selection changes must not undo the user's current view.
+    const graphFitKey = [
+      ...nodes.map(node => [
+        node.id,
+        node.name,
+        node.className,
+        node.parent || '',
+        node.type,
+        node.expanded ? 'expanded' : 'collapsed',
+        ...(node.children || []),
+      ].join(':')),
+      ...links.map(link => [
+        link.id,
+        String(link.source),
+        link.sourcePort,
+        String(link.target),
+        link.targetPort,
+        link.couplingType || '',
+        String(link.multiplicity || 1),
+      ].join(':')),
+    ].sort().join('|');
+    if (graphFitKey && graphFitKey !== lastFitKeyRef.current) {
+      pendingFitKeyRef.current = graphFitKey;
+      scheduleFitToViewport();
+    }
 
     function updateGeometry() {
         // Build hierarchy map
@@ -168,7 +266,9 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
 
         // Bottom-up traversal for sizing (Deepest first)
         // We use a separate sorted array for calculation logic
-        const calcOrder = [...visualNodesRef.current].sort((a: any, b: any) => getDepth(b.id) - getDepth(a.id));
+        const calcOrder = [...visualNodesRef.current].sort((a: any, b: any) => (
+            (hierarchyDepths.get(b.id) || 0) - (hierarchyDepths.get(a.id) || 0)
+        ));
 
         calcOrder.forEach((n: any) => {
             if (n.expanded && n.type === 'coupled') {
@@ -274,6 +374,35 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
              return `M${p1.x},${p1.y} C${p1.x + p1.dir*strength},${p1.y} ${p2.x + p2.dir*strength},${p2.y} ${p2.x},${p2.y}`;
         });
       link.exit().remove();
+
+      const linkLabel = gSelection.current!.selectAll('.link-label').data(simLinks, (d: any) => d.id);
+      const linkLabelEnter = linkLabel.enter().insert('text', '.node')
+        .attr('class', 'link-label')
+        .attr('text-anchor', 'middle')
+        .attr('font-size', 10)
+        .attr('font-weight', 600)
+        .attr('fill', '#64748b')
+        .attr('paint-order', 'stroke')
+        .attr('stroke', '#ffffff')
+        .attr('stroke-width', 3);
+      linkLabelEnter.merge(linkLabel as any)
+        .text((d: any) => {
+          const parts = [];
+          if (d.couplingType) parts.push(String(d.couplingType));
+          if (Number(d.multiplicity || 1) > 1) parts.push(`×${Number(d.multiplicity)}`);
+          return parts.join(' ');
+        })
+        .attr('x', (d: any) => {
+          const source = visualNodesRef.current.find(n => n.id === d.source.id || n.id === d.source);
+          const target = visualNodesRef.current.find(n => n.id === d.target.id || n.id === d.target);
+          return source && target ? (source.x + target.x) / 2 : 0;
+        })
+        .attr('y', (d: any) => {
+          const source = visualNodesRef.current.find(n => n.id === d.source.id || n.id === d.source);
+          const target = visualNodesRef.current.find(n => n.id === d.target.id || n.id === d.target);
+          return source && target ? (source.y + target.y) / 2 - 5 : 0;
+        });
+      linkLabel.exit().remove();
     }
 
     function renderNodes() {
@@ -414,7 +543,7 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
       <div className="absolute top-4 right-4 flex flex-col gap-2 z-10 bg-white p-2 rounded shadow">
          <button onClick={() => svgSelection.current?.transition().duration(750).call(zoomBehavior.current!.scaleBy, 1.2)} className="p-2 hover:bg-slate-100 rounded"><ZoomIn size={20} /></button>
          <button onClick={() => svgSelection.current?.transition().duration(750).call(zoomBehavior.current!.scaleBy, 0.8)} className="p-2 hover:bg-slate-100 rounded"><ZoomOut size={20} /></button>
-         <button onClick={() => svgSelection.current?.transition().duration(750).call(zoomBehavior.current!.transform, d3.zoomIdentity)} className="p-2 hover:bg-slate-100 rounded"><Move size={20} /></button>
+         <button type="button" title="Fit structure" aria-label="Fit structure" onClick={fitGraphToViewport} className="p-2 hover:bg-slate-100 rounded"><Move size={20} /></button>
       </div>
       <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing">
         <defs>

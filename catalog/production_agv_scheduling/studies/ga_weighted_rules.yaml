@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: production-agv-ga-weighted-rules
+description: Paper-style GA search from the 64 one-hot weighted-rule policies through ten generations.
+tags: [production, agv, baseline, ga, files]
+
+environmentConfig: ../environments/production_agv_scheduling/environment_meta.yaml
+methodConfig: ../methods/evolutionary_rule_search/method_ga.yaml
+
+objective:
+  metric: stability_fitness
+  direction: maximize
+  secondaryMetrics: [mean_total_score, std_total_score, min_total_score, max_total_score]
+
+budget:
+  maxTrials: 704
+
+execution:
+  parallelism: 8
+  timeoutSeconds: 3600
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 42

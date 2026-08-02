@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -40,8 +41,18 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
         metrics_path.write_text(json.dumps(result["metrics"], indent=2, sort_keys=True), encoding="utf-8")
         output_files.extend(
             [
-                {"type": "json", "name": f"schedule_{case['id']}", "path": str(schedule_path)},
-                {"type": "json", "name": f"job_shop_metrics_{case['id']}", "path": str(metrics_path)},
+                _json_output(
+                    declaration_id=f"job-shop-schedule-{case['id']}",
+                    name=f"schedule_{case['id']}",
+                    path=schedule_path.name,
+                    metadata={"case_id": case["id"], "category": "schedule"},
+                ),
+                _json_output(
+                    declaration_id=f"job-shop-metrics-{case['id']}",
+                    name=f"job_shop_metrics_{case['id']}",
+                    path=metrics_path.name,
+                    metadata={"case_id": case["id"], "category": "metrics"},
+                ),
             ]
         )
 
@@ -66,7 +77,14 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
         ),
         encoding="utf-8",
     )
-    output_files.append({"type": "json", "name": "job_shop_metrics", "path": str(summary_path)})
+    output_files.append(
+        _json_output(
+            declaration_id="job-shop-metrics-summary",
+            name="job_shop_metrics",
+            path=summary_path.name,
+            metadata={"category": "metrics_summary"},
+        )
+    )
     return {
         "status": "success",
         "metric_values": aggregated_metrics,
@@ -77,6 +95,25 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
             "case_count": len(case_results),
             "cases": [result["id"] for result in case_results],
         },
+    }
+
+
+def _json_output(
+    *,
+    declaration_id: str,
+    name: str,
+    path: str,
+    metadata: JsonDict,
+) -> JsonDict:
+    """Return one portable artifact declaration understood by Realm attempts."""
+
+    return {
+        "declaration_id": declaration_id,
+        "name": name,
+        "path": path,
+        "kind": "file",
+        "media_type": "application/json",
+        "metadata": metadata,
     }
 
 
@@ -147,14 +184,20 @@ def _extract_solution_schedule(candidate_runtime: JsonDict, case_id: str) -> Lis
     return list(operations)
 
 
-def _load_cases(settings: JsonDict) -> List[JsonDict]:
+def _load_cases(settings: Mapping[str, Any]) -> List[JsonDict]:
     cases = settings.get("cases")
-    if not isinstance(cases, list) or not cases:
-        raise ValueError("Job-shop evaluator settings.cases must be a non-empty list.")
+    if (
+        isinstance(cases, (str, bytes))
+        or not isinstance(cases, Sequence)
+        or not cases
+    ):
+        raise ValueError(
+            "Job-shop evaluator settings.cases must be a non-empty sequence."
+        )
     loaded = []
     base_dir = Path(__file__).resolve().parent
     for index, case in enumerate(cases):
-        if not isinstance(case, dict):
+        if not isinstance(case, Mapping):
             raise TypeError(f"Job-shop evaluator settings.cases[{index}] must be an object.")
         case_id = str(case.get("id") or "")
         if not case_id:
@@ -169,7 +212,7 @@ def _load_cases(settings: JsonDict) -> List[JsonDict]:
                 payload = yaml.safe_load(handle) or {}
         else:
             raise ValueError(f"Job-shop evaluator settings.cases[{index}] must define path or payload.")
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             raise TypeError(f"Job-shop case {case_id!r} must load to an object.")
         loaded.append({"id": case_id, "payload": dict(payload)})
     return loaded

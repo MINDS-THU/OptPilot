@@ -5,6 +5,7 @@ from smolagents import Tool
 from litellm import completion
 from ...utils import get_content_strict
 import ast
+from src.llm_resilience import litellm_retry_options
 
 # ==============================================================================
 # Refiner Prompt: 核心在于 "Conservation" (守恒律)
@@ -124,7 +125,8 @@ Please CAREFULLY make sure the code do not have this error. Ensure valid Python 
                         {"role": "user", "content": current_user_content}
                     ],
                     # 重试时稍微增加一点温度，避免陷入死循环，但保持在低位
-                    temperature=0.05 if attempt == 0 else 0.1, 
+                    temperature=0.05 if attempt == 0 else 0.1,
+                    **litellm_retry_options(),
                 )
                 
                 new_code_raw = get_content_strict(response)

@@ -23,6 +23,15 @@ export const SessionSelectorPanel: React.FC<Props> = ({
 }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
+  const activeStatuses: SessionInfo['status'][] = ['queued', 'running', 'waiting_for_user', 'cancelling'];
+  const statusLabels: Record<SessionInfo['status'], string> = {
+    idle: 'Ready',
+    queued: 'Waiting',
+    running: 'Building',
+    waiting_for_user: 'Review needed',
+    cancelling: 'Stopping',
+    failed: 'Needs attention'
+  };
 
   const formatTime = (value: string) => {
     const timestamp = Date.parse(value);
@@ -58,12 +67,12 @@ export const SessionSelectorPanel: React.FC<Props> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <Rows3 size={16} />
-            Sessions
+            History
           </div>
           <button
             onClick={onRefreshSessions}
             className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-blue-600"
-            title="Refresh Sessions"
+            title="Refresh history"
           >
             <RefreshCw size={14} />
           </button>
@@ -74,15 +83,15 @@ export const SessionSelectorPanel: React.FC<Props> = ({
         <button
           onClick={onCreateSession}
           className="flex w-full items-center justify-center gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100"
-          title="Create Session"
+          title="Start a new simulation design"
         >
           <Plus size={15} />
-          New Session
+          New simulation
         </button>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase text-slate-500">Sessions</span>
+            <span className="text-xs font-semibold uppercase text-slate-500">Design history</span>
             <span className="text-[10px] text-slate-400">Recent first</span>
           </div>
           {sessions.length > 0 ? sessions.map(session => {
@@ -135,7 +144,7 @@ export const SessionSelectorPanel: React.FC<Props> = ({
                             submitRename();
                           }}
                           className="rounded p-1 text-slate-500 hover:bg-white hover:text-blue-600"
-                          title="Save Session Name"
+                          title="Save design name"
                         >
                           <Check size={13} />
                         </button>
@@ -158,7 +167,7 @@ export const SessionSelectorPanel: React.FC<Props> = ({
                             startEditing(session);
                           }}
                           className="rounded p-1 text-slate-400 hover:bg-white hover:text-blue-600"
-                          title="Rename Session"
+                          title="Rename design"
                         >
                           <Pencil size={12} />
                         </button>
@@ -167,9 +176,9 @@ export const SessionSelectorPanel: React.FC<Props> = ({
                             event.stopPropagation();
                             onDeleteSession(session);
                           }}
-                          disabled={session.status !== 'idle'}
+                          disabled={activeStatuses.includes(session.status)}
                           className="rounded p-1 text-slate-400 hover:bg-white hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
-                          title={session.status === 'idle' ? 'Delete Session' : 'Cannot delete an active session'}
+                          title={activeStatuses.includes(session.status) ? 'Cannot delete an active design' : 'Delete design'}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -178,26 +187,23 @@ export const SessionSelectorPanel: React.FC<Props> = ({
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${
                       session.status === 'idle'
                         ? 'bg-slate-200 text-slate-600'
+                        : session.status === 'failed'
+                          ? 'bg-red-100 text-red-700'
                         : 'bg-amber-100 text-amber-700'
                     }`}>
-                      {session.status}
+                      {statusLabels[session.status]}
                     </span>
                   </div>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-2 text-slate-500">
-                  <div>Projects: {session.project_count}</div>
+                  <div>Simulations: {session.project_count}</div>
                   <div>Updated: {formatTime(session.updated_at)}</div>
                 </div>
-                {session.workspace_path && (
-                  <div className="mt-1 truncate text-[10px] text-slate-400" title={session.workspace_path}>
-                    {session.is_current_workspace ? 'Current workspace' : session.workspace_path}
-                  </div>
-                )}
               </div>
             );
           }) : (
             <div className="rounded border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
-              Select an existing session or create a new one to start working.
+              Start a new simulation, then describe what you want the agent to build.
             </div>
           )}
         </div>

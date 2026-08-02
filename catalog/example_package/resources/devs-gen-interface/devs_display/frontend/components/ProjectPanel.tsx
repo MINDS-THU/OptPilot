@@ -28,13 +28,13 @@ export const ProjectPanel: React.FC<Props> = ({
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
           <Folder size={16} />
-          Projects
+          Simulations
         </label>
         <button
           onClick={onRefreshProjects}
           disabled={!currentSessionId}
           className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
-          title="Refresh Project List"
+          title="Refresh simulations"
         >
           <RefreshCw size={14} />
         </button>
@@ -42,7 +42,7 @@ export const ProjectPanel: React.FC<Props> = ({
 
       {!currentSessionId && (
         <p className="text-xs text-slate-500">
-          Select or create a session before choosing projects.
+          Start or select a design before choosing simulations.
         </p>
       )}
 
@@ -52,7 +52,7 @@ export const ProjectPanel: React.FC<Props> = ({
         disabled={!currentSessionId}
         className="w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
       >
-        <option value="">-- Select Project --</option>
+        <option value="">Choose a simulation</option>
         {projects.map(project => (
           <option key={project.project_id} value={project.project_id}>
             {project.display_name} {project.project_id.startsWith('local-') ? '(Local)' : ''}

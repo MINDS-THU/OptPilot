@@ -5,17 +5,24 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
-import shutil
 import subprocess
 import sys
 import threading
 import time
-import traceback
 import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .attempt_semantics import (
+    PUBLIC_OBSERVATION_STATUSES,
+    error_payload as _error_payload,
+    exception_evaluation_result as _exception_evaluation_result,
+    status_for_exception as _status_for_exception,
+    unsupported_observation_status_result as _unsupported_observation_status_result,
+    validate_environment_result as _validate_environment_result,
+    validation_exception_report as _validation_exception_report,
+)
 from .candidate_materialization import MaterializationRecord, ValidationReport
 from .container_utils import build_container_image, container_pythonpath, dedupe_mounts, network_args
 from .models import Observation, ResourceProfile, SandboxSpec, TrialSpec, utc_now_iso
@@ -119,7 +126,7 @@ class Evaluator:
         }
         try:
             result = self.environment_adapter.evaluate(materialization_record.runtime_spec, context)
-            _validate_environment_result(result)
+            result = _validate_environment_result(result)
         except Exception as exc:
             result = _exception_evaluation_result(exc, "environment_evaluation", workspace)
         elapsed = time.monotonic() - started
@@ -185,7 +192,6 @@ class Evaluator:
         primary_metric = trial_spec.objective["primaryMetric"]["name"]
         output_files = list(materialization_record.output_files)
         output_files.extend(result.get("output_files", []))
-        output_files = self._retain_output_files(trial_spec.trial_id, output_files)
         event_summary = dict(result.get("event_summary", {}))
         event_summary.setdefault("primary_metric", primary_metric)
         event_summary["materialization"] = materialization_record.metadata
@@ -220,31 +226,6 @@ class Evaluator:
                 "generator": dict(trial_spec.candidate.get("generator", {})),
             },
         )
-
-    def _retain_output_files(self, trial_id: str, output_files: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        if self.study_spec.evidence.get("outputFileStorage", "reference") != "copy":
-            return output_files
-        retained = []
-        destination_root = self.evidence_store.run_dir / "evidence_files" / trial_id
-        for index, output_file in enumerate(output_files):
-            item = dict(output_file)
-            source_value = item.get("path") or item.get("contentRef")
-            if not source_value:
-                retained.append(item)
-                continue
-            source = Path(str(source_value))
-            if not source.exists() or not source.is_file():
-                retained.append(item)
-                continue
-            relative_name = _safe_output_file_copy_name(source.name, index)
-            destination = destination_root / relative_name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            item["originalPath"] = str(source)
-            item["copiedPath"] = str(destination)
-            item["path"] = str(destination)
-            retained.append(item)
-        return retained
 
     def _invalid_observation(
         self,
@@ -792,55 +773,6 @@ def _aggregation_weights(weights: Any, metric_name: str, count: int) -> List[flo
     return [1.0] * count
 
 
-def _validation_exception_report(exc: Exception) -> ValidationReport:
-    return ValidationReport(
-        accepted=False,
-        errors=[str(exc)],
-        metadata={"exception": _error_payload(exc, "validation")},
-    )
-
-
-def _exception_evaluation_result(exc: Exception, phase: str, workspace: Path) -> Dict[str, Any]:
-    status = _status_for_exception(exc)
-    return {
-        "status": status,
-        "metric_values": {},
-        "constraint_results": {},
-        "output_files": _failure_output_files(workspace),
-        "event_summary": {
-            "error": _error_payload(exc, phase),
-        },
-    }
-
-
-def _validate_environment_result(result: Any) -> None:
-    if not isinstance(result, dict):
-        raise TypeError("Environment evaluator result must be a JSON-like object.")
-    status = result.get("status", "success")
-    if not isinstance(status, str):
-        raise TypeError("Environment evaluator result status must be a string.")
-    metric_values = result.get("metric_values", {})
-    if not isinstance(metric_values, dict):
-        raise TypeError("Environment evaluator result metric_values must be a dict.")
-    for metric_name, metric_value in metric_values.items():
-        if not isinstance(metric_name, str):
-            raise TypeError("Environment evaluator metric names must be strings.")
-        if not isinstance(metric_value, (int, float, bool)):
-            raise TypeError(f"Environment evaluator metric {metric_name!r} must be numeric or boolean.")
-    constraint_results = result.get("constraint_results", {})
-    if not isinstance(constraint_results, dict):
-        raise TypeError("Environment evaluator result constraint_results must be a dict.")
-    output_files = result.get("output_files", [])
-    if not isinstance(output_files, list):
-        raise TypeError("Environment evaluator result output_files must be a list.")
-    for index, output_file in enumerate(output_files):
-        if not isinstance(output_file, dict):
-            raise TypeError(f"Environment evaluator output_file entry {index} must be an object.")
-    event_summary = result.get("event_summary", {})
-    if not isinstance(event_summary, dict):
-        raise TypeError("Environment evaluator result event_summary must be a dict.")
-
-
 def _aggregate_status(statuses) -> str:
     if not statuses:
         return "failed"
@@ -850,35 +782,6 @@ def _aggregate_status(statuses) -> str:
     if len(non_success) == 1 and "success" not in statuses:
         return next(iter(non_success))
     return "partial"
-
-
-def _status_for_exception(exc: Exception) -> str:
-    if isinstance(exc, subprocess.TimeoutExpired):
-        return "timeout"
-    return "failed"
-
-
-def _error_payload(exc: Exception, phase: str) -> Dict[str, Any]:
-    return {
-        "phase": phase,
-        "type": type(exc).__name__,
-        "message": str(exc),
-        "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__, limit=8)),
-    }
-
-
-def _failure_output_files(workspace: Path) -> List[Dict[str, Any]]:
-    output_files = []
-    for name, file_type, path in [
-        ("cli_candidate_input", "json", workspace / "cli_candidate.json"),
-        ("cli_settings_input", "json", workspace / "cli_settings.json"),
-        ("cli_result_output", "json", workspace / "cli_result.json"),
-        ("cli_stdout", "log", workspace / "cli_stdout.log"),
-        ("cli_stderr", "log", workspace / "cli_stderr.log"),
-    ]:
-        if path.exists():
-            output_files.append({"type": file_type, "name": name, "path": str(path)})
-    return output_files
 
 
 def _worker_output_files(paths: Dict[str, Path]) -> List[Dict[str, Any]]:
@@ -1030,9 +933,3 @@ def _worker_process_env(config: Dict[str, Any]) -> Dict[str, str]:
         pythonpath_entries.append(existing_pythonpath)
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
     return env
-
-
-def _safe_output_file_copy_name(name: str, index: int) -> str:
-    safe = "".join(char if char.isalnum() or char in {"-", "_", "."} else "_" for char in name)
-    safe = safe.strip("._") or "output_file"
-    return f"{index:04d}-{safe}"

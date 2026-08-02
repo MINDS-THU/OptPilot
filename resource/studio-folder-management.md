@@ -328,7 +328,8 @@ Default mounts:
   explicitly created or opened it as editable
 - catalog asset inspection: catalog folder mounted read-only
 - run artifact inspection: run directory mounted read-only
-- runtime home/cache: mounted under `.optpilot-ui/runtime/ws_<id>/`
+- runtime home/cache: mounted from the private per-Studio runtime namespace
+  under the OS-local Realm
 
 The assistant must still respect Studio permissions:
 

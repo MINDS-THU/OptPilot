@@ -1,0 +1,51 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: production-agv-scheduling-variable-arrivals
+description: Ten-replication robustness evaluation with order intervals drawn uniformly from 5 to 15 minutes.
+tags: [production, agv, scheduling, files, simulation, robustness]
+
+interface:
+  launchProfiles:
+    -
+      id: default
+      label: Factory Simulation
+      description: Explore the compiled 3D factory visualization with a local simulation.
+      command: [python, interface_server.py, --host, 0.0.0.0, --port, "8080"]
+      cwd: .
+      runtime: {sandbox: process}
+      grants: {network: disabled, envFromHost: [], secretsFromHost: []}
+      resources: {cpu: 2, memoryMiB: 2048, gpus: 0}
+      timeoutSeconds: 3600
+      presentation: {kind: web, port: 8080, readyPath: /ready, readyTimeoutSeconds: 60}
+      accepts: {selectionKinds: [candidate], mediaTypes: [application/vnd.optpilot.candidate+json]}
+    -
+      id: candidate
+      label: Try Candidate in 3D
+      description: Replay one exact retained scheduling policy in the compiled 3D factory visualization.
+      command: [python, interface_server.py, --host, 0.0.0.0, --port, "8080"]
+      cwd: .
+      runtime:
+        sandbox: container
+        container:
+          image: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+      grants: {network: disabled, envFromHost: [], secretsFromHost: []}
+      resources: {cpu: 2, memoryMiB: 2048, gpus: 0}
+      timeoutSeconds: 3600
+      presentation: {kind: web, port: 8080, readyPath: /ready, readyTimeoutSeconds: 60}
+      accepts: {selectionKinds: [candidate], mediaTypes: [application/vnd.optpilot.candidate+json]}
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: [.]
+  timeoutSeconds: 1800
+  settings: {time_unit: minutes, simulation_horizon: 500.0, time_step: 0.5, disable_faults: true, order_interval: [5.0, 15.0], fault_interval: [120.0, 180.0], fault_duration: [20.0, 60.0], repeat_runs: 10, seeds: [123, 124, 125, 126, 127, 128, 129, 130, 131, 132], stability_lambda: 0.35}
+candidate: {format: files, description: Self-contained executable production-and-AGV scheduling policy., materialize: {root: candidate}, files: {editable: [{path: scheduler.py}, {path: param_estimator.py}], required: [scheduler.py, param_estimator.py], allow: [scheduler.py, param_estimator.py, "policy/**"], deny: ["**/__pycache__/**", "**/*.pyc"]}}
+methodContext:
+  instructions: [prompts/policy_system.md]
+  references:
+    - {name: scheduler.py, path: initial/scheduler.py, type: candidate_template, description: Baseline scheduler source.}
+    - {name: param_estimator.py, path: initial/param_estimator.py, type: candidate_template, description: Baseline parameter estimator.}
+    - {name: factory_description, path: prompts/factory_description.md, type: markdown, description: Factory snapshot command and scoring contract.}
+    - {name: database_description, path: prompts/database_description.md, type: markdown, description: SQLite trace schema.}
+    - {name: replay_settings, path: settings/variable_arrivals.json, type: json, description: Exact deterministic replay settings.}
+metrics: {source: return, keys: [total_score, mean_total_score, std_total_score, min_total_score, max_total_score, stability_fitness, worst_seed, worst_total_score, replication_count, mean_efficiency_score, mean_quality_cost_score, mean_agv_score, mean_order_completion, mean_production_cycle, mean_device_utilization, mean_first_pass_rate, mean_cost_efficiency, mean_charge_strategy, mean_energy_efficiency, mean_utilization, mean_policy_fallback_replans, policy_fallback_replication_count]}

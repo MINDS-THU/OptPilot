@@ -5,10 +5,11 @@ import json
 import os
 import time
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .schemas import (
     AuthLoginRequest,
@@ -17,9 +18,11 @@ from .schemas import (
     CloneProjectsRequest,
     CreateSessionRequest,
     GraphParseRequest,
+    InteractionResolveRequest,
     LegacyChatRequest,
     LegacyUploadRequest,
     ParseModelRequest,
+    SimulationRunRequest,
     UpdateSessionRequest,
     UploadProjectRequest,
 )
@@ -207,6 +210,8 @@ def create_app(service) -> FastAPI:
             return {"project": service.upload_project(session_id, request.display_name, request.files)}
         except KeyError:
             raise HTTPException(status_code=404, detail="Session not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/sessions/{session_id}/projects:clone")
     def clone_projects_route(session_id: str, request: CloneProjectsRequest):
@@ -231,6 +236,152 @@ def create_app(service) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Project files not found")
 
+    @app.get("/sessions/{session_id}/projects/{project_id}/simulation")
+    def get_project_simulation_route(session_id: str, project_id: str):
+        try:
+            return service.get_project_simulation(session_id, project_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation not found")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/sessions/{session_id}/projects/{project_id}/simulation-runs")
+    def start_project_simulation_route(
+        session_id: str,
+        project_id: str,
+        request: SimulationRunRequest,
+    ):
+        try:
+            return {
+                "execution": service.start_simulation_run(
+                    session_id,
+                    project_id,
+                    arguments=request.arguments,
+                )
+            }
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation not found")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.post("/sessions/{session_id}/projects/{project_id}/simulation:validate")
+    def validate_project_simulation_route(
+        session_id: str,
+        project_id: str,
+        request: SimulationRunRequest,
+    ):
+        try:
+            return {
+                "execution": service.start_simulation_validation(
+                    session_id,
+                    project_id,
+                    arguments=request.arguments,
+                )
+            }
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation not found")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get(
+        "/sessions/{session_id}/projects/{project_id}/simulation-runs/{execution_id}"
+    )
+    def get_project_simulation_run_route(
+        session_id: str, project_id: str, execution_id: str
+    ):
+        try:
+            return {
+                "execution": service.get_simulation_run(
+                    session_id, project_id, execution_id
+                )
+            }
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation run not found")
+
+    @app.get(
+        "/sessions/{session_id}/projects/{project_id}/simulation-runs/"
+        "{execution_id}/result-files/{file_path:path}"
+    )
+    def get_project_simulation_result_file_route(
+        session_id: str,
+        project_id: str,
+        execution_id: str,
+        file_path: str,
+        download: bool = False,
+    ):
+        try:
+            result = service.get_simulation_result_file(
+                session_id,
+                project_id,
+                execution_id,
+                file_path,
+                download=download,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation result not found")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Simulation result is unavailable")
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc))
+        except TypeError as exc:
+            raise HTTPException(status_code=415, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        if not download:
+            return JSONResponse(
+                content=result,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        filename = file_path.rsplit("/", 1)[-1]
+        fallback_name = "".join(
+            character
+            if character.isascii() and (character.isalnum() or character in "._-")
+            else "_"
+            for character in filename
+        ) or "simulation-result"
+        encoded_name = quote(filename, safe="")
+        return Response(
+            content=result["content"],
+            media_type=result["media_type"],
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    f'attachment; filename="{fallback_name}"; '
+                    f"filename*=UTF-8''{encoded_name}"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post(
+        "/sessions/{session_id}/projects/{project_id}/simulation-runs/{execution_id}/stop"
+    )
+    def stop_project_simulation_run_route(
+        session_id: str, project_id: str, execution_id: str
+    ):
+        try:
+            return {
+                "execution": service.stop_simulation_run(
+                    session_id, project_id, execution_id
+                )
+            }
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Simulation run not found")
+
     @app.get("/sessions/{session_id}/projects/{project_id}/graph")
     def get_project_graph_route(session_id: str, project_id: str, start_if_missing: bool = True):
         try:
@@ -251,6 +402,8 @@ def create_app(service) -> FastAPI:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Session or project not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
 
@@ -270,10 +423,13 @@ def create_app(service) -> FastAPI:
                 request.active_project_id,
                 request.include_project_context,
                 request.idempotency_key,
+                request.generation_mode,
             )
             return {"request": chat_request, "user_message": user_message}
         except KeyError:
             raise HTTPException(status_code=404, detail="Session or project not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
 
@@ -284,12 +440,83 @@ def create_app(service) -> FastAPI:
         except KeyError:
             raise HTTPException(status_code=404, detail="Request not found")
 
+    @app.post(
+        "/sessions/{session_id}/requests/{request_id}/interactions/"
+        "{interaction_id}:resolve"
+    )
+    def resolve_request_interaction_route(
+        session_id: str,
+        request_id: str,
+        interaction_id: str,
+        request: InteractionResolveRequest,
+    ):
+        try:
+            chat_request, interaction = service.resolve_interaction(
+                session_id=session_id,
+                request_id=request_id,
+                interaction_id=interaction_id,
+                action=request.action,
+                artifact_digest=request.artifact_digest,
+                answers=request.answers,
+                feedback=request.feedback,
+                edited_intent=request.edited_intent,
+                idempotency_key=request.idempotency_key,
+            )
+            return {"request": chat_request, "interaction": interaction}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Request or interaction not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get(
+        "/sessions/{session_id}/requests/{request_id}/artifacts/{artifact_id}"
+    )
+    def get_request_artifact_route(
+        session_id: str,
+        request_id: str,
+        artifact_id: str,
+    ):
+        try:
+            return {
+                "artifact": service.get_request_artifact(
+                    session_id, request_id, artifact_id
+                )
+            }
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Request artifact not found")
+
     @app.get("/sessions/{session_id}/events")
     def get_events_route(session_id: str, after: int = 0, request_id: Optional[str] = None, limit: int = 100):
         try:
             return service.get_events(session_id, after=after, request_id=request_id, limit=limit)
         except KeyError:
             raise HTTPException(status_code=404, detail="Session not found")
+
+    @app.get(
+        "/sessions/{session_id}/requests/{request_id}/activity-files/"
+        "{file_path:path}"
+    )
+    def get_request_activity_file_route(
+        session_id: str,
+        request_id: str,
+        file_path: str,
+    ):
+        try:
+            return service.get_request_activity_file(
+                session_id,
+                request_id,
+                file_path,
+            )
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Generated file not found")
+        except OverflowError as exc:
+            raise HTTPException(status_code=413, detail=str(exc))
+        except TypeError as exc:
+            raise HTTPException(status_code=415, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/sessions/{session_id}/requests/{request_id}/cancel")
     def cancel_request_route(session_id: str, request_id: str, request: CancelRequest):

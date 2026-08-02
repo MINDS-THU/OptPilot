@@ -1,0 +1,74 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: production-agv-scheduling-baselines
+description: Matched-seed 100-replication evaluation for exhaustive rule and rolling-MILP baselines.
+tags: [production, agv, scheduling, files, simulation, baseline]
+
+interface:
+  launchProfiles:
+    -
+      id: default
+      label: Factory Simulation
+      description: Explore the compiled 3D factory visualization with a local simulation.
+      command: [python, interface_server.py, --host, 0.0.0.0, --port, "8080"]
+      cwd: .
+      runtime: {sandbox: process}
+      grants: {network: disabled, envFromHost: [], secretsFromHost: []}
+      resources: {cpu: 2, memoryMiB: 2048, gpus: 0}
+      timeoutSeconds: 3600
+      presentation: {kind: web, port: 8080, readyPath: /ready, readyTimeoutSeconds: 60}
+      accepts: {selectionKinds: [candidate], mediaTypes: [application/vnd.optpilot.candidate+json]}
+    -
+      id: candidate
+      label: Try Candidate in 3D
+      description: Replay one exact retained scheduling policy in the compiled 3D factory visualization.
+      command: [python, interface_server.py, --host, 0.0.0.0, --port, "8080"]
+      cwd: .
+      runtime:
+        sandbox: container
+        container:
+          image: python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+      grants: {network: disabled, envFromHost: [], secretsFromHost: []}
+      resources: {cpu: 2, memoryMiB: 2048, gpus: 0}
+      timeoutSeconds: 3600
+      presentation: {kind: web, port: 8080, readyPath: /ready, readyTimeoutSeconds: 60}
+      accepts: {selectionKinds: [candidate], mediaTypes: [application/vnd.optpilot.candidate+json]}
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: [.]
+  timeoutSeconds: 10800
+  settings:
+    time_unit: minutes
+    simulation_horizon: 500.0
+    time_step: 0.5
+    disable_faults: true
+    order_interval: [10.0, 10.0]
+    fault_interval: [120.0, 180.0]
+    fault_duration: [20.0, 60.0]
+    repeat_runs: 100
+    seeds: [123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222]
+    stability_lambda: 0.35
+
+candidate:
+  format: files
+  description: Self-contained executable production-and-AGV scheduling policy.
+  materialize: {root: candidate}
+  files:
+    editable: [{path: scheduler.py}, {path: param_estimator.py}]
+    required: [scheduler.py, param_estimator.py]
+    allow: [scheduler.py, param_estimator.py, "policy/**"]
+    deny: ["**/__pycache__/**", "**/*.pyc"]
+
+methodContext:
+  instructions: [prompts/policy_system.md]
+  references:
+    - {name: scheduler.py, path: initial/scheduler.py, type: candidate_template, description: Baseline scheduler source used to initialize code-design methods.}
+    - {name: param_estimator.py, path: initial/param_estimator.py, type: candidate_template, description: Self-contained baseline parameter estimator.}
+    - {name: factory_description, path: prompts/factory_description.md, type: markdown, description: Factory snapshot command and scoring contract.}
+    - {name: database_description, path: prompts/database_description.md, type: markdown, description: SQLite trace schema and interpretation notes.}
+    - {name: replay_settings, path: settings/baselines.json, type: json, description: Exact settings used by this environment variant for deterministic replay.}
+
+metrics:
+  source: return
+  keys: [total_score, mean_total_score, std_total_score, min_total_score, max_total_score, stability_fitness, worst_seed, worst_total_score, replication_count, mean_efficiency_score, mean_quality_cost_score, mean_agv_score, mean_order_completion, mean_production_cycle, mean_device_utilization, mean_first_pass_rate, mean_cost_efficiency, mean_charge_strategy, mean_energy_efficiency, mean_utilization, mean_policy_fallback_replans, policy_fallback_replication_count]

@@ -1,4 +1,4 @@
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
 from pathlib import Path
 import os
 import json
@@ -8,6 +8,7 @@ from ..simulation.devs_execute import DEVSExecute
 from ..simulation.verifier_execute import DEVSLogValidator
 from .code_modifier import CodeRefiner
 from .code_inspector import CodeInspector
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 
 # ==============================================================================
 # PROMPT TEMPLATES (复用并扩展你的标准)
@@ -15,7 +16,7 @@ from .code_inspector import CodeInspector
 # 这里我们需要包含之前的标准，因为修复代码时也必须遵守这些规范
 GLOBAL_STANDARDS = """
 ### [Global Standards]
-- **Imports**: Whitelist: `numpy`, `math`, `random`, `time`, `pandas`, `json`, `sys`, `pathlib`, `xdevs`, `devs_project.devs_utils.*`.
+- **Portable imports only**: Use `xdevs`, `devs_project.devs_utils.*`, local modules, and Python's standard library. Remove numpy, pandas, scipy, and any other third-party dependency because generated bundles intentionally vendor only xDEVS.
 - **Coding**: explicit `__init__` args, no `self.logger`/`get_sim_logger`, store hardcoded params in `self.param`.
 - **External IO**: Implement required external_io directly with Python IO such as `print(json.dumps(record), flush=True)`, `sys.stdin`, `sys.stderr`, or file writes.
 """
@@ -407,7 +408,11 @@ class CodeFixer(Tool):
 
         # 3. 初始化 Agent
         # 我们把传入的 file_system_tools 注册给这个内部 Agent
-        model = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         tools = self.file_system_tools + [self.devs_excute_tool, self.code_refiner]
         if veri_file:
             tools.append(self.veri_excute_tool)

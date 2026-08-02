@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: production-agv-de-weighted-rules
+description: Paper-style DE/best/1/bin search from the 64 one-hot policies through ten generations.
+tags: [production, agv, baseline, differential-evolution, files]
+
+environmentConfig: ../environments/production_agv_scheduling/environment_meta.yaml
+methodConfig: ../methods/evolutionary_rule_search/method_de.yaml
+
+objective:
+  metric: stability_fitness
+  direction: maximize
+  secondaryMetrics: [mean_total_score, std_total_score, min_total_score, max_total_score]
+
+budget:
+  maxTrials: 704
+
+execution:
+  parallelism: 8
+  timeoutSeconds: 3600
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 42

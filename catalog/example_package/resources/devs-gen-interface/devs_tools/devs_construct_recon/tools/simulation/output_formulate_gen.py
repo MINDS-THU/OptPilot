@@ -1,9 +1,10 @@
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
 from pathlib import Path
 import os
 import json
 import shutil
 from .verifier_execute import PythonScriptExecutor
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 
 # ==============================================================================
 # HELPER TOOL: SpecificFileSaver (用于保存生成的 Python 脚本)
@@ -171,6 +172,11 @@ You must bridge the gap between "Granular Logs" and "Aggregated Output".
 {scenario}
 
 ## **[Requirements]**
+
+0. **Portable imports only**:
+   - Use Python's standard library only. Do not use numpy, pandas, scipy, or any
+     other third-party package; this generated helper executes in the same
+     offline container boundary as the simulation.
 
 1. **Output Format**:
    - Check the **Scenario** description carefully. 
@@ -362,7 +368,11 @@ class LogSummaryCreator(Tool):
         )
 
         # 实例化内部 Agent
-        model_llm = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model_llm = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         agent = CodeAgent(
             tools=[self.read_file_tool, script_saver, script_runner],
             model=model_llm,

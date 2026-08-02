@@ -1,5 +1,6 @@
 
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 from pathlib import Path
 import os
 import yaml
@@ -48,7 +49,7 @@ GLOBAL_STANDARDS = """
 Adhere to the following engineering standards for all model types:
 
 #### 1. Imports & Dependencies
-- **Whitelist**: Restrict imports to the following packages: `numpy`, `math`, `random`, `time`, `pandas`, `json`, `sys`, `pathlib`, `xdevs` (and `xdevs.models`).
+- **Portable imports only**: Use `xdevs`, local `devs_project` modules, and Python's standard library. Do not use numpy, pandas, scipy, or any other third-party package: generated bundles intentionally vendor only the pure-Python xDEVS runtime.
 - **Project Utils**: Import necessary utilities (e.g., `get_current_time`) from `devs_project.devs_utils.xxx`. Refer to [Utils] for detailed import statements.
 - Other submodels in the project can be imported as needed.
 
@@ -303,7 +304,11 @@ class SimulationRunnerCreator(Tool):
             atomic_standards=ATOMIC_INSTRUCTIONS,
         )
 
-        model1 = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model1 = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         agent1 = CodeAgent(
             tools=[self.read_file_tool, runner_saver],
             model=model1,

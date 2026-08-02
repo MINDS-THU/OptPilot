@@ -1,4 +1,4 @@
-"""Helpers for storing generated file candidates by reference."""
+"""Helpers for staging generated file-candidate bundles before sealing."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence
+
+from .retained_file_candidates import portable_candidate_id
 
 
 JsonDict = Dict[str, Any]
@@ -29,95 +31,114 @@ class CandidateFileMapping:
     path: str
 
 
-class CandidateFileStore:
-    """Store generated files and return a file-candidate manifest.
+class CandidateBundleStager:
+    """Stage generated files and return a provisional file-candidate manifest.
 
     Methods can use this helper when they produce files outside the trial
-    workspace. The helper copies those files into the run's candidate store and
-    returns a manifest with stable ``contentRef`` and ``sha256`` fields.
+    workspace. The helper copies those files into one method-call staging inbox
+    and returns a draft manifest.  The runner later seals the bundle; this
+    helper never writes to or names the immutable candidate store.
     """
 
     def __init__(
         self,
         root_dir: str | Path,
-        *,
-        content_ref_mode: str = "absolute",
-        content_ref_base: str | Path | None = None,
     ):
         self.root_dir = Path(root_dir).resolve()
-        self.content_ref_mode = content_ref_mode
-        self.content_ref_base = Path(content_ref_base).resolve() if content_ref_base else None
-        if content_ref_mode not in {"absolute", "relative"}:
-            raise ValueError("content_ref_mode must be 'absolute' or 'relative'.")
-        if content_ref_mode == "relative" and self.content_ref_base is None:
-            raise ValueError("content_ref_base is required when content_ref_mode='relative'.")
 
-    def store_directory(
+    def stage_directory(
         self,
         source_dir: str | Path,
         *,
-        candidate_id: str | None = None,
-        entrypoint: str | None = None,
+        candidate_id: str,
         lineage: Optional[JsonDict] = None,
         generator: Optional[JsonDict] = None,
-        metadata: Optional[JsonDict] = None,
     ) -> JsonDict:
-        source_root = Path(source_dir).resolve()
+        source_input = Path(source_dir)
+        if source_input.is_symlink():
+            raise NotADirectoryError(f"Candidate source directory must not be a symlink: {source_dir}")
+        source_root = source_input.resolve()
         if not source_root.is_dir():
             raise NotADirectoryError(f"Candidate source is not a directory: {source_dir}")
-        mappings = [
-            CandidateFileMapping(source=source, path=source.relative_to(source_root).as_posix())
+        entries = tuple(
+            source
             for source in sorted(source_root.rglob("*"))
-            if source.is_file() and not _is_excluded(source, source_root)
+            if not _is_excluded(source, source_root)
+        )
+        for source in entries:
+            if source.is_symlink():
+                raise ValueError(
+                    f"Candidate directory must not contain symlinks: {source}"
+                )
+            if not source.is_file() and not source.is_dir():
+                raise ValueError(
+                    f"Candidate directory contains a special file: {source}"
+                )
+        mappings = [
+            CandidateFileMapping(
+                source=source,
+                path=source.relative_to(source_root).as_posix(),
+            )
+            for source in entries
+            if source.is_file()
         ]
         if not mappings:
-            raise ValueError(f"Candidate directory contains no storable files: {source_dir}")
-        return self.store_files(
+            raise ValueError(f"Candidate directory contains no staged files: {source_dir}")
+        candidate = self.stage_files(
             mappings,
             candidate_id=candidate_id,
-            entrypoint=entrypoint,
             lineage=lineage,
             generator=generator,
-            metadata=metadata,
         )
+        files_root = Path(candidate["spec"]["bundleRef"])
+        try:
+            for source in entries:
+                if source.is_dir():
+                    relative = source.relative_to(source_root)
+                    (files_root / relative).mkdir(parents=True, exist_ok=True)
+        except BaseException:
+            shutil.rmtree(files_root.parent, ignore_errors=True)
+            raise
+        return candidate
 
-    def store_file(
+    def stage_file(
         self,
         source: str | Path,
         *,
         path: str | None = None,
-        candidate_id: str | None = None,
-        entrypoint: str | None = None,
+        candidate_id: str,
         lineage: Optional[JsonDict] = None,
         generator: Optional[JsonDict] = None,
-        metadata: Optional[JsonDict] = None,
     ) -> JsonDict:
-        source_path = Path(source).resolve()
-        return self.store_files(
+        source_path = Path(source)
+        if source_path.is_symlink():
+            raise FileNotFoundError(f"Candidate source must not be a symlink: {source}")
+        source_path = source_path.resolve()
+        return self.stage_files(
             [CandidateFileMapping(source=source_path, path=path or source_path.name)],
             candidate_id=candidate_id,
-            entrypoint=entrypoint,
             lineage=lineage,
             generator=generator,
-            metadata=metadata,
         )
 
-    def store_files(
+    def stage_files(
         self,
         files: Sequence[CandidateFileMapping | JsonDict | tuple[Any, Any]],
         *,
-        candidate_id: str | None = None,
-        entrypoint: str | None = None,
+        candidate_id: str,
         lineage: Optional[JsonDict] = None,
         generator: Optional[JsonDict] = None,
-        metadata: Optional[JsonDict] = None,
     ) -> JsonDict:
         mappings = [_coerce_mapping(item) for item in files]
         if not mappings:
             raise ValueError("At least one candidate file is required.")
 
-        candidate_id = candidate_id or f"candidate-files-{uuid.uuid4().hex[:12]}"
-        candidate_root = self.root_dir / candidate_id
+        candidate_id = portable_candidate_id(candidate_id)
+        # Candidate ids are user-controlled semantic identities, never storage
+        # coordinates.  A generated key prevents traversal and keeps a later
+        # content-addressed cutover from depending on public ids as paths.
+        storage_key = f"bundle-{uuid.uuid4().hex}"
+        candidate_root = self.root_dir / storage_key
         files_root = candidate_root / "files"
         if candidate_root.exists():
             raise FileExistsError(f"Candidate already exists: {candidate_root}")
@@ -132,8 +153,11 @@ class CandidateFileStore:
                 if mapping.path in seen_paths:
                     raise ValueError(f"Duplicate candidate file path: {mapping.path!r}")
                 seen_paths.add(mapping.path)
-                source = mapping.source.resolve()
-                if not source.exists() or not source.is_file() or source.is_symlink():
+                source_input = mapping.source
+                if source_input.is_symlink():
+                    raise FileNotFoundError(f"Candidate source must not be a symlink: {source_input}")
+                source = source_input.resolve()
+                if not source.exists() or not source.is_file():
                     raise FileNotFoundError(f"Candidate source must be a regular file: {source}")
                 destination = (files_root / mapping.path).resolve()
                 if files_root.resolve() not in destination.parents:
@@ -156,67 +180,66 @@ class CandidateFileStore:
             "bundleRef": self._content_ref(files_root),
             "files": entries,
         }
-        if entrypoint:
-            spec["entrypoint"] = entrypoint
-
         candidate = {
             "candidate_id": candidate_id,
             "format": "files",
             "spec": spec,
             "lineage": dict(lineage or {"parents": []}),
-            "generator": dict(generator or {"strategy": "stored_file_candidate"}),
+            "generator": dict(generator or {"strategy": "staged_file_candidate"}),
         }
-        if metadata:
-            candidate["metadata"] = dict(metadata)
         return candidate
 
     def _content_ref(self, path: Path) -> str:
-        resolved = path.resolve()
-        if self.content_ref_mode == "absolute":
-            return str(resolved)
-        assert self.content_ref_base is not None
-        try:
-            return resolved.relative_to(self.content_ref_base).as_posix()
-        except ValueError as exc:
-            raise ValueError(
-                f"Stored candidate path {resolved} is not under content_ref_base {self.content_ref_base}."
-            ) from exc
+        return str(path.resolve())
 
 
-def store_candidate_directory(
+def stage_candidate_directory(
     source_dir: str | Path,
-    candidate_store_dir: str | Path,
-    **kwargs: Any,
+    candidate_staging_dir: str | Path,
+    *,
+    candidate_id: str,
+    lineage: Optional[JsonDict] = None,
+    generator: Optional[JsonDict] = None,
 ) -> JsonDict:
-    store = _store_from_kwargs(candidate_store_dir, kwargs)
-    return store.store_directory(source_dir, **kwargs)
+    return CandidateBundleStager(candidate_staging_dir).stage_directory(
+        source_dir,
+        candidate_id=candidate_id,
+        lineage=lineage,
+        generator=generator,
+    )
 
 
-def store_candidate_files(
+def stage_candidate_files(
     files: Sequence[CandidateFileMapping | JsonDict | tuple[Any, Any]],
-    candidate_store_dir: str | Path,
-    **kwargs: Any,
+    candidate_staging_dir: str | Path,
+    *,
+    candidate_id: str,
+    lineage: Optional[JsonDict] = None,
+    generator: Optional[JsonDict] = None,
 ) -> JsonDict:
-    store = _store_from_kwargs(candidate_store_dir, kwargs)
-    return store.store_files(files, **kwargs)
+    return CandidateBundleStager(candidate_staging_dir).stage_files(
+        files,
+        candidate_id=candidate_id,
+        lineage=lineage,
+        generator=generator,
+    )
 
 
-def store_candidate_file(
+def stage_candidate_file(
     source: str | Path,
-    candidate_store_dir: str | Path,
-    **kwargs: Any,
+    candidate_staging_dir: str | Path,
+    *,
+    candidate_id: str,
+    path: str | None = None,
+    lineage: Optional[JsonDict] = None,
+    generator: Optional[JsonDict] = None,
 ) -> JsonDict:
-    store = _store_from_kwargs(candidate_store_dir, kwargs)
-    return store.store_file(source, **kwargs)
-
-
-def _store_from_kwargs(candidate_store_dir: str | Path, kwargs: JsonDict) -> CandidateFileStore:
-    content_ref_mode = kwargs.pop("content_ref_mode", "absolute")
-    content_ref_base = kwargs.pop("content_ref_base", None)
-    return CandidateFileStore(
-        candidate_store_dir,
-        content_ref_mode=content_ref_mode,
-        content_ref_base=content_ref_base,
+    return CandidateBundleStager(candidate_staging_dir).stage_file(
+        source,
+        path=path,
+        candidate_id=candidate_id,
+        lineage=lineage,
+        generator=generator,
     )
 
 
@@ -255,3 +278,12 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+__all__ = [
+    "CandidateBundleStager",
+    "CandidateFileMapping",
+    "stage_candidate_directory",
+    "stage_candidate_file",
+    "stage_candidate_files",
+]

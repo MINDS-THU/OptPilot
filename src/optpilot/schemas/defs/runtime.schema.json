@@ -9,7 +9,9 @@
         "sandbox": {
           "enum": ["process", "container"]
         },
-        "setup": {"$ref": "common.schema.json#/definitions/setup"},
+        "setup": {
+          "$ref": "common.schema.json#/definitions/setup"
+        },
         "container": {
           "type": "object",
           "additionalProperties": false,

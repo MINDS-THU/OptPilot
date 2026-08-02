@@ -1,12 +1,107 @@
 from smolagents import Tool
+import os
+import signal
 import sys
 import subprocess
 import tempfile
 import shutil
+import threading
+import time
 from pathlib import Path
 import json
 from typing import List, Dict, Optional, Union, Tuple
 from dataclasses import dataclass
+
+from default_tools.generated_execution import (
+    ExecutionBoundaryError,
+    GeneratedExecutionBoundary,
+    PythonLaunch,
+)
+from default_tools.path_security import (
+    UnsafePathError,
+    resolve_confined_path,
+)
+
+
+MAX_EXECUTION_TIMEOUT_SECONDS = 120
+MAX_STDOUT_BYTES = 1024 * 1024
+MAX_STDERR_BYTES = 1024 * 1024
+PROCESS_STOP_GRACE_SECONDS = 0.5
+PROCESS_POLL_INTERVAL_SECONDS = 0.02
+
+
+class _BoundedCapture:
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.chunks: List[bytes] = []
+        self.size = 0
+        self.truncated = False
+
+    def add(self, chunk: bytes) -> None:
+        remaining = self.limit - self.size
+        if remaining > 0:
+            kept = chunk[:remaining]
+            self.chunks.append(kept)
+            self.size += len(kept)
+        if len(chunk) > max(remaining, 0):
+            self.truncated = True
+
+    def text(self) -> str:
+        return b"".join(self.chunks).decode("utf-8", errors="replace")
+
+
+def _read_stream(stream, capture: _BoundedCapture, overflow: threading.Event) -> None:
+    if stream is None:
+        return
+    try:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                return
+            capture.add(chunk)
+            if capture.truncated:
+                overflow.set()
+    except (OSError, ValueError):
+        return
+    finally:
+        stream.close()
+
+
+def _write_stdin(stream, content: str) -> None:
+    if stream is None:
+        return
+    try:
+        stream.write(content.encode("utf-8"))
+        stream.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _terminate(process) -> None:
+    if process is None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        process.wait(timeout=PROCESS_STOP_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
 # ==========================================
 # 1. 通用 Python 脚本执行器 (Generic Executor)
@@ -29,8 +124,23 @@ class PythonScriptExecutor:
     4. 将 Stdout/Stderr 保存到指定路径。
     5. 返回执行结果。
     """
-    def __init__(self, working_directory: str = "./working_dir"):
+    def __init__(
+        self,
+        working_directory: str = "./working_dir",
+        *,
+        execution_mode: str | None = None,
+        allow_trusted_process: bool = False,
+        container_engine: str | None = None,
+        container_image: str | None = None,
+    ):
         self.working_directory = Path(working_directory).resolve()
+        self.execution_boundary = GeneratedExecutionBoundary(
+            mode=execution_mode,
+            allow_trusted_process=allow_trusted_process,
+            engine=container_engine,
+            image=container_image,
+            python_executable=sys.executable,
+        )
 
     def execute(self, 
                 script_path: str, 
@@ -53,9 +163,19 @@ class PythonScriptExecutor:
         
         # 1. 基础路径解析与检查
         try:
-            full_script_path = (self.working_directory / script_path).resolve()
-            if not full_script_path.exists():
-                return ExecutionResult(-1, "", "", f"Script file not found: {script_path}")
+            full_script_path = resolve_confined_path(
+                self.working_directory,
+                script_path,
+                must_exist=True,
+                expected="file",
+            )
+            timeout = max(1, min(int(timeout), MAX_EXECUTION_TIMEOUT_SECONDS))
+        except FileNotFoundError:
+            return ExecutionResult(-1, "", "", f"Script file not found: {script_path}")
+        except UnsafePathError as e:
+            return ExecutionResult(-1, "", "", f"Unsafe script path: {e}")
+        except (TypeError, ValueError):
+            return ExecutionResult(-1, "", "", "Timeout must be an integer number of seconds.")
         except Exception as e:
             return ExecutionResult(-1, "", "", f"Path resolution error: {str(e)}")
 
@@ -70,60 +190,151 @@ class PythonScriptExecutor:
                 shutil.copy2(full_script_path, temp_dir_path / target_script_name)
 
                 # 复制其他依赖文件
+                copied_destinations = {target_script_name}
                 for item in files_to_copy:
                     src_rel = item["src"]
                     dest_name = item["dest"] # 如果为None，则保留原名
                     
-                    src_full = (self.working_directory / src_rel).resolve()
-                    if not src_full.exists():
+                    try:
+                        src_full = resolve_confined_path(
+                            self.working_directory,
+                            src_rel,
+                            must_exist=True,
+                            expected="file",
+                        )
+                    except FileNotFoundError:
                         return ExecutionResult(-1, "", "", f"Input file not found: {src_rel}")
-                    
-                    if not str(src_full).startswith(str(self.working_directory)):
-                        return ExecutionResult(-1, "", "", f"Input file {src_rel} is outside working directory.")
+                    except UnsafePathError as e:
+                        return ExecutionResult(-1, "", "", f"Unsafe input file {src_rel}: {e}")
 
                     final_dest_name = dest_name if dest_name else src_full.name
                     # 确保目标目录结构存在（如果dest包含子目录）
-                    dest_full_path = temp_dir_path / final_dest_name
+                    try:
+                        dest_full_path = resolve_confined_path(
+                            temp_dir_path, final_dest_name
+                        )
+                    except UnsafePathError as e:
+                        return ExecutionResult(-1, "", "", f"Unsafe input destination: {e}")
+                    relative_destination = dest_full_path.relative_to(temp_dir_path).as_posix()
+                    if relative_destination in copied_destinations:
+                        return ExecutionResult(
+                            -1,
+                            "",
+                            "",
+                            f"Duplicate input destination is not allowed: {relative_destination}",
+                        )
+                    copied_destinations.add(relative_destination)
                     dest_full_path.parent.mkdir(parents=True, exist_ok=True)
                     
                     shutil.copy2(src_full, dest_full_path)
 
                 # --- B. 执行脚本 (Execution) ---
-                cmd = [sys.executable, target_script_name]
-                
-                result = subprocess.run(
-                    cmd,
-                    cwd=str(temp_dir_path),
-                    input=stdin_content, # 注入 Stdin
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout
-                )
-                
-                stdout_str = result.stdout
-                stderr_str = result.stderr
+                launch: PythonLaunch | None = None
+                process = None
+                stdout_capture = _BoundedCapture(MAX_STDOUT_BYTES)
+                stderr_capture = _BoundedCapture(MAX_STDERR_BYTES)
+                overflow = threading.Event()
+                readers = []
+                writer = None
+                failure = None
+                try:
+                    launch = self.execution_boundary.build_python_launch(
+                        temp_dir_path,
+                        ("-u", target_script_name),
+                        home_directory=temp_dir_path,
+                        temporary_directory=temp_dir_path,
+                        stdin_open=stdin_content is not None,
+                    )
+                    process = subprocess.Popen(
+                        launch.argv,
+                        cwd=str(launch.cwd),
+                        stdin=(
+                            subprocess.PIPE
+                            if stdin_content is not None
+                            else subprocess.DEVNULL
+                        ),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=launch.environment,
+                        start_new_session=(os.name == "posix"),
+                        bufsize=0,
+                    )
+                    for stream, capture in (
+                        (process.stdout, stdout_capture),
+                        (process.stderr, stderr_capture),
+                    ):
+                        reader = threading.Thread(
+                            target=_read_stream,
+                            args=(stream, capture, overflow),
+                            daemon=True,
+                        )
+                        reader.start()
+                        readers.append(reader)
+                    if stdin_content is not None:
+                        writer = threading.Thread(
+                            target=_write_stdin,
+                            args=(process.stdin, stdin_content),
+                            daemon=True,
+                        )
+                        writer.start()
+                    started = time.monotonic()
+                    while process.poll() is None:
+                        if overflow.is_set():
+                            failure = (
+                                "Execution exceeded the stdout or stderr output limit "
+                                f"({MAX_STDOUT_BYTES} bytes per stream)."
+                            )
+                            self.execution_boundary.force_remove(launch)
+                            break
+                        if time.monotonic() - started >= timeout:
+                            failure = f"Execution timed out after {timeout}s."
+                            self.execution_boundary.force_remove(launch)
+                            break
+                        time.sleep(PROCESS_POLL_INTERVAL_SECONDS)
+                    _terminate(process)
+                    for reader in readers:
+                        reader.join(timeout=1.0)
+                    if writer is not None:
+                        writer.join(timeout=1.0)
+                finally:
+                    self.execution_boundary.force_remove(launch)
+                    _terminate(process)
+                stdout_str = stdout_capture.text()
+                stderr_str = stderr_capture.text()
+                if failure:
+                    return ExecutionResult(-1, stdout_str, stderr_str, failure)
                 
                 # --- C. 保存输出 (Save Output) ---
                 if stdout_save_path:
-                    out_path = (self.working_directory / stdout_save_path).resolve()
+                    out_path = resolve_confined_path(
+                        self.working_directory, stdout_save_path
+                    )
                     out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path = resolve_confined_path(
+                        self.working_directory, stdout_save_path
+                    )
                     with open(out_path, 'w', encoding='utf-8') as f:
                         f.write(stdout_str)
                         
                 if stderr_save_path:
-                    err_path = (self.working_directory / stderr_save_path).resolve()
+                    err_path = resolve_confined_path(
+                        self.working_directory, stderr_save_path
+                    )
                     err_path.parent.mkdir(parents=True, exist_ok=True)
+                    err_path = resolve_confined_path(
+                        self.working_directory, stderr_save_path
+                    )
                     with open(err_path, 'w', encoding='utf-8') as f:
                         f.write(stderr_str)
 
                 return ExecutionResult(
-                    return_code=result.returncode,
+                    return_code=process.returncode if process is not None else -1,
                     stdout=stdout_str,
                     stderr=stderr_str
                 )
 
-            except subprocess.TimeoutExpired:
-                return ExecutionResult(-1, "", "", f"Execution timed out after {timeout}s.")
+            except ExecutionBoundaryError as e:
+                return ExecutionResult(-1, "", "", str(e))
             except Exception as e:
                 return ExecutionResult(-1, "", "", f"Internal execution error: {str(e)}")
 
@@ -137,8 +348,8 @@ class DEVSLogValidator(Tool):
     description = (
         "Validates the execution results by running a specific Python validation script against "
         "the stdout and stderr output files generated by a previous execution. "
-        "The validator is copied to a temporary environment and executed securely, the stdout_file and stderr_file are copied to the validator's working directory, with the names 'stdout.txt' and 'stderr.txt'. "
-        "It uses a secure executor to run the validation in a temporary environment. "
+        "The validator and logs are copied into the same credential-free, network-disabled "
+        "container boundary used for generated simulators. "
         "Returns a JSON string indicating pass/fail status."
     )
     inputs = {
@@ -167,11 +378,18 @@ class DEVSLogValidator(Tool):
     }
     output_type = "string"
 
-    def __init__(self, working_directory: str = "./working_dir"):
+    def __init__(
+        self,
+        working_directory: str = "./working_dir",
+        **execution_options,
+    ):
         super().__init__()
         self.working_directory = working_directory
         # 实例化通用执行器
-        self.executor = PythonScriptExecutor(working_directory=working_directory)
+        self.executor = PythonScriptExecutor(
+            working_directory=working_directory,
+            **execution_options,
+        )
     
     def forward(self, validator_file_path: str, stdout_file_path: str, stderr_file_path: str, timeout: int = 30, stdout_name_in_docker: str = "stdout.txt") -> str:
         if timeout is None: timeout = 30

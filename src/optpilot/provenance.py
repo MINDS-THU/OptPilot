@@ -48,7 +48,10 @@ class PromptStore:
                 raise TypeError(f"messages[{index}] must define string role and content.")
 
         prompt_record_id = prompt_record_id or f"prompt-{uuid.uuid4().hex[:12]}"
-        prompt_dir = self.root_dir / prompt_record_id
+        # The caller-visible record id is semantic provenance, not a storage
+        # coordinate.  Keep it in the payload and use an opaque internal key on
+        # disk so traversal and platform-specific names are impossible.
+        prompt_dir = self.root_dir / f"record-{uuid.uuid4().hex}"
         if prompt_dir.exists():
             raise FileExistsError(f"Prompt record already exists: {prompt_dir}")
         prompt_dir.mkdir(parents=True, exist_ok=False)

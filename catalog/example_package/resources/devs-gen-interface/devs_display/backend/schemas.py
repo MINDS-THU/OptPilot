@@ -1,8 +1,8 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from devs_settings import DEFAULT_VISUALIZER_MODEL_ID
+from devs_settings import visualizer_model_id
 
 
 class AuthLoginRequest(BaseModel):
@@ -30,6 +30,10 @@ class UploadProjectRequest(BaseModel):
     files: Dict[str, str]
 
 
+class SimulationRunRequest(BaseModel):
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
 class CloneProjectsRequest(BaseModel):
     clone_projects: List[CloneProjectSpec]
 
@@ -38,6 +42,21 @@ class ChatSubmitRequest(BaseModel):
     content: str
     active_project_id: Optional[str] = None
     include_project_context: bool = False
+    idempotency_key: Optional[str] = None
+    generation_mode: Literal["automatic", "guided"] = "automatic"
+
+
+class InteractionResolveRequest(BaseModel):
+    action: Literal[
+        "confirm",
+        "revise",
+        "continue_automatically",
+        "cancel",
+    ]
+    artifact_digest: Optional[str] = None
+    answers: Dict[str, Any] = Field(default_factory=dict)
+    feedback: Optional[str] = None
+    edited_intent: Optional[Dict[str, Any]] = None
     idempotency_key: Optional[str] = None
 
 
@@ -56,7 +75,7 @@ class ParseModelRequest(BaseModel):
 
 class GraphParseRequest(BaseModel):
     provider: str = "openai"
-    model: str = DEFAULT_VISUALIZER_MODEL_ID
+    model: str = visualizer_model_id()
     api_key: Optional[str] = None
     force: bool = False
 

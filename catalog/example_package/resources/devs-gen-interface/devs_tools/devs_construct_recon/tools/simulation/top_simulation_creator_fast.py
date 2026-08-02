@@ -3,11 +3,18 @@ from pathlib import Path
 import os
 import yaml
 import json
-import ast
 from .devs_execute import DEVSExecute
 from typing import Optional
 
 from ...utils import get_content_strict
+from .result_summary_contract import (
+    require_event_trace_contract,
+    require_result_summary_contract,
+)
+from .runner_argument_contract import require_runner_argument_contract
+from ..generated_member_contract import require_generated_member_contract
+from ..generated_python_response import extract_generated_python_response
+from src.llm_resilience import litellm_retry_options
 from litellm import completion
 import litellm
 
@@ -17,8 +24,8 @@ litellm.drop_params = True
 class DEVSExecuteWrapper(Tool):
     name = "devs_execute"
     description = (
-        "Execute the target DEVS model project within a controlled temporary environment. "
-        "The tool captures stdout/stderr, manages timeouts, and provides a basic sandbox to restrict imports to allowed libraries only. "
+        "Execute the target DEVS model project from a credential-free temporary copy. "
+        "Execution uses the credential-free, network-disabled generated-code container boundary. "
     )
     inputs = {
         "timeout": {
@@ -33,7 +40,7 @@ class DEVSExecuteWrapper(Tool):
         },
         "allowed_libraries": {
             "type": "string",
-            "description": "Comma-separated list of allowed root packages (default: numpy,xdevs,logging,math,random,time,collections,itertools).",
+            "description": "Deprecated compatibility input. The outer isolated runtime owns import and execution policy.",
             "nullable": True,
         },
         "stdin_content": {
@@ -66,7 +73,7 @@ class DEVSExecuteWrapper(Tool):
         self,
         timeout: int = 30,
         command_args: Optional[str] = None,
-        allowed_libraries: str = "numpy,xdevs,logging,math,random,time,collections,itertools",
+        allowed_libraries: str = "xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib,statistics,dataclasses,typing",
         stdin_content: Optional[str] = None,
     ) -> str:
         self.has_executed = True
@@ -112,18 +119,11 @@ class SpecificFileSaver(Tool):
 
 
 def extract_xml_code(text):
-    start_tag = "<python_code>"
-    end_tag = "</python_code>"
-
-    if start_tag in text and end_tag in text:
-        # rindex 找最后一个开始标签（防止模型输出了多个版本）
-        start_index = text.rindex(start_tag) + len(start_tag)
-        end_index = text.find(end_tag, start_index)
-        code = text[start_index:end_index].strip()
-        ast.parse(code)
-        compile(code, "<generated_runner>", "exec")
-        return code
-    raise ValueError("No <python_code> tags found")
+    return extract_generated_python_response(
+        text,
+        filename="<generated_runner>",
+        artifact_label="runner",
+    )
 
 
 # ==============================================================================
@@ -141,7 +141,8 @@ Generate a Python simulation runner script for `{class_name}` using `argparse` f
 - **Model Specification**:
 {spec}
 - **Simulation Scenario**: 
-You should not deal with the output logic, as it is handled by the model itself.
+Business-event output remains the model's responsibility. The runner must still
+write the small, post-run result summary described below.
 {scenario}
 
 ## **[System Registry]**
@@ -159,11 +160,16 @@ You must construct the script in the following **exact order**.
 - The runner only parses command line arguments, creates the global clock, instantiates the root model, creates the Coordinator, and calls initialize/simulate/exit.
 - Do NOT read or consume stdin in the runner. If any model uses `external_io.target="stdin"`, that model is responsible for reading stdin itself.
 - Do NOT parse business input streams, create business DEVS events, inject startup messages, or call model ports directly from the runner. Startup behavior must be implemented inside the model according to its port protocol and `initial_signal`.
-- Do NOT implement output, logging, file writing, or result formatting in the runner unless the root model specification explicitly requires the runner itself to do so.
+- Do NOT implement business output, logging, or arbitrary file writing in the
+  runner unless the root model specification explicitly requires it. The only
+  standard exceptions are the event-trace attachment and exact result-summary
+  contract below.
 
 ### 1. Imports
 - **General**: Import `Coordinator`, `SimulationClock` from `xdevs.sim`.
 - **Utils**: Import `set_global_clock` from `devs_project.devs_utils.devs_context`.
+- **Event trace**: Import `attach_event_trace` from
+  `devs_project.devs_utils.event_trace`.
 - **Target Model**: Use a **relative import** for the model class. 
     - Logic: If script is at `runner.py` and model is at `target.py`, use `from .target import {class_name}`.
 
@@ -172,6 +178,18 @@ Initialize `argparse.ArgumentParser`:
 - Create arguments for `{class_name}` initialization parameters and `simulate_time` (or other name like `simulation_time` if specified in the scenario). 
 - **CRITICAL**: You MUST check the Model Specification or System Registry to determine the EXACT `model_init_args` of the target model class. Only create argparse arguments for those exact parameters. Do NOT invent extra parameters. Do NOT pass simulation-level configs (like test_name) as model init args unless the model's __init__ explicitly accepts them.
 - **CRITICAL**: Set `default` values based on the **Simulation Scenario**.
+- Treat these defaults as one small, meaningful demonstration scenario for a
+  first-time student. Every `add_argument` call must use an optional literal
+  `--long-name` and an explicit finite literal scalar `default` (`str`, `bool`,
+  `int`, or `float`). The Run form and automatic validation use these exact
+  values.
+- Do not use `required=True`, positional arguments, `nargs`, collection
+  defaults/types, or list-building actions such as `append`. External
+  stdin/file content belongs to the model's existing external-IO path, not to a
+  required generated CLI argument.
+- Do not use `type=bool`. For a one-way boolean flag, use
+  `action="store_true", default=False` or
+  `action="store_false", default=True`; otherwise use a scalar parser.
 - **CRITICAL**: if the args are specified in the `Simulation Scenario`, ensure their names match exactly.
 - Parse the arguments into variables (e.g., `args = parser.parse_args()`).
 
@@ -181,9 +199,12 @@ Initialize `argparse.ArgumentParser`:
 - **Step 3.3**: Instantiate the model `{class_name}`: `model = {class_name}(...)`.
     - Ensure you pass the correct arguments (e.g., `name="{class_name}"`, `parent=None`, and other params defined in Step 2).
 - **Step 3.4**: Create the Simulator: `sim = Coordinator(model, clock)`.
+- **Step 3.5**: Immediately call `attach_event_trace(sim, model)`. This standard
+  generated utility records atomic-model output ports as bounded JSONL when a
+  managed result directory is available. Do not replace it with custom logging.
 
 ### 4. Simulation Execution
-- Call `sim.initialize()`.
+- Call `sim.initialize()` only after `attach_event_trace(sim, model)`.
 - To avoid missing end-of-horizon internal events at exactly `t==simulate_time`, run with a tiny epsilon horizon:
   - Determine a numeric horizon in the simulation clock's unit from the scenario arguments.
   - If the CLI duration is already numeric, use `numeric_horizon = float(simulate_time)`.
@@ -192,6 +213,45 @@ Initialize `argparse.ArgumentParser`:
   - `sim.simulate_time(effective_end)`
   - Keep all emitted business timestamps and KPI semantics anchored to `simulate_time`.
 - Call `sim.exit()`.
+
+### 5. Result Summary (Required)
+- At module scope, declare exactly:
+  `OPTPILOT_RESULT_FILE = "summary.json"`.
+- Implement `write_simulation_summary(metrics, simulated_time, metric_note=None)`.
+  It must be dependency-free and must:
+  - Return without writing when `OPTPILOT_SIMULATION_RESULTS_DIR` is absent.
+  - Keep only explicitly supplied `bool`, `int`, or finite `float` metric values.
+    Convert model counters or NumPy-like scalars explicitly before passing them;
+    never serialize NaN or infinity.
+  - Create the supplied result directory and atomically write
+    `summary.json` as UTF-8 JSON with this shape:
+    `{{"schema_version": "devs.simulation-result.v1", "metrics": {{...}},
+    "run": {{"completed": true, "simulated_time": <finite number>}}}}`.
+  - Include `metric_note` outside `metrics` when supplied.
+- After `sim.exit()`, collect stable, domain-meaningful outcome KPIs that the
+  generated model really exposes (for example completed jobs, throughput, lost
+  sales, average inventory, delay, or cost), then call
+  `write_simulation_summary(...)`.
+- The System Registry contains a `generated_interface` extracted
+  deterministically from each generated class. Before directly accessing a
+  model or child attribute, property, or method, use only an exact member listed
+  in the applicable registry entry. Follow `child_instances` mappings when
+  traversing from the root to a child. Never derive a member name from prose,
+  domain conventions, or a similar-looking name in another class.
+- The metric names and extraction expressions are part of this generated
+  simulator's domain contract. Use the model specification and exact generated
+  interface to choose them. Do not use reflection, attribute-name guessing,
+  placeholder values, or a generic `"score"`.
+- If the model exposes no trustworthy outcome KPI, write an empty `metrics`
+  object and a clear `metric_note` explaining what model state should be exposed
+  before optimization. The run summary is still useful, but do not pretend an
+  input such as the requested horizon is an optimization outcome.
+- xDEVS 3 ``Port`` objects do not have a singular ``.value`` attribute. Never
+  use expressions such as ``model.output[name].value``. A port exposes
+  ``.values``, but its transient values may be empty after a simulation step;
+  prefer stable counters or summaries retained by the model. If no stable KPI
+  is available, write empty metrics with an honest ``metric_note`` instead of
+  guessing a value or inserting zero placeholders.
 
 ## **[Reference Code]**
 Use this code as your strict template. Do not change the logic flow. 
@@ -270,6 +330,7 @@ class TopSimulationCreatorFast(Tool):
         self.util_desc_file = self.tool_dir / sub_path / "util_desc.yaml"
         self.injected_utils = [
             "set_global_clock",
+            "attach_event_trace",
             # "injection_tools",
             # "get_raw_input_content",
             # "logger",
@@ -325,20 +386,24 @@ class TopSimulationCreatorFast(Tool):
         # relative to the simulation save path
         model_rel_path = Path(model_file_path).relative_to(Path(save_path).parent)
 
+        system_info_path = Path(system_info_file_path)
+        if not system_info_path.is_absolute():
+            system_info_path = self.working_directory / system_info_path
+        system_registry = {}
         try:
-            with open(system_info_file_path, "r") as f:
+            with open(system_info_path, "r", encoding="utf-8") as f:
                 system_info = f.read()
             try:
-                system_info = json.loads(system_info)
-                if isinstance(system_info, dict):
-                    # 获取最后一个键值对
-                    last_key = list(system_info.keys())[-1]
-                    system_info = system_info[last_key]
-                elif isinstance(system_info, list):
-                    system_info = system_info[-1]
-            except:
-                system_info = system_info
-        except:
+                parsed_system_info = json.loads(system_info)
+                system_registry = parsed_system_info
+                system_info = json.dumps(
+                    parsed_system_info,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            except (TypeError, json.JSONDecodeError):
+                pass
+        except OSError:
             code_full_path = (self.working_directory / model_file_path).resolve()
             with open(code_full_path, "r") as f:
                 system_info = f.read()
@@ -362,10 +427,20 @@ class TopSimulationCreatorFast(Tool):
                     model=self.model_id,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.5,
+                    **litellm_retry_options(),
                 )
                 code = get_content_strict(response)
 
                 code = extract_xml_code(code)
+                require_result_summary_contract(code)
+                require_event_trace_contract(code)
+                require_generated_member_contract(
+                    code,
+                    system_registry,
+                    model_class_name,
+                    filename=str(full_path),
+                )
+                require_runner_argument_contract(code, filename=str(full_path))
 
                 full_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -377,5 +452,10 @@ class TopSimulationCreatorFast(Tool):
             except Exception as e:
                 last_fail_info = f"FAILURE: Error creating top-level simulation runner script. Reason: {str(e)}"
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
+                prompt += (
+                    "\n\nThe previous runner was rejected by deterministic validation: "
+                    f"{e}\nReturn a corrected complete runner that follows every "
+                    "Event Trace, Result Summary, and suggested-scenario argument requirements."
+                )
 
-        return last_fail_info
+        raise RuntimeError(last_fail_info)

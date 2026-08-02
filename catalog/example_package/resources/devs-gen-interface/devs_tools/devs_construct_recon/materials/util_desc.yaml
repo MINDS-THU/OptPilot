@@ -28,6 +28,12 @@ set_global_clock: |
     - Import: `from devs_project.devs_utils.devs_context import set_global_clock`
     - Usage: first `clock = SimulationClock()`, then `set_global_clock(clock)`
 
+attach_event_trace: |
+  The standard bounded event trace for generated simulations.
+    - Import: `from devs_project.devs_utils.event_trace import attach_event_trace`
+    - Usage: immediately after `sim = Coordinator(model, clock)`, call `attach_event_trace(sim, model)`, before `sim.initialize()`.
+    - It records events emitted by atomic-model output ports to `event_trace.jsonl` only when the managed execution runtime supplies a result directory. Do not implement a second event logger in the runner.
+
 logger: |
   Deprecated. Do not use `get_sim_logger`, `self.logger`, or logger helpers in generated models. Implement required external_io directly with Python IO such as `print(json.dumps(record), flush=True)`, `sys.stdin`, `sys.stderr`, or file writes.
 

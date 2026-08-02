@@ -1,69 +1,71 @@
 ---
 title: Installation
-description: Choose between the core CLI/SDK install and the full OptPilot Studio source checkout.
+description: Choose between the core CLI/SDK and a source checkout with Studio.
 ---
 
 # Installation
 
-OptPilot has two intended installation modes.
+OptPilot has two installation modes.
 
-Most new users should start with the **source checkout for the tutorial and
-Studio**. It includes the bundled tutorial package and the local GUI, so it is
-the fastest way to see the complete workflow.
-
-Use the **Core CLI/SDK** when you already have an OptPilot package or want to
-integrate your own environment and method code with the public YAML schema from
-a terminal.
-
-## Which Install Should I Use?
-
-| Install mode | Best for | Includes | Does not include |
-| --- | --- | --- | --- |
-| Core CLI/SDK | Users building or running OptPilot packages in their own project. | Python package, JSON Schema validation, `optpilot run`, `optpilot validate`, `optpilot package validate`, local and container runtimes declared in configs. | Studio UI, OpenHands assistant, embedded Code Server, bundled `catalog/example_package/`. |
-| Source checkout: tutorial and Studio | Users exploring the built-in tutorial or self-hosting OptPilot Studio. | Everything in core, the bundled job-shop example package, Studio UI, workspace management, assistant integration, docs, and contributor workflow. | A production multi-user deployment. |
-
-Both modes use the same public config model. A package that validates and runs
-with the core CLI should also be browsable in Studio when you put it under a
-Studio catalog root.
+| Install | Best for | Includes |
+| --- | --- | --- |
+| Core CLI/SDK | Building, validating, and running your own OptPilot package. | Public schemas, package validation, Realm-backed `optpilot run`, and the Python SDK. |
+| Source checkout | Developing OptPilot or using local Studio/docs/examples. | Core plus Studio, the tutorial catalog, assistant integration, docs, and contributor tooling. |
 
 ## Prerequisites
 
-| Capability | Required for | Requirement |
-| --- | --- | --- |
-| Python | Core CLI/SDK and Studio | Python 3.10 or newer. |
-| `uv` | Source checkout, examples, docs, and Studio | Recommended for the full local workflow. |
-| Docker or Podman | Container runtimes, embedded Code Server, workspace previews, and assistant tools that execute in workspaces | Optional until you use those features. |
-| Python 3.12 environment for OpenHands | OpenHands agent-server runtime | The local bridge has been checked with `openhands-agent-server==1.29.0`; OpenHands currently expects Python 3.12. |
-| API key for a model provider | LLM methods or assistant model chat | Optional; configure only for workflows that declare or use it. |
+- Python 3.10 or newer
+- `uv` for the source-checkout workflow
+- Docker/Podman only for Studio workspace/assistant features that explicitly
+  require it; the current retained study runner executes its bounded local
+  process slice and does not execute container study configs
 
 ## Core CLI/SDK
 
-Install the core package from PyPI:
-
 ```bash
 python -m pip install optpilot
+optpilot --help
 ```
 
-Use it inside a project that already contains OptPilot configs:
+Validate a package and study:
 
 ```bash
 optpilot package validate path/to/package
 optpilot validate path/to/package/studies/my_study.yaml
-optpilot run path/to/package/studies/my_study.yaml
 ```
 
-The core install supports the public configuration schema, including component
-`runtime` settings. If a config asks for a container runtime, Docker or Podman
-must be available on the machine running the command. If a config asks for a
-local process runtime, its dependencies must be installable in that local
-workspace.
+Run a supported retained study:
 
-For direct CLI runs, `envFromHost` reads from the shell process environment.
-Values saved in Studio settings are local to Studio-managed setup, interface,
-assistant, and study-launch paths; they are not read by plain `optpilot run`.
+```bash
+optpilot run path/to/package/studies/my_study.yaml \
+  --package-root path/to/package
+```
 
-The core install is the right distribution target for package authors. A package
-can contain:
+`--package-root` is required. It is the complete source authority OptPilot
+captures before compilation; referenced configs, Python roots, and source-backed
+callables must stay inside it.
+
+Without `--realm-root`, the command uses OptPilot's private per-user Realm in
+the OS user-data location. Use an explicit Realm root only for deliberate local
+isolation/testing. It is not a Workspace or generated-output directory.
+
+The current retained execution slice supports parameter and bounded file
+candidates, Python batch methods/evaluators, local process runtime, and package-backed,
+environment-owned `methodContext.references`. Those references are captured
+with the package and projected read-only into the method worker. Package-owned
+`trialWorkspace` files/directories are also supported as retained seed layers
+for attempts; every attempt receives a fresh writable trial volume. File
+candidates are frozen, sealed, and atomically admitted before their immutable
+tree is projected into that volume. The slice does not yet support setup/build,
+Environment/backend host-derived values, containers, or hostile native code.
+A process Method may declare `runtime.envFromHost`; the launcher selects only
+those names. Studio binds their current saved revisions to the new Run and
+sends the values transiently to its Method worker, leaving them out of the
+durable process request and Run evidence. A direct CLI launch instead uses its
+exported process environment as a process-lifetime binding. Unsupported
+authoring configs fail during retained compilation.
+
+A package normally contains:
 
 ```text
 my_package/
@@ -73,27 +75,26 @@ my_package/
   studies/
 ```
 
-See [Packages and Catalogs](catalog.md) for the package layout.
+See [Packages and Catalogs](catalog.md).
 
-## Source Checkout: Tutorial And Studio
-
-Clone the repository when you want the full local Studio:
+## Source checkout and Studio
 
 ```bash
 git clone https://github.com/MINDS-THU/OptPilot.git
 cd OptPilot
 uv sync --all-packages --group examples --group docs
-```
-
-Verify the CLI and bundled example package:
-
-```bash
 uv run optpilot --help
-uv run optpilot package validate catalog/example_package
+uv run optpilot package validate catalog/example_package --check-source
 ```
 
-Continue with [First Job-Shop Run](getting-started.md) for the first runnable
-study, expected output, and evidence inspection commands.
+Four bundled studies run without optional dependencies: the fixed weighted-rule
+baseline, deterministic tuner, dispatch-rule file baseline, and solver-code file
+baseline. With the example dependency group installed, the three JobShopLib
+solver studies and the Stable-Baselines study are retained-launchable too. Only
+the OpenAI editor needs additional local setup: add `OPENROUTER_API_KEY` under
+Studio Settings → Local environment variables, or export it before a CLI
+launch. OptPilot supplies the value only to the Method process for that Run and
+does not copy it into Run evidence.
 
 Launch Studio:
 
@@ -101,42 +102,36 @@ Launch Studio:
 uv run optpilot ui --open-browser
 ```
 
-The default Studio URL is:
-
-```text
-http://127.0.0.1:8765/
-```
-
-Use `--port` when you want a specific port:
+The default URL is `http://127.0.0.1:8765/`. To choose another port:
 
 ```bash
 uv run optpilot ui --host 127.0.0.1 --port 8866 --open-browser
 ```
 
-Studio scans packages under `catalog/` by default. The repository ships the
-job-shop tutorial package at `catalog/example_package/`.
-
-For the assistant-enabled Studio workflow, also run an OpenHands agent server
-and make Docker or Podman available for workspace containers. See
-[OptPilot Studio](ui.md), [Workspace Management](studio-workspaces.md), and
+Studio scans `catalog/` by default and reads runs from the same default Realm.
+See [Studio UI](ui.md), [Workspace Management](studio-workspaces.md), and
 [OptPilot Assistant](assistant.md).
 
-## Optional Example Dependencies
-
-The full source sync above installs the optional example dependency group. If
-you started from a smaller source environment and later want to run JobShopLib,
-OR-Tools CP-SAT, simulated annealing, or Stable-Baselines examples, run:
+## Optional example dependencies
 
 ```bash
 uv sync --all-packages --group examples
 ```
 
-The dependency-free job-shop baseline and tuner do not require external solver
-or LLM dependencies.
+These dependencies make the following package-backed `methodContext` studies
+retained-launchable:
 
-## Documentation Server
+```text
+job_shop_lib_dispatching_rule.yaml
+job_shop_simulated_annealing.yaml
+job_shop_ortools_cpsat.yaml
+job_shop_rl_stable_baselines.yaml
+```
 
-From a source checkout:
+They do not enable the separate file-candidate path; parameter
+`trialWorkspace` seeds need no optional runtime dependency.
+
+## Documentation server
 
 ```bash
 uv run --group docs mkdocs serve

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import itertools
-import uuid
 from typing import Any, Dict, Iterable, List
 
 
@@ -24,18 +23,18 @@ class TuneDispatchWeightsMethod:
         if n_candidates <= 0 or self._index >= len(self._candidates):
             return []
         batch = self._candidates[self._index : self._index + n_candidates]
+        start_index = self._index
         self._index += len(batch)
         return [
             {
-                "candidate_id": f"dispatch-weights-{uuid.uuid4().hex[:12]}",
+                "candidate_id": f"dispatch-weights-{start_index + offset:04d}",
                 "format": "parameters",
                 "spec": values,
                 "generator": {
                     "method_id": self.definition["id"],
                     "strategy": "deterministic_dispatch_weight_grid",
-                    "candidate_index": self._index - len(batch) + offset,
+                    "candidate_index": start_index + offset,
                 },
-                "metadata": {"summary": "Weighted dispatch-rule parameters from a deterministic grid."},
             }
             for offset, values in enumerate(batch)
         ]

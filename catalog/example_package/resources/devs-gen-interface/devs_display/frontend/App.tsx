@@ -1,39 +1,59 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { AlertCircle, Cpu, Folder, MessageSquare, PanelLeftClose, PanelLeftOpen, Rows3 } from 'lucide-react';
+import { AlertCircle, ChevronDown, Code2, Cpu, MessageSquare, Network, PanelLeftClose, PanelLeftOpen, Play, RefreshCw, Upload } from 'lucide-react';
 import { GraphVisualizer, GraphVisualizerHandle } from './components/GraphVisualizer';
 import { ChatInterface } from './components/ChatInterface';
 import { SessionSelectorPanel } from './components/SessionSelectorPanel';
-import { ProjectPanel } from './components/ProjectPanel';
-import { VisualizationControls } from './components/VisualizationControls';
 import { SourcePreviewPanel } from './components/SourcePreviewPanel';
+import { FileTreeBrowser } from './components/FileTreeBrowser';
+import { SimulationRunPanel } from './components/SimulationRunPanel';
+import { StructureInspector } from './components/StructureInspector';
 import { parseModelCode } from './services/graphParseService';
+import { architectureTerminalHandoff, reviewComponentResponsibility, shouldClearArchitectureProjection } from './services/reviewPresentationService.js';
+import {
+  architectureOnlyGraph,
+  canRefreshStructure,
+  rootStructureNode,
+  structureLifecyclePresentation
+} from './services/structureLifecycleService.js';
+import { getKeyModuleFilePaths, isDisplayableSourceFile, isKnownNoiseFile, normalizeFilePath, resolveClassSourcePath, sortSourceFiles } from './services/sourceFileService';
+import { activityPreviewFileState, projectToFollowDuringGeneration, projectToOpenAfterGeneration, resolveActivityPreviewPath, selectedFileAfterProjectRefresh, shouldFocusFilesForProjectRefresh } from './services/projectSelectionService.js';
 import {
   createSession,
   deleteSession,
+  getFrontendConfig,
   getAuthStatus,
   getSessionProjectGraph,
   getSessionProjects,
+  getSessionRequest,
   getSessions,
   getSessionProjectFiles,
+  getRequestActivityFile,
   getStoredAuthToken,
   isUnauthorizedError,
   loginWithPassword,
   renameSession,
   uploadSessionProject
 } from './services/agentService';
-import { SystemModelInfo, FileMap, GraphNode, GraphLink, ParsedStructure, ProjectInfo, SessionInfo, ProjectGraphResponse } from './types';
+import { ActivityFilePreview, SystemModelInfo, FileMap, FrontendConfig, GraphNode, GraphLink, ParsedStructure, PendingInteraction, ProjectInfo, SessionInfo, ProjectGraph, ProjectGraphResponse } from './types';
 
 // Default dimension constants
 const NODE_WIDTH = 180;
 const NODE_HEIGHT = 100;
 const PANEL_BOUNDS = {
-  sessions: { min: 220, max: 420, default: 288, collapseBelow: 170 },
-  chat: { min: 300, max: 640, default: 416, collapseBelow: 240 },
-  project: { min: 240, max: 460, default: 320, collapseBelow: 190 }
+  conversation: { min: 280, max: 480, default: 336, collapseBelow: 220 }
 };
 
 type PanelName = keyof typeof PANEL_BOUNDS;
 type AuthState = 'checking' | 'authenticated' | 'required';
+type ConversationMode = 'history' | 'chat';
+type MainTab = 'structure' | 'run' | 'files';
+type StructureReviewState = 'awaiting_review' | 'revising' | 'approved_building' | 'finalizing' | 'build_stopped';
+
+const PROJECT_STATUS_LABEL: Record<ProjectInfo['status'], string> = {
+  ready: 'Ready',
+  updating: 'Building',
+  error: 'Needs attention'
+};
 
 const sortSessionsByRecentActivity = (sessionList: SessionInfo[]): SessionInfo[] => {
   return [...sessionList].sort((a, b) => {
@@ -44,10 +64,12 @@ const sortSessionsByRecentActivity = (sessionList: SessionInfo[]): SessionInfo[]
 };
 
 const SESSION_REFRESH_INTERVAL_MS = 15000;
+const PROJECT_REFRESH_INTERVAL_MS = 3000;
+const ARCHITECTURE_REQUEST_POLL_INTERVAL_MS = 2000;
 const GRAPH_PARSE_POLL_INTERVAL_MS = 2000;
 const GRAPH_PARSE_MAX_POLL_ATTEMPTS = 300;
 const GRAPH_PARSE_PROVIDER = 'openai';
-const GRAPH_PARSE_MODEL = 'openrouter/openai/gpt-5.4-mini';
+const GRAPH_PARSE_MODEL = import.meta.env.VITE_DEVS_DISPLAY_MODEL_ID || 'deepseek/deepseek-v4-pro';
 
 const emptySpec = () => ({
   input_ports: [] as Array<{ name: string; type: string; description: string }>,
@@ -60,6 +82,118 @@ const normalizePorts = (ports: any[] | undefined) => {
     type: String(port.type || ''),
     description: String(port.description || port.structure || '')
   })).filter(port => port.name);
+};
+
+const graphFromStructureReview = (interaction: PendingInteraction): ProjectGraph | null => {
+  if (interaction.kind !== 'structure_review') return null;
+  const payload = (interaction.payload || interaction.artifact || {}) as Record<string, unknown>;
+  const embeddedGraph = payload.graph;
+  if (
+    embeddedGraph
+    && typeof embeddedGraph === 'object'
+    && Array.isArray((embeddedGraph as ProjectGraph).nodes)
+    && Array.isArray((embeddedGraph as ProjectGraph).links)
+  ) {
+    return architectureOnlyGraph(embeddedGraph) as ProjectGraph;
+  }
+
+  const rawComponents = Array.isArray(payload.components)
+    ? payload.components.filter(component => component && typeof component === 'object') as Array<Record<string, unknown>>
+    : [];
+  if (rawComponents.length === 0) return null;
+
+  const rootModel = String(payload.root_model_name || payload.title || rawComponents[0]?.name || 'Simulation');
+  const proposedRootId = String(payload.root_node_id || rootModel);
+  const componentIds = new Set(rawComponents.map(component => String(component.id || component.name || '')).filter(Boolean));
+  const rootComponent = rawComponents.find(component => (
+    String(component.id || component.name || '') === proposedRootId
+    || String(component.id || component.name || '') === rootModel
+    || component.parent_id === null
+  ));
+  const rootId = String(rootComponent?.id || rootComponent?.name || proposedRootId);
+  if (!componentIds.has(rootId)) componentIds.add(rootId);
+
+  const normalizedComponents = rootComponent
+    ? rawComponents
+    : [{ id: rootId, name: rootModel, model_type: 'coupled', parent_id: null }, ...rawComponents];
+  const aliases = new Map<string, string>();
+  normalizedComponents.forEach(component => {
+    const id = String(component.id || component.name || '');
+    if (!id) return;
+    aliases.set(id, id);
+    aliases.set(String(component.name || id), id);
+  });
+  const componentParentId = (component: Record<string, unknown>): string | null => {
+    const id = String(component.id || component.name || '');
+    if (id === rootId) return null;
+    return aliases.get(String(component.parent_id || '')) || rootId;
+  };
+
+  const componentById = new Map<string, Record<string, unknown>>();
+  const parentById = new Map<string, string | null>();
+  const childrenById = new Map<string, string[]>();
+  normalizedComponents.forEach((component, index) => {
+    const id = String(component.id || component.name || `component-${index}`);
+    componentById.set(id, component);
+    const parent = componentParentId(component);
+    parentById.set(id, parent);
+    if (parent) childrenById.set(parent, [...(childrenById.get(parent) || []), id]);
+  });
+
+  // Give every subtree its own vertical band. A per-parent sibling index makes
+  // grandchildren under different branches overlap at exactly the same point.
+  const layout = new Map<string, { x: number; y: number }>();
+  const visiting = new Set<string>();
+  let nextLeaf = 0;
+  const placeSubtree = (id: string, depth: number): number => {
+    if (layout.has(id)) return layout.get(id)!.y;
+    if (visiting.has(id)) {
+      const y = nextLeaf++ * 150 + 80;
+      layout.set(id, { x: depth * 260 + 80, y });
+      return y;
+    }
+    visiting.add(id);
+    const children = (childrenById.get(id) || []).filter(child => child !== id);
+    const childYs = children.map(child => placeSubtree(child, depth + 1));
+    const y = childYs.length > 0
+      ? childYs.reduce((sum, childY) => sum + childY, 0) / childYs.length
+      : nextLeaf++ * 150 + 80;
+    visiting.delete(id);
+    layout.set(id, { x: depth * 260 + 80, y });
+    return y;
+  };
+  placeSubtree(rootId, 0);
+  componentById.forEach((_component, id) => {
+    if (!layout.has(id)) placeSubtree(id, 1);
+  });
+
+  const nodes: GraphNode[] = normalizedComponents.map((component, index) => {
+    const id = String(component.id || component.name || `component-${index}`);
+    const isRoot = id === rootId;
+    const parent = parentById.get(id) ?? null;
+    const position = layout.get(id) || { x: isRoot ? 80 : 340, y: nextLeaf++ * 150 + 80 };
+    return {
+      id,
+      name: String(component.name || id),
+      className: String(component.class_name || component.name || id),
+      description: reviewComponentResponsibility(component),
+      type: String(component.model_type || (isRoot ? 'coupled' : 'atomic')) === 'coupled' ? 'coupled' : 'atomic',
+      parent,
+      expanded: true,
+      fixed: false,
+      x: position.x,
+      y: position.y,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      ports: {
+        inputs: [],
+        outputs: []
+      },
+      children: childrenById.get(id) || []
+    };
+  });
+
+  return { root_model: rootId, nodes, links: [] };
 };
 
 interface PanelToolbarProps {
@@ -92,7 +226,7 @@ const LoginScreen: React.FC<{
   const [password, setPassword] = useState('');
 
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-slate-100 px-4">
+    <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-slate-100 px-4">
       <form
         className="w-full max-w-sm rounded border border-slate-200 bg-white p-6 shadow-sm"
         onSubmit={(event) => {
@@ -103,7 +237,7 @@ const LoginScreen: React.FC<{
         <div className="mb-5">
           <h1 className="flex items-center gap-2 text-xl font-bold text-slate-800">
             <Cpu className="text-blue-600" />
-            DEVS Generator Workspace
+            DEVS Generator
           </h1>
         </div>
         <label className="mb-2 block text-sm font-medium text-slate-700" htmlFor="hamlet-password">
@@ -289,7 +423,7 @@ const getModelInfoFromFiles = (rawFiles: FileMap): SystemModelInfo | null => {
 // Helper: Strip common root folder if exists to standardize paths
 const standardizeFiles = (rawFiles: FileMap): { name: string, files: FileMap } => {
     const paths = Object.keys(rawFiles);
-    if (paths.length === 0) return { name: 'Empty Project', files: rawFiles };
+    if (paths.length === 0) return { name: 'Empty simulation', files: rawFiles };
 
     const firstPathParts = paths[0].split('/');
     let commonPrefix = '';
@@ -308,12 +442,12 @@ const standardizeFiles = (rawFiles: FileMap): { name: string, files: FileMap } =
         cleanedFiles[p.replace(commonPrefix, '')] = rawFiles[p];
     });
 
-    const inferredName = commonPrefix ? commonPrefix.slice(0, -1) : 'Uploaded Project';
+    const inferredName = commonPrefix ? commonPrefix.slice(0, -1) : 'Uploaded simulation';
     return { name: inferredName, files: cleanedFiles };
 };
 
 const App: React.FC = () => {
-  // --- Project Management State ---
+  // Backend calls these generated bundles "projects". The student UI consistently calls them simulations.
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [remoteProjects, setRemoteProjects] = useState<ProjectInfo[]>([]);
@@ -322,15 +456,13 @@ const App: React.FC = () => {
   const [currentProjectName, setCurrentProjectName] = useState<string | null>(null);
   const [projectCache, setProjectCache] = useState<Record<string, FileMap>>({});
   const [collapsedPanels, setCollapsedPanels] = useState<Record<PanelName, boolean>>({
-      sessions: false,
-      chat: false,
-      project: false
+      conversation: typeof window !== 'undefined' && window.innerWidth < 900
   });
   const [panelWidths, setPanelWidths] = useState<Record<PanelName, number>>({
-      sessions: PANEL_BOUNDS.sessions.default,
-      chat: PANEL_BOUNDS.chat.default,
-      project: PANEL_BOUNDS.project.default
+      conversation: PANEL_BOUNDS.conversation.default
   });
+  const [conversationMode, setConversationMode] = useState<ConversationMode>('history');
+  const [mainTab, setMainTab] = useState<MainTab>('files');
   const dragStateRef = useRef<{
       panel: PanelName;
       startX: number;
@@ -341,6 +473,8 @@ const App: React.FC = () => {
   // --- Current Project Data ---
   const [modelInfo, setModelInfo] = useState<SystemModelInfo | null>(null);
   const [files, setFiles] = useState<FileMap>({});
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [activityFilePreview, setActivityFilePreview] = useState<ActivityFilePreview | null>(null);
   const [rootModelName, setRootModelName] = useState<string>('');
   
   // Settings
@@ -349,6 +483,9 @@ const App: React.FC = () => {
   // Graph State
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [links, setLinks] = useState<GraphLink[]>([]);
+  const [proposedGraph, setProposedGraph] = useState<ProjectGraph | null>(null);
+  const [structureReviewState, setStructureReviewState] = useState<StructureReviewState | null>(null);
+  const [architectureProjectionOwner, setArchitectureProjectionOwner] = useState<{ sessionId: string; requestId: string } | null>(null);
   const [selectedSourceNode, setSelectedSourceNode] = useState<GraphNode | null>(null);
   const [graphSource, setGraphSource] = useState<'backend' | 'local' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -357,12 +494,22 @@ const App: React.FC = () => {
   const [authState, setAuthState] = useState<AuthState>('checking');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [frontendConfig, setFrontendConfig] = useState<FrontendConfig | null>(null);
 
   // Refs
   const nodesRef = useRef<GraphNode[]>([]);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
 
   const shouldAutoRefreshRef = useRef(false);
+  const manualProjectSelectionRef = useRef(false);
+  const projectLoadRequestRef = useRef(0);
+  const activityFilePreviewRef = useRef<ActivityFilePreview | null>(null);
+  const activityFileRequestRef = useRef(0);
+  const lastActiveRequestIdRef = useRef<string | null>(null);
+  const architectureProjectionOwnerRef = useRef<{ sessionId: string; requestId: string } | null>(null);
+  const architectureTerminalPollInFlightRef = useRef(false);
+  const handledArchitectureTerminalRequestsRef = useRef<Set<string>>(new Set());
+  const handleProjectsUpdatedRef = useRef<(updatedIdsOrNames: string[]) => Promise<void>>(async () => {});
   const graphVisualizerRef = useRef<GraphVisualizerHandle>(null);
   const [parsedCache, setParsedCache] = useState<Record<string, ParsedStructure>>({});
 
@@ -410,7 +557,12 @@ const App: React.FC = () => {
 
   const initializeBackendState = async () => {
       try {
-          const sessionList = sortSessionsByRecentActivity(await getSessions());
+          const [sessionRows, config] = await Promise.all([
+              getSessions(),
+              getFrontendConfig()
+          ]);
+          setFrontendConfig(config);
+          const sessionList = sortSessionsByRecentActivity(sessionRows);
           setSessions(sessionList);
           const nextSessionId = sessionList[0]?.session_id || '';
           setCurrentSessionId(nextSessionId);
@@ -455,22 +607,26 @@ const App: React.FC = () => {
       return () => window.clearInterval(interval);
   }, [authState]);
 
-  const refreshProjectList = async (sessionId = currentSessionId) => {
+  const refreshProjectList = async (
+      sessionId = currentSessionId
+  ): Promise<ProjectInfo[]> => {
       if (!sessionId) {
           setRemoteProjects([]);
-          return;
+          return [];
       }
       try {
           const projs = await getSessionProjects(sessionId);
           setRemoteProjects(projs);
+          return projs;
       } catch (err) {
           if (isUnauthorizedError(err)) {
               setAuthState('required');
               setAuthError('Password required.');
-              return;
+              return [];
           }
           console.warn("Backend offline or unreachable, using local mode.", err);
           setRemoteProjects([]);
+          return [];
       }
   };
 
@@ -483,14 +639,35 @@ const App: React.FC = () => {
 
   // --- File Loading Logic ---
 
-  const loadFilesIntoState = (newFiles: FileMap, project?: ProjectInfo) => {
+  const loadFilesIntoState = (
+    newFiles: FileMap,
+    project?: ProjectInfo,
+    options: {
+      preserveActivityPreview?: boolean;
+      preserveSelectionForSameProject?: boolean;
+    } = {}
+  ) => {
     const info = getModelInfoFromFiles(newFiles);
     const newRoot = info ? detectRootModel(info) : '';
 
     setFiles(newFiles);
     setModelInfo(info);
     setRootModelName(newRoot);
-    setSelectedSourceNode(null);
+    if (!options.preserveActivityPreview) {
+        activityFilePreviewRef.current = null;
+        setActivityFilePreview(null);
+        setSelectedSourceNode(null);
+        if (options.preserveSelectionForSameProject) {
+            setSelectedFilePath(previousPath => selectedFileAfterProjectRefresh(
+                previousPath,
+                currentProjectId,
+                project?.project_id || null,
+                Object.keys(newFiles)
+            ));
+        } else {
+            setSelectedFilePath(null);
+        }
+    }
     setParsedCache({}); // Clear parse cache when files change
     setParseStatus(info
       ? `Loaded ${Object.keys(info).length} model definitions. Root: ${newRoot || 'unknown'}.`
@@ -508,6 +685,7 @@ const App: React.FC = () => {
 
   const handleProjectSelect = async (e: React.ChangeEvent<HTMLSelectElement>) => {
       const projectId = e.target.value;
+      manualProjectSelectionRef.current = true;
       if (!projectId) {
           setCurrentProjectId(null);
           setCurrentProjectName(null);
@@ -520,6 +698,8 @@ const App: React.FC = () => {
   };
 
   const selectSessionById = async (sessionId: string) => {
+      manualProjectSelectionRef.current = false;
+      projectLoadRequestRef.current += 1;
       setCurrentSessionId(sessionId);
       setLocalProjects([]);
       setProjectCache({});
@@ -527,25 +707,29 @@ const App: React.FC = () => {
       setCurrentProjectName(null);
       handleClearProject();
       await refreshProjectList(sessionId);
+      setConversationMode('chat');
   };
 
   const handleCreateSession = async () => {
       try {
-          const title = `Session ${new Date().toLocaleString()}`;
+          const title = `New simulation ${new Date().toLocaleString()}`;
           const result = await createSession(title);
           const refreshedSessions = await refreshSessionList();
           if (!refreshedSessions.some(session => session.session_id === result.session.session_id)) {
               setSessions(prev => [result.session, ...prev.filter(session => session.session_id !== result.session.session_id)]);
           }
           setCurrentSessionId(result.session.session_id);
+          manualProjectSelectionRef.current = false;
+          projectLoadRequestRef.current += 1;
           setRemoteProjects(result.projects || []);
           setLocalProjects([]);
           setProjectCache({});
           setCurrentProjectId(null);
           setCurrentProjectName(null);
           handleClearProject();
+          setConversationMode('chat');
       } catch (err: any) {
-          setError(err.message || "Failed to create session.");
+          setError(err.message || "Failed to start a new simulation design.");
       }
   };
 
@@ -557,14 +741,14 @@ const App: React.FC = () => {
           ));
           setError(null);
       } catch (err: any) {
-          setError(err.message || "Failed to rename session.");
+          setError(err.message || "Failed to rename the design.");
       }
   };
 
   const handleDeleteSession = async (session: SessionInfo) => {
       const title = session.title || session.session_id;
       const confirmed = window.confirm(
-          `Delete session "${title}"?\n\nThis removes the session from the DEVS Generator. Automatically-created session workspaces will also be deleted.`
+          `Delete design "${title}"?\n\nThis removes its conversation and temporary generated simulations from DEVS Generator.`
       );
       if (!confirmed) return;
 
@@ -578,6 +762,8 @@ const App: React.FC = () => {
           if (session.session_id === currentSessionId) {
               const nextSessionId = remainingSessions[0]?.session_id || '';
               setCurrentSessionId(nextSessionId);
+              manualProjectSelectionRef.current = false;
+              projectLoadRequestRef.current += 1;
               setLocalProjects([]);
               setProjectCache({});
               setCurrentProjectId(null);
@@ -591,45 +777,58 @@ const App: React.FC = () => {
           }
           setError(null);
       } catch (err: any) {
-          setError(err.message || "Failed to delete session.");
+          setError(err.message || "Failed to delete the design.");
       }
   };
 
-  const fetchAndLoadProject = async (project: ProjectInfo) => {
+  const fetchAndLoadProject = async (
+      project: ProjectInfo,
+      forceRefresh = false
+  ): Promise<boolean> => {
       if (!currentSessionId && !project.project_id.startsWith('local-')) {
-          setError("Create or select a session before loading backend projects.");
-          return;
+          setError("Start or select a design before loading simulations.");
+          return false;
       }
+      const loadRequest = ++projectLoadRequestRef.current;
       setLoading(true);
       setError(null);
       try {
           // 1. Check Cache (Priority for Local/Offline)
-          if (projectCache[project.project_id]) {
+          if (!forceRefresh && projectCache[project.project_id]) {
               console.log("Loading from cache:", project.display_name);
-              loadFilesIntoState(projectCache[project.project_id], project);
+              if (loadRequest === projectLoadRequestRef.current) {
+                  loadFilesIntoState(projectCache[project.project_id], project);
+              } else {
+                  return false;
+              }
           } else {
               // 2. Fetch from backend
               console.log("Fetching from backend:", project.display_name);
               try {
                 const projectFiles = await getSessionProjectFiles(currentSessionId, project.project_id);
+                if (loadRequest !== projectLoadRequestRef.current) return false;
                 setProjectCache(prev => ({ ...prev, [project.project_id]: projectFiles }));
                 loadFilesIntoState(projectFiles, project);
               } catch (fetchErr) {
                 // Backend failed and no cache
-                throw new Error("Could not load project. Backend offline and no local copy.");
+                throw new Error("Could not load the simulation. The service is offline and there is no local copy.");
               }
           }
+          return true;
       } catch (err: any) {
-          setError(err.message || `Failed to load project: ${project.display_name}`);
+          if (loadRequest === projectLoadRequestRef.current) {
+              setError(err.message || `Failed to load simulation: ${project.display_name}`);
+          }
+          return false;
       } finally {
-          setLoading(false);
+          if (loadRequest === projectLoadRequestRef.current) setLoading(false);
       }
   };
 
   // Handle updates from Agent Chat
   const handleProjectsUpdated = async (updatedIdsOrNames: string[]) => {
       // 1. Refresh list of projects available
-      await refreshProjectList();
+      const refreshedProjects = await refreshProjectList();
 
       // 2. Invalidate caches for updated projects
       setProjectCache(prev => {
@@ -638,12 +837,113 @@ const App: React.FC = () => {
           return newCache;
       });
 
-      // 3. If current project was updated, force reload
-      if (currentProjectId && (updatedIdsOrNames.includes(currentProjectId) || (currentProjectName && updatedIdsOrNames.includes(currentProjectName)))) {
-          const project = allProjects.find(p => p.project_id === currentProjectId);
-          if (project) await fetchAndLoadProject(project);
+      // 3. Open the simulation the agent just created or revised. Use the
+      // refreshed records so the graph and files cannot lag one revision.
+      const projectToOpen = projectToOpenAfterGeneration(
+          refreshedProjects,
+          updatedIdsOrNames,
+          currentProjectId,
+          manualProjectSelectionRef.current
+      );
+      let implementedGraphReady = false;
+      if (projectToOpen) {
+          setMainTab('structure');
+          const projectLoaded = await fetchAndLoadProject(projectToOpen, true);
+          if (projectLoaded) {
+              if (projectToOpen.project_id.startsWith('local-')) {
+                  implementedGraphReady = true;
+              } else {
+                  try {
+                      const response = await getSessionProjectGraph(
+                          currentSessionId,
+                          projectToOpen.project_id,
+                          true
+                      );
+                      implementedGraphReady = applyBackendGraphResponse(response)
+                          || await waitForBackendGraph(currentSessionId, projectToOpen.project_id);
+                  } catch (graphError: any) {
+                      setError(graphError.message || 'The implemented model is ready, but its Structure could not be loaded yet. Choose Refresh in Structure to retry.');
+                  }
+              }
+          }
+      }
+      // Replace the approved plan atomically. If loading fails, keep the
+      // whole approved architecture instead of exposing a partial hierarchy.
+      if (implementedGraphReady) {
+          handlePendingStructureChange(null, 'clear');
+      } else if (architectureProjectionOwnerRef.current) {
+          setStructureReviewState('finalizing');
       }
   };
+
+  // Keep the simulation menu live while the agent writes a new bundle.  The
+  // backend exposes discovered bundles as `updating`; following that record
+  // lets students inspect files before the full generation request completes.
+  // A direct dropdown choice disables auto-follow for the rest of this design.
+  useEffect(() => {
+      if (authState !== 'authenticated' || !currentSessionId) return;
+
+      let cancelled = false;
+      let inFlight = false;
+      const refreshAndFollow = async () => {
+          if (inFlight) return;
+          inFlight = true;
+          try {
+              const projects = await getSessionProjects(currentSessionId);
+              if (cancelled) return;
+              setRemoteProjects(projects);
+              const projectToFollow = projectToFollowDuringGeneration(
+                  projects,
+                  currentProjectId,
+                  manualProjectSelectionRef.current
+              );
+              if (!projectToFollow) return;
+
+              const loadRequest = ++projectLoadRequestRef.current;
+              const projectFiles = await getSessionProjectFiles(
+                  currentSessionId,
+                  projectToFollow.project_id
+              );
+              if (
+                  cancelled
+                  || loadRequest !== projectLoadRequestRef.current
+              ) return;
+              setProjectCache(prev => ({
+                  ...prev,
+                  [projectToFollow.project_id]: projectFiles
+              }));
+              const shouldFocusFiles = shouldFocusFilesForProjectRefresh(
+                  currentProjectId,
+                  projectToFollow.project_id
+              );
+              // Keep the explicit architecture checkpoint/build lifecycle on
+              // screen. Students may still choose Files themselves, but
+              // background project discovery must not pull them away from the
+              // approved whole-model view.
+              if (shouldFocusFiles && !structureReviewState) setMainTab('files');
+              loadFilesIntoState(projectFiles, projectToFollow, {
+                  preserveActivityPreview: Boolean(activityFilePreviewRef.current),
+                  preserveSelectionForSameProject: !shouldFocusFiles
+              });
+          } catch (err) {
+              if (isUnauthorizedError(err)) {
+                  setAuthState('required');
+                  setAuthError('Password required.');
+              } else {
+                  console.warn('Failed to refresh simulations during generation.', err);
+              }
+          } finally {
+              inFlight = false;
+          }
+      };
+
+      refreshAndFollow();
+      const interval = window.setInterval(refreshAndFollow, PROJECT_REFRESH_INTERVAL_MS);
+      return () => {
+          cancelled = true;
+          window.clearInterval(interval);
+      };
+  }, [authState, currentSessionId, currentProjectId, structureReviewState]);
 
   // Auto-refresh graph
   useEffect(() => {
@@ -660,7 +960,7 @@ const App: React.FC = () => {
     if (!fileList) return;
 
     if (!currentSessionId) {
-      setError("Create or select a session before uploading a project.");
+      setError("Start or select a design before uploading a simulation.");
       event.target.value = '';
       return;
     }
@@ -701,18 +1001,23 @@ const App: React.FC = () => {
         setLocalProjects(prev => Array.from(new Map([...prev, localProject].map(p => [p.project_id, p])).values()));
         setProjectCache(prev => ({ ...prev, [localProject.project_id]: cleanFiles }));
         loadFilesIntoState(cleanFiles, localProject);
-        setError(`Project "${inferredName}" loaded locally. (Backend sync failed)`);
+        setError(`Simulation "${inferredName}" was loaded only in this browser because synchronization failed.`);
     }
     setLoading(false);
   };
 
   const handleClearProject = () => {
+      projectLoadRequestRef.current += 1;
+      activityFileRequestRef.current += 1;
+      activityFilePreviewRef.current = null;
+      setActivityFilePreview(null);
       setFiles({});
       setModelInfo(null);
       setRootModelName('');
       setNodes([]);
       setLinks([]);
       setSelectedSourceNode(null);
+      setSelectedFilePath(null);
       setGraphSource(null);
       setParsedCache({});
       setParseStatus('');
@@ -775,7 +1080,7 @@ const App: React.FC = () => {
 
   const initializeGraph = async () => {
     if (!modelInfo || !rootModelName) {
-      setError("Please load a project.");
+      setError("Please select a simulation.");
       return;
     }
     
@@ -1079,22 +1384,320 @@ const App: React.FC = () => {
          return sourceVisible && targetVisible;
       });
   }, [links, visibleNodes]);
+  const structureNodes = proposedGraph?.nodes || visibleNodes;
+  const structureLinks = proposedGraph?.links || visibleLinks;
+  const structureRootModel = proposedGraph?.root_model || rootModelName;
+  const structureLifecycle = proposedGraph
+      ? structureReviewState === 'approved_building'
+        ? 'building'
+        : structureReviewState === 'revising'
+          ? 'revising'
+          : structureReviewState === 'finalizing'
+            ? 'finalizing'
+            : structureReviewState === 'build_stopped'
+              ? 'stopped'
+              : 'proposed'
+      : currentProjectId
+        ? 'implemented'
+        : null;
+  const structurePresentation = structureLifecyclePresentation(
+      structureReviewState,
+      Boolean(currentProjectId)
+  );
+  const selectedStructureNode = selectedSourceNode
+      ? structureNodes.find(node => node.id === selectedSourceNode.id) || null
+      : null;
+  const structureSourcePaths = useMemo<Record<string, string | null>>(() => (
+      Object.fromEntries(structureNodes.map(node => [
+          node.id,
+          resolveClassSourcePath(node.className, modelInfo, files)
+      ]))
+  ), [structureNodes, modelInfo, files]);
+
+  useEffect(() => {
+      if (mainTab !== 'structure' || structureNodes.length === 0 || selectedStructureNode) return;
+      const root = rootStructureNode(structureNodes, structureRootModel) as GraphNode | null;
+      if (root) setSelectedSourceNode(root);
+  }, [mainTab, structureNodes, structureRootModel, selectedStructureNode]);
+
+  const activityPreviewDisplayPath = useMemo(() => {
+      if (!activityFilePreview) return null;
+      return resolveActivityPreviewPath(activityFilePreview.path, Object.keys(files));
+  }, [activityFilePreview, files]);
+
+  const displayedFiles = useMemo<FileMap>(() => {
+      if (!activityFilePreview || !activityPreviewDisplayPath) return files;
+      return {
+          ...files,
+          [activityPreviewDisplayPath]: activityFilePreview.content
+      };
+  }, [activityFilePreview, activityPreviewDisplayPath, files]);
+
+  useEffect(() => {
+      if (!activityFilePreview || !activityPreviewDisplayPath) return;
+      setSelectedSourceNode(null);
+      setSelectedFilePath(activityPreviewDisplayPath);
+  }, [activityFilePreview, activityPreviewDisplayPath]);
+
+  const keyModuleFilePaths = useMemo(() => getKeyModuleFilePaths(modelInfo, files), [modelInfo, files]);
+  const selectableFiles = useMemo(() => sortSourceFiles(
+      Object.keys(displayedFiles).filter(path => isDisplayableSourceFile(path) && !isKnownNoiseFile(path)),
+      keyModuleFilePaths
+  ), [displayedFiles, keyModuleFilePaths]);
+
+  const handleGraphNodeSelect = useCallback((node: GraphNode) => {
+      setSelectedSourceNode(node);
+      if (proposedGraph) {
+          setSelectedFilePath(null);
+          return;
+      }
+      const sourcePath = resolveClassSourcePath(node.className, modelInfo, files);
+      setSelectedFilePath(sourcePath || null);
+  }, [files, modelInfo, proposedGraph]);
+
+  const handleOpenStructureSource = useCallback((path: string) => {
+      setSelectedFilePath(path);
+      setMainTab('files');
+  }, []);
+
+  const handleFileSelect = useCallback((path: string) => {
+      if (activityFilePreviewRef.current && path !== activityPreviewDisplayPath) {
+          activityFilePreviewRef.current = null;
+          setActivityFilePreview(null);
+      }
+      setSelectedFilePath(path);
+      const normalizedPath = normalizeFilePath(path);
+      setSelectedSourceNode(visibleNodes.find(node => {
+          const sourcePath = resolveClassSourcePath(node.className, modelInfo, files);
+          return sourcePath && normalizeFilePath(sourcePath) === normalizedPath;
+      }) || null);
+  }, [activityPreviewDisplayPath, files, modelInfo, visibleNodes]);
+
+  const handleActivityFileSelect = useCallback(async (requestId: string, filePath: string) => {
+      if (!currentSessionId) return;
+      const previewRequest = ++activityFileRequestRef.current;
+      setMainTab('files');
+      setError(null);
+      try {
+          const preview = await getRequestActivityFile(currentSessionId, requestId, filePath);
+          if (previewRequest !== activityFileRequestRef.current) return;
+          const previewState = activityPreviewFileState(preview);
+          activityFilePreviewRef.current = preview;
+          setActivityFilePreview(preview);
+          loadFilesIntoState(previewState.files, undefined, {
+              preserveActivityPreview: true
+          });
+          setSelectedSourceNode(null);
+          setSelectedFilePath(previewState.selectedPath);
+      } catch (err: any) {
+          if (previewRequest !== activityFileRequestRef.current) return;
+          setError(err.message || 'This generated file is no longer available to preview.');
+      }
+  }, [currentSessionId]);
+
+  const handlePendingStructureChange = useCallback((
+      interaction: PendingInteraction | null,
+      state: StructureReviewState | 'clear' = interaction ? 'awaiting_review' : 'clear',
+      owner?: { sessionId: string; requestId: string }
+  ) => {
+      if (state === 'clear' || !interaction) {
+          const currentOwner = architectureProjectionOwnerRef.current;
+          if (
+              owner
+              && currentOwner
+              && (
+                  owner.sessionId !== currentOwner.sessionId
+                  || owner.requestId !== currentOwner.requestId
+              )
+          ) return;
+          architectureProjectionOwnerRef.current = null;
+          setArchitectureProjectionOwner(null);
+          setProposedGraph(null);
+          setStructureReviewState(null);
+          setSelectedSourceNode(null);
+          return;
+      }
+      if (owner) {
+          architectureProjectionOwnerRef.current = owner;
+          setArchitectureProjectionOwner(owner);
+          // Chat may learn about a newly submitted request before the slower
+          // session-list poll. Record that ownership locally so a later
+          // terminal active_request_id transition is observable even if the
+          // Conversation view is hidden in the meantime.
+          setSessions(current => current.map(session => (
+              session.session_id === owner.sessionId
+                  && session.active_request_id !== owner.requestId
+                ? { ...session, active_request_id: owner.requestId }
+                : session
+          )));
+      }
+      const graph = interaction ? graphFromStructureReview(interaction) : null;
+      setProposedGraph(graph);
+      setStructureReviewState(state);
+      setSelectedSourceNode(
+          graph ? rootStructureNode(graph.nodes, graph.root_model) as GraphNode | null : null
+      );
+      if (graph) {
+          setSelectedFilePath(null);
+          setMainTab('structure');
+      }
+  }, []);
+
+  const retryFinalImplementedGraph = async () => {
+      if (
+          !currentSessionId
+          || !currentProjectId
+          || currentProjectId.startsWith('local-')
+      ) {
+          setError('The generated simulation is not available for final Structure loading.');
+          return;
+      }
+
+      setLoading(true);
+      setError(null);
+      setParseStatus(`Retrying the implemented Structure for ${currentProjectName || currentProjectId}...`);
+      try {
+          const response = await getSessionProjectGraph(
+              currentSessionId,
+              currentProjectId,
+              true
+          );
+          const implementedGraphReady = applyBackendGraphResponse(response)
+              || await waitForBackendGraph(currentSessionId, currentProjectId);
+          if (implementedGraphReady) {
+              // Keep the approved projection visible until the complete
+              // source-derived graph has been applied successfully.
+              handlePendingStructureChange(null, 'clear');
+          } else {
+              setError('The implemented Structure is still being prepared. Choose Refresh to try again.');
+          }
+      } catch (graphError: any) {
+          setError(graphError.message || 'The implemented Structure could not be loaded yet. Choose Refresh to try again.');
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  const handleProposedNodeMove = useCallback((nodeId: string, x: number, y: number) => {
+      setProposedGraph(current => current ? {
+          ...current,
+          nodes: current.nodes.map(node => node.id === nodeId ? { ...node, x, y } : node)
+      } : current);
+  }, []);
+
+  const handleProposedToggleFixed = useCallback((nodeId: string, isFixed: boolean, currentX?: number, currentY?: number) => {
+      setProposedGraph(current => current ? {
+          ...current,
+          nodes: current.nodes.map(node => node.id === nodeId
+            ? { ...node, fixed: isFixed, x: currentX ?? node.x, y: currentY ?? node.y }
+            : node)
+      } : current);
+  }, []);
 
   const currentSession = useMemo(
       () => sessions.find(session => session.session_id === currentSessionId),
       [sessions, currentSessionId]
   );
 
-  const workspaceLabel = currentSessionId
-      ? `Session: ${currentSession?.title || currentSessionId}${currentProjectName ? ` / Project: ${currentProjectName}` : ''}`
-      : 'Create or select a session to begin';
-  const sessionPanelWidth = panelWidths.sessions;
-  const chatPanelWidth = panelWidths.chat;
-  const projectPanelWidth = panelWidths.project;
+  // Keep the latest project handoff callback behind a ref so terminal polling
+  // is tied only to request ownership, not to unrelated App renders.
+  useEffect(() => {
+      handleProjectsUpdatedRef.current = handleProjectsUpdated;
+  });
+
+  // Terminal build ownership belongs to App, which remains mounted when the
+  // Conversation panel is collapsed. ChatInterface continues to poll messages
+  // and review state while visible, but it no longer owns project/graph side
+  // effects. The handled set makes this exact-request transition idempotent.
+  useEffect(() => {
+      const owner = architectureProjectionOwner;
+      if (!owner) return;
+
+      let cancelled = false;
+      const handledKey = `${owner.sessionId}:${owner.requestId}`;
+      const pollOwnerRequest = async () => {
+          if (
+              cancelled
+              || architectureTerminalPollInFlightRef.current
+              || handledArchitectureTerminalRequestsRef.current.has(handledKey)
+          ) return;
+          architectureTerminalPollInFlightRef.current = true;
+          try {
+              const request = await getSessionRequest(owner.sessionId, owner.requestId);
+              if (
+                  cancelled
+                  || architectureProjectionOwnerRef.current?.sessionId !== owner.sessionId
+                  || architectureProjectionOwnerRef.current?.requestId !== owner.requestId
+              ) return;
+
+              const handoff = architectureTerminalHandoff(owner, request);
+              if (!handoff) return;
+              if (handoff.state === 'build_stopped') {
+                  setStructureReviewState('build_stopped');
+                  handledArchitectureTerminalRequestsRef.current.add(handledKey);
+                  return;
+              }
+              if (handoff.state === 'clear') {
+                  handledArchitectureTerminalRequestsRef.current.add(handledKey);
+                  handlePendingStructureChange(null, 'clear', owner);
+                  return;
+              }
+
+              setStructureReviewState('finalizing');
+              await handleProjectsUpdatedRef.current(handoff.updatedProjects);
+              if (!cancelled) {
+                  handledArchitectureTerminalRequestsRef.current.add(handledKey);
+              }
+          } catch (pollError) {
+              // A transient request/graph failure must remain retryable. The
+              // visible approved architecture is intentionally left intact.
+              console.warn('Could not complete the generated Structure handoff yet.', pollError);
+          } finally {
+              architectureTerminalPollInFlightRef.current = false;
+          }
+      };
+
+      void pollOwnerRequest();
+      const interval = window.setInterval(
+          pollOwnerRequest,
+          ARCHITECTURE_REQUEST_POLL_INTERVAL_MS
+      );
+      return () => {
+          cancelled = true;
+          window.clearInterval(interval);
+      };
+  }, [architectureProjectionOwner, handlePendingStructureChange]);
+
+  useEffect(() => {
+      if (!shouldClearArchitectureProjection(
+          architectureProjectionOwnerRef.current,
+          {
+              sessionId: currentSessionId,
+              activeRequestId: currentSession?.active_request_id
+          }
+      )) return;
+      handlePendingStructureChange(null, 'clear');
+  }, [currentSessionId, currentSession?.active_request_id, handlePendingStructureChange]);
+
+  useEffect(() => {
+      const activeRequestId = currentSession?.active_request_id || null;
+      if (activeRequestId && activeRequestId !== lastActiveRequestIdRef.current) {
+          // A new generation should follow its own simulation by default, even
+          // if the student manually inspected an older simulation beforehand.
+          manualProjectSelectionRef.current = false;
+      }
+      lastActiveRequestIdRef.current = activeRequestId;
+  }, [currentSessionId, currentSession?.active_request_id]);
+
+  const designLabel = currentSessionId
+      ? currentSession?.title || currentSessionId
+      : 'Start a new simulation to begin';
+  const conversationPanelWidth = panelWidths.conversation;
+  const currentProject = allProjects.find(project => project.project_id === currentProjectId) || null;
 
   if (authState === 'checking') {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-slate-100 text-sm text-slate-500">
+      <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-slate-100 text-sm text-slate-500">
         Loading...
       </div>
     );
@@ -1105,158 +1708,193 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-slate-100">
-      {collapsedPanels.sessions ? (
+    <div className="flex h-full min-h-0 w-full overflow-hidden bg-slate-100">
+      {collapsedPanels.conversation ? (
         <CollapsedPanelButton
-          title="Sessions"
-          icon={<Rows3 size={16} />}
-          onClick={() => togglePanel('sessions')}
+          title="Conversation"
+          icon={<MessageSquare size={16} />}
+          onClick={() => togglePanel('conversation')}
         />
       ) : (
-        <div className="relative flex-shrink-0" style={{ width: sessionPanelWidth }}>
+        <aside className="relative flex-shrink-0 border-r border-slate-200 bg-white max-[800px]:absolute max-[800px]:inset-y-0 max-[800px]:left-0 max-[800px]:z-50 max-[800px]:shadow-xl" style={{ width: conversationPanelWidth }}>
           <div className="absolute right-2 top-2 z-10">
             <PanelToolbar
-              title="Sessions"
+              title="Conversation"
               collapsed={false}
-              onToggle={() => togglePanel('sessions')}
+              onToggle={() => togglePanel('conversation')}
             />
           </div>
-          <PanelResizeHandle title="Sessions" panel="sessions" onResizeStart={handlePanelResizeStart} />
-          <SessionSelectorPanel
-            sessions={sessions}
-            currentSessionId={currentSessionId}
-            onCreateSession={handleCreateSession}
-            onRefreshSessions={refreshSessionList}
-            onSelectSessionId={selectSessionById}
-            onRenameSession={handleRenameSession}
-            onDeleteSession={handleDeleteSession}
-          />
-        </div>
-      )}
-
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4 shadow-sm">
-          <div>
-            <h1 className="flex items-center gap-2 text-xl font-bold text-slate-800">
-              <Cpu className="text-blue-600" />
-              DEVS Generator Workspace
-            </h1>
-            <p className="text-sm text-slate-500">{workspaceLabel}</p>
-          </div>
-          <div className="flex items-center gap-4">
-            {error && (
-              <div className="flex items-center gap-1 text-sm text-red-600">
-                <AlertCircle size={14} />
-                {error}
-              </div>
-            )}
-            <a href="#help" className="text-sm text-blue-600 hover:underline">Help</a>
-          </div>
-        </header>
-
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          {collapsedPanels.chat ? (
-            <CollapsedPanelButton
-              title="Chat"
-              icon={<MessageSquare size={16} />}
-              onClick={() => togglePanel('chat')}
-            />
-          ) : (
-            <section className="relative flex-shrink-0 border-r border-slate-200 bg-white" style={{ width: chatPanelWidth }}>
-              <div className="absolute right-2 top-2 z-10">
-                <PanelToolbar
-                  title="Chat"
-                  collapsed={false}
-                  onToggle={() => togglePanel('chat')}
-                />
-              </div>
-              <PanelResizeHandle title="Chat" panel="chat" onResizeStart={handlePanelResizeStart} />
+          <PanelResizeHandle title="Conversation" panel="conversation" onResizeStart={handlePanelResizeStart} />
+          <div className={conversationMode === 'chat' && currentSessionId ? 'h-full' : 'hidden'}>
+            {currentSessionId && (
               <ChatInterface
                 sessionId={currentSessionId}
                 activeRequestId={currentSession?.active_request_id}
                 activeProjectId={currentProjectId}
                 currentProjectName={currentProjectName}
-                onProjectsUpdated={handleProjectsUpdated}
+                currentSessionTitle={currentSession?.title || currentSessionId}
+                onActivityFileSelect={handleActivityFileSelect}
+                onPendingStructureChange={handlePendingStructureChange}
+                onReviewStructure={() => setMainTab('structure')}
+                defaultGenerationMode={frontendConfig?.default_generation_mode || 'guided'}
                 isOpen={true}
+                onBack={() => setConversationMode('history')}
               />
-            </section>
+            )}
+          </div>
+          <div className={conversationMode === 'chat' && currentSessionId ? 'hidden' : 'h-full'}>
+            <SessionSelectorPanel
+              sessions={sessions}
+              currentSessionId={currentSessionId}
+              onCreateSession={handleCreateSession}
+              onRefreshSessions={refreshSessionList}
+              onSelectSessionId={selectSessionById}
+              onRenameSession={handleRenameSession}
+              onDeleteSession={handleDeleteSession}
+            />
+          </div>
+        </aside>
+      )}
+
+      <main className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-10 min-h-10 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Cpu size={16} aria-hidden="true" className="shrink-0 text-blue-600" />
+            <h1 className="shrink-0 text-sm font-semibold text-slate-800">DEVS Generator</h1>
+            <span
+              className="hidden min-w-0 truncate border-l border-slate-200 pl-2 text-xs text-slate-500 min-[560px]:block"
+              title={`Current design: ${designLabel}`}
+            >
+              {designLabel}
+            </span>
+          </div>
+          {error && (
+            <div role="status" aria-live="polite" className="flex min-w-0 items-center gap-1 text-xs text-red-600" title={error}>
+              <AlertCircle size={14} aria-hidden="true" />
+              <span className="max-w-72 truncate">{error}</span>
+            </div>
           )}
+        </header>
 
-          <section className="flex min-w-0 flex-1 flex-col bg-slate-50">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-800">Visualizer</h2>
-                <p className="text-xs text-slate-500">
-                  {currentProjectName ? `Project: ${currentProjectName}` : 'Select a project or upload one to visualize'}
-                </p>
+        <section className="flex min-h-0 flex-1 flex-col bg-slate-50">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <label className="hidden text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:block">Simulation</label>
+              <div className="relative min-w-[180px] max-w-md flex-1">
+                <select
+                  value={proposedGraph ? '__active_architecture__' : currentProjectId || ''}
+                  onChange={handleProjectSelect}
+                  disabled={!currentSessionId || Boolean(proposedGraph)}
+                  title={proposedGraph
+                    ? 'The Structure view belongs to the simulation currently being generated.'
+                    : 'Choose a generated simulation'}
+                  className="h-9 w-full appearance-none rounded border border-slate-300 bg-white py-0 pl-3 pr-8 text-sm font-medium text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {proposedGraph && <option value="__active_architecture__">Current generation architecture</option>}
+                  <option value="">{currentSessionId ? 'Choose a generated simulation' : 'Start a design first'}</option>
+                  {allProjects.map(project => <option key={project.project_id} value={project.project_id}>{project.display_name}{project.project_id.startsWith('local-') ? ' (local)' : ''}</option>)}
+                </select>
+                <ChevronDown size={14} className="pointer-events-none absolute right-2 top-2.5 text-slate-400" />
               </div>
+              <button onClick={() => refreshProjectList()} disabled={!currentSessionId} className="rounded border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-blue-600 disabled:opacity-40" title="Refresh simulations"><RefreshCw size={15} /></button>
+              <label className={`flex h-9 cursor-pointer items-center gap-2 rounded border border-slate-200 px-3 text-xs font-medium text-slate-600 hover:bg-slate-50 ${!currentSessionId ? 'pointer-events-none opacity-40' : ''}`} title="Upload an existing simulation folder">
+                <Upload size={14} /><span className="hidden md:inline">Upload</span>
+                <input type="file" multiple {...({ webkitdirectory: '', directory: '' } as any)} className="hidden" onChange={handleFileUpload} disabled={!currentSessionId} />
+              </label>
+              {!proposedGraph && currentProject && <span className={`hidden rounded-full px-2 py-1 text-[10px] font-semibold sm:inline ${currentProject.status === 'ready' ? 'bg-emerald-50 text-emerald-700' : currentProject.status === 'error' ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>{PROJECT_STATUS_LABEL[currentProject.status]}</span>}
             </div>
+          </div>
 
-            <div className="flex min-h-0 flex-1 overflow-hidden">
-              {collapsedPanels.project ? (
-                <CollapsedPanelButton
-                  title="Project"
-                  icon={<Folder size={16} />}
-                  onClick={() => togglePanel('project')}
-                />
-              ) : (
-                <aside className="relative flex flex-shrink-0 flex-col border-r border-slate-200 bg-white" style={{ width: projectPanelWidth }}>
-                  <div className="absolute right-2 top-2 z-10">
-                    <PanelToolbar
-                      title="Project"
-                      collapsed={false}
-                      onToggle={() => togglePanel('project')}
+          <div className="flex min-h-[46px] items-center justify-between gap-3 border-b border-slate-200 bg-white px-3">
+            <nav className="flex h-full items-end gap-1" aria-label="Simulation views">
+              {([
+                ['files', 'Files', <Code2 key="files-icon" size={14} />],
+                ['structure', 'Structure', <Network key="structure-icon" size={14} />],
+                ['run', 'Run', <Play key="run-icon" size={14} />]
+              ] as const).map(([tab, label, icon]) => (
+                <button key={tab} onClick={() => setMainTab(tab)} className={`flex h-10 items-center gap-2 border-b-2 px-3 text-xs font-semibold ${mainTab === tab ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}>{icon}{label}</button>
+              ))}
+            </nav>
+            <div className="min-w-0 truncate text-right text-[11px] text-slate-500">
+              {structurePresentation
+                ? structurePresentation.label
+                : currentProjectName || 'No simulation selected'}
+            </div>
+          </div>
+
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            {mainTab === 'structure' && (
+              (currentProjectId || proposedGraph) && structureLifecycle && structurePresentation ? (
+                <div className="flex h-full min-h-0 flex-col bg-slate-50">
+                  <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`flex items-center gap-1.5 rounded px-2 py-1 text-xs font-semibold ${structureLifecycle === 'implemented' ? 'bg-emerald-50 text-emerald-800' : structureLifecycle === 'stopped' ? 'bg-amber-50 text-amber-800' : structureLifecycle === 'building' || structureLifecycle === 'finalizing' ? 'bg-blue-50 text-blue-800' : 'bg-purple-50 text-purple-800'}`}>
+                          <Network size={13} /> {structurePresentation.label}
+                        </span>
+                        <span className="text-[11px] leading-5 text-slate-600">{structurePresentation.instruction}</span>
+                      </div>
+                      {structurePresentation.scope && <p className="mt-1 text-[10px] leading-4 text-slate-500">{structurePresentation.scope}</p>}
+                      {structureLifecycle === 'implemented' && parseStatus && <p className="mt-1 truncate text-[10px] text-slate-400" title={parseStatus}>{parseStatus}</p>}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {canRefreshStructure(structureLifecycle) && (
+                        <button
+                          onClick={structureLifecycle === 'finalizing' ? retryFinalImplementedGraph : initializeGraph}
+                          disabled={loading || (structureLifecycle === 'implemented' && !modelInfo)}
+                          className="flex items-center gap-1.5 rounded border border-slate-200 px-2 py-1.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                        >
+                          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Refresh
+                        </button>
+                      )}
+                      <button onClick={handleExport} disabled={!structureNodes.length} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">Export image</button>
+                    </div>
+                  </header>
+                  <div className="flex min-h-0 flex-1">
+                    <section className="min-w-0 flex-1 bg-slate-50 p-3">
+                      <GraphVisualizer
+                        ref={graphVisualizerRef}
+                        nodes={structureNodes}
+                        links={structureLinks}
+                        physicsEnabled={physicsEnabled}
+                        selectedNodeId={selectedStructureNode?.id || null}
+                        onExpand={proposedGraph ? () => {} : handleExpand}
+                        onCollapse={proposedGraph ? () => {} : handleCollapse}
+                        onToggleFixed={proposedGraph ? handleProposedToggleFixed : handleToggleFixed}
+                        onNodeMove={proposedGraph ? handleProposedNodeMove : handleNodeMove}
+                        onNodeSelect={handleGraphNodeSelect}
+                      />
+                    </section>
+                    <StructureInspector
+                      lifecycle={structureLifecycle}
+                      nodes={structureNodes}
+                      links={structureLinks}
+                      rootModel={structureRootModel}
+                      selectedNode={selectedStructureNode}
+                      sourcePaths={structureSourcePaths}
+                      onSelect={handleGraphNodeSelect}
+                      onOpenSource={handleOpenStructureSource}
                     />
                   </div>
-                  <PanelResizeHandle title="Project" panel="project" onResizeStart={handlePanelResizeStart} />
-                  <div className="mr-3 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 pt-11">
-                    <ProjectPanel
-                      currentSessionId={currentSessionId}
-                      currentProjectId={currentProjectId}
-                      currentProjectName={currentProjectName}
-                      projects={allProjects}
-                      filesLoaded={Object.keys(files).length}
-                      onProjectSelect={handleProjectSelect}
-                      onRefreshProjects={() => refreshProjectList()}
-                      onFileUpload={handleFileUpload}
-                    />
+                </div>
+              ) : <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center"><Network className="mx-auto mb-3 text-slate-400" size={28} /><h2 className="font-semibold text-slate-800">No simulation selected</h2><p className="mt-2 text-sm leading-6 text-slate-500">Ask the agent to generate one, then choose it above to explore its structure.</p></div></div>
+            )}
 
-                    <VisualizationControls
-                      modelInfo={modelInfo}
-                      rootModelName={rootModelName}
-                      parseStatus={parseStatus}
-                      loading={loading}
-                      hasNodes={nodes.length > 0}
-                      onRefreshGraph={initializeGraph}
-                      onExport={handleExport}
-                    />
+            {mainTab === 'run' && <SimulationRunPanel sessionId={currentSessionId} simulationId={currentProjectId} simulationName={currentProjectName} />}
 
-                    <SourcePreviewPanel
-                      selectedNode={selectedSourceNode}
-                      modelInfo={modelInfo}
-                      files={files}
-                    />
-                  </div>
+            {mainTab === 'files' && (
+              <div className="flex h-full min-h-0 flex-col bg-white md:flex-row">
+                <aside className="h-48 flex-shrink-0 overflow-hidden border-b border-slate-200 bg-slate-50 md:h-full md:w-64 md:border-b-0 md:border-r">
+                  <div className="border-b border-slate-200 bg-white px-3 py-3 text-xs font-semibold text-slate-700">Simulation files <span className="ml-1 font-normal text-slate-400">{selectableFiles.length}</span></div>
+                  <div className="h-[calc(100%-42px)] overflow-y-auto"><FileTreeBrowser filePaths={selectableFiles} keyModuleFilePaths={keyModuleFilePaths} selectedFilePath={selectedFilePath} onFileSelect={handleFileSelect} /></div>
                 </aside>
-              )}
-
-              <section className="relative flex-1 overflow-hidden bg-slate-50 p-4">
-                <GraphVisualizer
-                  ref={graphVisualizerRef}
-                  nodes={visibleNodes}
-                  links={visibleLinks}
-                  physicsEnabled={physicsEnabled}
-                  selectedNodeId={selectedSourceNode?.id || null}
-                  onExpand={handleExpand}
-                  onCollapse={handleCollapse}
-                  onToggleFixed={handleToggleFixed}
-                  onNodeMove={handleNodeMove}
-                  onNodeSelect={setSelectedSourceNode}
-                />
-              </section>
-            </div>
-          </section>
-        </div>
+                <section className="min-h-0 min-w-0 flex-1">
+                  <SourcePreviewPanel selectedNode={selectedSourceNode} selectedFilePath={selectedFilePath} modelInfo={modelInfo} files={displayedFiles} workspace />
+                </section>
+              </div>
+            )}
+          </div>
+        </section>
       </main>
     </div>
   );

@@ -7,7 +7,7 @@ description: Field-by-field reference for OptPilot environment, method, study, a
 
 !!! tip "New to OptPilot?"
 
-    Start with [First Job-Shop Run](getting-started.md) if you have not run
+    Start with [Getting Started](getting-started.md) if you have not run
     OptPilot yet. Use this page as a field reference once you have seen one
     successful run.
 
@@ -18,6 +18,20 @@ by:
 ```bash
 optpilot validate path/to/study.yaml
 ```
+
+!!! warning "Schema surface is broader than the current runner"
+
+    The Realm runner currently executes parameter and bounded file candidates
+    with Python batch methods/evaluators and package-owned `trialWorkspace`
+    seeds on the local process runtime, without setup/build, containers, host
+    values for Environments/backends, or ambient inheritance. A process Method
+    may explicitly declare `runtime.envFromHost`; only those named values are
+    supplied to its worker. Studio Runs retain only opaque local value
+    revisions; raw values are excluded from the durable process request and Run
+    evidence.
+    Command/session methods, command evaluators, containers, and legacy
+    path-backed output declarations may validate as authored schema but are not
+    executable by this retained slice. Unsupported studies fail closed.
 
 To validate a whole package folder, use:
 
@@ -38,7 +52,7 @@ optpilot package validate path/to/package \
 These checks are intentionally stricter than normal runtime path resolution:
 package source paths must stay inside the package being validated. This is what
 lets a package keep working after it is moved from an attached external project
-into `catalog/my_package/` or Studio's local `catalog/local_package/`.
+into `catalog/my_package/` or published as an immutable Realm package revision.
 
 To check or execute setup declarations:
 
@@ -70,7 +84,9 @@ apiVersion: optpilot.io/v1
 config: environment   # enum: environment | method | study | resource
 ```
 
-`config` selects the schema. OptPilot also writes an internal compiled run spec into run directories; users do not author that file directly.
+`config` selects the schema. At launch, OptPilot captures the explicit package
+root and retains an exact path-free study definition in the Realm. Users do not
+author or locate that internal definition as a run-directory file.
 
 ## Naming Rules
 
@@ -146,20 +162,6 @@ catalog/
         method.py
     studies/
       my_study.yaml
-  local_package/
-    environments/
-      my_environment/
-        environment.yaml
-        evaluator.py
-        assets/
-    methods/
-      my_method/
-        method.yaml
-        method.py
-        assets/
-    resources/
-      my_reference_project/
-        README.md
 ```
 
 Environment and method configs are reusable. A single environment
@@ -168,16 +170,16 @@ fidelity levels, metrics, or runtime settings. A single method implementation
 can have multiple method YAML files for different prompts, models,
 hyperparameters, or runtime settings.
 
-Study configs are concrete project runs. Keep them with the project or
-workspace where they are drafted and launched rather than registering them as
-catalog entries.
+Study configs are concrete run plans. Keep authored studies with their package
+or project. Studio Study Builder stores a new study in a Realm-managed workspace
+assembled from the exact selected package roots, so edits and launch can be
+fenced by an exact workspace revision.
 
 ## Path Resolution
 
 | Field | Relative to |
 | --- | --- |
 | `study.environmentConfig`, `study.methodConfig` | The study config file. |
-| `evidence.outputDir` | The launch working directory. An explicit CLI or Studio output root takes precedence over this field. |
 | `environment.evaluator.pythonPath`, `environment.trialWorkspace[].from`, `environment.methodContext.instructions`, `environment.methodContext.references[].path` | The environment config file. |
 | `method.entrypoint.pythonPath`, `method.runtime.container.build.context` | The method config file. |
 | `environment.evaluator.cwd` | The trial workspace created for the candidate evaluation. |
@@ -185,6 +187,12 @@ catalog entries.
 | `environment.records[].path` for file-backed records | The trial workspace after evaluator execution. |
 
 Python import strings are resolved by normal Python import rules after any declared `pythonPath` entries are prepended.
+
+These are authoring-path rules inside a package; they are not the browser API.
+Realm-backed Studio rows use exact catalog entry refs, and Study Builder accepts
+those refs rather than host config paths. The generated YAML remains portable
+because it writes ordinary relative
+`environmentConfig` and `methodConfig` strings.
 
 Most setup paths resolve from the config file that owns the field. Runtime
 paths that describe what the evaluator should read or produce resolve inside
@@ -205,7 +213,9 @@ Example:
 
 An environment config describes what can be evaluated and how the evaluation happens.
 
-The block below is an annotated field template, not a runnable example file. It intentionally shows alternatives such as Python, command, and adapter evaluators in one place. For complete runnable configs, see [First Job-Shop Run](getting-started.md) and the files under `catalog/example_package/`.
+The block below is an annotated schema template, not a runnable retained-study
+example. It intentionally shows alternatives; the current runner accepts only
+the Python/parameters/process subset described above.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -251,7 +261,7 @@ runtime:
   #   executable: docker
   #   network: disabled  # enum: enabled | disabled
 
-# Optional files copied into each trial workspace before evaluation.
+# Optional package files/directories mapped into each fresh trial workspace.
 trialWorkspace:
   - from: assets/input_data
     to: input_data
@@ -288,13 +298,13 @@ metrics:
   source: return         # enum: return | file | stdout | sqlite | custom
   keys: [score]
 
-# Optional evidence streams extracted after evaluation.
+# Legacy authoring fields. The retained runner rejects these until the strict
+# artifact/record contract lands.
 records:
   - name: events
     source: jsonl        # enum: jsonl | csv | sqlite_table | sqlite_query | custom
     path: events.jsonl
 
-# Optional files to save from each trial workspace after evaluation.
 outputFiles:
   - metrics.json
   - path: logs/*.txt
@@ -307,7 +317,18 @@ capabilities:
     description: Read-only access to a historical SQLite database.
 ```
 
-For a first runnable environment config, the minimum important fields are usually `id`, `evaluator`, `candidate`, and `metrics`.
+For the retained local-process slice, each `trialWorkspace.from`
+must resolve to a regular file or directory inside the explicit package root.
+OptPilot seals those bytes with the package, compiles ordered portable input
+layers, and gives each attempt a fresh writable trial volume initialized from
+them. The evaluator may modify that trial volume without changing the retained
+package. Shared directories and identical files may overlap; conflicting or
+case-colliding destinations fail closed. The config does not select copying,
+overlay, reflink, or another provider realization strategy.
+
+For a current runnable environment, use a Python evaluator, a parameter or
+bounded file candidate contract, process runtime, and no legacy
+`records`/`outputFiles`.
 
 ### Evaluator Return
 
@@ -325,7 +346,11 @@ def evaluate(candidate_runtime, context):
     }
 ```
 
-For parameter candidates, `candidate_runtime` is the candidate parameter dictionary. For file candidates, it contains the trial workspace, candidate root, manifest path, and candidate file records.
+For parameter candidates, `candidate_runtime` is the candidate parameter
+dictionary. For file candidates, it contains the fresh trial-workspace path,
+the environment-owned candidate root, the validated path-free file declaration,
+and optional entrypoint/options. It never contains a Realm content ref,
+immutable-store path, or staging token.
 
 `evaluator.settings` is intentionally a plain object. OptPilot does not define
 domain-specific concepts such as scenarios, datasets, queries, or benchmark
@@ -469,7 +494,13 @@ constraints:
 
 If a candidate violates a constraint, OptPilot rejects it before calling the evaluator and records the failed constraint id in candidate evidence.
 
-`files` candidates are generated file sets. `trialWorkspace` seeds the workspace; the method returns references to generated files; the materializer copies those files into `candidate.materialize.root`.
+`files` candidates are generated file sets. `trialWorkspace` optionally seeds
+the workspace, and the method stages generated files through
+`runtime_context.candidate_staging_dir`. OptPilot freezes the complete proposal,
+seals each tree, atomically admits it, and projects the selected immutable tree
+under `candidate.materialize.root` as the final input layer of every fresh
+attempt. The config describes semantics only; it does not select copying,
+overlay, reflink, or another provider realization.
 
 Environment field fragments:
 
@@ -523,7 +554,8 @@ entrypoint:
   protocol: batch        # enum: batch | session
   pythonPath: [.]
 
-  # Alternative command entrypoint. Command methods currently use batch protocol.
+  # Alternative command entrypoint. Batch-shaped in the schema but not yet
+  # executable by the retained runner.
   # command: [python, method.py, "{input_file}", "{output_file}"]
 
 # Free object passed to the method as method settings.
@@ -543,10 +575,46 @@ runtime:
   sandbox: process       # enum: process | container
 ```
 
-For a first runnable method config, the minimum important fields are usually
-`id`, `entrypoint`, and `accepts`. The environment owns the candidate contract;
+For a current runnable method, use a Python `batch` entrypoint accepting
+`parameters` with process runtime. The environment owns the candidate contract;
 OptPilot validates every submitted candidate against that environment contract
 during the run.
+
+### Exact Python Dependencies For Retained Runs
+
+An Environment or Method in the current process runtime can declare Python
+dependencies without relying on packages installed in Studio's host Python.
+Vendor pure-Python wheels in the same package, record each wheel's SHA-256 in a
+lock file, and use the same narrow `runtime.setup` declaration on whichever
+component needs those imports:
+
+```yaml
+runtime:
+  sandbox: process
+  setup:
+    cache: prepared
+    timeoutSeconds: 300
+    steps:
+      - uses: python-venv
+        cwd: ../..
+        requirements: [requirements.lock]
+```
+
+Paths are resolved from `cwd`, which is itself relative to the component YAML.
+Each non-comment lock-file line has exactly this form:
+
+```text
+vendor/example_dependency-1.2.3-py3-none-any.whl --hash=sha256:<64 lowercase hex characters>
+```
+
+This first retained dependency slice intentionally accepts only vendored,
+hash-locked `py3-none-any` (or `py2.py3-none-any`) wheels. It does not run shell
+commands, contact a package index, install the project itself, inherit host
+secrets, or accept native extensions. During Workspace Setup, **Check** validates
+the declaration and paths; **Test** verifies the hashes, prepares the exact
+read-only dependency layers, and executes the Study through the ordinary Run
+path. A successful preparation is cached locally for speed, while every Run
+retains the exact dependency trees it used.
 
 Batch Python methods can implement:
 
@@ -569,15 +637,19 @@ class MyMethod:
         ...
 ```
 
-Session Python methods implement `run(session)` and actively submit candidates through the session object. Batch and session protocols have the same candidate/evidence capability; the difference is passive request/response versus active tool-like interaction.
+`protocol: session` is reserved in the authoring schema, but the public Realm
+runner rejects it. Live submit/wait/poll semantics are not implemented; OptPilot
+does not execute a session config with degraded batch timing.
 
-Command methods receive a JSON request on stdin unless `{input_file}` is present. If `{output_file}` is present, they write the response there; otherwise OptPilot reads stdout.
+The command request/response shape is an authoring target, not a current
+retained execution capability.
 
 ## Study Config
 
 A study config binds one environment config to one method config.
 
-The block below is an annotated field template. [First Job-Shop Run](getting-started.md) shows a complete runnable study config from `catalog/example_package/studies/`.
+The block below is an annotated field template for the current retained study
+shape.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -607,11 +679,15 @@ execution:
 
 evidence:
   level: standard        # enum: minimal | standard | full
-  outputFileStorage: reference # enum: reference | copy
 
 reproducibility:
   seed: 0
 ```
+
+`weighted_mean` currently uses uniform weights because the study schema does
+not yet expose an explicit weight vector. The evaluator and the Workbench
+candidate-result projection apply that same rule; use `mean` when the more
+specific label is unnecessary.
 
 A study config does not describe domain inputs directly. If the selected
 environment needs a scenario, dataset, query, simulator argument set, or
@@ -619,7 +695,8 @@ benchmark case list, put that in the environment config's `evaluator.settings`
 or create another environment config variant. This keeps studies small: they
 choose the environment, method, objective, budget, evidence policy, and seed.
 
-Containerized environment runtime:
+Containerized environment runtime (schema/target; not executable by the current
+retained runner):
 
 Environment `runtime` fragment:
 
@@ -650,7 +727,7 @@ For example, these are separate environment configs rather than different
 OptPilot study concepts:
 
 ```text
-catalog/local_package/environments/my_benchmark/
+catalog/my_package/environments/my_benchmark/
   environment_small.yaml
   environment_large.yaml
   evaluator.py
@@ -666,37 +743,187 @@ still returns one OptPilot result with metric values, output files, records,
 and event summary. If per-case details matter, write them as configured
 `records` or `outputFiles` so they appear in evidence.
 
+### Studio Study Builder Boundary
+
+Study Builder accepts an exact environment and method from one immutable Realm
+package revision or from non-conflicting package roots in different Realm
+revisions in the same content store. Saving supplies the complete exact package
+selections and component focus paths to one actor-bound Create Workspace
+command. One distinct root is adopted directly. Multiple roots use one
+whole-tree manifest union without copying file blobs: directories can merge, but
+any file overlap, file/directory conflict, or case-fold collision rejects.
+
+The command binds and checks recovery before source reads; multi-root assembly
+uses a leased internal attempt, retained proof, atomic final workspace commit,
+and bounded startup cleanup. Cross-store transfer remains a future explicit
+import, never an implicit copy. Updates include the expected workspace revision.
+Launch commits that checkout and validates and plans from a read-only projection
+of the exact committed workspace revision. The checkout's absolute path is never
+part of the study's durable identity.
+
 ## Launchable Interfaces
 
 Reusable environments, methods, and resources can optionally declare a small
 frontend or graphical helper with an `interface` block. Studio shows **Launch
 Interface** for catalog entries that include this block.
 
-When launched, Studio copies the catalog folder into an editable draft
-workspace, starts the command inside that workspace's container runtime, and
-opens the configured port in the Preview panel.
+When launched from the Catalog, Studio keeps component source read-only and
+creates private launch-scoped runtime, dependency, and frontend storage. An
+interface that declares `outputs: true` (or the action form described below)
+also receives private control and output storage. Studio starts the command in
+that transient runtime and opens the configured port in Preview. Use **Edit in
+Workspace** when the source itself must be changed; launching an interface does
+not create a durable workspace.
 
 ```yaml
 interface:
   label: Demo UI
   description: Optional short note shown in Studio.
+  outputs: true
   command: [python, -m, http.server, "5173", --bind, 0.0.0.0]
-  port: 5173
   cwd: .
   env:
     APP_MODE: demo
-  extraPorts: [8000]
-  readyPath: /
-  readyTimeoutSeconds: 60
+  runtime:
+    sandbox: process
+  grants:
+    network: disabled
+    envFromHost: []
+    secretsFromHost: []
+  resources:
+    cpu: 1
+    memoryMiB: 2048
+    gpus: 0
+  timeoutSeconds: 3600
+  presentation:
+    kind: web
+    port: 5173
+    extraPorts: [8000]
+    readyPath: /
+    readyTimeoutSeconds: 60
+  accepts:
+    selectionKinds: [candidate, trial]
+    mediaTypes: []
 ```
 
-Use `command` for the long-running frontend process and `port` for the main
-browser port. The command should bind to `0.0.0.0` inside the workspace runtime
-so Studio can proxy it. `cwd` is relative to the copied workspace root.
-`extraPorts` is only needed when the frontend calls another local backend port
-through the same Preview session. `readyPath` is the HTTP path Studio probes
-before showing the preview, and `readyTimeoutSeconds` controls how long launch
-waits for first-time installs or builds.
+Use `command` for the long-running frontend process and `presentation.port` for
+the main browser port. The command should bind to `0.0.0.0` inside its runtime
+so Studio can proxy it. `cwd` is a portable path relative to the component
+source. Fixed nonsecret values belong in `env`; required user- or machine-selected
+values such as model ids belong in `grants.envFromHost`; secret names belong in
+`grants.secretsFromHost`; and network authority belongs in `grants.network`.
+Studio resolves both host-variable lists only from **Local environment variables** and
+never exposes their values in catalog summaries. Capacity and duration belong
+in `resources` and `timeoutSeconds`. `presentation.extraPorts` exposes
+additional local service ports, while its readiness fields define the bounded
+HTTP probe.
+
+Catalog launch currently accepts process-declared profiles and runs them
+through Studio's managed authoring-runtime provider. It does not yet
+independently enforce every declared per-profile network, resource, or
+long-running timeout field; unsupported runtime/profile combinations fail
+closed. Contextual Environment Preview uses the narrower retained-profile and
+trusted-container checks described in [Studio UI](ui.md).
+
+Output reporting is part of this same optional `interface` contract for
+Environments, Methods, and Resources. Set `outputs: true` on a producing launch
+profile; omit it for a view-only interface. This flag declares the capability,
+not a list of paths. For each opted-in launch, Studio creates a different private
+output area and control file and injects their locations as
+`OPTPILOT_INTERFACE_OUTPUT_ROOT` and `OPTPILOT_INTERFACE_OUTPUTS_FILE`.
+
+To report a result, the interface writes the complete file or folder below
+`OPTPILOT_INTERFACE_OUTPUT_ROOT`, stops modifying it, and appends one
+newline-terminated JSON object to `OPTPILOT_INTERFACE_OUTPUTS_FILE`:
+
+```json
+{"schema_version":"optpilot.interface.output.v1","id":"simulator-001","label":"Generated simulator","kind":"tree","root":"output","path":"results/simulator-001"}
+```
+
+`kind` is `file` or `tree`, `root` is always `output`, and `path` is a canonical
+relative path below the supplied root. This is a language-neutral environment
+variable and JSONL boundary: interface code does not import or depend on an
+OptPilot module. Studio validates and seals the relinquished bytes, then shows
+a read-only output card. Repeating the same record is idempotent; changed bytes
+must use a new `id`. A ready folder can then be saved as a managed editable
+Workspace through the same one-selection Create Workspace command used by
+Study Builder, without trusting a mutable app path. **Output missing?** is a
+manual recovery path for a completed folder that the interface failed to
+report; it uses the same capture lifecycle.
+
+These two handles are supplied only to an opted-in interface launch. The
+Environment evaluator and Method entrypoint used by a Study keep their ordinary
+execution contracts and do not need to implement this protocol.
+
+If a reported folder has a useful bounded command—for example, running a
+generated simulator—declare that command in the registered interface profile:
+
+```yaml
+interface:
+  outputs:
+    actions:
+      - id: run-simulation
+        label: Run simulation
+        command:
+          - bash
+          - -lc
+          - 'exec "$OPTPILOT_PREPARED_RUNTIME_ROOT/python-venv/bin/python" -u run.py "$@"'
+          - output-action
+        cwd: .
+        timeoutSeconds: 120
+        acceptsArguments: true
+        runtime: originating-interface
+  # command, presentation, runtime, grants, and other profile fields follow
+```
+
+The command belongs to the exact registered Catalog profile; an output record
+or browser request may select its `id` but cannot supply another command,
+image, environment, mount, or network policy. Studio snapshots the selected
+folder and starts a fresh network-disabled sibling container from the same
+immutable image and read-only prepared runtime as the originating interface.
+It does not execute generated code inside the live interface container and
+does not pass that interface's environment variables or secrets. `cwd` is
+relative to the selected folder, `timeoutSeconds` is bounded to one hour, and
+extra arguments are accepted only when `acceptsArguments` is true.
+A request may omit `timeout_seconds` to use the authored maximum, or supply a
+positive value no greater than that maximum to finish sooner; it can never
+extend the registered action's lifetime.
+
+An interface that needs the same action for its own verification UI also
+receives `OPTPILOT_INTERFACE_OUTPUT_ACTION_ROOT`. Its language-neutral request,
+response, cancellation, and result files let the interface select a declared
+action for a tree staged below the broker's dedicated `inputs/` directory
+without importing OptPilot. These transient execution inputs are separate from
+`OPTPILOT_INTERFACE_OUTPUT_ROOT`, so they never appear as generated output.
+Studio still chooses the runtime and command. This is the same execution path used by the
+output card, so automatic checks and user-triggered runs do not require two
+different sandbox mechanisms.
+
+When a component genuinely needs several independent commands or runtime
+policies, use `launchProfiles`. Each entry is complete and named; profiles do
+not inherit from the surrounding interface or from one another:
+
+```yaml
+interface:
+  launchProfiles:
+    - id: inspect
+      label: Inspect Candidate
+      command: [python, -m, viewer]
+      presentation: {kind: web, port: 5173}
+      accepts: {selectionKinds: [candidate]}
+    - id: replay
+      label: Replay Trial
+      command: [python, -m, replay]
+      grants: {network: disabled, envFromHost: [], secretsFromHost: []}
+      presentation: {kind: web, port: 6173, readyPath: /health}
+      accepts: {selectionKinds: [trial]}
+```
+
+`launchProfiles` is mutually exclusive with all top-level profile fields. A
+profile `runtime` may contain only `sandbox`, `setup`, and typed container
+image/build/platform/engine settings. It cannot carry environment variables,
+host-secret names, network authority, filesystem grants, resources, or launch
+timeouts.
 
 Resources can declare the same block in an optional
 `optpilot.resource.yaml` file at the resource root:
@@ -706,12 +933,19 @@ apiVersion: optpilot.io/v1
 config: resource
 id: case-browser
 name: Case Browser
+purpose: viewer
 tags: [frontend]
 
 interface:
   command: [python, -m, http.server, "5173", --bind, 0.0.0.0]
-  port: 5173
+  presentation: {kind: web, port: 5173}
+  accepts: {selectionKinds: [workspace]}
 ```
+
+The optional `purpose` field is bounded to `generator`, `viewer`, `template`,
+or `reference`. Studio shows the matching human-readable Catalog badge. If the
+field is absent, Studio shows **Resource**; it does not infer a role from tags,
+paths, files, or commands.
 
 ## JSON Schema Files
 

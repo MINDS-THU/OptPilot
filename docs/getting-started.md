@@ -41,70 +41,85 @@ uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameter
 Run it:
 
 ```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package
 ```
 
 The command prints a JSON summary. A successful first run should show:
 
-- `completed_trials: 1`
-- `failure_count: 0`
-- a non-empty `run_dir`
-- `best_metric` and `best_trial_id`
+- `run_status: succeeded`
+- an explicit `stop_code`, normally `max_trials` for this study
+- `counts.logical_trials.terminal: 1` and `successful: 1`
+- `counts.logical_trials.final_failures: 0`
+- `counts.attempts.total: 1` and `counts.observations.total: 1`
+- a non-empty `run_id`
+- `best.metric` plus correlated Candidate, logical-trial, attempt, and
+  observation ids (this is a best single observation, not complete-Candidate
+  ranking)
 
 Example excerpt:
 
 ```json
 {
-  "completed_trials": 1,
-  "failure_count": 0,
-  "best_metric": 1.2009657009657009,
-  "status": "completed"
+  "schema": "optpilot.run-summary-projection.v1",
+  "run_id": "run-…",
+  "run_status": "succeeded",
+  "stop_code": "max_trials",
+  "counts": {
+    "logical_trials": {
+      "terminal": 1,
+      "successful": 1,
+      "final_failures": 0
+    },
+    "attempts": {"total": 1, "retries": 0},
+    "observations": {"total": 1}
+  },
+  "best": {
+    "candidate_id": "fixed-rule-parameters-0000",
+    "metric": 1.2009657009657009
+  }
 }
 ```
 
-Run ids, timestamps, trial ids, and exact output paths will differ on your
-machine. The key first-run checks are one completed trial and zero failures.
+Run, trial, attempt, and observation ids will differ on your machine. The key
+first-run checks are a succeeded Run, one successful terminal logical trial,
+one attempt and observation, and zero final failures.
 
-Run evidence is written under `runs/` unless you pass `--output-root` or set
-`evidence.outputDir` in the study.
+The Run is retained in OptPilot's private local Realm; it is not written as a
+mutable `runs/` directory. Treat the printed summary as a read model, not as a
+resume file or the canonical evidence store.
 
 If you want copy-pasteable inspection commands, save the command output first:
 
 ```bash
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package \
   | tee /tmp/optpilot-first-run.json
 ```
 
-Then extract the run directory and inspect the summary:
+Then print the canonical Run id:
 
 ```bash
-export RUN_DIR=$(uv run python - <<'PY'
+export RUN_ID=$(uv run python - <<'PY'
 import json
 from pathlib import Path
-print(json.loads(Path("/tmp/optpilot-first-run.json").read_text())["run_dir"])
+print(json.loads(Path("/tmp/optpilot-first-run.json").read_text())["run_id"])
 PY
 )
-
-uv run python -m json.tool "$RUN_DIR/summary.json"
+echo "$RUN_ID"
 ```
 
-Inspect the trial observation records:
+Start Studio and select that id on **Runs** to inspect its Overview,
+Candidates, trials, attempts, observations, artifacts, and exact-head timeline:
 
 ```bash
-uv run python - <<'PY'
-import json
-import os
-from pathlib import Path
-
-run_dir = Path(os.environ["RUN_DIR"])
-for line in (run_dir / "observations.jsonl").read_text().splitlines():
-    print(json.dumps(json.loads(line), indent=2))
-PY
+uv run optpilot ui --open-browser
 ```
 
 ## Environment Config
 
-The environment config says what OptPilot can evaluate:
+The environment config says what OptPilot can evaluate. This abridged excerpt
+shows the reusable evaluator, Candidate contract, and metric contract:
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -136,51 +151,21 @@ candidate:
         min: -5.0
         max: 5.0
         default: 1.0
-      processing_time_weight:
-        valueType: float
-        min: -5.0
-        max: 5.0
-        default: -1.0
-      machine_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0
-        default: -0.1
-      job_ready_weight:
-        valueType: float
-        min: -2.0
-        max: 2.0
-        default: -0.1
-
-methodContext:
-  references:
-    - name: ft06_small
-      path: cases/ft06_small.yaml
-      type: job_shop_case
-    - name: la01_tiny
-      path: cases/la01_tiny.yaml
-      type: job_shop_case
-    - name: ft06_standard
-      path: cases/ft06_standard.yaml
-      type: job_shop_case
+      # The source file defines three more bounded numeric weights.
 
 metrics:
   source: return
   keys: [makespan, normalized_makespan, tardiness, utilization, feasible, operation_count]
-
-outputFiles:
-  - schedule_*.json
-  - job_shop_metrics*.json
 ```
 
 Important details:
 
 - `evaluator.settings.cases` are environment-owned evaluator inputs.
 - `candidate.parameters.schema` defines the parameter names and bounds.
-- `methodContext.references` exposes read-only case files to methods that ask
-  for method context.
 - `metrics.keys` names the metrics that a study may choose as objective or
   secondary metrics.
+- The evaluator returns typed artifact declarations alongside its metrics;
+  output placement is not configured with legacy path globs.
 
 In these tutorial studies, `normalized_makespan` is the main score:
 
@@ -265,29 +250,23 @@ direction tells OptPilot how to rank trials and write the run summary.
 
 ## Inspect The Run
 
-After the first run, inspect these files first:
+After the first Run, use Studio's bounded Run views:
 
-| File | What it tells you |
+| View | What it tells you |
 | --- | --- |
-| `summary.json` | Best metric, best trial, failure count, and run status. |
-| `observations.jsonl` | Trial outcomes and metric values. |
-| `trials/<trial-id>/attempt-1/job_shop_metrics.json` | Per-case job-shop metrics written by the evaluator. |
+| Overview | Status, stop reason, budget, counts, objective, and best eligible Candidate. |
+| Candidates | Proposed inputs, complete-plan outcomes, ranks, inspection actions, and comparisons. |
+| Trials and attempts | Logical budget use, retries, execution state, and terminal outcomes. |
+| Observations and artifacts | Evaluator metrics, constraints, retained schedules, and per-case job-shop results. |
+| Timeline | Ordered lifecycle and Method-exchange evidence at one exact Realm head. |
 
-Then inspect the supporting evidence:
-
-| File | What it tells you |
-| --- | --- |
-| `study_spec.json` | Compiled environment, method, objective, runtime, and execution policy. |
-| `candidates.jsonl` | Candidate validation and materialization records. |
-| `trials.jsonl` | Terminal trial records and execution metadata. |
-| `method_calls.jsonl` | Method requests, responses, and errors. |
-
-See [Evidence](evidence.md) for the full file layout.
+See [Runs and Evidence](evidence.md) for the canonical evidence model.
 
 ## Troubleshooting
 
-If `failure_count` is greater than zero, open `summary.json` first, then inspect
-`trials.jsonl` and `method_calls.jsonl` for the failing trial or method call.
+If `counts.logical_trials.final_failures` is greater than zero, open the Run in
+Studio, then inspect its terminal logical trials, attempts, observations,
+timeline, and bounded Method/runtime logs.
 
 If the command cannot find `catalog/example_package/`, make sure you are in a
 source checkout of the repository. The PyPI core package does not include the

@@ -64,7 +64,7 @@ OPTPILOT_OPENHANDS_API_KEY=...
 ```mermaid
 flowchart TB
   Studio["Studio page context"]
-  Settings["Studio settings\nassistant + secrets"]
+  Settings["Studio settings\nassistant + local variables"]
   Chat["model chat\noptional"]
   OpenHands["OpenHands bridge\noptional workspace tools"]
   Approval["approval gate\nfor actions"]
@@ -78,17 +78,19 @@ flowchart TB
   Approval --> Workspace
 ```
 
-## Settings And Secrets
+## Settings And Local Variables
 
 Studio settings have two scopes:
 
 | Settings area | Purpose |
 | --- | --- |
 | Assistant | OpenHands URL, model, API key, assistant capabilities, and approval defaults. |
-| Environment & Secrets | Platform-level environment variables that component configs may request through `envFromHost`. |
+| Local environment variables | Machine-local environment variables that component configs may request through `envFromHost`. |
 
-Secrets are write-only in the browser. Studio can show that a value is
-configured, but it does not echo the secret value back into the page.
+Values are write-only in the browser. Studio can show that a value is
+configured, but it does not echo the value back into the page. They are stored
+as plaintext in OptPilot's local settings file, with mode `0600` where the
+platform supports it. This local file is not a secret vault.
 
 Components should declare the environment variables they need. For example, an
 LLM method can declare `OPENROUTER_API_KEY` in its runtime environment
@@ -118,11 +120,13 @@ It can act on editable attached workspaces when allowed:
 - write files
 - run shell commands in the workspace runtime
 - open workspace previews
-- prepare catalog registrations
+- prepare package plans
 - draft or save study YAML
 
-The assistant should not modify immutable catalog source directly. To edit or
-execute package code, create an editable workspace copy first.
+The assistant should not modify immutable catalog source directly. Editing
+package code requires an editable workspace. Launching a declared catalog
+interface is different: Studio keeps its source read-only and gives the process
+private launch-scoped runtime and output storage.
 
 ## Approvals
 
@@ -132,7 +136,7 @@ Higher-impact actions are approval-gated in Studio. This includes:
 - running shell commands
 - launching studies
 - stopping jobs
-- applying catalog registrations
+- applying package plans
 
 OpenHands-native tools are limited to low-risk inspection and planning, such as
 `grep`, `glob`, and `task_tracker`. Studio exposes OpenHands-compatible

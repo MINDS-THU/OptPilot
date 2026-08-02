@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, List
 
 from job_shop_lib_solvers import solve_job_shop_cases
@@ -32,7 +31,7 @@ class OrToolsCpSatSolverMethod:
         )
         return [
             {
-                "candidate_id": f"job-shop-lib-cpsat-{uuid.uuid4().hex[:12]}",
+                "candidate_id": "job-shop-lib-cpsat-0000",
                 "format": "parameters",
                 "spec": {"solutions": solutions},
                 "generator": {
@@ -40,7 +39,6 @@ class OrToolsCpSatSolverMethod:
                     "strategy": "job_shop_lib_ortools_solver",
                     "time_limit_seconds": time_limit,
                 },
-                "metadata": {"summary": "Schedules produced by JobShopLib ORToolsSolver."},
             }
         ]
 

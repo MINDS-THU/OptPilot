@@ -55,9 +55,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "level": {"enum": ["minimal", "standard", "full"]},
-        "outputFileStorage": {"enum": ["reference", "copy"]},
-        "outputDir": {"type": "string"}
+        "level": {"enum": ["minimal", "standard", "full"]}
       }
     },
     "reproducibility": {

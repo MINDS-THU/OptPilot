@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: production-agv-scheduling-smoke
+description: Fast end-to-end check of the simulator and the initial executable policy.
+tags: [production, agv, smoke, files]
+
+environmentConfig: ../environments/production_agv_scheduling/environment_smoke.yaml
+methodConfig: ../methods/rule_grid/method_smoke.yaml
+
+objective:
+  metric: mean_total_score
+  direction: maximize
+  secondaryMetrics: [std_total_score, mean_efficiency_score, mean_quality_cost_score, mean_agv_score]
+
+budget:
+  maxTrials: 1
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 120
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 42

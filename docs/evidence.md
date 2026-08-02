@@ -1,187 +1,237 @@
 ---
-title: Evidence
-description: Files recorded by OptPilot runs and how methods can inspect prior observations.
+title: Runs and Evidence
 ---
 
-# Evidence
+# Runs and Evidence
 
-Evidence is the recorded history of one OptPilot run.
+OptPilot stores each study as a canonical run in a local Realm. A run is not a
+folder of mutable JSON files: the Realm owns its exact study definition,
+candidates, logical trials, attempts, observations, retained artifacts,
+execution history, method exchanges, and terminal state.
 
-The public configs define what should happen:
+This gives the CLI, recovery logic, and Studio one source of truth.
 
-```text
-method proposes candidate
-environment evaluates candidate
-OptPilot records evidence
-```
+## What a run contains
 
-The run directory shows what actually happened: which candidates were proposed, how they were materialized, which trials succeeded or failed, which metrics were returned, and where evaluator output files were written.
+The public evidence model keeps related identities separate:
 
-```mermaid
-flowchart LR
-  Method["method call"]
-  Candidate["candidate record\ncandidates.jsonl"]
-  Trial["trial workspace\ntrials/<trial>/attempt-1"]
-  Observation["observation\nobservations.jsonl"]
-  Summary["summary.json"]
-  EvidenceView["EvidenceView\nlater method calls"]
-
-  Method --> Candidate
-  Candidate --> Trial
-  Trial --> Observation
-  Observation --> Summary
-  Observation --> EvidenceView
-  Candidate --> EvidenceView
-```
-
-## Run Directory
-
-By default, runs are written to `runs/` under the current workspace. Studio uses this workspace-level run root, and direct CLI runs do the same unless you override it with `--output-root` or `evidence.outputDir`. Catalog packages should stay focused on authored methods, environments, resources, and studies; generated run evidence is user-local runtime data.
-
-Common files written by the local evidence store:
-
-| File | Meaning |
+| Record | Meaning |
 | --- | --- |
-| `summary.json` | Final run summary, best metric, failure count, and run status. |
-| `study_spec.json` | Compiled run spec generated from the study, environment, and method configs. |
-| `candidates.jsonl` | Candidate records, validation details, and materialization details. |
-| `observations.jsonl` | Trial observations and metric values. |
-| `trials.jsonl` | Terminal trial records, statuses, and execution metadata. |
-| `method_calls.jsonl` | Method requests, responses, and errors. |
-| `method_events.jsonl` | Events emitted by methods. |
-| `scheduler_events.jsonl` | Scheduling and worker events. |
-| `environment_snapshot.json` | Environment contract used by the run. |
-| `run_policy.json` | Budget, retry, parallelism, and timeout policy. |
-| `run_lineage.json` | Resume and branch lineage metadata. |
+| Run definition | Exact environment, method, candidate contract, objective, policy, and retained source/runtime closure. |
+| Candidate | One normalized proposal. The same candidate may be evaluated more than once. |
+| Logical trial | One accepted evaluation and one budget slot. |
+| Attempt | A concrete execution of a logical trial. Retries create new attempts without consuming another logical-trial slot. |
+| Observation | The evaluator outcome and metric values adopted from a terminal attempt. |
+| Artifact | A retained file/tree result with content identity and availability. |
+| Timeline event | An ordered lifecycle fact correlated to the records above. |
+| Method exchange | A durable proposal or observation-delivery checkpoint for the retained method worker. |
 
-The exact set can vary by runtime path and by which events, method calls,
-output files, and records a run actually produces. `evidence.level` is compiled
-into the run policy and kept in the audit trail; the common JSON and JSONL files
-above are still written by normal local runs.
+The fenced run controller is the only canonical writer. Runtime paths, process
+ids, leases, and provider details are operational facts; they do not become the
+semantic identity of a run.
 
-A typical local run looks like:
+## CLI result
 
-```mermaid
-flowchart TB
-  Summary["summary.json\nbest metric + status"]
-  Observations["observations.jsonl\ntrial metrics"]
-  Candidates["candidates.jsonl\ncandidate manifests"]
-  Calls["method_calls.jsonl\nproposal requests + responses"]
-  Trial["trials/<trial>/attempt-1/\nmaterialized candidate + evaluator outputs"]
-  Outputs["schedule_*.json\njob_shop_metrics*.json\nlogs or artifacts"]
-  EvidenceFiles["evidence_files/\noptional copied outputs"]
+A successful `optpilot run` prints a
+`optpilot.run-summary-projection.v1` JSON object. Important fields include:
 
-  Calls --> Candidates
-  Candidates --> Trial
-  Trial --> Outputs
-  Trial --> Observations
-  Observations --> Summary
-  Outputs -. "when copied" .-> EvidenceFiles
-```
+- `run_id`, `run_status`, `submission_state`, and `stop_code`
+- objective metric and direction
+- accepted and terminal logical-trial counts
+- attempt, retry, observation, success, and final-failure counts
+- best single-observation metric and its correlated
+  candidate/trial/attempt/observation ids (this is not Candidate ranking)
+- an exact projection cursor with Realm revision and event sequence
 
-```text
-runs/my-study-2026-06-20T.../
-  summary.json
-  study_spec.json
-  run_policy.json
-  run_lineage.json
-  environment_snapshot.json
-  candidates.jsonl
-  trials.jsonl
-  observations.jsonl
-  method_calls.jsonl
-  scheduler_events.jsonl
-  prompts/
-    prompt-.../prompt.json
-  candidates/
-    candidate-.../files/...
-  trials/
-    trial-.../
-      attempt-1/
-        candidate/
-        candidate.json
-        workspace_manifest.json
-        evaluator outputs...
-  evidence_files/
-    trial-.../
-      copied outputs when evidence.outputFileStorage: copy
-```
+The summary is a read model derived from one exact ledger head. It is not a
+resume file and cannot override canonical evidence.
 
-The most important files for debugging are usually `summary.json`,
-`observations.jsonl`, `candidates.jsonl`, and the corresponding
-`trials/<trial-id>/attempt-<n>/` directory. Retries add later attempt folders
-without overwriting earlier evaluator work.
-
-## Storage Roles
-
-OptPilot uses a few runtime folders with different jobs.
-
-| Runtime storage | Purpose |
-| --- | --- |
-| Method workspace | Scratch space for one method invocation. Command wrappers often write request files and logs here. |
-| Candidate store | Durable handoff area for candidates produced by methods, especially generated files. |
-| Trial workspace | Fresh evaluation directory for one trial. `trialWorkspace` entries are copied here and file candidates are materialized here. |
-| Evidence directory | Run-level records, summaries, and retained evaluator outputs. |
-
-The evaluator normally reads the trial workspace, not the candidate store. For file candidates, the runner copies files from the candidate store into the trial workspace according to the environment candidate contract.
-
-## Output Files
-
-Evaluators may produce logs, JSON summaries, CSV files, SQLite databases, images, or other files inside the trial workspace.
-
-There are two ways those files become visible in evidence:
-
-- the evaluator returns `output_files` descriptors
-- the environment config lists `outputFiles` patterns to collect after evaluation
-
-`evidence.outputFileStorage` controls whether file bytes are copied into evidence storage:
-
-| Value | Behavior |
-| --- | --- |
-| `reference` | Evidence records paths to files where they were produced, usually inside trial workspaces. |
-| `copy` | Matching output files are copied into evidence storage so they remain easy to inspect even if trial workspaces are later cleaned up. |
-
-Metric values should still be returned or extracted through `metrics`. Output files are for supporting evidence, debugging, traces, plots, logs, and databases.
-
-## EvidenceView
-
-Methods can inspect previous results through `EvidenceView` during iterative optimization.
-
-Typical information available through this API includes:
-
-- observations and metric values
-- trial records
-- candidate records
-- method call records
-- scheduler events
-- method events
-- extracted records
-- evaluator output files and artifacts
-
-This gives methods a stable way to learn from previous trials without parsing raw run files by hand.
-
-```python
-def propose(self, n_candidates, study_state, evidence_view):
-    recent = evidence_view.observations(limit=3)
-    traces = evidence_view.artifacts(kind="json", limit=5)
-    rows = evidence_view.records("events", limit=20)
-    ...
-```
-
-`records(...)` reads rows extracted from configured JSONL, CSV, SQLite, or custom record streams. `artifacts(...)` and `output_files(...)` return metadata for files produced during evaluation, such as logs, plots, JSON reports, CSV files, or SQLite databases. They return paths and content references so a method can decide what to read.
-
-## Resume And Branch
-
-Resume appends more trials to an existing run:
+Run an authored study from one explicit package root:
 
 ```bash
-uv run optpilot run path/to/study.yaml \
-  --resume-run-dir path/to/existing-run
+uv run optpilot run path/to/package/studies/my_study.yaml \
+  --package-root path/to/package
 ```
 
-Branch starts a new run that records a previous run as its parent:
+The current retained compiler supports the bounded parameter-or-file Python
+process/batch slice, including package-owned `trialWorkspace` seed layers,
+immutable file-candidate layers, and bounded vendored, hash-locked pure-Python
+dependency preparation. It rejects unsupported configs instead of falling back
+to an older runner. In particular, command/session methods, opaque candidates,
+command evaluators, containers, arbitrary setup/build execution, host-derived
+environment/secrets, and legacy path-backed output declarations are not yet
+executable through this path.
+
+The bundled catalog still contains broader teaching and authoring fixtures, so
+validation success does not imply that every example is in the current retained
+execution slice.
+
+## Where the Realm lives
+
+By default, `optpilot run` opens OptPilot's private per-user Realm:
+
+- macOS: `~/Library/Application Support/OptPilot/realm`
+- Windows: `%LOCALAPPDATA%/OptPilot/realm`
+- Linux: `$XDG_DATA_HOME/optpilot/realm`, or
+  `~/.local/share/optpilot/realm`
+
+Use `--realm-root` only when you deliberately need a separate local Realm,
+such as an isolated test:
 
 ```bash
-uv run optpilot run path/to/study.yaml \
-  --branch-from-run-dir path/to/existing-run
+uv run optpilot run path/to/package/studies/my_study.yaml \
+  --package-root path/to/package \
+  --realm-root /absolute/path/to/private-test-realm
 ```
+
+`OPTPILOT_REALM_ROOT` can override the default location. A Realm root is
+private operational storage, not an output directory or a package folder. Do
+not sync it through a project drive, edit its database, or treat internal files
+as a public evidence format.
+
+`optpilot package smoke` uses a temporary Realm unless you explicitly supply
+`--realm-root`.
+
+## Inspect runs in Studio
+
+Studio's Runs page reads the same Realm and shows:
+
+- canonical run ids and native catalog heads
+- status, stop reason, objective, budget, counts, and the best complete
+  comparable Candidate when one exists
+- exact-head candidate aggregates and within-plan ranks derived by Core
+- bounded candidate, logical-trial, attempt, observation, and artifact pages
+- an exact-head timeline correlated across those records
+
+The Workbench stays useful while a run is active and after it completes. Its
+bounded pages avoid repeatedly loading an unbounded history.
+
+Candidate aggregates use only the terminal attempt observation of every
+admitted logical trial. Core publishes an aggregate only when the candidate's
+whole evaluation plan is terminal, successful, and finite for the primary
+objective. It does not discard failed or missing trials. Ranking is scoped to
+candidates with the same ordered seed/repetition plan and is provisional while
+the run can still change. Individual observations, including superseded retry
+evidence, remain separately inspectable.
+
+Selecting a row opens the Run directly. A Run is recorded evidence, not editable
+project files, so it never appears in **Workspaces** and needs no intermediate
+“Open as Workspace” action.
+
+## Candidate inspection
+
+A committed candidate can be resolved with the exact retained environment and
+runtime semantics that evaluate it. OptPilot represents that pair as a no-copy
+inspection target and compiles its `EvaluationSpec` with the same pure compiler
+used for canonical attempts.
+
+Studio presents this as **Try Candidate**. **Run headless** is available when the
+retained evaluation compiles to the supported noninteractive local process.
+**Open interactive interface** additionally requires a compatible retained web profile
+and provider. Both modes are inspection-only: they never consume Study budget
+or become observations of the source Run. Studio shows an explicit reason when
+retained content or a provider requirement is unavailable.
+
+Under the hood, each try is a durable noncanonical Operator Job resolved from
+the exact inspection target. The bounded Workbench page resolves these
+actor-authorized action facts in one exact-head batch; they are advisory UI
+state, and every action reauthorizes its immutable selection when it executes.
+
+Candidate comparison is also noncanonical and read-only. Core reauthorizes one
+run snapshot before validating both exact-head presentation selections, then
+returns independently eligible outcome and candidate-input sections. Outcomes
+cover the primary objective and authored secondary metrics for parameter, file,
+and opaque candidates; a numeric relation is available only for complete,
+matching evaluation plans. Boolean constraints report exact satisfied/violated
+coverage and prefer feasible over infeasible only when both sides are complete.
+Input presenters provide a bounded contract-aware parameter table, a path-free
+sealed-file-manifest table, or bounded/redacted opaque top-level metadata. File
+hashes/content refs and guessed domain semantics are not returned. The initial
+comparison requires metadata access only. For an added, removed, or changed
+sealed file, **View text diff** explicitly reauthorizes both exact retained
+candidate selections and reads only that relative path. Core accepts strict
+UTF-8 text up to 48 KiB and 4,000 lines per side, returns an all-or-nothing
+bounded unified diff, and explains when the file is binary, too large, or
+otherwise unavailable. Neither step creates a lease, projection, workspace,
+runtime, copied tree, or evidence record.
+
+The Overview can chart any finite numeric or boolean metric returned in its
+bounded observation page and summarizes boolean constraint rows from that same
+page. It labels the exact Realm head and says when more observations or names
+exist; it is an inspection of loaded raw evidence, not a replacement candidate
+aggregate.
+
+The Workbench Overview derives conservative environment-evaluation and
+objective fingerprints from that same authorized run head. Its structured
+reproducibility report distinguishes identified facts from availability that was
+not assessed and guarantees that remain unverified. Matching digests are not a
+reproducibility claim, and automatic cross-run ranking stays disabled until the
+missing evidence and terminal seal exist.
+
+The same exact selection also drives **Inspect** and **View files**. Inspect
+shows semantic inputs without launching. View files opens a file Candidate or
+project artifact in a bounded relative-path browser, or a retained file
+artifact in a bounded byte-range preview. This is a short-lived view, not a
+disposable Workspace: it creates no editable ownership and does not copy or
+recapture content. **Edit in Workspace** is offered only when the selection is
+an eligible complete project.
+
+## Save a Shortlist
+
+The Candidates page exposes **Save to Shortlist**. The first saved Candidate
+adds a **Shortlist** tab to that Run. A Shortlist is not a top-level library,
+Workspace, or runtime; it is the place within one Run to keep promising
+Candidates, plain-language notes, order, and selected completed inspection
+results.
+
+Studio freezes the Candidate's exact evidence at the time it is saved. The
+Shortlist lets you edit its name, notes, membership, and order as one draft;
+**Save changes** commits them together. **More** contains bounded saved history,
+**Export this saved version**, and **Delete Shortlist**. Selecting an earlier
+saved version renders it read-only, export follows the version being viewed,
+and returning to current does not discard unsaved current edits.
+
+After a **Run headless** or **Open interactive interface** result reaches a terminal state,
+use **Save inspection to Shortlist** when its Candidate is already present, or
+**Save Candidate and inspection** to save both. This records bounded terminal
+facts, metrics, constraints, output metadata, logs, and execution policy. It
+does not retain the live process, interface URL, or provider-private
+coordinates.
+
+### Under the hood: decision retention
+
+Core implements the Run-local Shortlist with the existing Realm-owned Review
+Collection aggregate. The default `decision` policy reuses already-sealed
+Candidate and artifact content by adding memberships to the same content refs;
+it does not copy bytes. Each **Save changes** operation creates an immutable
+revision under a stale-edit fence. The dedicated decision owner continues
+retaining that content if the source Run later releases its own memberships.
+
+**Delete Shortlist** is the deliberate inverse. After confirmation, Core fences
+the exact current revision and digest, removes the complete revision chain,
+retires only the dedicated decision owner, and releases that owner's
+memberships in one transaction. It does not delete the source Run or shared
+content. Removing one Candidate and choosing **Save changes** creates a new
+saved version while older decision history remains available.
+
+Attaching a terminal try atomically saves the current Shortlist draft and the
+authority-checked Operator Job outcome. Nonterminal jobs cannot be attached,
+and ordinary Shortlist fields cannot forge or alter the recorded outcome.
+
+This first slice deliberately does not claim independently runnable Shortlist
+items. Starting another Try or exact re-evaluation still depends on the source
+Run's retained Environment/runtime closure. Cross-Run collections,
+artifact-as-item review, richer qualitative inspection annotation, and the
+stronger `runnable` policy remain future extensions of the internal
+decision-retention mechanism.
+
+## Evidence visibility
+
+Operator evidence and method-visible feedback are different views. Methods
+receive only candidate identity, evaluator outcome, metrics, sanitized errors,
+and explicitly method-visible retained artifacts. They do not receive raw
+backend diagnostics, secrets, host paths, unrelated candidates, or direct Realm
+access.
+
+For configuration details, see [Configuration](configuration.md). For the
+Studio surface, see [Studio UI](ui.md).

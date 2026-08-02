@@ -70,6 +70,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "optpilot.schemas" = ["*.json", "defs/*.json"]
+"optpilot.realm" = ["migrations/*.sql"]
 
 [tool.uv.workspace]
 members = ["studio"]

@@ -190,54 +190,62 @@ If the method also needs read-only access to files listed in evaluator settings,
 expose them through `methodContext.references`. Keep method-owned prompts,
 models, solver parameters, and search knobs in `method.settings`.
 
-## What OptPilot Creates At Runtime
+## What OptPilot Creates at Runtime
 
-Users author configs and source code. OptPilot creates run-time storage.
+Users author configs and source inside one package. The retained runner captures
+that package and creates semantic Realm records plus provider-owned temporary
+realizations:
 
 ```text
-public YAML configs
-  -> compiled study_spec.json
-  -> method proposal request
-  -> candidate record or candidate files
-  -> trial workspace
-  -> evaluator result
-  -> evidence store
+package root
+  -> immutable package snapshot
+  -> retained study definition
+  -> canonical Realm run
+  -> candidates -> logical trials -> attempts -> observations/artifacts
+  -> summary, bounded Workbench pages, exact-head timeline
+  -> optional immutable Review Collection revisions over exact selections
 ```
 
-Important runtime storage:
+Important runtime concepts:
 
-| Runtime storage | Purpose |
+| Runtime concept | Purpose |
 | --- | --- |
-| Compiled spec | Exact environment, method, objective, and execution policy used for the run. |
-| Candidate store | Durable handoff area for method-produced candidates, especially generated files. |
-| Trial workspace | Fresh evaluation directory for one trial attempt. |
-| Method workspace | Scratch area for method calls, command requests, stdout, and stderr. |
-| Evidence store | Run history: observations, trials, candidates, method calls, events, artifacts, and summary. |
+| Retained study definition | Exact environment, method, objective, policy, and content closure used by a run. |
+| RunLedger | Canonical controller, candidate, trial, attempt, evidence, method-exchange, and terminal state. |
+| Projection | Leased realization of exact immutable inputs for a reader or process. |
+| Writable volume | Fresh provider-owned attempt/control/state space with explicit lifetime. |
+| Workbench projection | Read-only bounded summary/pages/timeline and complete-plan candidate results derived from one exact Realm head. |
+| Review Collection | Realm-owned immutable decision revisions containing an ordered shortlist, notes, frozen bounded run and terminal inspection evidence, bounded history navigation, and no-copy memberships to retained candidate/artifact content that survive source-run retirement. It is not a workspace or runtime. |
 
-`trialWorkspace` in an environment config says what should be copied into each
-trial workspace before evaluation. It is for evaluator input files and
-workspace-local source needed during evaluation. It is not a dependency manager
-or a general permission model.
+`trialWorkspace` expresses environment-owned input mappings into each attempt's
+logical workspace. It does not select a copy strategy or grant broad project/
+Realm access.
+
+In the current retained local-process slice, those mappings are executable for
+parameter and file candidates: they alias files/directories in the sealed
+package and initialize a fresh writable trial volume for every attempt. A file
+candidate is sealed independently and applied as the final immutable layer over
+those seeds; evaluator writes remain in the fresh private upper.
 
 ## Evidence
 
-Evidence is the recorded history of a run. It lets users inspect what happened
-and lets iterative methods learn from previous trials without parsing arbitrary
-workspace files.
+Evidence is the canonical retained history of a run. It lets operators inspect
+what happened and lets methods receive filtered prior results without parsing
+arbitrary workspace files.
 
-Every run may record:
+A Realm run records the exact definition, candidate and logical-trial identity,
+attempt/retry lifecycle, observations, artifacts, method exchanges, ordered
+events, run policy, and terminal summary. Studio reads bounded projections of
+those records.
 
-- compiled `study_spec.json`
-- `summary.json`
-- observations and trial records
-- candidate records
-- method calls and method events
-- scheduler events
-- output files and artifacts
-- run policy and environment snapshot
+Candidate and artifact selections can also back a bounded read-only content
+view. The view reuses retained immutable bytes and safe relative paths; it is
+not a workspace and grants no edit authority. Keeping an eligible tree is a
+separate explicit derivation that creates the independent editable owner.
 
-Methods can inspect prior results through `EvidenceView`. For the file layout
-and resume/branch behavior, see [Evidence](evidence.md).
+Methods receive a filtered evidence view; operator-only diagnostics, secrets,
+host paths, and unrelated artifacts are excluded. See [Runs and
+Evidence](evidence.md).
 
 ## Core Is Separate From Studio
 
@@ -245,12 +253,14 @@ The core CLI can validate packages and run studies without the Studio UI:
 
 ```bash
 optpilot package validate path/to/package
-optpilot run path/to/package/studies/my_study.yaml
+optpilot run path/to/package/studies/my_study.yaml \
+  --package-root path/to/package
 ```
 
-Studio uses the same core model, but adds a browser interface, editable
-workspace copies, Code Server, and the optional assistant. If a package is valid
-under the core CLI, Studio can browse and launch it from a catalog root.
+Studio uses the same core model, but adds a browser interface, managed editable
+workspaces, Code Server, the Realm Run Workbench, and the optional assistant. A
+package may validate for authoring while still using features outside the
+current retained execution slice.
 
 The split is intentional:
 

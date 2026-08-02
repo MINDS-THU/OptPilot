@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Production &amp; AGV Candidate Lab</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Environment interface</p>
+        <h1>Production &amp; AGV Candidate Lab</h1>
+      </div>
+      <div class="boundary-badges" aria-label="Runtime boundaries">
+        <span>Offline evaluation</span>
+        <span>Private local telemetry</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="viewer-panel" aria-labelledby="viewer-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Live visualization</p>
+            <h2 id="viewer-heading">Factory floor</h2>
+          </div>
+          <div id="viewer-status" class="status-pill status-idle">Loading</div>
+        </div>
+        <div class="viewer-frame">
+          <iframe
+            id="unity-viewer"
+            src="/unity/"
+            title="Interactive 3D production and AGV simulation"
+            allow="fullscreen"
+          ></iframe>
+        </div>
+        <div class="run-summary">
+          <div>
+            <span class="summary-label">Run</span>
+            <strong id="run-id">—</strong>
+          </div>
+          <div>
+            <span class="summary-label">Telemetry</span>
+            <strong id="event-progress">0 events</strong>
+          </div>
+          <div>
+            <span class="summary-label">Total score</span>
+            <strong id="total-score">—</strong>
+          </div>
+          <p id="run-message" role="status">Preparing the interface…</p>
+        </div>
+        <pre id="run-error" class="error-box" hidden></pre>
+      </section>
+
+      <aside class="control-panel" aria-labelledby="controls-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Candidate controls</p>
+            <h2 id="controls-heading">Run and replay</h2>
+          </div>
+          <span id="candidate-source" class="source-label">Loading…</span>
+        </div>
+
+        <div class="field-grid">
+          <label>
+            <span>Seed</span>
+            <input id="seed" type="number" step="1">
+          </label>
+          <label>
+            <span>Horizon</span>
+            <input id="horizon" type="number" min="1" max="500" step="1">
+          </label>
+          <label>
+            <span>Decision step</span>
+            <input id="time-step" type="number" min="0.1" max="10" step="0.1">
+          </label>
+          <label>
+            <span>Replay speed</span>
+            <select id="replay-speed">
+              <option value="1" selected>1× · accurate animation</option>
+            </select>
+          </label>
+        </div>
+        <label class="check-field">
+          <input id="disable-faults" type="checkbox">
+          <span>Disable injected equipment faults</span>
+        </label>
+
+        <div class="actions">
+          <button id="run-button" class="primary" type="button">Run candidate</button>
+          <button id="replay-button" type="button">Replay last run</button>
+          <button id="stop-button" class="danger" type="button">Stop</button>
+        </div>
+
+        <details class="editor" open>
+          <summary>
+            <span>scheduler.py</span>
+            <small>Main scheduling policy</small>
+          </summary>
+          <textarea id="scheduler-source" spellcheck="false" aria-label="scheduler.py source"></textarea>
+        </details>
+        <details class="editor">
+          <summary>
+            <span>param_estimator.py</span>
+            <small>Policy parameters</small>
+          </summary>
+          <textarea id="estimator-source" spellcheck="false" aria-label="param_estimator.py source"></textarea>
+        </details>
+        <p id="additional-files" class="helper-text"></p>
+        <p class="boundary-note">
+          Candidate code runs in a bounded child process inside this isolated
+          interface runtime. Its telemetry is replayed through this launch
+          only; the recorded Run and the Environment’s offline evaluator are
+          not changed.
+        </p>
+      </aside>
+    </main>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

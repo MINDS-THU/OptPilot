@@ -6,9 +6,12 @@ import hashlib
 import fnmatch
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
+
+from .realm._validation import thaw_json
 
 
 JsonDict = Dict[str, Any]
@@ -35,9 +38,28 @@ class MaterializationRecord:
         return asdict(self)
 
 
-def normalize_candidate(candidate: JsonDict, study_spec, method_id: str) -> JsonDict:
-    primary_candidate = study_spec.candidate
-    normalized = dict(candidate)
+def normalize_candidate_against_contract(
+    candidate: Mapping[str, Any],
+    candidate_contract: Mapping[str, Any],
+    method_id: str,
+) -> JsonDict:
+    """Normalize a candidate from retained, path-free contract semantics.
+
+    This is the implementation identified by
+    ``optpilot.candidate-normalizer.v1``.  It deliberately needs no
+    ``StudySpec`` or filesystem path so a recovered Realm controller can
+    resolve the exact normalizer named by its retained run manifest.
+    """
+
+    if not isinstance(candidate, Mapping):
+        raise TypeError("candidate must be a mapping.")
+    if not isinstance(candidate_contract, Mapping):
+        raise TypeError("candidate_contract must be a mapping.")
+    if not isinstance(method_id, str) or not method_id:
+        raise ValueError("method_id must be non-empty text.")
+
+    primary_candidate = candidate_contract
+    normalized = thaw_json(candidate)
     normalized.setdefault("candidate_id", candidate.get("candidate_id", candidate.get("id")))
     if not normalized.get("candidate_id"):
         raise ValueError("Candidate manifest requires candidate_id.")
@@ -51,9 +73,23 @@ def normalize_candidate(candidate: JsonDict, study_spec, method_id: str) -> Json
             "strategy": "external",
         },
     )
-    normalized.setdefault("validation", dict(primary_candidate.get("validation", {})))
-    normalized.setdefault("materialization", dict(primary_candidate.get("materialization", {})))
+    normalized.setdefault(
+        "validation", thaw_json(primary_candidate.get("validation", {}))
+    )
+    normalized.setdefault(
+        "materialization", thaw_json(primary_candidate.get("materialization", {}))
+    )
     return normalized
+
+
+def normalize_candidate(candidate: JsonDict, study_spec, method_id: str) -> JsonDict:
+    """Compatibility wrapper over the path-free v1 candidate normalizer."""
+
+    return normalize_candidate_against_contract(
+        candidate,
+        study_spec.candidate,
+        method_id,
+    )
 
 
 class ParameterPassthroughMaterializer:
@@ -219,7 +255,7 @@ class BoundsCandidateValidator:
         if not config.get("enforceBounds", False):
             return ValidationReport(metadata={"implementation": self.definition.get("implementation")})
 
-        search_space = _collect_search_space(self.study_spec.method)
+        search_space = dict(config.get("searchSpace", {}))
         constraints = list(config.get("constraints", []) or [])
         errors: List[str] = []
         for name, value in candidate.get("spec", {}).items():
@@ -261,11 +297,6 @@ class BoundsCandidateValidator:
                 "checkedConstraints": [constraint.get("id") for constraint in constraints],
             },
         )
-
-
-def _collect_search_space(method: JsonDict) -> JsonDict:
-    return dict(method.get("config", {}).get("searchSpace", {}))
-
 
 def _evaluate_constraint(expr: Any, values: JsonDict) -> bool:
     if not isinstance(expr, dict):
@@ -539,12 +570,16 @@ def _snapshot_readonly_ref(workspace: Path, value: Any) -> List[JsonDict]:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("readonlyFiles entries must be non-empty strings.")
     if any(char in value for char in "*?[]"):
+        if not _is_safe_candidate_path(value):
+            raise ValueError(f"readonlyFiles glob must be a safe relative POSIX pattern: {value!r}")
         records = []
         for path in sorted(workspace.glob(value)):
+            _require_contained_workspace_entry(workspace, path)
             if path.is_file():
                 records.append(_readonly_file_record(workspace, path))
             elif path.is_dir():
                 for child in sorted(path.rglob("*")):
+                    _require_contained_workspace_entry(workspace, child)
                     if child.is_file():
                         records.append(_readonly_file_record(workspace, child))
         if not records:
@@ -557,9 +592,18 @@ def _snapshot_readonly_ref(workspace: Path, value: Any) -> List[JsonDict]:
         return [_readonly_file_record(workspace, path)]
     records = []
     for child in sorted(path.rglob("*")):
+        _require_contained_workspace_entry(workspace, child)
         if child.is_file():
             records.append(_readonly_file_record(workspace, child))
     return records
+
+
+def _require_contained_workspace_entry(workspace: Path, path: Path) -> Path:
+    root = workspace.resolve()
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"Read-only selection escapes trial workspace: {path}")
+    return resolved
 
 
 def _readonly_file_record(workspace: Path, path: Path) -> JsonDict:

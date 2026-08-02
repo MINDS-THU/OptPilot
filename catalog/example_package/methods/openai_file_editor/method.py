@@ -7,11 +7,10 @@ import os
 import tempfile
 import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
-from optpilot.candidate_files import CandidateFileStore, CandidateFileMapping
+from optpilot.candidate_staging import CandidateBundleStager, CandidateFileMapping
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
@@ -25,24 +24,21 @@ class OpenAIFileEditMethod:
         self.target_files = _editable_paths_from_context(self.candidate_context)
         if not self.target_files:
             raise ValueError("OpenAIFileEditMethod requires candidate_context.files.editable.")
-        self.source_dir = self._resolve_source_dir()
         self.source_files = self._resolve_source_files()
         self.primary_metric = str(self.study_spec.objective["primaryMetric"]["name"])
         self.primary_direction = str(self.study_spec.objective["primaryMetric"]["direction"])
         self.include_baseline = bool(self.config.get("includeBaselineCandidate", True))
         self._baseline_emitted = False
+        self._edit_index = 0
         self.observations: List[Dict[str, Any]] = []
 
     def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
         runtime_context = dict(study_state.get("runtime_context", {}))
-        candidate_store_dir = runtime_context.get("candidate_store_dir")
-        if not candidate_store_dir:
-            raise ValueError("OpenAIFileEditMethod requires runtime_context.candidate_store_dir.")
+        candidate_staging_dir = runtime_context.get("candidate_staging_dir")
+        if not candidate_staging_dir:
+            raise ValueError("OpenAIFileEditMethod requires runtime_context.candidate_staging_dir.")
 
-        candidate_store = CandidateFileStore(
-            candidate_store_dir,
-            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
-        )
+        candidate_stager = CandidateBundleStager(candidate_staging_dir)
         prompt_store = None
         if runtime_context.get("prompt_store_dir"):
             prompt_store = PromptStore(
@@ -54,7 +50,7 @@ class OpenAIFileEditMethod:
         remaining = int(n_candidates)
 
         if remaining > 0 and self.include_baseline and not self._baseline_emitted:
-            candidates.append(self._build_baseline_candidate(candidate_store))
+            candidates.append(self._build_baseline_candidate(candidate_stager))
             self._baseline_emitted = True
             remaining -= 1
 
@@ -69,28 +65,28 @@ class OpenAIFileEditMethod:
                 else None
             )
             candidate_summary, candidate_files = self._request_edit(prompt_messages)
-            candidates.append(self._store_candidate(candidate_store, candidate_summary, candidate_files, prompt_record))
+            candidates.append(self._stage_candidate(candidate_stager, candidate_summary, candidate_files, prompt_record))
 
         return candidates
 
     def observe(self, observations: List[Dict[str, Any]]) -> None:
         self.observations.extend(observations)
 
-    def _build_baseline_candidate(self, candidate_store: CandidateFileStore) -> Dict[str, Any]:
+    def _build_baseline_candidate(self, candidate_stager: CandidateBundleStager) -> Dict[str, Any]:
         mappings = [
             CandidateFileMapping(source=self._source_file_for(relative_path), path=relative_path)
             for relative_path in self.target_files
         ]
-        return candidate_store.store_files(
+        return candidate_stager.stage_files(
             mappings,
-            candidate_id=f"{self.definition['id']}-baseline-{uuid.uuid4().hex[:12]}",
+            candidate_id=f"{self.definition['id']}-baseline",
             lineage={"parents": [], "source": "baseline_source_tree"},
             generator={
                 "method_id": self.definition["id"],
                 "strategy": "baseline_source_snapshot",
                 "owned_by": "user",
+                "summary": "Baseline candidate copied from the environment-provided source files.",
             },
-            metadata={"summary": "Baseline candidate copied from the environment-provided source files."},
         )
 
     def _build_prompt_messages(self, study_state: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -252,9 +248,9 @@ class OpenAIFileEditMethod:
         edited_files = _extract_edited_files(parsed, self.target_files)
         return str(parsed.get("summary", "LLM edited candidate files.")), edited_files
 
-    def _store_candidate(
+    def _stage_candidate(
         self,
-        candidate_store: CandidateFileStore,
+        candidate_stager: CandidateBundleStager,
         summary: str,
         edited_files: Dict[str, str],
         prompt_record: Dict[str, Any] | None,
@@ -278,9 +274,9 @@ class OpenAIFileEditMethod:
                     "max_tokens": int(self.config.get("maxTokens", 0) or 0),
                 },
             )
-            return candidate_store.store_files(
+            candidate = candidate_stager.stage_files(
                 mappings,
-                candidate_id=f"{self.definition['id']}-{uuid.uuid4().hex[:12]}",
+                candidate_id=f"{self.definition['id']}-edit-{self._edit_index:04d}",
                 lineage={"parents": [_candidate_id(best)] if best else []},
                 generator=build_generator_record(
                     method_id=self.definition["id"],
@@ -293,31 +289,32 @@ class OpenAIFileEditMethod:
                         "edited_paths": sorted(edited_files),
                     },
                 ),
-                metadata={"summary": summary},
             )
-
-    def _resolve_source_dir(self) -> Path | None:
-        files = self.candidate_context.get("files", {})
-        root = str(files.get("root", "."))
-        for entry in self.candidate_context.get("workspace", {}).get("copy", []) or []:
-            if str(entry.get("to", ".")) == root:
-                source_dir = Path(str(entry["from"])).resolve()
-                if source_dir.is_dir():
-                    return source_dir
-        return None
+            self._edit_index += 1
+            return candidate
 
     def _resolve_source_files(self) -> Dict[str, Path]:
+        method_context = self.candidate_context.get("methodContext", {})
+        references = (
+            method_context.get("references", [])
+            if isinstance(method_context, dict)
+            else []
+        )
+        templates = {
+            str(reference.get("name")): Path(str(reference.get("path")))
+            for reference in references
+            if isinstance(reference, dict)
+            and reference.get("type") == "candidate_template"
+            and reference.get("name")
+            and reference.get("path")
+        }
         source_files: Dict[str, Path] = {}
-        workspace_copy = self.candidate_context.get("workspace", {}).get("copy", []) or []
         for relative_path in self.target_files:
-            source = None
-            if self.source_dir is not None:
-                source = self.source_dir / relative_path
-            else:
-                source = _source_for_workspace_file(relative_path, workspace_copy)
-            if source is None or not source.exists():
+            source = templates.get(relative_path)
+            if source is None or not source.is_file():
                 raise FileNotFoundError(
-                    f"OpenAIFileEditMethod could not resolve source for editable file {relative_path!r}."
+                    "OpenAIFileEditMethod requires one candidate_template "
+                    f"methodContext reference named {relative_path!r}."
                 )
             source_files[relative_path] = source
         return source_files
@@ -429,18 +426,3 @@ def _fence_language(relative_path: str) -> str:
         ".md": "markdown",
         ".txt": "text",
     }.get(suffix, "")
-
-
-def _source_for_workspace_file(relative_path: str, copy_entries: List[Dict[str, Any]]) -> Path | None:
-    for entry in copy_entries:
-        source = Path(str(entry.get("from", ""))).resolve()
-        destination = str(entry.get("to", ""))
-        if destination == relative_path and source.is_file():
-            return source
-        if source.is_dir():
-            try:
-                rel = Path(relative_path).relative_to(destination)
-            except ValueError:
-                continue
-            return source / rel
-    return None

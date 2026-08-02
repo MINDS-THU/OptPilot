@@ -1,0 +1,23 @@
+apiVersion: optpilot.io/v1
+config: method
+id: exhaustive-rule-grid
+description: Evaluates all 135 executable line, task-priority, and AGV-dispatch rule combinations.
+tags: [production, agv, baseline, exhaustive-search, file-candidate, no-api]
+
+entrypoint:
+  python: method:RuleGridMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 15
+  lineRules: [default, sq, lwt, met, random]
+  taskRules: [default, spt, lwkr, lopnr, edd, cr, ms, fifo, random]
+  agvRules: [default, nvf, random]
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - candidate.files.allow

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test services/*.test.js",
+    "test:selection": "node --test services/projectSelectionService.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

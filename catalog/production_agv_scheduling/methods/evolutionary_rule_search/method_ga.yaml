@@ -1,0 +1,30 @@
+apiVersion: optpilot.io/v1
+config: method
+id: ga-weighted-rule-search
+description: Paper-style genetic search over executable 14-weight scheduling policies.
+tags: [production, agv, baseline, ga, file-candidate, no-api]
+
+entrypoint:
+  python: method:EvolutionaryRuleSearchMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 64
+  algorithm: ga
+  seed: 42
+  populationSize: 64
+  generations: 10
+  stabilityLambda: 0.35
+  crossoverProbability: 0.9
+  crossoverEta: 15.0
+  crossoverVariableProbability: 0.5
+  mutationProbability: 0.25
+  mutationEta: 20.0
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - candidate.files.allow

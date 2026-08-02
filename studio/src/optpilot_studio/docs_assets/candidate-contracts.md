@@ -41,6 +41,11 @@ A candidate is the object the method proposes and the environment evaluates. Opt
 
 The environment owns the accepted candidate contract. The method owns how candidates are produced.
 
+The current retained local-process runner executes `parameters` and bounded
+`files` candidates with source-backed Python batch methods and evaluators. It
+also supports package-owned `trialWorkspace` seed layers. `opaque` remains a
+valid authoring contract but is not yet executable through this retained slice.
+
 ## Parameter Candidates
 
 Parameter candidates are dictionaries. The environment declares a schema:
@@ -94,14 +99,55 @@ candidate:
     root: candidate
 ```
 
-A method writes files into the candidate store and returns a manifest. Python methods can use `CandidateFileStore` to create that manifest.
+A Python method writes or generates files, then stages the selected bundle with
+`CandidateBundleStager`. The runtime supplies the generation-bound staging root
+as `study_state["runtime_context"]["candidate_staging_dir"]`.
+
+```python
+from optpilot.candidate_staging import CandidateBundleStager
+
+
+def propose_file_candidate(study_state, generated_file):
+    staging = CandidateBundleStager(
+        study_state["runtime_context"]["candidate_staging_dir"]
+    )
+    return staging.stage_file(
+        generated_file,
+        path="policy.py",
+        candidate_id="policy-001",
+        lineage={"parents": []},
+        generator={"strategy": "my_editor"},
+    )
+```
+
+`candidate_id` is an explicit semantic identity, not a storage path. The helper
+returns a provisional, worker-local declaration. OptPilot validates the complete
+method response, atomically freezes the selected staging subtree, seals it into
+immutable content, and commits candidate admission, logical trials, budget, and
+owner membership in one Realm transaction. Host paths and staging tokens are
+removed before durable candidate identity or evidence is written.
 
 ```text
-method writes generated files
-runner validates paths and hashes
-runner copies files into the trial workspace
-environment evaluates the trial workspace
+method stages generated files in one bounded inbox
+worker freezes the complete proposal
+runner seals and atomically admits immutable trees
+attempt projects the selected tree into a fresh trial volume
+environment evaluates the trial volume
 ```
+
+The candidate is the final `replace` layer over any environment-owned trial
+seeds. Each attempt receives a new writable upper layer, so evaluator edits do
+not modify the retained candidate and retries start clean. The local provider
+reuses the same immutable projection for materialization; it does not create a
+disposable workspace or make a second candidate-tree copy. Native-process
+filesystem enforcement is advisory, so this first slice is for trusted local
+method, evaluator, and candidate code.
+
+After admission, Studio can browse the same retained tree through **Open Read
+Only**, execute it through **Debug Run**, or explicitly derive an editable tree
+through **Keep as Workspace**. These are three capabilities over one immutable
+selection: browsing creates no workspace, Debug Run gets a fresh attempt upper,
+and Keep alone creates an independent persistent owner.
 
 ## Method Compatibility
 
@@ -190,7 +236,7 @@ Static material belongs in `methodContext`. Evaluation outputs created during a 
 flowchart TD
   Public["Public YAML\nstudy + environment + method"]
   Compile["Compile and validate\nschema + compatibility"]
-  Spec["Internal study_spec.json"]
+  Spec["Retained study definition"]
   Request["Method request\nstudy_state + candidate_context + evidence"]
   Candidate["Candidate"]
   Materialize["Validate/materialize"]
@@ -201,7 +247,10 @@ flowchart TD
   Public --> Compile --> Spec --> Request --> Candidate --> Materialize --> Trial --> Evaluate --> Evidence --> Request
 ```
 
-The public YAML is for users. The internal `study_spec.json` is what the runner actually executed and is written into every run directory for auditability.
+The public YAML is for users. The runner captures the explicit package root and
+retains an exact path-free study definition in the Realm. That definition and
+its immutable content closure are the audit boundary; there is no public
+`study_spec.json` run-directory contract.
 
 For a concrete tutorial that uses one environment with several different
 candidate contracts, see [Job-Shop Environment](job-shop-environment.md).

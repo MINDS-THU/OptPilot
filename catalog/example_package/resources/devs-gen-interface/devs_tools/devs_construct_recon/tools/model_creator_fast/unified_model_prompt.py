@@ -2,7 +2,7 @@
 GLOBAL_STANDARDS = """
 ## [Global Standards - STRICT]
 ### Code Basics
-1. **Imports**: Whitelist: `numpy`, `math`, `random`, `time`, `pandas`, `json`, `sys`, `pathlib`, `xdevs` (and `xdevs.models`). Use `devs_project.devs_utils.xxx` only for project utilities explicitly listed in [Utils].
+1. **Portable imports only**: Use `xdevs`, local `devs_project` modules, and Python's standard library (for example `math`, `random`, `statistics`, `collections`, `itertools`, `json`, `pathlib`, `dataclasses`, and `typing`). Use `devs_project.devs_utils.xxx` only for project utilities explicitly listed in [Utils]. Do not use numpy, pandas, scipy, or any other third-party package: the generated bundle intentionally vendors only xDEVS.
 2. **Typing**: Use ONLY `int`, `float`, `str`, `bool`, `dict`, and `list` for ports and arguments.
 3. **Clean Code**: Store internal hardcoded parameters in a `self.param` dictionary. Write minimal code. Do NOT create unnecessary helper methods.
 
@@ -77,7 +77,8 @@ Build against interfaces that actually exist. Earlier plans describe intended to
     - [Specification] is authoritative for THIS coupled model's own: `__init__` arguments, input ports, output ports, explicit external_io, if any
     - If [Coupling Specification] mentions this model's boundary ports but differs from [Specification], follow [Specification].
 2. **Generated Child Interfaces**
-    - [Sub-Models] is the PRIMARY SOURCE OF TRUTH for generated child: class names, `relative_file_path`, constructor arguments, input port names/types, output port names/types
+    - [Sub-Models] is the PRIMARY SOURCE OF TRUTH for generated child: class names, `relative_file_path`, constructor arguments, input port names/types, output port names/types, and `generated_interface`.
+    - `generated_interface` is extracted deterministically from the generated Python source. Its `instance_attributes`, `properties`, `public_methods`, and `child_instances` are the exact public implementation names available for direct Python access. Never derive or rename one of these members from prose, domain conventions, or an earlier plan.
     - [Context Info] may contain additional actual generated interfaces. Only explicitly labeled generated-interface summaries in [Context Info] may be used as interface truth. Other context is explanatory and must not override [Sub-Models].
 3. **Planned Coupling Reference**
     - [Coupling Specification] is only a topology/intention reference. Use it to understand intended data flow, but realize that flow using ports and constructor arguments that actually exist.
@@ -88,7 +89,7 @@ Build against interfaces that actually exist. Earlier plans describe intended to
 - Import `from xdevs.models import Coupled, Port` and inherit from `Coupled`.
 - Treat this class as a PURE structure container. Implement ONLY `__init__`. NO state machines, NO event handlers, NO custom methods.
 - Use relative imports for sub-models (e.g., `from .folder.file import SubModelName`).
-- Before writing code, make one interface checklist row for each child instance from [Sub-Models]: `relative_file_path`, class name, required constructor arguments with their exact source/value, input ports, and output ports. Use only that row for imports, instantiation, and couplings.
+- Before writing code, make one interface checklist row for each child instance from [Sub-Models]: `relative_file_path`, class name, required constructor arguments with their exact source/value, input ports, output ports, and exact `generated_interface` names. Use only that row for imports, instantiation, couplings, and any direct Python member access.
 - Derive each sub-model import from its checklist `relative_file_path`, not from class-name guesses or assumed sibling folders. Example: `relative_file_path="Parent_libs/ChildGroup_libs/Foo.py"` means `from .Parent_libs.ChildGroup_libs.Foo import Foo`.
 - `name` and `parent` are framework-reserved constructor arguments. Include each exactly once. Do not pass a second keyword named `name` or `parent` to child constructors.
 
@@ -97,6 +98,7 @@ Build against interfaces that actually exist. Earlier plans describe intended to
 2. Call `super().__init__(name)` and set `self.parent = parent`.
 3. Register this coupled model's boundary ports using `self.add_in_port()` and `self.add_out_port()`.
 4. Instantiate components and register them via `self.add_component(instance)`.
+    - Keep every child discoverable on a public `self` attribute. Prefer `self.worker = Worker(...)` for one child. For a homogeneous runtime-sized group, use a direct list/list-comprehension such as `self.workers = [Worker(...) for ...]` or append `Worker(...)` directly to `self.workers`. Do not hide child construction behind a factory, dynamic `setattr`, or a local variable that is never assigned to `self`; later generators inspect these bindings deterministically.
     - Pass every required child constructor argument shown by the child's interface checklist. Do NOT omit required child args or pass unsupported args.
     - Copy each child argument value exactly from this model's own `__init__` args or from constants explicitly described in the child specification. Use the specified source/value rather than domain assumptions or familiar defaults.
     - Child constructor arguments must already contain effective scenario defaults required at runtime; do NOT depend on mutating parent `self.param` after child creation.

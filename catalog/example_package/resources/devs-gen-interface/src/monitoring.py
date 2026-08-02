@@ -32,6 +32,8 @@ import os
 import atexit
 from datetime import datetime
 
+from .progress import ProgressReporter, agent_code_activity
+
 __all__ = ["AgentLogger", "LogLevel", "Monitor"]
 
 
@@ -86,12 +88,19 @@ YELLOW_HEX = "#d4b702"
 
 
 class AgentLogger:
-    def __init__(self, level: LogLevel = LogLevel.INFO, save_to_file=None, name=None):
+    def __init__(
+        self,
+        level: LogLevel = LogLevel.INFO,
+        save_to_file=None,
+        name=None,
+        progress_reporter: Optional[ProgressReporter] = None,
+    ):
         self.level = level
         self.save_to_file = save_to_file
         self.console = Console()
         self.log_file = None
         self.name = name
+        self.progress_reporter = progress_reporter
         if self.save_to_file:
             # Step 1: Clear the file first (overwrite)
             with open(self.save_to_file, "w", encoding="utf-8"):
@@ -185,6 +194,13 @@ class AgentLogger:
             self.log_file.flush()
 
     def log_code(self, title: str, content: str, level: int = LogLevel.INFO) -> None:
+        if self.progress_reporter:
+            activity = agent_code_activity(content)
+            if activity:
+                # This is a point-in-time observation of an allowlisted call,
+                # not a lifecycle boundary. The tool itself reports terminal
+                # state when it can do so reliably.
+                self.progress_reporter.emit(state="progress", **activity)
         self.log(
             Panel(
                 Syntax(

@@ -63,6 +63,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - Local Operations and Security: operations.md
   - Getting Started:
       - First Job-Shop Run: getting-started.md
   - OptPilot Core:

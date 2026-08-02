@@ -1,0 +1,30 @@
+apiVersion: optpilot.io/v1
+config: method
+id: pso-weighted-rule-search
+description: Paper-style particle swarm search over executable 14-weight scheduling policies.
+tags: [production, agv, baseline, pso, file-candidate, no-api]
+
+entrypoint:
+  python: method:EvolutionaryRuleSearchMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 64
+  algorithm: pso
+  seed: 42
+  populationSize: 64
+  generations: 10
+  stabilityLambda: 0.35
+  inertia: 0.9
+  cognitive: 2.0
+  social: 2.0
+  initialVelocity: random
+  maxVelocity: 0.2
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - candidate.files.allow

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -36,7 +37,7 @@ class EvidenceView:
         self.study_spec = study_spec
 
     def observations(self, limit: Optional[int] = None, status: Optional[str] = None) -> List[JsonDict]:
-        observations = self.store.read_observations()
+        observations = [_method_safe_value(observation) for observation in self.store.read_observations()]
         if status is not None:
             observations = [observation for observation in observations if observation.get("status") == status]
         return _limit_tail(observations, limit)
@@ -327,7 +328,7 @@ class EvidenceView:
 
     def _read_event_type(self, event_type: str) -> List[JsonDict]:
         if event_type == "observation":
-            return self.store.read_observations()
+            return self.observations()
         if event_type == "trial":
             return self.store.read_trials()
         if event_type == "candidate":
@@ -347,6 +348,23 @@ def _limit_tail(items: List[JsonDict], limit: Optional[int]) -> List[JsonDict]:
     if limit <= 0:
         return []
     return items[-limit:]
+
+
+def _method_safe_value(value: Any) -> Any:
+    """Remove operator-only raw observation status details from method views."""
+
+    if isinstance(value, list):
+        return [_method_safe_value(item) for item in value]
+    if not isinstance(value, dict):
+        return copy.deepcopy(value)
+    sanitized = {
+        key: _method_safe_value(item)
+        for key, item in value.items()
+        if not (value.get("code") == "unsupported_observation_status" and key in {"raw_status", "message"})
+    }
+    if value.get("code") == "unsupported_observation_status":
+        sanitized["message"] = "Environment evaluator returned an unsupported observation status."
+    return sanitized
 
 
 def _observation_record_streams(observation: JsonDict) -> List[JsonDict]:

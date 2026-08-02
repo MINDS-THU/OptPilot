@@ -60,7 +60,7 @@ flowchart TB
   Configs["public configs\nenvironment + method + study"]
   Core["Core CLI/SDK\nPyPI package"]
   Studio["Full Studio\nsource checkout"]
-  Runs["runs/\nlocal evidence"]
+  Runs["OptPilot Realm\ncanonical Run evidence"]
   Workspaces[".optpilot-ui/workspaces/\neditable copies"]
 
   Configs --> Core

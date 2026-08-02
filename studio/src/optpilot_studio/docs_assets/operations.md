@@ -1,0 +1,245 @@
+---
+title: Local Operations and Security
+description: Trust boundaries, storage locations, filesystem support, cache integrity, and safe cleanup for local OptPilot use.
+---
+
+# Local Operations and Security
+
+This page describes the current local implementation. It is intentionally not
+a deployment guide for a shared or internet-facing service.
+
+## Trust boundary
+
+OptPilot Studio is a **single-user, local-host application**. It derives its
+Realm actor from the OS user that started Studio. It does not implement user
+accounts, tenant isolation, or a remote authorization boundary.
+
+Studio and Code Server bind to `127.0.0.1` by default. Keep those defaults for
+normal use. In particular:
+
+- the main Studio HTTP server has no login or session authentication
+- the main server does not validate `Origin`, `Referer`, or `Host` headers and
+  does not issue or require a CSRF token
+- not returning cross-origin-readable responses is not a CSRF defense; another
+  browser origin may still be able to send a state-changing request
+- Code Server also defaults to `auth: none`; enabling its password mode does
+  not add authentication to the main Studio server
+- Preview URLs use launch-scoped routing controls, but those controls are not a
+  login layer for Studio
+
+Use Studio only from a browser profile and local machine you trust. Do not bind
+Studio or Code Server to `0.0.0.0`, publish their ports, or place them behind a
+shared reverse proxy. A multi-user or remote deployment needs authentication,
+request-origin/CSRF enforcement, TLS, and a separate authorization review; the
+current server does not provide those controls.
+
+The local settings file may contain Assistant credentials and values entered
+under **Local environment variables**. Values are plaintext in that file.
+Studio attempts to store it with mode `0600`, but it is not a secret vault.
+Other processes running as the same OS user remain inside the trust boundary.
+For retained Runs, the durable launch records only a variable name and opaque
+Settings revision. The plaintext value is not copied into the Run, process
+registry, or launch manifest; it is sent to a new Method worker over a
+one-shot inherited channel.
+
+Only one Studio process may supervise a given Studio start directory at a
+time. Studio holds a crash-released POSIX lock for the lifetime of the process;
+a second Studio started from the same directory exits before opening Realm,
+recovering interface runtimes, or binding another HTTP port. This prevents one
+process from treating another process's in-progress setup as orphaned work.
+During shutdown, Studio keeps that claim and its Realm/coordination descriptors
+open until launch workers, output watchers, and active Preview HTTP/WebSocket
+handlers have actually returned. If a bounded shutdown wait expires, the
+process retains ownership until exit instead of closing storage beneath a live
+request.
+
+Laptop sleep or another temporary process suspension can outlast the short
+heartbeat lease used while an interface watches for generated outputs. When
+the same Studio process resumes, it may replace that expired lease with a
+higher fencing token only after rechecking its process-lifetime supervisor
+claim and proving that the exact launch runtime is still live. The old writer
+remains expired, and any capture interrupted by the suspension is recorded as
+failed before the control file is retried. A Stop request, a different Studio
+process, a missing ownership record, or a terminal runtime cannot use this
+recovery path. Transient heartbeat and control-file metadata errors are retried
+without silently ending output monitoring.
+
+## Prepared-runtime cache integrity
+
+Prepared caches improve repeat launches; they are not canonical source or Run
+evidence. Cache keys include the exact source, setup declaration, provider and
+platform identity, and cache format.
+
+On every acquisition, OptPilot verifies the entry type, directory identity,
+manifest, complete tree digest, file counts, and byte counts before reuse. An
+invalid or incomplete entry is removed and rebuilt when no active lease owns
+it. Active leases protect an entry from automatic eviction. Exact retained
+Environment and Method dependencies are additionally captured into the Realm
+and checked against the expected retained tree before a Run uses them.
+
+Cache directories are private and cached payloads are made read-only. These
+controls catch stale or accidental mutation; they do not isolate OptPilot from
+a malicious process running as the same OS user. The current contract trusts
+same-user host processes not to race a cache mutation after verification and
+before or during use. A read-only container mount does not close that host-side
+race.
+
+Each prepared cache currently keeps at most 16 entries and 4 GiB by default.
+It prunes least-recently-used, unleased entries during normal acquisition and
+release and recovers incomplete entries when reopened. There is no supported
+**Clear cache** button or public cache-maintenance command.
+
+## Supported platform and filesystem boundary
+
+| Area | Current release boundary |
+| --- | --- |
+| Python | Package metadata declares Python 3.10 or newer. Automated CI currently exercises 3.10, 3.11, and 3.12; newer interpreters are not in that matrix. |
+| Operating system | The retained local Realm, local process runner, prepared cache, and Studio runtime require POSIX filesystem/process primitives. Linux is exercised in CI. macOS code paths exist but still require the release manual gates. Windows is not supported by this retained local runtime slice. |
+| Realm/cache filesystem | Use one local filesystem with working POSIX `flock`, hard links, private permission modes, directory `fsync`, and atomic same-filesystem rename. Device/inode identity must remain stable during each live attachment or operation, but may change across a normal unmounted/remounted launch boundary. The root must be a real directory, not a symlink. |
+| Container features | Workspace Code Server and container-backed Preview require a working Docker/Podman-compatible engine. Candidate **Environment Preview** additionally runs only an explicitly trusted image. |
+| Network, distributed, or synchronized storage | NFS/SMB-style mounts and cloud/file-provider synchronized folders are not supported locations for the Realm, prepared caches, or Studio runtime state. Their lock, inode, permission, and rename behavior is not covered by the release tests. |
+
+On macOS, OptPilot narrowly ignores two known OS-maintained file-provider
+metadata attributes while sealing content, and conditionally accepts Docker
+Desktop ownership metadata after validating its full permission mode. This
+does **not** make a synchronized folder a supported operational-data location.
+
+Studio still places settings and local coordination records in `.optpilot-ui/`
+below the directory from which Studio was launched. The larger and more
+mutation-heavy Workspace runtimes, interface output folders, logs, and prepared
+runtime cache live under the OS-local Realm instead, so launching an interface
+does not put transient output traffic into the source checkout. For the fully
+supported path, the remaining checkout-local Studio state should also be on a
+local, non-synchronized filesystem. A configured Catalog source or externally
+connected folder may point elsewhere, but OptPilot treats it as mutable input
+and may reject capture if it changes. A synchronized source is not a durability
+or concurrency guarantee; prefer a local checkout for Check, registration, and
+setup work.
+
+Realm projection and writable-volume roots and namespaces, Realm-managed
+editable Workspace checkouts, and each Studio workspace-runtime directory carry
+a private nonce-bound claim marker. That marker is the durable cross-launch
+ownership identity. Device and inode observations are recaptured when a process
+attaches and remain strict fences for that live attachment and for cleanup. A
+missing, malformed, or mismatched claim is rejected and left untouched;
+OptPilot does not silently adopt or migrate unclaimed runtime state.
+
+### Filesystem identity classification
+
+OptPilot uses filesystem observations in four deliberately different ways:
+
+| Use | Cross-launch rule |
+| --- | --- |
+| Durable provider ownership | Realm projection and writable-volume roots and namespaces, editable Workspace checkouts, Studio workspace runtimes, and retained Environment Preview control layouts are selected by exact nonce-bound claims. A new service or manager validates the claim and captures current descriptor observations. |
+| Active transaction fences | Local-process launch locks and UNIX sockets, plus namespace retirement and cleanup proofs, retain device/inode facts only to finish the exact process or cleanup transaction without following a replacement path. They are not Workspace or Realm-object identities and fail closed if the filesystem changes while that transaction is active. |
+| Rebuildable cache validation | A prepared-runtime cache manifest records its payload observation as one cache-integrity input. A mismatch makes the entry a cache miss; it may be rebuilt once no active lease remains. |
+| In-process path safety | Content-store handles, the Studio coordination database, and interface-output enumeration/capture compare descriptor observations only during the current process or operation. Those observations are not persisted as ownership authority. |
+
+This distinction is intentional: a claim proves *which managed namespace* a
+new process may attach to, while device/inode observations prove that a path
+did not change *during that attachment or transaction*.
+
+## Where local data lives
+
+### Realm-owned data
+
+Unless `OPTPILOT_REALM_ROOT` or the CLI `--realm-root` selects another private
+root, Core and Studio use:
+
+- macOS: `~/Library/Application Support/OptPilot/realm`
+- Linux: `$XDG_DATA_HOME/optpilot/realm`, or
+  `~/.local/share/optpilot/realm`
+
+The code can calculate a Windows user-data path, but that does not make the
+current POSIX retained runtime Windows-supported.
+
+For an isolated local Studio, choose both a non-synchronized start directory
+and a dedicated local Realm before launch:
+
+```bash
+cd /absolute/local/non-synchronized/OptPilot
+OPTPILOT_REALM_ROOT=/absolute/local/optpilot-realm \
+  uv run optpilot ui --host 127.0.0.1 --port 8765
+```
+
+For one isolated CLI run, pass the same kind of dedicated root explicitly:
+
+```bash
+uv run optpilot run path/to/package/studies/study.yaml \
+  --package-root path/to/package \
+  --realm-root /absolute/local/test-realm
+```
+
+The Realm root contains one authority database and provider-private storage:
+
+| Relative location | Purpose |
+| --- | --- |
+| `authority/` | Canonical Realm ledger and identities. |
+| `content/` | Immutable content-addressed blobs and trees. |
+| `editable-workspaces/` | Realm-managed editable Workspace checkouts. |
+| `projections/` | Rebuildable read-only or execution views. |
+| `volumes/` and `processes/` | Private attempt/runtime state and supervision records. |
+| `retained-dependency-cache/` | Exact offline Python dependency preparation for Environments and Methods. |
+| `runtime-cache/studio-prepared-runtimes/` | Reusable prepared output for eligible Studio interfaces. |
+| `runtime-cache/studio-workspace-runtimes/` | Per-Studio Workspace containers, interface launch roots, logs, control files, and temporary generated outputs. |
+| `container-web/` | Provider control state when container Preview is enabled. |
+
+These are implementation directories, not public APIs. Do not edit, copy
+individual files from, or partially delete them. Use Studio and Realm services
+to read canonical Runs, Catalog revisions, and Workspaces.
+
+### Checkout-local Studio data
+
+Studio stores its local coordination state below `<studio-start-directory>/.optpilot-ui/`:
+
+| Relative location | Purpose |
+| --- | --- |
+| `settings.json` | Local Assistant, environment-value, and UI settings. |
+| `jobs/`, `sessions/`, and `agent_sessions/` | Studio job and Assistant coordination records. |
+| `workspaces/` | Studio-owned draft and editable Catalog-copy folders. |
+| `code-server/` | Local Code Server profile and process state. |
+| `runtime-supervisor.lock` | Process-lifetime ownership claim; it is retained between launches and must not be deleted while Studio is running. |
+
+An interface launch receives a private directory below the Realm's
+`runtime-cache/studio-workspace-runtimes/` namespace with separate runtime,
+control, log, and `interface-outputs` areas. Unsaved generated outputs remain
+there only for that launch. **Save as Workspace** gives the selected sealed tree
+durable editable Workspace ownership; it does not make the whole launch
+directory durable.
+
+Configured Catalog source folders and folders opened with **Open local folder**
+remain user-owned at their original paths. Removing their Studio reference must
+not delete those folders. Container images and engine-level caches live in the
+container engine, outside both storage roots.
+
+## Safe cleanup that exists today
+
+Use the product controls while Studio is running:
+
+| What to reclaim | User action | Result |
+| --- | --- | --- |
+| Live interface runtime and unsaved generated output | Click **Stop** on the interface. Use **Save as Workspace** for wanted generated outputs when prompted, or choose **Stop without saving**. A slow setup may first show **Stopping**; wait for its current bounded command to reach a safe boundary. If the card later reports cleanup pending, click **Retry cleanup**. | Studio never deletes launch storage while setup/startup code or a Preview request can still use it. After the worker and Preview handlers quiesce, Studio proves the process/container and any prepared-runtime builder stopped, retires the launch output session, releases its borrowed source/cache handles, and removes launch-scoped storage. Saved Workspaces remain. |
+| Realm-managed editable Workspace | Detach it from Assistant sessions, stop its interface if one is live, then use **Delete Workspace**. | Studio deletes its private checkout, retires the Workspace, and releases that Workspace's content memberships. A Catalog version registered from it is unchanged; shared immutable objects are not promised to disappear immediately. |
+| Studio-owned draft or editable Catalog copy | Stop its interface, then use **Delete Draft** or **Delete Copy**. | Studio removes its owned folder and runtime state. The original Catalog source/version is unchanged. |
+| Externally owned local folder | Use **Remove From Studio**. | Only the Studio reference and owned runtime state are removed; the folder remains on disk. |
+| Saved Study draft | Open the draft's **More** menu and choose **Discard draft**. | The draft is removed; existing Runs are unchanged. |
+| Idle Workspace container | Leave it unreferenced until the configured idle timeout. | Studio's runtime health reconciliation stops the container; it does not delete Workspace files or caches. |
+
+Stopping Studio also asks its transient interface launches to stop and reconciles
+orphaned launch runtimes the next time Studio starts. A `cleanup pending` state
+means cleanup was not proven; retry it instead of manually deleting the path.
+Browser launch diagnostics expose only bounded, no-follow regular-file log
+tails. Studio removes launch-private paths and values declared through
+`secretsFromHost`; ordinary `envFromHost` values are not treated as secrets.
+Very short declared secrets may cause an affected diagnostic string to be
+withheld entirely rather than risk disclosure.
+
+There is currently no user-facing Run archive/deletion action, whole-Realm
+reset, prepared-cache clear, or container-image cleanup. Stopping a Run stops
+work but intentionally preserves its evidence. Do not reclaim those areas by
+deleting internal subdirectories. For disposable tests, select a dedicated
+absolute Realm with `--realm-root`; after every OptPilot process using it has
+stopped, an administrator can discard that entire dedicated root as one unit
+with the operating system's file manager or normal filesystem tools.
+Never apply that procedure to the default Realm unless losing all of its Runs,
+Catalog publications, Workspaces, and retained content is intentional.

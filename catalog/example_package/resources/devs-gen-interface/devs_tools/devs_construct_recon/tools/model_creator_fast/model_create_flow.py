@@ -7,17 +7,28 @@ from .model_summarizer import ModelSummarizer
 from .unified_model_checker_judged import ModelChecker
 from .simulation_based_refine import SimuBasedModelChecker
 from .simulation_necessity import SimulationNecessityJudge
-from typing import Literal
+from typing import Callable, Literal, Optional
 from ...base_types import PlanResult, StandardContextModel, StandardContext
 
 class ModelCreateFlow: 
-    def __init__(self, model_id: dict, working_directory: str, file_tools: dict[str, Tool], disable_check: bool = False):
+    def __init__(
+        self,
+        model_id: dict,
+        working_directory: str,
+        file_tools: dict[str, Tool],
+        disable_check: bool = False,
+        progress_callback: Optional[Callable[[str, str, int, int, str], None]] = None,
+    ):
         super().__init__()
         self.model_id = model_id
         self.disable_check = disable_check
         # Initialize all sub-tools
         self.working_directory = working_directory
-        self.unified_model_creator = ModelCreator(model_id['strong'], working_directory)
+        self.unified_model_creator = ModelCreator(
+            model_id['strong'],
+            working_directory,
+            progress_callback=progress_callback,
+        )
         self.model_checker = ModelChecker(model_id['strong'], working_directory)
         self.model_summarizer = ModelSummarizer(model_id['weak'], working_directory)
         self.simu_based_checker = SimuBasedModelChecker(

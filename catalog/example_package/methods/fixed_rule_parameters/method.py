@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, List
 
 
@@ -28,7 +27,7 @@ class FixedRuleParametersMethod:
             }
         return [
             {
-                "candidate_id": f"fixed-rule-{uuid.uuid4().hex[:12]}",
+                "candidate_id": "fixed-rule-parameters-0000",
                 "format": "parameters",
                 "spec": values,
                 "generator": {

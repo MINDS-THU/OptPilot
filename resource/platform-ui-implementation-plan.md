@@ -395,7 +395,6 @@ Add catalog/run workspace entry points:
 ```text
 POST /api/catalog/{kind}/{uid}/open-workspace
 POST /api/catalog/{kind}/{uid}/edit-copy
-POST /api/runs/{run_id}/open-workspace
 ```
 
 Add assistant APIs:
@@ -757,7 +756,6 @@ Initial tool set:
 | `optpilot_study_launch` | launch a validated study |
 | `optpilot_run_list` | list runs and live jobs |
 | `optpilot_run_detail` | inspect run summary, trials, candidates, events |
-| `optpilot_run_open_workspace` | attach run directory as analysis workspace |
 | `optpilot_smoke_test` | run environment/method/study smoke tests |
 | `optpilot_special_tool_run` | invoke declared capability commands such as a simulator generator |
 

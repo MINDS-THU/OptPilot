@@ -1,0 +1,12 @@
+{
+  "time_unit": "minutes",
+  "simulation_horizon": 500.0,
+  "time_step": 0.5,
+  "disable_faults": false,
+  "order_interval": [10.0, 10.0],
+  "fault_interval": [80.0, 120.0],
+  "fault_duration": [20.0, 60.0],
+  "repeat_runs": 10,
+  "seeds": [123, 124, 125, 126, 127, 128, 129, 130, 131, 132],
+  "stability_lambda": 0.35
+}

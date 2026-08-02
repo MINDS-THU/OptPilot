@@ -1,5 +1,6 @@
 
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 from pathlib import Path
 import os
 import yaml
@@ -242,7 +243,11 @@ class LogVerifierCreator(Tool):
             all_events=all_events,
         )
 
-        model2 = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model2 = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         agent2 = CodeAgent(
             tools=[self.read_file_tool, verifier_saver],
             model=model2,

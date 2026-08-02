@@ -3,10 +3,12 @@ import json
 import argparse
 from pathlib import Path
 from dotenv import load_dotenv
-from smolagents import LiteLLMModel, CodeAgent, ToolCallingAgent, Tool
+from smolagents import CodeAgent, ToolCallingAgent, Tool
 from devs_display.backend.server import DEFAULT_REGISTRY_PATH, run_devs_display_backend
 from devs_settings import agent_concurrency, agent_model_id, agent_strong_model_id
 from src.monitoring import AgentLogger, LogLevel
+from src.progress import ProgressReporter
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 from datetime import datetime
 
 import litellm
@@ -60,7 +62,7 @@ import time
 from collections import defaultdict
 
 # Load environment variables
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 
 class TokenTracker:
@@ -154,6 +156,7 @@ def create_devs_agent(
     concur_num=4,
     construct_variant="recon",
 ):
+    progress_reporter = ProgressReporter()
     ### Set up the model ###
     # here we use LiteLLMModel.
     # Alternatively, you can use InferenceClientModel, VLLMModel or TransformersModel depending on your chosen LLM model backend
@@ -163,7 +166,15 @@ def create_devs_agent(
         if (manager_use_strong or not disable_check)
         else model_id["weak"]
     )
-    model = LiteLLMModel(model_id=manager_model_id)
+    # smolagents receives a complete model response before it parses or runs a
+    # tool call.  Retrying the provider completion here is therefore safe: a
+    # dropped HTTP response cannot replay a local file-writing tool.  Keep both
+    # layers bounded so one transient OpenRouter disconnect neither aborts the
+    # whole build nor retries indefinitely.
+    model = ResilientLiteLLMModel(
+        model_id=manager_model_id,
+        **litellm_retry_options(),
+    )
 
     ### Set up the tools ###
     # tools for working with the local working directory
@@ -171,8 +182,11 @@ def create_devs_agent(
         ListDir(working_directory),
         SeeTextFile(working_directory),
         ReadBinaryAsMarkdown(working_directory),
-        ModifyFile(working_directory),
-        CreateFileWithContent(working_directory),
+        ModifyFile(working_directory, progress_reporter=progress_reporter),
+        CreateFileWithContent(
+            working_directory,
+            progress_reporter=progress_reporter,
+        ),
     ]
 
     devs_tools: list[Tool] = []
@@ -206,10 +220,14 @@ def create_devs_agent(
         working_directory=working_directory,
         disable_check=disable_check,
         concur_num=effective_concur_num,
+        progress_reporter=progress_reporter,
     )
     devs_tools.append(devs_tree_construct_tool)
 
-    devs_execute_tool = DEVSExecute(working_directory=working_directory)
+    devs_execute_tool = DEVSExecute(
+        working_directory=working_directory,
+        progress_reporter=progress_reporter,
+    )
     devs_tools.append(devs_execute_tool)
 
     ### Set up the agent ###
@@ -228,6 +246,7 @@ def create_devs_agent(
             persistent_storage, f"manager_agent_log_{signature}.txt"
         ),
         name=app_name,
+        progress_reporter=progress_reporter,
     )
     tools = working_directory_file_editing_tools + devs_tools
     # manager agent is responsible for directly talking with user and call sub-agents to complete user tasks
@@ -243,6 +262,9 @@ def create_devs_agent(
         description="This is a DEVS agent application that can construct, execute, and analyze DEVS models using xDEVS.py.",
     )
     mananger_logger.visualize_agent_tree(manager_agent)
+    # The display backend binds this resource-local reporter to the active
+    # request.  The agent itself remains usable without the graphical UI.
+    manager_agent.progress_reporter = progress_reporter
     return manager_agent
 
 def _find_existing_display_workspace(base_temp_dir: str) -> str | None:
@@ -350,8 +372,15 @@ if __name__ == "__main__":
     )
     args = argparser.parse_args()
 
-    # Ensure the base temp_files directory exists
-    base_temp_dir = "devs_app/working_dirs"
+    # Keep every mutable fallback under one runtime boundary. Studio supplies
+    # an external launch-owned root; direct/manual execution uses .runtime.
+    interface_root = Path(__file__).resolve().parents[1]
+    runtime_root = Path(
+        os.getenv("OPTPILOT_INTERFACE_RUNTIME_ROOT", str(interface_root / ".runtime"))
+    ).expanduser().resolve()
+    base_temp_dir = os.getenv(
+        "DEVS_DISPLAY_WORKING_DIRS_ROOT", str(runtime_root / "working-dirs")
+    )
     Path(base_temp_dir).mkdir(parents=True, exist_ok=True)
 
     # Server mode owns workspace/session registry selection. If the caller does
@@ -367,10 +396,15 @@ if __name__ == "__main__":
                 dir=base_temp_dir, prefix=f"working_directory_{curr_time}_"
             )
     if args.persistent_storage is None:
-        args.persistent_storage = "devs_app/persistent_storage"
+        args.persistent_storage = os.getenv(
+            "DEVS_INTERFACE_PERSISTENT_STORAGE_ROOT",
+            str(runtime_root / "persistent-storage"),
+        )
     Path(args.persistent_storage).mkdir(parents=True, exist_ok=True)
     if args.index_dir is None:
-        args.index_dir = "devs_app/index_dir"
+        args.index_dir = os.getenv(
+            "DEVS_INTERFACE_INDEX_ROOT", str(runtime_root / "index-dir")
+        )
     Path(args.index_dir).mkdir(parents=True, exist_ok=True)
 
     # create a date time signature

@@ -5,6 +5,13 @@ description: How JobShopLib reinforcement-learning policies fit the job-shop exa
 
 # Reinforcement Learning Methods
 
+!!! warning "Current runtime status"
+
+    This study is retained-launchable after the optional example dependencies
+    are installed with a working PyTorch stack. Its environment-owned training
+    cases and adapter are projected read-only into the retained method worker.
+
+
 Reinforcement learning is included because it exercises a different kind of
 method: the method may train or load a policy before it can propose a candidate.
 
@@ -72,12 +79,18 @@ Install optional example dependencies:
 uv sync --all-packages --group examples
 ```
 
-Run the study:
+Validate and run the study:
 
 ```bash
 uv run optpilot validate catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml \
+  --package-root catalog/example_package
 ```
+
+The retained runner resolves the training cases and `rl_env_adapter.py` from
+the captured package snapshot through `methodContext.references`. This study
+does not require the supported parameter `trialWorkspace` seed path, and it
+does not depend on the still-pending file-candidate path.
 
 The bundled run is intentionally small. It is meant to demonstrate the OptPilot
 boundary, not to produce a strong benchmark policy.
@@ -85,9 +98,9 @@ boundary, not to produce a strong benchmark policy.
 Expected result:
 
 - the run should complete one trial with `failure_count: 0`
-- `candidates.jsonl` should contain one `parameters` candidate whose `spec`
+- the Workbench Candidates page should contain one `parameters` candidate whose `spec`
   contains `solutions`
-- `observations.jsonl` should contain `normalized_makespan` and the secondary
+- the Workbench Observations page should contain `normalized_makespan` and the secondary
   job-shop metrics
 - if the run fails before training starts, the usual cause is missing optional
   dependencies such as Stable-Baselines3, Gymnasium, or a compatible PyTorch

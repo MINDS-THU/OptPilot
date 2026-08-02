@@ -1,151 +1,162 @@
 # OptPilot
 
-OptPilot is a lightweight orchestration layer for iterative optimization studies. It connects a user-owned method to a user-owned environment, runs candidate solutions, records objective metrics, and keeps an auditable evidence trail.
+OptPilot is a lightweight orchestration layer for iterative optimization
+studies. It connects a user-owned method to a user-owned environment and owns
+the boundary around evaluation:
 
-OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework. Those pieces remain yours. OptPilot standardizes the loop around them:
+1. A method proposes candidates.
+2. OptPilot validates and admits them as logical trials.
+3. The environment evaluates them in fresh attempts.
+4. OptPilot commits observations, artifacts, events, and recovery state.
+5. The method receives filtered evidence for the next decision.
 
-1. A method proposes one or more candidates.
-2. OptPilot validates and materializes each candidate.
-3. An environment evaluates the candidate and reports metrics.
-4. OptPilot records trials, observations, saved output files, method calls, and run metadata.
-5. The method can use the accumulated evidence to propose the next candidates.
+OptPilot is not an optimizer, simulator, RL framework, or LLM agent framework.
+Those pieces remain yours.
 
 ```mermaid
 flowchart LR
   Env["Environment\nwhat can be evaluated"]
-  Method["Method\nhow candidates are produced"]
-  Study["Study\nobjective + budget + execution"]
-  Runner["OptPilot runner\nvalidate + materialize + evaluate"]
-  Evidence["Evidence\nobservations + artifacts"]
+  Method["Method\nhow candidates are proposed"]
+  Study["Study\nobjective + budget + policy"]
+  Realm["OptPilot Realm\nadmission + execution + evidence"]
+  Workbench["Run Workbench\nmonitor + inspect"]
 
   Study --> Env
   Study --> Method
-  Env --> Runner
-  Method --> Runner
-  Runner --> Evidence
-  Evidence --> Method
+  Env --> Realm
+  Method --> Realm
+  Realm --> Method
+  Realm --> Workbench
 ```
 
-The boundary between environment and method is the candidate contract. Start with `docs/candidate-contracts.md` after the quickstart if you are adding a new integration.
+The environment/method boundary is the candidate contract. See
+[Candidate Contracts](https://MINDS-THU.github.io/OptPilot/candidate-contracts/)
+when adding an integration.
 
-## Current Surface
+## Public configs
 
-Users author three public YAML config files:
+Users author three YAML config kinds:
 
-- `config: environment`: candidate contract, evaluator, metrics, trial workspace, saved output-file rules, and optional records.
-- `config: method`: method entrypoint, protocol, settings, compatibility requirements, and optional method runtime.
-- `config: study`: the concrete run binding an environment config to a method config with objective, budget, execution, and evidence settings.
+- `config: environment`: candidate contract, evaluator, metrics, context, and
+  runtime requirements
+- `config: method`: proposal entrypoint, settings, protocol, compatibility,
+  and runtime requirements
+- `config: study`: environment/method binding, objective, budget, execution,
+  evidence, and reproducibility policy
 
-OptPilot validates those YAML files with packaged JSON Schemas, compiles them into an internal `StudySpec`, and writes the compiled spec into every run directory.
+OptPilot validates the YAML, captures one explicit package root, and compiles an
+exact retained study definition. A run is a canonical namespace in a local
+Realm, not a mutable output directory.
 
-Included in the core CLI/SDK:
+## Current executable surface
 
-- JSON Schema validation for public environment, method, and study configs
-- package validation for folders that contain environments, methods, resources, and studies
-- parameter, file, and opaque candidate contracts
-- Python and command environment evaluators
-- Python and command methods with batch protocol, plus Python session protocol
-- local thread, local subprocess, and Docker/Podman-compatible environment execution
-- Docker/Podman-compatible command-method runtime isolation
-- local JSONL evidence store with run summaries, trials, observations, candidate records, saved output files, method calls, and events
+The public Realm runner currently supports a deliberately bounded slice:
 
-Included in a source checkout:
+- parameter candidates and bounded file candidates
+- source-backed Python `batch` methods
+- configured Python evaluators
+- local process runtime with bounded, vendored, hash-locked pure-Python
+  dependency preparation, but without arbitrary setup/build commands,
+  containers, or Environment/backend host-derived values
+- launch-scoped `method.runtime.envFromHost` values selected explicitly for the
+  Method process; Studio Runs retain only the names and opaque Settings
+  revisions, while values stay out of process records and Run evidence
+- retained read-only method context, runtime-private file-candidate staging,
+  and isolated per-attempt candidate materialization
+- durable method exchanges, attempt binding/launch/reconciliation, canonical
+  evidence, and terminal recovery
 
-- runnable job-shop scheduling tutorial package with shared validation cases, a shared objective, parameter/file candidate variants, JobShopLib-backed method wrappers, Stable-Baselines3 RL, and LLM file-candidate examples
-- OptPilot Studio, a local UI for browsing reusable catalogs, opening workspaces, checking compatibility, launching studies, inspecting runs, and optionally using an OpenHands-backed assistant
+Unsupported configs fail during retained compilation. The runner does not fall
+back to the removed directory-based path. Command/session methods, command
+evaluators, opaque candidates, containers, arbitrary setup/build execution,
+Environment/backend host-derived values, and legacy path-backed output
+declarations are not yet executable through this slice.
 
-Not included:
+All nine bundled studies are retained-launchable. The OpenAI editing Study
+additionally needs `OPENROUTER_API_KEY`: add it under Studio Settings → Local
+environment variables, or export it for a CLI launch. Each Run resolves that
+declared value independently: Studio binds the current saved revision at
+launch, and a later Settings change applies only to later Runs. The value is
+handed transiently to the Method process without being copied into the Run or
+process-supervisor record. If an older Run needs recovery after its bound
+revision was changed or removed, it waits instead of silently using the new
+value. Validation success and launch readiness remain separate checks for
+user-authored packages too.
 
-- production Bayesian optimization, RL, LLM, or metaheuristic frameworks
-- remote execution backends
-- automatic dependency inference for study runtimes
-- multi-user Studio authentication
+## Install
 
-## Prerequisites
+OptPilot supports Python 3.10 and newer.
 
-OptPilot currently supports Python 3.10 and newer.
-
-Before running the examples below, install:
-
-- Python 3.10+
-- `uv`
-
-## Install Options
-
-Use the PyPI package when you want the Python SDK and CLI in your own project.
-This path does not install OptPilot Studio, OpenHands, Code Server, or the
-bundled example catalog.
+Install the core CLI/SDK from PyPI:
 
 ```bash
 python -m pip install optpilot
 optpilot --help
 optpilot package validate path/to/package
 optpilot validate path/to/package/studies/my_study.yaml
-optpilot run path/to/package/studies/my_study.yaml
+optpilot run path/to/package/studies/my_study.yaml \
+  --package-root path/to/package
 ```
 
-Use a source checkout when you want the bundled tutorial package, full local
-Studio, docs, and contributor workflow:
+The PyPI package does not include Studio, OpenHands, Code Server, or this
+repository's example catalog.
+
+For Studio, docs, examples, and contributor tooling, use a source checkout:
 
 ```bash
 git clone https://github.com/MINDS-THU/OptPilot.git
 cd OptPilot
 uv sync --all-packages --group examples --group docs
 uv run optpilot --help
-```
-
-## First Run
-
-Start with the job-shop parameter baseline from a source checkout. It is the
-recommended first run, works after the full source sync above, and does not
-require API keys or external solvers.
-
-The job-shop examples are the main tutorial comparison set: environments declare what they can evaluate, methods declare how they produce candidates, and study files bind one environment, one method, objective, budget, and execution policy.
-
-Run the job-shop parameter baseline:
-
-```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-```
-
-Validate a config without running it:
-
-```bash
-uv run optpilot validate catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-```
-
-After the first run succeeds, open Studio:
-
-```bash
 uv run optpilot ui --open-browser
 ```
 
-![OptPilot Studio catalog and assistant](https://raw.githubusercontent.com/MINDS-THU/OptPilot/main/docs/assets/studio-assistant-catalog.png)
+Validate the bundled authoring package:
 
-Studio scans packages under `catalog/` by default. Stop the local server with
-`Ctrl-C` in the terminal when you are done.
+```bash
+uv run optpilot validate \
+  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
+uv run optpilot package validate catalog/example_package --check-source
+```
 
-For the assistant-enabled Studio workflow with OpenHands, embedded Code Server,
-and per-workspace containers, see [OptPilot Studio](docs/ui.md).
+See [Getting Started](https://MINDS-THU.github.io/OptPilot/getting-started/)
+for the current run boundary and command shape.
 
-Some examples, such as the JobShopLib and Stable-Baselines method wrappers, require optional dependencies. Use the dependency-free job-shop baseline first, then continue with the example-specific docs.
+## Runs and Studio
 
-## Full Config Examples
+Without `--realm-root`, CLI and Studio use OptPilot's private per-user Realm
+in the OS user-data location. `--realm-root` is an operational override for an
+isolated local Realm, not an output-folder option.
 
-The first tutorial shows the full environment, method, and study YAML files for a runnable job-shop baseline:
+The Studio Runs page reads the same canonical Realm and provides:
 
-- `catalog/example_package/environments/job_shop_scheduling/environment_rule_parameters.yaml`
-- `catalog/example_package/methods/fixed_rule_parameters/method.yaml`
-- `catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml`
+- status, stop reason, objective, budget, counts, and best result
+- bounded candidate, logical-trial, attempt, observation, and artifact pages
+- an exact-head correlated timeline
+- direct Run pages: selecting a Run never creates or opens a Workspace
+- same-Run Candidate comparison, a Run-local **Shortlist**, and exact
+  **Re-evaluate in a new Run** when eligible
 
-Read [First Job-Shop Run](docs/getting-started.md) for the full configs and the explanation of how the three files fit together. Python evaluator references use `module:function`; Python method references use `module:Class`.
+Studio resolves each Candidate action from the exact retained selection.
+**Run headless** runs a noninteractive inspection; **Open interactive
+interface** opens the Environment's live view when its retained profile and
+provider support it.
+Both are explicitly inspection-only: they never consume the source Run's
+budget or change its ranking or evidence.
 
-## Catalog Packages
+**Inspect** shows semantic inputs without launching. **View files** browses
+retained file Candidates and artifacts through a bounded read-only view.
+**Edit in Workspace** is available only for an eligible complete project and
+creates or reopens one durable editable Workspace. Viewing or trying a
+Candidate does not create a Workspace, copy its content, or expose internal
+storage paths.
 
-OptPilot ships one package at `catalog/example_package/`. When Studio registers
-user-owned files, it creates `catalog/local_package/` on demand. Add future
-packages as additional siblings under `catalog/`; they should not overwrite
-existing packages.
+## Catalog packages
+
+A package may contain `environments/`, `methods/`, `resources/`, and
+`studies/`. Environment and method directories own implementation code and
+reusable config variants; resources are supporting content/apps; studies are
+concrete run plans.
 
 ```text
 catalog/
@@ -154,83 +165,26 @@ catalog/
   another_package/
 ```
 
-Each package can contain `environments/`, `methods/`, `resources/`, and
-`studies/`. Environment and method directories own reusable implementation code
-and reusable config variants. Resources are reusable reference folders or
-launchable apps. Study configs are concrete run plans.
-
-## Container Runtime Example
-
-Run an environment evaluator in a container by declaring the component runtime
-on the environment config:
-
-```yaml
-runtime:
-  sandbox: container
-  container:
-    image: python:3.11-slim
-    executable: docker
-    network: disabled
-```
-
-The study still owns trial policy:
-
-```yaml
-execution:
-  parallelism: 1
-  timeoutSeconds: 300
-```
-
-Run a command method in its own container:
-
-```yaml
-entrypoint:
-  command: [python, my_agent.py, "{input_file}", "{output_file}"]
-  protocol: batch
-
-runtime:
-  sandbox: container
-  container:
-    image: my-agent-image:latest
-    executable: docker
-    network: disabled
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
-      tag: my-agent-image:latest
-  envFromHost: [OPENAI_API_KEY]
-```
-
 ## Documentation
 
-- [Installation](docs/installation.md)
-- [First Job-Shop Run](docs/getting-started.md)
-- [OptPilot Core](docs/concepts.md)
-- [Candidate Contracts](docs/candidate-contracts.md)
-- [Methods](docs/methods.md)
-- [Packages and Catalogs](docs/catalog.md)
-- [Configuration Reference](docs/configuration.md)
-- [How a Run Works](docs/how-it-works.md)
-- [Evidence](docs/evidence.md)
-- [Job-Shop Tutorial Map](docs/examples.md)
-- [Job-Shop Environment](docs/job-shop-environment.md)
-- [OptPilot Studio](docs/ui.md)
-- [Workspace Management](docs/studio-workspaces.md)
-- [OptPilot Assistant](docs/assistant.md)
+- [Getting Started](https://MINDS-THU.github.io/OptPilot/getting-started/)
+- [How a Run Works](https://MINDS-THU.github.io/OptPilot/how-it-works/)
+- [Runs and Evidence](https://MINDS-THU.github.io/OptPilot/evidence/)
+- [Configuration](https://MINDS-THU.github.io/OptPilot/configuration/)
+- [Studio UI](https://MINDS-THU.github.io/OptPilot/ui/)
+- [Examples](https://MINDS-THU.github.io/OptPilot/examples/)
 
-Build the docs locally:
+## Development
 
 ```bash
-uv run --group docs mkdocs serve
+uv sync --all-packages --group examples --group docs
+uv run pytest
+uv run mkdocs serve
 ```
 
-## Development Checks
+Contributors should see the
+[Development guide](https://MINDS-THU.github.io/OptPilot/development/) and the
+[maintainer design notes](https://github.com/MINDS-THU/OptPilot/tree/main/designs).
 
-```bash
-uv run python -m unittest discover -s tests -p 'test_*.py'
-uv run python -m compileall src/optpilot
-uv run python -m compileall studio/src/optpilot_studio
-./scripts/smoke_test.sh
-```
-
-OptPilot is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+OptPilot is licensed under the
+[Apache License 2.0](https://github.com/MINDS-THU/OptPilot/blob/main/LICENSE).

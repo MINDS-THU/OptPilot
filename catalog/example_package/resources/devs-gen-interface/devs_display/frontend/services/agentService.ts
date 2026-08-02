@@ -1,10 +1,16 @@
 import {
+    ActivityFilePreview,
     BackendMessage,
     ChatRequestInfo,
+    EventResponse,
     FileMap,
     FrontendConfig,
+    GenerationMode,
     ProjectGraphResponse,
     ProjectInfo,
+    SimulationResultPreview,
+    SimulationRun,
+    SimulationSpec,
     SessionInfo
 } from '../types';
 
@@ -136,6 +142,20 @@ export const getSessionProjectFiles = async (sessionId: string, projectId: strin
     return data.files || {};
 };
 
+export const getRequestActivityFile = async (
+    sessionId: string,
+    requestId: string,
+    filePath: string
+): Promise<ActivityFilePreview> => {
+    const encodedPath = filePath
+        .split('/')
+        .map(part => encodeURIComponent(part))
+        .join('/');
+    return jsonFetch<ActivityFilePreview>(
+        `/sessions/${encodeURIComponent(sessionId)}/requests/${encodeURIComponent(requestId)}/activity-files/${encodedPath}`
+    );
+};
+
 export const getSessionProjectGraph = async (
     sessionId: string,
     projectId: string,
@@ -144,6 +164,146 @@ export const getSessionProjectGraph = async (
     return jsonFetch<ProjectGraphResponse>(
         `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/graph?start_if_missing=${startIfMissing ? 'true' : 'false'}`
     );
+};
+
+export const getSimulationSpec = async (
+    sessionId: string,
+    projectId: string
+): Promise<SimulationSpec> => {
+    const data = await jsonFetch<{ simulation?: Partial<SimulationSpec> & { arguments?: SimulationSpec['parameters'] } } & Partial<SimulationSpec> & { arguments?: SimulationSpec['parameters'] }>(
+        `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/simulation`
+    );
+    const raw = data.simulation || data;
+    return {
+        available: raw.available !== false,
+        entrypoint: raw.entrypoint,
+        description: raw.description,
+        parameters: Array.isArray(raw.parameters) ? raw.parameters : (Array.isArray(raw.arguments) ? raw.arguments : []),
+        validation_status: raw.validation_status,
+        validation_message: raw.validation_message
+    };
+};
+
+type RawSimulationRun = Partial<SimulationRun> & {
+    execution_id?: string;
+    finished_at?: string | null;
+    message?: string | null;
+};
+
+const normalizeSimulationRun = (raw: RawSimulationRun): SimulationRun => ({
+    ...raw,
+    run_id: raw.run_id || raw.execution_id || '',
+    status: raw.status || 'queued',
+    completed_at: raw.completed_at ?? raw.finished_at,
+    error: raw.error ?? raw.message
+});
+
+export const startSimulationRun = async (
+    sessionId: string,
+    projectId: string,
+    parameters: Record<string, string | number | boolean>
+): Promise<SimulationRun> => {
+    const data = await jsonFetch<{ run?: RawSimulationRun; execution?: RawSimulationRun } & RawSimulationRun>(
+        `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/simulation-runs`,
+        {
+            method: 'POST',
+            body: JSON.stringify({
+                arguments: parameters
+            })
+        }
+    );
+    return normalizeSimulationRun(data.run || data.execution || data);
+};
+
+export const validateSimulation = async (
+    sessionId: string,
+    projectId: string,
+    parameters: Record<string, string | number | boolean>
+): Promise<SimulationRun> => {
+    const data = await jsonFetch<{ run?: RawSimulationRun; execution?: RawSimulationRun } & RawSimulationRun>(
+        `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/simulation:validate`,
+        {
+            method: 'POST',
+            body: JSON.stringify({ arguments: parameters })
+        }
+    );
+    return normalizeSimulationRun(data.run || data.execution || data);
+};
+
+export const getSimulationRun = async (
+    sessionId: string,
+    projectId: string,
+    runId: string
+): Promise<SimulationRun> => {
+    const data = await jsonFetch<{ run?: RawSimulationRun; execution?: RawSimulationRun } & RawSimulationRun>(
+        `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/simulation-runs/${encodeURIComponent(runId)}`
+    );
+    return normalizeSimulationRun(data.run || data.execution || data);
+};
+
+export const stopSimulationRun = async (
+    sessionId: string,
+    projectId: string,
+    runId: string
+): Promise<SimulationRun> => {
+    const data = await jsonFetch<{ run?: RawSimulationRun; execution?: RawSimulationRun } & RawSimulationRun>(
+        `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}/simulation-runs/${encodeURIComponent(runId)}/stop`,
+        { method: 'POST', body: JSON.stringify({}) }
+    );
+    return normalizeSimulationRun(data.run || data.execution || data);
+};
+
+const simulationResultFilePath = (
+    sessionId: string,
+    projectId: string,
+    runId: string,
+    filePath: string
+): string => {
+    const encodedFilePath = filePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `/sessions/${encodeURIComponent(sessionId)}/projects/${encodeURIComponent(projectId)}`
+        + `/simulation-runs/${encodeURIComponent(runId)}/result-files/${encodedFilePath}`;
+};
+
+export const getSimulationResultPreview = async (
+    sessionId: string,
+    projectId: string,
+    runId: string,
+    filePath: string
+): Promise<SimulationResultPreview> => {
+    return jsonFetch<SimulationResultPreview>(
+        simulationResultFilePath(sessionId, projectId, runId, filePath)
+    );
+};
+
+export const downloadSimulationResultFile = async (
+    sessionId: string,
+    projectId: string,
+    runId: string,
+    filePath: string
+): Promise<Blob> => {
+    const token = getStoredAuthToken();
+    const response = await fetch(
+        `${AGENT_API_URL}${simulationResultFilePath(sessionId, projectId, runId, filePath)}?download=true`,
+        {
+            headers: {
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            }
+        }
+    );
+    if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+            const data = await response.json();
+            detail = data.detail || detail;
+        } catch {
+            // Keep HTTP status text.
+        }
+        if (response.status === 401) clearStoredAuthToken();
+        const error = new Error(detail) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+    }
+    return response.blob();
 };
 
 export const parseSessionProjectGraph = async (
@@ -186,7 +346,9 @@ export const submitSessionChat = async (
     sessionId: string,
     content: string,
     activeProjectId: string | null,
-    includeProjectContext = false
+    includeProjectContext = false,
+    generationMode: GenerationMode = 'guided',
+    idempotencyKey?: string
 ): Promise<{ request: ChatRequestInfo; user_message: BackendMessage }> => {
     return jsonFetch(`/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: 'POST',
@@ -194,9 +356,39 @@ export const submitSessionChat = async (
             content,
             active_project_id: activeProjectId,
             include_project_context: includeProjectContext,
-            idempotency_key: `${Date.now()}-${Math.random().toString(16).slice(2)}`
+            generation_mode: generationMode,
+            idempotency_key: idempotencyKey || `${Date.now()}-${Math.random().toString(16).slice(2)}`
         })
     });
+};
+
+export type ResolveInteractionAction = 'confirm' | 'revise' | 'continue_automatically' | 'cancel';
+
+export const resolveGenerationInteraction = async (
+    sessionId: string,
+    requestId: string,
+    interactionId: string,
+    input: {
+        action: ResolveInteractionAction;
+        artifact_digest?: string;
+        answers?: Record<string, string>;
+        feedback?: string | null;
+        edited_intent?: Record<string, unknown> | null;
+    },
+    idempotencyKey?: string
+): Promise<{ request: ChatRequestInfo }> => {
+    return jsonFetch(
+        `/sessions/${encodeURIComponent(sessionId)}/requests/${encodeURIComponent(requestId)}`
+        + `/interactions/${encodeURIComponent(interactionId)}:resolve`,
+        {
+            method: 'POST',
+            body: JSON.stringify({
+                ...input,
+                idempotency_key: idempotencyKey
+                    || `resolve-${Date.now()}-${Math.random().toString(16).slice(2)}`
+            })
+        }
+    );
 };
 
 export const getSessionRequest = async (sessionId: string, requestId: string): Promise<ChatRequestInfo> => {
@@ -204,6 +396,20 @@ export const getSessionRequest = async (sessionId: string, requestId: string): P
         `/sessions/${encodeURIComponent(sessionId)}/requests/${encodeURIComponent(requestId)}`
     );
     return data.request;
+};
+
+export const getSessionEvents = async (
+    sessionId: string,
+    requestId: string,
+    after = 0
+): Promise<EventResponse> => {
+    const query = new URLSearchParams({
+        request_id: requestId,
+        after: String(Math.max(0, Math.floor(after)))
+    });
+    return jsonFetch<EventResponse>(
+        `/sessions/${encodeURIComponent(sessionId)}/events?${query.toString()}`
+    );
 };
 
 export const cancelQueuedRequest = async (

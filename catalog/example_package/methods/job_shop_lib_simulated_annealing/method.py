@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, List
 
 from job_shop_lib_solvers import solve_job_shop_cases
@@ -42,14 +41,13 @@ class JobShopLibSimulatedAnnealingMethod:
         )
         return [
             {
-                "candidate_id": f"job-shop-lib-sa-{uuid.uuid4().hex[:12]}",
+                "candidate_id": "job-shop-lib-sa-0000",
                 "format": "parameters",
                 "spec": {"solutions": solutions},
                 "generator": {
                     "method_id": self.definition["id"],
                     "strategy": "job_shop_lib_simulated_annealing",
                 },
-                "metadata": {"summary": "Schedules produced by JobShopLib SimulatedAnnealingSolver."},
             }
         ]
 

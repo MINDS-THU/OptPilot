@@ -5,6 +5,56 @@ import importlib.util
 import difflib
 import ast
 
+from default_tools.path_security import resolve_confined_path
+
+
+def _report_file_change(
+    reporter: Any,
+    working_dir: str,
+    file_path: str,
+    *,
+    existed_before: bool,
+) -> None:
+    """Best-effort public notice for one successfully written text file."""
+
+    if reporter is None:
+        return
+    try:
+        relative_path = os.path.relpath(file_path, working_dir).replace("\\", "/")
+        reporter.emit(
+            activity_key="agent_update_files",
+            state="progress",
+            title="Simulation file updated",
+            detail="A generated source file is ready to inspect.",
+            technical_name="file editing",
+            file_changes=[{
+                "path": relative_path,
+                "change": "modified" if existed_before else "added",
+            }],
+        )
+    except Exception:
+        # File edits remain authoritative; progress is advisory.
+        return
+
+
+def _safe_tool_path(
+    working_dir: str,
+    path: str,
+    *,
+    allow_root: bool = False,
+    must_exist: bool = False,
+    expected: Optional[str] = None,
+) -> str:
+    return str(
+        resolve_confined_path(
+            working_dir,
+            path,
+            allow_root=allow_root,
+            must_exist=must_exist,
+            expected=expected,
+        )
+    )
+
 class ListDir(Tool):
     name = "list_dir"
     description = (
@@ -32,12 +82,12 @@ class ListDir(Tool):
             return '\n'.join(files)
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir,
+            path,
+            allow_root=True,
+            expected="directory",
+        )
 
 
 class SeeTextFile(Tool):
@@ -81,11 +131,9 @@ class SeeTextFile(Tool):
         return "".join(formatted_lines)
 
     def _safe_path(self, path: str) -> str:
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir, path, expected="file"
+        )
 
 class ReadBinaryAsMarkdown(Tool):
     name = "read_binary_as_markdown"
@@ -123,11 +171,9 @@ class ReadBinaryAsMarkdown(Tool):
             return f"Error reading '{filename}': {str(e)}"
 
     def _safe_path(self, path: str) -> str:
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir, path, expected="file"
+        )
 
 class SmartReplace(Tool):
     name = "smart_replace"
@@ -165,12 +211,18 @@ class SmartReplace(Tool):
     }
     output_type = "string"
 
-    def __init__(self, working_dir):
+    def __init__(self, working_dir, progress_reporter: Any = None):
         super().__init__()
         self.working_dir = working_dir
+        self.progress_reporter = progress_reporter
 
     def forward(self, filename: str, target_text: str, replacement_text: str, begin_line: Optional[int] = None, context_above: Optional[str] = None) -> Any:
-        filepath = os.path.join(self.working_dir, filename)
+        try:
+            filepath = _safe_tool_path(
+                self.working_dir, filename, must_exist=True, expected="file"
+            )
+        except (PermissionError, FileNotFoundError) as e:
+            return f"Error: {e}"
         if not os.path.exists(filepath):
             return f"Error: File {filename} not found."
 
@@ -298,6 +350,13 @@ class SmartReplace(Tool):
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(new_file_content)
 
+        _report_file_change(
+            self.progress_reporter,
+            self.working_dir,
+            filepath,
+            existed_before=True,
+        )
+
         return f"Success: Replaced content starting at line {final_idx + 1}."
 
 class ModifyFile(Tool):
@@ -315,9 +374,10 @@ class ModifyFile(Tool):
     }
     output_type = "string"
 
-    def __init__(self, working_dir):
+    def __init__(self, working_dir, progress_reporter: Any = None):
         super().__init__()
         self.working_dir = working_dir
+        self.progress_reporter = progress_reporter
 
     def forward(self, filename: str, start_line: int, end_line: int, new_content: str) -> Any:
         try:
@@ -332,15 +392,18 @@ class ModifyFile(Tool):
             file.seek(0)
             file.truncate()
             file.write("".join(lines))
+        _report_file_change(
+            self.progress_reporter,
+            self.working_dir,
+            filepath,
+            existed_before=True,
+        )
         return "Content modified."
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir, path, expected="file"
+        )
 
 class CreateFileWithContent(Tool):
     name = "create_file_with_content"
@@ -355,9 +418,10 @@ class CreateFileWithContent(Tool):
     }
     output_type = "string"
 
-    def __init__(self, working_dir):
+    def __init__(self, working_dir, progress_reporter: Any = None):
         super().__init__()
         self.working_dir = working_dir
+        self.progress_reporter = progress_reporter
 
     def forward(self, filename: str, content: str) -> Any:
         try:
@@ -373,20 +437,22 @@ class CreateFileWithContent(Tool):
             except Exception as e:
                 return f"Failed to create parent directories for '{filename}': {e}"
 
+        existed_before = os.path.isfile(filepath)
         try:
             with open(filepath, "w", encoding="utf-8") as file:
                 file.write(content)
         except Exception as e:
             return f"Failed to create or write file '{filename}': {e}"
+        _report_file_change(
+            self.progress_reporter,
+            self.working_dir,
+            filepath,
+            existed_before=existed_before,
+        )
         return "File created successfully."
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(self.working_dir, path)
 
 class SearchKeyword(Tool):
     name = "search_keyword"
@@ -424,6 +490,8 @@ class SearchKeyword(Tool):
             for root, _, files in os.walk(target_path):
                 for fname in files:
                     fpath = os.path.join(root, fname)
+                    if os.path.islink(fpath):
+                        continue
                     rel_path = os.path.relpath(fpath, self.working_dir)
                     try:
                         result = self._search_in_file(fpath, keyword, context_lines, display_path=rel_path)
@@ -460,12 +528,9 @@ class SearchKeyword(Tool):
         return f"--- Matches in [{display_path}] ---\n" + "\n".join(formatted_output)
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir, path, allow_root=True
+        )
 
 class DeleteFileOrFolder(Tool):
     name = "delete_file_or_folder"
@@ -509,12 +574,7 @@ class DeleteFileOrFolder(Tool):
                 return f"The file or folder {filename} does not exist."
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(self.working_dir, path)
 
 class LoadObjectFromPythonFile(Tool):
     name = "load_object_from_python_file"
@@ -553,9 +613,6 @@ class LoadObjectFromPythonFile(Tool):
         return getattr(module, object_name)
 
     def _safe_path(self, path: str) -> str:
-        # Prevent absolute paths and directory traversal
-        abs_working_dir = os.path.abspath(self.working_dir)
-        abs_path = os.path.abspath(os.path.join(self.working_dir, path))
-        if not abs_path.startswith(abs_working_dir):
-            raise PermissionError("Access outside the working directory is not allowed.")
-        return abs_path
+        return _safe_tool_path(
+            self.working_dir, path, expected="file"
+        )

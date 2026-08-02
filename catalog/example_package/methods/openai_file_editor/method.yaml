@@ -31,3 +31,4 @@ accepts:
     context:
       - candidate.files.editable
       - methodContext.instructions
+      - methodContext.references

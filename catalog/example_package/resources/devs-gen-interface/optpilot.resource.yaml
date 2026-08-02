@@ -3,6 +3,7 @@ config: resource
 id: devs-gen-interface
 name: DEVS Simulation Generator Interface
 description: Natural-language interface for generating, running, and visualizing xDEVS discrete-event simulation projects.
+purpose: generator
 tags:
   - resource
   - simulation
@@ -12,16 +13,63 @@ tags:
 interface:
   label: DEVS Generator
   description: Launch the DEVS generation backend and graphical frontend, then open the Vite UI in Studio Preview.
+  outputs:
+    actions:
+      - id: run-simulation
+        label: Run simulation
+        command:
+          - bash
+          - -lc
+          - >-
+            export OPTPILOT_SIMULATION_RESULTS_DIR="$OPTPILOT_OUTPUT_EXECUTION_RESULTS_ROOT";
+            export DEVS_SIMULATION_RESULTS_DIR="$OPTPILOT_OUTPUT_EXECUTION_RESULTS_ROOT";
+            exec "$OPTPILOT_PREPARED_RUNTIME_ROOT/python-venv/bin/python" -u run.py "$@"
+          - optpilot-run
+        cwd: .
+        timeoutSeconds: 300
+        acceptsArguments: true
+        runtime: originating-interface
+        # The embedded Run tab provides the student-facing controls. Keep this
+        # action available to that interface without duplicating it above the UI.
+        showInOutputCard: false
   command: [bash, -lc, ./_optpilot_launch_interface.sh]
-  port: 3000
   cwd: .
   env:
-    DEVS_INTERFACE_MODEL_ID: openrouter/openai/gpt-5.4
     DEVS_INTERFACE_CONCURRENCY: "8"
     DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS: "240"
     DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS: "6"
-  envFromHost:
-    - OPENROUTER_API_KEY
-  extraPorts: [8000]
-  readyPath: /
-  readyTimeoutSeconds: 420
+    # Standalone launches use this no-network container fallback. Managed
+    # Studio launches use the run-simulation action in the originating
+    # prepared runtime. Generated Python never runs in the credential-bearing
+    # interface process.
+    DEVS_GENERATED_EXECUTION_MODE: container
+    DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:latest
+  runtime:
+    sandbox: process
+    setup:
+      cache: prepared
+      timeoutSeconds: 1800
+      steps:
+        - uses: command
+          command: [bash, ./_optpilot_launch_interface.sh, --prepare-only]
+  grants:
+    network: enabled
+    envFromHost:
+      - DEVS_INTERFACE_MODEL_ID
+      - DEVS_INTERFACE_STRONG_MODEL_ID
+      - DEVS_DISPLAY_MODEL_ID
+    secretsFromHost: [OPENROUTER_API_KEY]
+  resources:
+    cpu: 2
+    memoryMiB: 4096
+    gpus: 0
+  timeoutSeconds: 3600
+  presentation:
+    kind: web
+    port: 3000
+    extraPorts: [8000]
+    readyPath: /
+    readyTimeoutSeconds: 420
+  accepts:
+    selectionKinds: [workspace]
+    mediaTypes: []

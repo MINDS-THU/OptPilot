@@ -22,12 +22,14 @@ jobs:
       - name: Install source checkout
         run: python -m pip install -e . -e ./studio
 
-      - name: Build and inspect core distribution
+      - name: Build and inspect distributions
         run: |
           python -m pip install build
           rm -rf dist-check
           python -m build --wheel --sdist --outdir dist-check
-          python scripts/check_release_artifacts.py dist-check
+          python -m build --wheel --sdist --outdir dist-check/studio studio
+          python scripts/check_release_artifacts.py dist-check \
+            --studio-dist-dir dist-check/studio
 
       - name: Verify core package without Studio
         run: |
@@ -37,9 +39,39 @@ jobs:
           /tmp/optpilot-core-check/bin/optpilot --help
           /tmp/optpilot-core-check/bin/optpilot validate tests/fixtures/catalog/studies/toy_random_search.yaml
           /tmp/optpilot-core-check/bin/optpilot package validate tests/fixtures/catalog
+          rm -rf /tmp/optpilot-core-realm
+          /tmp/optpilot-core-check/bin/optpilot run \
+            catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+            --package-root catalog/example_package \
+            --realm-root /tmp/optpilot-core-realm
           /tmp/optpilot-core-check/bin/python - <<'PY'
+          import importlib.resources
           import importlib.util
+          assert importlib.resources.files("optpilot.schemas").joinpath("study.schema.json").is_file()
+          assert importlib.resources.files("optpilot.realm.migrations").joinpath("0001_realm_core.sql").is_file()
           raise SystemExit(1 if importlib.util.find_spec("optpilot_studio") else 0)
+          PY
+
+      - name: Verify core source distribution and Studio artifact
+        run: |
+          python -m venv /tmp/optpilot-sdist-check
+          /tmp/optpilot-sdist-check/bin/python -m pip install --upgrade pip
+          /tmp/optpilot-sdist-check/bin/python -m pip install dist-check/optpilot-*.tar.gz
+          /tmp/optpilot-sdist-check/bin/optpilot --help
+
+          python -m venv /tmp/optpilot-studio-check
+          /tmp/optpilot-studio-check/bin/python -m pip install --upgrade pip
+          /tmp/optpilot-studio-check/bin/python -m pip install \
+            dist-check/optpilot-*.whl \
+            dist-check/studio/optpilot_studio-*.whl
+          /tmp/optpilot-studio-check/bin/optpilot ui --help
+          /tmp/optpilot-studio-check/bin/optpilot-studio --help
+          /tmp/optpilot-studio-check/bin/python - <<'PY'
+          import importlib.resources
+          assert importlib.resources.files("optpilot_studio.ui").joinpath("static/index.html").is_file()
+          assert importlib.resources.files("optpilot_studio.ui").joinpath("workspace_runtime/Dockerfile").is_file()
+          assert importlib.resources.files("optpilot_studio.docs_assets").joinpath("operations.md").is_file()
+          assert importlib.resources.files("optpilot_studio.assistant_assets").joinpath("prompts/system.md").is_file()
           PY
 
       - name: Run unit tests

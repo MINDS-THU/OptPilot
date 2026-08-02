@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,9 +22,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run an OptPilot study config")
     run_parser.add_argument("spec", help="Path to the study YAML file")
-    run_parser.add_argument("--output-root", help="Directory to place study runs (default: ./runs)")
-    run_parser.add_argument("--resume-run-dir", help="Append more trials to an existing run directory")
-    run_parser.add_argument("--branch-from-run-dir", help="Start a new run that records an existing run as its parent")
+    run_parser.add_argument(
+        "--package-root",
+        required=True,
+        help="Explicit root of the package captured for this study",
+    )
+    run_parser.add_argument(
+        "--realm-root",
+        help="Private local Realm root (default: secure OS user-data location)",
+    )
+    run_parser.add_argument(
+        "--operation-id",
+        help="Stable launch identity for replay and pre-launch run monitoring",
+    )
+    run_parser.add_argument(
+        "--method-request-timeout",
+        type=float,
+        default=10.0,
+        help=(
+            "Maximum seconds for one retained method callback "
+            "(increase for external model calls; default: 10)"
+        ),
+    )
     run_parser.set_defaults(handler=_run_command)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an OptPilot public config")
@@ -48,7 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     package_smoke_parser = package_subparsers.add_parser("smoke", help="Run a package smoke study")
     package_smoke_parser.add_argument("package", help="Path to a package folder")
     package_smoke_parser.add_argument("--study", help="Study config path, relative to package root or absolute")
-    package_smoke_parser.add_argument("--output-root", help="Directory for smoke run output; defaults to a temporary directory")
+    package_smoke_parser.add_argument(
+        "--realm-root",
+        help="Private Realm root for retained smoke evidence; defaults to a temporary Realm",
+    )
     package_smoke_parser.add_argument("--json", action="store_true", help="Print machine-readable smoke output")
     package_smoke_parser.set_defaults(handler=_package_smoke_command)
 
@@ -64,18 +87,26 @@ def main(argv=None) -> int:
     if handler is None:
         parser.error(f"Unsupported command: {args.command}")
         return 2
-    return int(handler(args) or 0)
+    try:
+        return int(handler(args) or 0)
+    except (OSError, RuntimeError, ValueError) as error:
+        # Command-line users need one actionable message. The public library
+        # API remains exception-based for callers that need structured
+        # recovery or a developer traceback.
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
 
 
 def _run_command(args) -> int:
     summary = run_study(
         args.spec,
-        output_root=args.output_root,
-        resume_run_dir=args.resume_run_dir,
-        branch_from_run_dir=args.branch_from_run_dir,
+        package_root=args.package_root,
+        realm_root=args.realm_root,
+        operation_id=args.operation_id,
+        method_request_timeout=args.method_request_timeout,
     )
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
-    return 0
+    return 0 if summary.run_status == "succeeded" else 1
 
 
 def _validate_command(args) -> int:
@@ -140,12 +171,12 @@ def _package_setup_check_command(args) -> int:
 
 
 def _package_smoke_command(args) -> int:
-    result = _package_smoke(args.package, study=args.study, output_root=args.output_root)
+    result = _package_smoke(args.package, study=args.study, realm_root=args.realm_root)
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     elif result["valid"]:
         print(f"Smoke passed: {result['study']}")
-        print(f"Run directory: {result['run_dir']}")
+        print(f"Run: {result['run_id']}")
     else:
         print(f"Smoke failed: {result.get('study') or args.package}")
         for error in result.get("errors", []):
@@ -197,46 +228,146 @@ def _entry_setup_blocks(raw: dict) -> list[tuple[str, dict]]:
     if setup:
         blocks.append(("runtime.setup", setup))
     interface = raw.get("interface", {}) if isinstance(raw.get("interface"), dict) else {}
-    setup = interface.get("setup") if isinstance(interface.get("setup"), dict) else None
-    if setup:
-        blocks.append(("interface.setup", setup))
+    launch_profiles = interface.get("launchProfiles")
+    profiles = (
+        [
+            (f"interface.launchProfiles[{index}]", profile)
+            for index, profile in enumerate(launch_profiles)
+            if isinstance(profile, dict)
+        ]
+        if isinstance(launch_profiles, list)
+        else [("interface", interface)]
+    )
+    for label, profile in profiles:
+        interface_runtime = (
+            profile.get("runtime", {})
+            if isinstance(profile.get("runtime"), dict)
+            else {}
+        )
+        setup = (
+            interface_runtime.get("setup")
+            if isinstance(interface_runtime.get("setup"), dict)
+            else None
+        )
+        if setup:
+            blocks.append((f"{label}.runtime.setup", setup))
     return blocks
 
 
-def _package_smoke(package: str, *, study: str | None, output_root: str | None) -> dict:
+def _package_smoke(package: str, *, study: str | None, realm_root: str | None) -> dict:
     package_root = Path(package).expanduser().resolve()
     validation = validate_package(package_root, check_source=True, check_setup_files=True)
     if not validation.get("valid"):
-        return {"valid": False, "package": str(package_root), "errors": ["Package validation failed."], "validation": validation}
-    study_path = _select_package_smoke_study(package_root, study)
+        return {
+            "valid": False,
+            "package": str(package_root),
+            "errors": ["Package validation failed."],
+            "validation": validation,
+        }
+    try:
+        study_path = _select_package_smoke_study(package_root, study)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "valid": False,
+            "package": str(package_root),
+            "errors": [str(exc)],
+        }
     if study_path is None:
-        return {"valid": False, "package": str(package_root), "errors": ["No smoke study selected and package does not contain exactly one study."]}
+        return {
+            "valid": False,
+            "package": str(package_root),
+            "errors": [
+                "No smoke study selected and package does not contain exactly one study."
+            ],
+        }
     study_validation = validate_authoring_config(study_path)
     if not study_validation.get("valid"):
-        return {"valid": False, "package": str(package_root), "study": str(study_path), "errors": ["Study validation failed."], "validation": study_validation}
+        return {
+            "valid": False,
+            "package": str(package_root),
+            "study": str(study_path),
+            "errors": ["Study validation failed."],
+            "validation": study_validation,
+        }
     try:
-        if output_root:
-            summary = run_study(study_path, output_root=output_root)
-            return {"valid": True, "package": str(package_root), "study": str(study_path), "run_dir": str(summary.run_dir), "summary": summary.to_dict()}
-        tmp_dir = tempfile.mkdtemp(prefix="optpilot-package-smoke-")
-        summary = run_study(study_path, output_root=tmp_dir)
-        return {"valid": True, "package": str(package_root), "study": str(study_path), "run_dir": str(summary.run_dir), "summary": summary.to_dict()}
+        if realm_root is not None:
+            summary = run_study(
+                str(study_path),
+                package_root=str(package_root),
+                realm_root=realm_root,
+            )
+            return _package_smoke_summary_result(package_root, study_path, summary)
+        with tempfile.TemporaryDirectory(prefix="optpilot-package-smoke-") as tmp_dir:
+            summary = run_study(
+                str(study_path),
+                package_root=str(package_root),
+                realm_root=str(Path(tmp_dir) / "realm"),
+            )
+            return _package_smoke_summary_result(package_root, study_path, summary)
     except Exception as exc:
-        return {"valid": False, "package": str(package_root), "study": str(study_path), "errors": [str(exc)]}
+        return {
+            "valid": False,
+            "package": str(package_root),
+            "study": str(study_path),
+            "errors": [str(exc)],
+        }
+
+
+def _package_smoke_summary_result(package_root: Path, study_path: Path, summary) -> dict:
+    payload = summary.to_dict()
+    valid = summary.run_status == "succeeded" and summary.final_logical_failures == 0
+    return {
+        "valid": valid,
+        "package": str(package_root),
+        "study": str(study_path),
+        "run_id": summary.run_id,
+        "summary": payload,
+        "errors": []
+        if valid
+        else [
+            "Smoke run did not complete cleanly: "
+            f"run_status={summary.run_status}, stop_code={summary.stop_code}, "
+            f"final_logical_failures={summary.final_logical_failures}."
+        ],
+    }
 
 
 def _select_package_smoke_study(package_root: Path, study: str | None) -> Path | None:
+    try:
+        canonical_root = package_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Package root does not exist: {package_root}.") from exc
+    if not canonical_root.is_dir():
+        raise ValueError(f"Package root is not a directory: {canonical_root}.")
+
     if study:
-        path = Path(study).expanduser()
-        return path.resolve() if path.is_absolute() else (package_root / path).resolve()
-    index = index_package(package_root)
+        requested = Path(study).expanduser()
+        selected = requested if requested.is_absolute() else canonical_root / requested
+        return _contained_smoke_study(canonical_root, selected)
+    index = index_package(canonical_root)
     studies = [entry.path for entry in index.entries if entry.config == "study"]
     if len(studies) == 1:
-        return studies[0]
+        return _contained_smoke_study(canonical_root, studies[0])
     smoke_named = [path for path in studies if "smoke" in path.stem.lower()]
     if len(smoke_named) == 1:
-        return smoke_named[0]
+        return _contained_smoke_study(canonical_root, smoke_named[0])
     return None
+
+
+def _contained_smoke_study(package_root: Path, selected: Path) -> Path:
+    try:
+        canonical = selected.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Smoke study does not exist: {selected}.") from exc
+    try:
+        canonical.relative_to(package_root)
+    except ValueError as exc:
+        raise ValueError(
+            "Smoke study must be a file inside the explicit package root."
+        ) from exc
+    if not canonical.is_file():
+        raise ValueError(f"Smoke study is not a file: {canonical}.")
+    return canonical
 
 
 def _load_command_providers(subparsers) -> None:

@@ -74,7 +74,7 @@ class CodeReview(BaseModel):
 # --- PHASE 1: STATIC STRUCTURE (Syntax, Imports, Docstrings) ---
 STATIC_CHECKLIST = """
 ### S1. Import Safety
-- **Definition**: strictly ONLY the imports from the following packages and their submodules are allowed: `numpy`, `math`, `random`, `time`, `pandas`, `xdevs`, `devs_project`, and relative imports from `.`.
+- **Definition**: imports must be limited to `xdevs`, `devs_project`, relative local modules, and the Python standard library. Reject numpy, pandas, scipy, and every other third-party dependency because generated bundles intentionally vendor only xDEVS.
 - **Violation**: Importing `os`, `sys`, `subprocess`, `threading`.
 - **Exception (ALLOW)**: 
     - Standard Python typing (`List`, `Dict`, `Optional`, `Any`, `Union`).

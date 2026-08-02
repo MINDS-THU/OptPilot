@@ -16,6 +16,37 @@ python -m {sim_file} < path_of_your_input_file_if_needed > path_to_save_simulati
 args: 
 {sim_args}
 
+## Result Summary
+
+When the launcher supplies `OPTPILOT_SIMULATION_RESULTS_DIR`, the generated
+runner writes `summary.json` there after a successful simulation. The file uses
+the portable `devs.simulation-result.v1` shape:
+
+```json
+{{
+  "schema_version": "devs.simulation-result.v1",
+  "metrics": {{"completed_items": 42}},
+  "run": {{"completed": true, "simulated_time": 60.0}}
+}}
+```
+
+Metrics are named outcome KPIs selected from this model's actual state; they
+are not inferred by OptPilot. Review them before using this simulator as an
+optimization Environment. If the generator could not identify a trustworthy
+outcome KPI, `metrics` is empty and `metric_note` explains what state still
+needs to be exposed. Running the script normally without the supplied result
+directory remains supported and does not write this file.
+
+## Event Trace
+
+Managed runs also write `event_trace.jsonl` in the supplied result directory.
+Each event record contains its simulation time, atomic component path, output
+port, and JSON-safe value. The file has a fixed size limit and ends with a
+summary record containing `recorded_events`, `dropped_events`, and `truncated`.
+An empty trace still receives a summary, so it is clear that tracing ran but no
+output-port events occurred. The generated runner uses the bundled
+`attach_event_trace` helper; no OptPilot import is required.
+
 ## Model Info
 
 Root Model: {root_model_path}

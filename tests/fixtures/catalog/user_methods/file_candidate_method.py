@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 from typing import Any, Dict, List
 
-from optpilot.candidate_files import CandidateFileStore
+from optpilot.candidate_staging import CandidateBundleStager
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
 
 
@@ -30,14 +29,11 @@ class FileCandidateMethod:
         runtime_context = study_state.get("runtime_context", {})
         candidate_context = study_state.get("candidate_context") or runtime_context.get("candidate_context", {})
         source_dir = self._resolve_source_dir(candidate_context)
-        candidate_store_dir = runtime_context.get("candidate_store_dir")
-        if not candidate_store_dir:
-            raise ValueError("FileCandidateMethod requires runtime_context.candidate_store_dir.")
+        candidate_staging_dir = runtime_context.get("candidate_staging_dir")
+        if not candidate_staging_dir:
+            raise ValueError("FileCandidateMethod requires runtime_context.candidate_staging_dir.")
 
-        candidate_store = CandidateFileStore(
-            candidate_store_dir,
-            content_ref_mode=runtime_context.get("candidate_content_ref_mode", "absolute"),
-        )
+        candidate_stager = CandidateBundleStager(candidate_staging_dir)
         prompt_record = None
         if runtime_context.get("prompt_store_dir") and config.get("promptMessages"):
             prompt_store = PromptStore(
@@ -57,15 +53,14 @@ class FileCandidateMethod:
             )
         candidates = []
         for _ in range(n_candidates):
-            candidate_id = f"file-candidate-{uuid.uuid4().hex[:12]}"
-            candidate = candidate_store.store_directory(
+            candidate_id = f"file-candidate-{self._cursor:08d}"
+            candidate = candidate_stager.stage_directory(
                 source_dir,
                 candidate_id=candidate_id,
-                entrypoint=config.get("entrypoint"),
                 lineage={"parents": list(config.get("parents", []))},
                 generator=build_generator_record(
                     method_id=self.definition["id"],
-                    strategy="stored_directory_example",
+                    strategy="staged_directory_example",
                     prompt_record=prompt_record,
                     model_record=model_record,
                     extra={"owned_by": "user", "cursor": self._cursor},

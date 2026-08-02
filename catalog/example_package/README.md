@@ -71,33 +71,56 @@ evaluator:
 For user-owned registrations, Studio creates `catalog/local_package/` on
 demand. Registered configs should use the same local-import pattern.
 
-## Quick Runs
+## Current Retained Studies
 
-Dependency-free job-shop baselines and parameter tuning:
+These four dependency-free studies compile and run through the retained
+process-study path. The first two use parameter candidates; the latter two use
+file candidates:
 
 ```bash
-uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_tune_dispatch_weights.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_dispatch_rule_baseline.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_solver_code_baseline.yaml \
+  --package-root catalog/example_package
 ```
 
-JobShopLib and Stable-Baselines examples:
+After installing the optional example dependencies, the three JobShopLib solver
+studies and the Stable-Baselines study are retained-launchable too:
 
 ```bash
 uv sync --all-packages --group examples
-uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml
-uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml
+uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_ortools_cpsat.yaml \
+  --package-root catalog/example_package
+uv run optpilot run catalog/example_package/studies/job_shop_rl_stable_baselines.yaml \
+  --package-root catalog/example_package
 ```
 
-LLM code-editing example:
+Those methods receive environment-owned, package-backed
+`methodContext.references` as a retained read-only projection. This capability
+is also how the file baselines read their environment-owned starting templates.
+File methods publish candidates through a runtime-private staging authority;
+OptPilot captures each admitted bundle and materializes it into an isolated
+attempt workspace for evaluation.
 
-```bash
-uv run optpilot run catalog/example_package/studies/job_shop_openai_dispatch_rule.yaml
-```
+All nine studies are eligible for retained execution. The OpenAI editor has one
+additional local setup requirement:
 
-The OpenAI-compatible editing study runs its baseline candidate without
-provider credentials. Real LLM edits require provider credentials and a larger
-trial budget.
+| Study | Retained capability | Local setup |
+| --- | --- | --- |
+| `job_shop_openai_dispatch_rule.yaml` | `ready` | Add `OPENROUTER_API_KEY` under Studio Settings → Local environment variables, or export it before a CLI launch. |
+
+Package validation and retained launch capability are deliberately separate.
+Use `optpilot package validate ... --check-imports` to validate all authored
+configs and inspect each study's `retained_execution` capability. The solver and
+RL examples additionally need their optional dependencies. For the
+OpenAI-compatible file editor, OptPilot retains the declared variable name but
+resolves its value separately for each Run and supplies it only to that Run's
+Method process. The value is not copied into Run evidence.

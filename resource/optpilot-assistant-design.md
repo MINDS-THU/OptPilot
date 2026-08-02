@@ -422,7 +422,6 @@ JSON for the agent and a human-readable event for the GUI timeline.
 | `optpilot_run_list` | List live and completed runs |
 | `optpilot_run_detail` | Read run summary, trials, observations, candidates, events, and files |
 | `optpilot_run_file_read` | Read one run file safely |
-| `optpilot_run_open_workspace` | Attach a run directory as an analysis workspace |
 | `optpilot_run_compare` | Compare runs with compatible environment/metric policy |
 
 ### Smoke-Test And Docs Tools

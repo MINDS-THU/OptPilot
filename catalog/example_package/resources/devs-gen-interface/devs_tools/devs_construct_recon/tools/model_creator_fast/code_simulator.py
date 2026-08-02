@@ -1,4 +1,4 @@
-from smolagents import Tool, CodeAgent, LiteLLMModel
+from smolagents import Tool, CodeAgent
 from pathlib import Path
 import os
 import json
@@ -6,12 +6,13 @@ import yaml
 from ..simulation.devs_execute import DEVSExecute
 from .code_modifier import CodeRefiner
 from typing import Optional
+from src.llm_resilience import ResilientLiteLLMModel, litellm_retry_options
 
 class DEVSExecuteWrapper(Tool):
     name = "devs_execute"
     description = (
-        "Execute the target DEVS model project within a controlled temporary environment. "
-        "The tool captures stdout/stderr, manages timeouts, and provides a basic sandbox to restrict imports to allowed libraries only. "
+        "Execute the target DEVS model project from a credential-free temporary copy. "
+        "Execution uses the credential-free, network-disabled generated-code container boundary. "
     )
     inputs = {
         "timeout": {
@@ -26,7 +27,7 @@ class DEVSExecuteWrapper(Tool):
         },
         "allowed_libraries": {
             "type": "string", 
-            "description": "Comma-separated list of allowed root packages (default: numpy,xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib).", 
+            "description": "Deprecated compatibility input. The outer isolated runtime owns import and execution policy.",
             "nullable": True
         },
         "stdin_content": {
@@ -50,7 +51,7 @@ class DEVSExecuteWrapper(Tool):
     def forward(self, 
                 timeout: int = 30, 
                 command_args: Optional[str] = None, 
-                allowed_libraries: str = "numpy,xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib", 
+                allowed_libraries: str = "xdevs,logging,math,random,time,collections,itertools,json,sys,pathlib,statistics,dataclasses,typing",
                 stdin_content: Optional[str] = None) -> str:
         return self.core.forward(
             timeout=timeout,
@@ -202,7 +203,11 @@ class SimulationRunnerFixer(Tool):
         )
         tools = [self.read_file_tool, self.code_refiner, execute_wrapper]
         
-        model = LiteLLMModel(model_id=self.model_id, temperature=0.1)
+        model = ResilientLiteLLMModel(
+            model_id=self.model_id,
+            temperature=0.1,
+            **litellm_retry_options(),
+        )
         
         agent = CodeAgent(
             tools=tools,

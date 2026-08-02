@@ -107,8 +107,10 @@ class GlobalPlanGenerator:
                 # Validate: root must be first, all children_names must exist
                 names = {m.name for m in modules}
                 for m in modules:
-                    # 孩子名称去重
-                    m.children_names = list(set(m.children_names))
+                    # Preserve the architect's order while removing duplicate
+                    # child references.  Set iteration made otherwise-identical
+                    # review artifacts produce different digests across runs.
+                    m.children_names = list(dict.fromkeys(m.children_names))
                     for cn in m.children_names:
                         if cn not in names:
                             raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")
@@ -129,6 +131,7 @@ class GlobalPlanGenerator:
 
                     names = {m.name for m in modules}
                     for m in modules:
+                        m.children_names = list(dict.fromkeys(m.children_names))
                         for cn in m.children_names:
                             if cn not in names:
                                 raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")

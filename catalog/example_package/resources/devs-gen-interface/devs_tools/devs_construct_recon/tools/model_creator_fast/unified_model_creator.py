@@ -7,6 +7,7 @@ import litellm
 from litellm import completion
 import json
 from dataclasses import dataclass
+from typing import Callable, Optional
 litellm.drop_params = True
 from ...base_types import PlanResult, StandardContext, StandardContextModel, format_context_str
 from ...utils import get_content_strict
@@ -19,23 +20,16 @@ from .unified_model_prompt import (
     COUPLED_INSTRUCTIONS,
     MAIN_PROMPT_TEMPLATE,
 )
-
-import ast
-import re
+from .generated_interface import extract_generated_python_interface
+from ..generated_member_contract import require_generated_member_contract
+from ..generated_python_response import extract_generated_python_response
 
 def extract_xml_code(text):
-    start_tag = "<python_code>"
-    end_tag = "</python_code>"
-    
-    if start_tag in text and end_tag in text:
-        # rindex 找最后一个开始标签（防止模型输出了多个版本）
-        start_index = text.rindex(start_tag) + len(start_tag)
-        end_index = text.find(end_tag, start_index)
-        code = text[start_index:end_index].strip()
-        ast.parse(code)
-        compile(code, "<generated_model>", "exec")
-        return code
-    raise ValueError("No <python_code> tags found")
+    return extract_generated_python_response(
+        text,
+        filename="<generated_model>",
+        artifact_label="model",
+    )
 
 def process_sub_models(sub_models: list[StandardContextModel], target_file_path: Path) -> str:
     """Calculates relative paths for imports if sub_models_info is provided. And formulates the sub_models_info into a string."""
@@ -68,11 +62,17 @@ TYPE_TO_CLASS_NAME = {
 
 
 class ModelCreator:
-    def __init__(self, model_id: str, working_directory: str = "./working_dir"):
+    def __init__(
+        self,
+        model_id: str,
+        working_directory: str = "./working_dir",
+        progress_callback: Optional[Callable[[str, str, int, int, str], None]] = None,
+    ):
         super().__init__()
         self.model_id = model_id
         self.working_directory = Path(working_directory)
         self.working_directory.mkdir(parents=True, exist_ok=True)
+        self.progress_callback = progress_callback
         
         # Define material paths
         self.tool_dir = Path(__file__).parent.parent.parent
@@ -93,6 +93,33 @@ class ModelCreator:
                 self.tool_dir / "materials/devs_project/coupled_example_fast.py",
             ]
         }
+
+    def _report_attempt(
+        self,
+        component_name: str,
+        phase: str,
+        attempt: int,
+        total: int,
+        detail: str,
+    ) -> None:
+        if self.progress_callback is None:
+            return
+        try:
+            self.progress_callback(component_name, phase, attempt, total, detail)
+        except Exception:
+            # Progress is advisory and must never break code generation.
+            return
+
+    @staticmethod
+    def _public_rejection_detail(error: Exception) -> str:
+        message = str(error).lower()
+        if "generated member contract" in message:
+            return "The component used a child interface incorrectly; generating a corrected version."
+        if "python code block" in message or "python_code" in message:
+            return "The response did not contain one usable Python code block; requesting a corrected response."
+        if isinstance(error, (SyntaxError, IndentationError)):
+            return "The generated Python was not syntactically valid; requesting a corrected version."
+        return "The component did not pass deterministic validation; generating a corrected version."
 
     def _read_materials(self, model_type: str):
         example_content = ""
@@ -184,6 +211,15 @@ class ModelCreator:
         last_fail_info = ""
         for attempt in range(5):
             try:
+                self._report_attempt(
+                    model_plan.model_info.class_name,
+                    "generating" if attempt == 0 else "retrying",
+                    attempt + 1,
+                    5,
+                    "Requesting the component implementation."
+                    if attempt == 0
+                    else "Checking a corrected component implementation.",
+                )
                 response = completion_with_logging(
                     model=self.model_id,
                     messages=[{"role": "user", "content": prompt}],
@@ -195,6 +231,32 @@ class ModelCreator:
                 code = get_content_strict(response)
                 
                 code = extract_xml_code(code)
+
+                # Python compilation cannot detect ``self.child.misspelled``.
+                # The child implementations have already been generated, so
+                # reject only references that contradict their exact extracted
+                # interfaces before accepting this parent source.
+                candidate_interface = extract_generated_python_interface(
+                    code,
+                    model_plan.model_info.class_name,
+                    filename=str(full_path),
+                    child_class_names=(
+                        child.class_name for child in model_plan.children_plan
+                    ),
+                )
+                candidate_root = model_plan.model_info.model_copy(
+                    update={"generated_interface": candidate_interface}
+                )
+                contract_registry = {
+                    item.class_name: item.model_dump(mode="json")
+                    for item in [*model_plan.children_plan, candidate_root]
+                }
+                require_generated_member_contract(
+                    code,
+                    contract_registry,
+                    model_plan.model_info.class_name,
+                    filename=str(full_path),
+                )
                 
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 
@@ -206,5 +268,19 @@ class ModelCreator:
             except Exception as e:
                 last_fail_info = f"FAILURE: Error creating {model_plan.type} model '{model_plan.model_info.class_name}'. Reason: {str(e)}"
                 print(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt < 4:
+                    self._report_attempt(
+                        model_plan.model_info.class_name,
+                        "correcting",
+                        attempt + 2,
+                        5,
+                        self._public_rejection_detail(e),
+                    )
+                prompt += (
+                    "\n\nThe previous generated model was rejected by deterministic "
+                    f"validation: {e}\nReturn a corrected complete model. When "
+                    "accessing a child, copy its exact generated_interface member "
+                    "name from [Sub-Models]; do not infer a similar name."
+                )
                 
         return last_fail_info

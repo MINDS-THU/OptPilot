@@ -1,0 +1,30 @@
+apiVersion: optpilot.io/v1
+config: method
+id: de-weighted-rule-search
+description: Paper-style DE/best/1/bin search over executable 14-weight scheduling policies.
+tags: [production, agv, baseline, differential-evolution, file-candidate, no-api]
+
+entrypoint:
+  python: method:EvolutionaryRuleSearchMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 64
+  algorithm: de
+  seed: 42
+  populationSize: 64
+  generations: 10
+  stabilityLambda: 0.35
+  variant: DE/best/1/bin
+  differentialWeight: 0.5
+  crossoverRate: 0.2
+  mutationProbability: 0.1
+  mutationEta: 20.0
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - candidate.files.allow

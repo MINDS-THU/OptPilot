@@ -42,7 +42,7 @@ MODEL_SKILLS_DISTRIBUTION = """
 - For weighted categorical choices, use `random.choices(values, weights=weights, k=1)[0]`.
 - If a sampled value is used as a duration/sigma, it must be finite and non-negative.
 For normal durations, use truncation/resampling or `max(0.0, sample)` only if the Specification permits clipping. Prefer resampling for physical durations.
-- If a required distribution is not directly available in the standard library, implement a small local helper with `random`/`math` or use `numpy` only when already allowed and genuinely simpler.
+- If a required distribution is not directly available in the standard library, implement a small local helper with `random`/`math`; generated projects must not depend on third-party numerical libraries.
 - Common distribution implementation rules:
     - deterministic/constant: return value
     - uniform(a, b): random.uniform(a, b)
@@ -54,7 +54,7 @@ For normal durations, use truncation/resampling or `max(0.0, sample)` only if th
     - lognormal(mu, sigma): random.lognormvariate(mu, sigma)
     - bernoulli(p): random.random() < p
     - categorical(values, weights): random.choices(values, weights=weights, k=1)[0]
-    - poisson(lambda): use numpy.random.poisson(lambda) if numpy is allowed; otherwise implement only if explicitly required
+    - poisson(lambda): implement the small Knuth sampler with `random`/`math` when explicitly required
 - Sample random durations/choices when scheduling state transitions in `initialize`, `deltext`, or `deltint`; avoid sampling in `lambdaf` if the sample affects future state or timing.
 """
 

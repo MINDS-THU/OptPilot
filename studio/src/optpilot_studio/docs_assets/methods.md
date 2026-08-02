@@ -132,61 +132,42 @@ can read the referenced files and emit candidate keys using the reference
 names, for example `spec.solutions.validation_small`. The evaluator decides how
 those names map to its own settings.
 
-## Session Protocol
+## Session protocol
 
-A Python session method actively interacts with an OptPilot session object. It is useful for LLM agents or workflows that naturally operate through repeated tool-like calls.
+`protocol: session` is reserved in the public schema for methods that keep
+their own search loop alive and adapt after individual completions. The current
+public Realm runner does not execute session configs.
 
-Method `entrypoint` fragment:
+Live session will provide runner-mediated `submit`, `wait`, `poll`, events,
+stop signals, filtered evidence, and method-owned state. Existing
+session-shaped helper code does not provide those semantics and is not a
+compatibility mode; unsupported session studies fail during retained
+compilation.
 
-```yaml
-entrypoint:
-  python: method:MyAgent
-  protocol: session
-```
+Use `batch` unless and until live observations must influence another
+submission before the method returns.
 
-```python
-class MyAgent:
-    def run(self, session):
-        session.event({"event": "started"})
-        session.submit({
-            "candidate_id": "candidate-001",
-            "format": "parameters",
-            "spec": {"x": 1.0},
-            "generator": {"method_id": session.method_id},
-        })
-```
+## Proposal width and execution capacity
 
-Batch and session methods have the same candidate and evidence capability. The distinction is control flow: batch methods are asked to produce candidates; session methods actively submit candidates through the session.
+`settings.batchSize` controls how many candidates OptPilot asks a batch method
+to propose in one exchange. It is not evaluator capacity. The retained
+controller rejects an oversized proposal atomically.
 
-## Parallel Candidates
+`study.execution.parallelism` is the semantic evaluator-capacity ceiling. The
+retained local driver overlaps evaluator waits up to that ceiling, with an
+additional process-local cap of 32 evaluator threads; excess ready attempts are
+queued. Canonical launch/adoption remains serialized and observations retain
+proposal order after the batch barrier.
 
-Both protocols can submit multiple candidates. `settings.batchSize` controls how many candidates OptPilot asks a batch method to propose at once. `study.execution.parallelism` controls how many candidate trials can be evaluated at the same time.
+## Runtime isolation
 
-## Runtime Isolation
+The current retained method worker is a supervised local process bound to exact
+retained source and durable method-exchange checkpoints. Study execution
+currently supports neither method setup/build nor container/host-secret
+runtime features.
 
-Python methods run through an OptPilot method worker process or container, not inside the main runner process. Use `runtime.setup` for process-runtime dependencies and `runtime.container` for container images.
-
-Method runtime fragment:
-
-```yaml
-entrypoint:
-  command: [python, my_agent.py, "{input_file}", "{output_file}"]
-  protocol: batch
-
-runtime:
-  sandbox: container
-  container:
-    image: my-agent-image:latest
-    executable: docker
-    network: disabled
-    build:
-      context: .
-      dockerfile: Dockerfile.agent
-      tag: my-agent-image:latest
-  envFromHost: [OPENAI_API_KEY]
-```
-
-Relative `build.context` paths are resolved from the method config file.
-Relative `build.dockerfile` paths are resolved from `build.context`.
-
-Method runtime containers are independent from environment runtime containers. Use method runtime for optimizer or agent dependencies, and environment runtime for simulator or evaluator dependencies.
+Container and command runtime fields remain part of the broader authoring
+schema/target. They become executable only after they compile through the same
+path-free bindings, narrow logical scopes, launch authority, reconciliation,
+and cleanup guarantees as the current process slice. They must not receive a
+broad package or Realm mount.

@@ -1,0 +1,23 @@
+apiVersion: optpilot.io/v1
+config: method
+id: default-rule-policy-smoke
+description: Stages only the DEFAULT/DEFAULT/DEFAULT policy for a dependency-free smoke run.
+tags: [production, agv, baseline, smoke, file-candidate, no-api]
+
+entrypoint:
+  python: method:RuleGridMethod
+  pythonPath: [.]
+  protocol: batch
+
+settings:
+  batchSize: 1
+  lineRules: [default]
+  taskRules: [default]
+  agvRules: [default]
+
+accepts:
+  formats: [files]
+  requires:
+    context:
+      - candidate.files.editable
+      - candidate.files.allow
