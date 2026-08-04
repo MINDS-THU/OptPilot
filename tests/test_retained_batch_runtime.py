@@ -1124,6 +1124,7 @@ class _FakeRequestClient:
         self.log = log
         self.error_response = False
         self.transport_failure = False
+        self.request_timeout = False
         self.acknowledged_sequence = 0
         self.acknowledged_chain = INITIAL_BATCH_EXCHANGE_CHAIN
         self.pending_exchange: dict[str, Any] | None = None
@@ -1133,6 +1134,8 @@ class _FakeRequestClient:
     ) -> dict[str, Any]:
         operation = request["op"]
         self.log.append(f"request:{operation}")
+        if self.request_timeout:
+            raise TimeoutError("/private/provider/request-timeout")
         if self.transport_failure:
             raise OSError("/private/provider/socket")
         if self.error_response:
@@ -1294,6 +1297,7 @@ class Method:
 
     def _cleanup_handles(self) -> None:
         self.client.transport_failure = False
+        self.client.request_timeout = False
         self.client.error_response = False
         for handle in reversed(self.handles):
             try:
@@ -1539,6 +1543,21 @@ class Method:
             )
         self.assertEqual(transport.exception.code, "worker_unavailable")
         self.assertNotIn("private", str(transport.exception).lower())
+
+        self.client.transport_failure = False
+        self.client.request_timeout = True
+        with self.assertRaises(RetainedBatchRuntimeError) as timed_out:
+            runtime.request(
+                "proposal-4",
+                "propose",
+                {"evidence": {}, "n_candidates": 1, "study_state": {}},
+                exchange_sequence=1,
+            )
+        self.assertEqual(
+            timed_out.exception.code,
+            "worker_request_timeout",
+        )
+        self.assertNotIn("private", str(timed_out.exception).lower())
 
     def test_typed_status_ack_and_retained_state_with_real_engine(self) -> None:
         engine = RetainedPythonBatchEngine(

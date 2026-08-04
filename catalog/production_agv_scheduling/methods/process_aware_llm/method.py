@@ -68,6 +68,29 @@ _TRANSIENT_API_ERROR_TYPES = frozenset(
 )
 _PROVENANCE_PATH = "provenance/llm_exchanges.json"
 _PROVENANCE_SCHEMA = "process-aware-llm-exchanges.v1"
+_FORBIDDEN_POLICY_IMPORT_ROOTS = frozenset(
+    {
+        "builtins",
+        "evaluator",
+        "factory_sim",
+        "importlib",
+        "os",
+        "pathlib",
+        "replay",
+        "simulation_runner",
+        "socket",
+        "subprocess",
+        "sys",
+    }
+)
+_PROVIDER_CREDENTIAL_PATTERNS = (
+    re.compile(r"(?i)(\bbearer\s+)([^\s,;\"'}\]]+)"),
+    re.compile(
+        r"(?i)([\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|"
+        r"secret|password|credential|authorization|cookie)[\"']?\s*[:=]\s*[\"']?)"
+        r"([^\"'\s,;}\]]+)"
+    ),
+)
 
 
 class _LLMRequestError(RuntimeError):
@@ -450,6 +473,7 @@ class ProcessAwareLLMHeuristicMethod:
             path: self.source_files[path].read_text(encoding="utf-8")
             for path in self.target_files
         }
+        _validate_policy_sources(sources)
         candidate_id = f"{self.definition['id']}-baseline"
         candidate = stager.stage_files(
             [
@@ -834,6 +858,8 @@ class ProcessAwareLLMHeuristicMethod:
             },
             method="POST",
         )
+        raw: str | None = None
+        transport_failure: _LLMRequestError | None = None
         try:
             with urllib.request.urlopen(
                 request, timeout=self.request_timeout_seconds
@@ -844,41 +870,93 @@ class ProcessAwareLLMHeuristicMethod:
                     label="LLM response",
                 ).decode("utf-8")
         except urllib.error.HTTPError as exc:
-            detail = _read_bounded_http_body(
-                exc,
-                max_bytes=self.max_http_error_bytes,
-                label="LLM HTTP error response",
-            ).decode("utf-8", errors="replace")
+            try:
+                numeric_status = int(exc.code)
+            except (TypeError, ValueError):
+                numeric_status = None
+            status = str(numeric_status) if numeric_status is not None else "unknown"
+            try:
+                detail = _read_bounded_http_body(
+                    exc,
+                    max_bytes=self.max_http_error_bytes,
+                    label="LLM HTTP error response",
+                ).decode("utf-8", errors="replace")
+                detail = _redact_provider_text(detail, secrets=(api_key,))
+            except Exception:
+                detail = "Provider error body was unavailable or exceeded its limit."
             message = (
-                f"LLM request failed with HTTP {exc.code}: "
+                f"LLM request failed with HTTP {status}: "
                 + _bounded_utf8_text(detail, 4096)
             )
-            if int(exc.code) in _TRANSIENT_HTTP_STATUS_CODES:
-                raise _RetryableLLMError(
+            try:
+                retry_after = _numeric_retry_after(exc.headers)
+            except Exception:
+                retry_after = None
+            if numeric_status in _TRANSIENT_HTTP_STATUS_CODES:
+                transport_failure = _RetryableLLMError(
                     message,
-                    retry_after_seconds=_numeric_retry_after(exc.headers),
-                ) from exc
-            raise _LLMRequestError(message) from exc
+                    retry_after_seconds=retry_after,
+                )
+            else:
+                transport_failure = _LLMRequestError(message)
         except urllib.error.URLError as exc:
-            reason = _bounded_utf8_text(str(exc.reason), 1000)
-            raise _RetryableLLMError(f"LLM request failed: {reason}") from exc
-        except TimeoutError as exc:
-            raise _RetryableLLMError("LLM request timed out.") from exc
+            try:
+                reason_text = str(exc.reason)
+            except Exception:
+                reason_text = "provider transport error"
+            reason = _bounded_utf8_text(
+                _redact_provider_text(reason_text, secrets=(api_key,)), 1000
+            )
+            transport_failure = _RetryableLLMError(
+                f"LLM request failed: {reason}"
+            )
+        except TimeoutError:
+            transport_failure = _RetryableLLMError("LLM request timed out.")
+        except Exception:
+            transport_failure = _RetryableLLMError(
+                "LLM request failed while opening or reading the provider response."
+            )
 
+        # Raise only after leaving the provider-exception handler. This keeps
+        # the original exception out of both __cause__ and __context__, which
+        # retained workers serialize as a full traceback chain.
+        if transport_failure is not None:
+            raise transport_failure
+        if raw is None:  # defensive: urlopen returned without data or failure
+            raise _RetryableLLMError("LLM endpoint returned no response body.")
+
+        envelope_failure: _RetryableLLMError | None = None
         try:
             envelope = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise _RetryableLLMError(
+        except json.JSONDecodeError:
+            envelope = None
+            envelope_failure = _RetryableLLMError(
                 "LLM endpoint returned a non-JSON response envelope."
-            ) from exc
-        wire_content, content, response_metadata = _chat_completion_content(envelope)
+            )
+        if envelope_failure is not None:
+            raise envelope_failure
+        wire_content, content, response_metadata = _chat_completion_content(
+            envelope,
+            secrets=(api_key,),
+        )
+        parse_failure: _RetryableLLMError | None = None
         try:
-            parsed = _parse_json_object(content)
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise _RetryableLLMError(
+            parsed_unredacted = _parse_json_object(content)
+        except (json.JSONDecodeError, ValueError):
+            parsed_unredacted = {}
+            parse_failure = _RetryableLLMError(
                 "LLM completion did not contain a complete JSON object.",
                 correctable_output=True,
-            ) from exc
+            )
+        if parse_failure is not None:
+            raise parse_failure
+        parsed = _redact_provider_value(parsed_unredacted, secrets=(api_key,))
+        if parsed != parsed_unredacted:
+            # The raw completion is a JSON container, so applying credential
+            # regexes to it would corrupt ordinary source code. When
+            # field-aware redaction changed parsed data, retain a canonical
+            # sanitized rendering instead of the unsafe wire spelling.
+            wire_content = _canonical_json_bytes(parsed).decode("utf-8")
         self._record_llm_exchange(
             payload,
             wire_content,
@@ -1441,16 +1519,93 @@ def _extract_files(payload: Dict[str, Any], allowed_paths: Iterable[str]) -> Dic
 
 
 def _validate_policy_sources(sources: Mapping[str, str]) -> None:
+    trees: Dict[str, ast.Module] = {}
     for path in TARGET_FILES:
         if path not in sources:
             raise ValueError(f"Missing required policy file {path!r}.")
-        ast.parse(sources[path], filename=path)
-    scheduler_tree = ast.parse(sources["scheduler.py"], filename="scheduler.py")
-    top_level_functions = {
-        node.name for node in scheduler_tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    if "create_scheduler" not in top_level_functions:
-        raise ValueError("scheduler.py must define top-level create_scheduler().")
+        trees[path] = ast.parse(sources[path], filename=path)
+
+    scheduler_tree = trees["scheduler.py"]
+    scheduler_factories = [
+        node
+        for node in scheduler_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "create_scheduler"
+    ]
+    if len(scheduler_factories) != 1 or isinstance(
+        scheduler_factories[0], ast.AsyncFunctionDef
+    ):
+        raise ValueError(
+            "scheduler.py must define exactly one synchronous top-level "
+            "create_scheduler()."
+        )
+    scheduler_factory = scheduler_factories[0]
+    factory_arguments = scheduler_factory.args
+    if (
+        factory_arguments.posonlyargs
+        or factory_arguments.args
+        or factory_arguments.vararg is not None
+        or factory_arguments.kwonlyargs
+        or factory_arguments.kwarg is not None
+    ):
+        raise ValueError("create_scheduler() must not accept arguments.")
+    for statement in scheduler_tree.body:
+        if statement is scheduler_factory:
+            continue
+        if any(
+            _ast_binds_name(node, "create_scheduler")
+            for node in ast.walk(statement)
+        ):
+            raise ValueError(
+                "scheduler.py must not rebind or shadow top-level create_scheduler()."
+            )
+
+    for path, tree in trees.items():
+        for node in ast.walk(tree):
+            if _ast_binds_name(node, "create_controller"):
+                raise ValueError(
+                    "Generated policies must use create_scheduler()/run(snapshot); "
+                    "create_controller is reserved for trusted simulation-bound baselines."
+                )
+            imported_root = _imported_module_root(node)
+            if imported_root in _FORBIDDEN_POLICY_IMPORT_ROOTS:
+                raise ValueError(
+                    f"{path} imports forbidden module {imported_root!r}. Generated "
+                    "policies may use only the documented snapshot contract."
+                )
+            if isinstance(node, ast.Constant) and node.value == "battery":
+                raise ValueError(
+                    f"{path} uses unknown snapshot field 'battery'; use "
+                    "'battery_level' for AGV records."
+                )
+
+
+def _ast_binds_name(node: ast.AST, name: str) -> bool:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name == name
+    if isinstance(node, ast.Name):
+        return node.id == name and isinstance(node.ctx, ast.Store)
+    if isinstance(node, ast.arg):
+        return node.arg == name
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return any(
+            (alias.asname or alias.name.rsplit(".", 1)[-1]) == name
+            for alias in node.names
+        )
+    return False
+
+
+def _imported_module_root(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Import):
+        roots = {alias.name.split(".", 1)[0] for alias in node.names}
+    elif isinstance(node, ast.ImportFrom):
+        roots = {str(node.module or "").split(".", 1)[0]}
+    else:
+        return None
+    forbidden = sorted(
+        root for root in roots if root in _FORBIDDEN_POLICY_IMPORT_ROOTS
+    )
+    return forbidden[0] if forbidden else None
 
 
 def _extract_plans(payload: Dict[str, Any], limit: int) -> List[Dict[str, str]]:
@@ -1522,13 +1677,17 @@ def _extract_total_score(payload: Any) -> float:
 
 def _chat_completion_content(
     envelope: Any,
+    *,
+    secrets: Sequence[str] = (),
 ) -> Tuple[Any, str, Dict[str, Any]]:
     """Validate one OpenAI-compatible non-streaming completion envelope."""
 
     if not isinstance(envelope, Mapping):
         raise _RetryableLLMError("LLM response envelope must be a JSON object.")
     if envelope.get("error") not in (None, {}):
-        raise _api_envelope_error("LLM endpoint error", envelope["error"])
+        raise _api_envelope_error(
+            "LLM endpoint error", envelope["error"], secrets=secrets
+        )
     choices = envelope.get("choices")
     if not isinstance(choices, list) or not choices:
         raise _RetryableLLMError("LLM response did not contain any choices.")
@@ -1536,7 +1695,9 @@ def _chat_completion_content(
     if not isinstance(choice, Mapping):
         raise _RetryableLLMError("LLM response choice must be a JSON object.")
     if choice.get("error") not in (None, {}):
-        raise _api_envelope_error("LLM provider error", choice["error"])
+        raise _api_envelope_error(
+            "LLM provider error", choice["error"], secrets=secrets
+        )
 
     finish_reason = choice.get("finish_reason")
     if finish_reason in {"content_filter", "error", "length"}:
@@ -1547,7 +1708,10 @@ def _chat_completion_content(
     message = choice.get("message")
     if not isinstance(message, Mapping):
         raise _RetryableLLMError("LLM response choice did not contain a message object.")
-    wire_content = message.get("content")
+    wire_content = _redact_provider_value(
+        message.get("content"),
+        secrets=secrets,
+    )
     if isinstance(wire_content, str):
         content = wire_content
     elif isinstance(wire_content, list):
@@ -1574,14 +1738,18 @@ def _chat_completion_content(
     ):
         value = envelope.get(source)
         if isinstance(value, str) and value:
-            metadata[target] = _bounded_utf8_text(value, 512)
+            metadata[target] = _bounded_utf8_text(
+                _redact_provider_text(value, secrets=secrets), 512
+            )
     for source, target in (
         ("finish_reason", "finish_reason"),
         ("native_finish_reason", "native_finish_reason"),
     ):
         value = choice.get(source)
         if isinstance(value, str) and value:
-            metadata[target] = _bounded_utf8_text(value, 128)
+            metadata[target] = _bounded_utf8_text(
+                _redact_provider_text(value, secrets=secrets), 128
+            )
     usage = envelope.get("usage")
     if isinstance(usage, Mapping):
         safe_usage: Dict[str, int | float] = {}
@@ -1625,7 +1793,12 @@ def _chat_completion_content(
     return wire_content, content, metadata
 
 
-def _api_envelope_error(label: str, error: Any) -> _LLMRequestError:
+def _api_envelope_error(
+    label: str,
+    error: Any,
+    *,
+    secrets: Sequence[str] = (),
+) -> _LLMRequestError:
     """Return a bounded typed error without retaining provider-owned payloads."""
 
     code: Any = None
@@ -1642,11 +1815,25 @@ def _api_envelope_error(label: str, error: Any) -> _LLMRequestError:
         message = error
     parts = []
     if code is not None:
-        parts.append(f"code={_bounded_utf8_text(str(code), 128)}")
+        parts.append(
+            "code="
+            + _bounded_utf8_text(
+                _redact_provider_text(str(code), secrets=secrets), 128
+            )
+        )
     if error_type is not None:
-        parts.append(f"type={_bounded_utf8_text(str(error_type), 128)}")
+        parts.append(
+            "type="
+            + _bounded_utf8_text(
+                _redact_provider_text(str(error_type), secrets=secrets), 128
+            )
+        )
     if message is not None:
-        parts.append(_bounded_utf8_text(str(message), 1000))
+        parts.append(
+            _bounded_utf8_text(
+                _redact_provider_text(str(message), secrets=secrets), 1000
+            )
+        )
     description = f"{label}: " + ("; ".join(parts) or "unspecified provider error")
 
     numeric_code: int | None = None
@@ -1661,6 +1848,75 @@ def _api_envelope_error(label: str, error: Any) -> _LLMRequestError:
     ):
         return _RetryableLLMError(description)
     return _LLMRequestError(description)
+
+
+def _redact_provider_value(value: Any, *, secrets: Sequence[str]) -> Any:
+    if isinstance(value, str):
+        # Successful completion strings may be source code. Replace only
+        # exact configured secrets here; broad credential regexes belong on
+        # diagnostic text or structurally identified credential fields.
+        return _redact_exact_provider_text(value, secrets=secrets)
+    if isinstance(value, list):
+        return [
+            _redact_provider_value(item, secrets=secrets)
+            for item in value
+        ]
+    if isinstance(value, Mapping):
+        redacted: Dict[Any, Any] = {}
+        for key, item in value.items():
+            safe_key = (
+                _redact_provider_text(key, secrets=secrets)
+                if isinstance(key, str)
+                else key
+            )
+            # Two provider-controlled keys can collapse to the same redacted
+            # spelling. Preserve both values without restoring either secret.
+            if safe_key in redacted:
+                base_key = str(safe_key)
+                suffix = 2
+                while f"{base_key}#{suffix}" in redacted:
+                    suffix += 1
+                safe_key = f"{base_key}#{suffix}"
+            if isinstance(key, str) and _is_provider_credential_field(key):
+                safe_item = "[REDACTED]"
+            else:
+                safe_item = _redact_provider_value(item, secrets=secrets)
+            redacted[safe_key] = safe_item
+        return redacted
+    return value
+
+
+def _redact_exact_provider_text(value: str, *, secrets: Sequence[str]) -> str:
+    redacted = str(value)
+    for secret in sorted(
+        {str(item) for item in secrets if str(item)},
+        key=len,
+        reverse=True,
+    ):
+        redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
+def _redact_provider_text(value: str, *, secrets: Sequence[str]) -> str:
+    redacted = _redact_exact_provider_text(value, secrets=secrets)
+    for pattern in _PROVIDER_CREDENTIAL_PATTERNS:
+        redacted = pattern.sub(r"\1[REDACTED]", redacted)
+    return redacted
+
+
+def _is_provider_credential_field(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", str(value).lower())
+    return normalized in {
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "authorization",
+        "cookie",
+    }
 
 
 def _parse_json_object(content: str) -> Dict[str, Any]:
@@ -1847,11 +2103,15 @@ def _read_bounded_http_body(response: Any, *, max_bytes: int, label: str) -> byt
         raw_length = headers.get("Content-Length")
         if raw_length is not None:
             try:
-                if int(raw_length) > max_bytes:
-                    raise ValueError(f"{label} exceeds its {max_bytes}-byte limit.")
-            except (TypeError, ValueError) as exc:
-                if isinstance(exc, ValueError) and "exceeds" in str(exc):
-                    raise
+                declared_length = int(raw_length)
+            except (TypeError, ValueError):
+                # Content-Length is provider-controlled. Ignore malformed
+                # values and enforce the bound against bytes actually read;
+                # never propagate the parser's diagnostic because it embeds
+                # the untrusted header verbatim.
+                declared_length = None
+            if declared_length is not None and declared_length > max_bytes:
+                raise ValueError(f"{label} exceeds its {max_bytes}-byte limit.")
     payload = response.read(max_bytes + 1)
     if len(payload) > max_bytes:
         raise ValueError(f"{label} exceeds its {max_bytes}-byte limit.")

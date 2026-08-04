@@ -13,6 +13,8 @@ presentation gateway is the only intended ingress.
 from __future__ import annotations
 
 import json
+import re
+import secrets
 import socket
 import struct
 import threading
@@ -26,6 +28,7 @@ MAX_WEBSOCKET_MESSAGE_BYTES = 512 * 1024
 MAX_CLIENTS = 8
 MAX_RETAINED_TOPICS = 512
 DEFAULT_WEBSOCKET_IDLE_TIMEOUT_SECONDS = 75.0
+_VIEWER_GENERATION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 class MQTTProtocolError(ValueError):
@@ -117,12 +120,28 @@ class LocalMQTTBroker:
         self._clients: set[_ClientSession] = set()
         self._retained: OrderedDict[str, bytes] = OrderedDict()
         self._closed = False
+        self._viewer_generation = "bootstrap"
+        self._viewer_client_id = _new_viewer_client_id()
         self._websocket_idle_timeout_seconds = float(websocket_idle_timeout_seconds)
 
     @property
     def client_count(self) -> int:
         with self._lock:
             return len(self._clients)
+
+    @property
+    def viewer_generation(self) -> str:
+        """Return the generation allowed to connect as the Unity viewer."""
+
+        with self._lock:
+            return self._viewer_generation
+
+    @property
+    def viewer_client_id(self) -> str:
+        """Return the MQTT client identifier required by the current viewer."""
+
+        with self._lock:
+            return self._viewer_client_id
 
     def has_subscriber(self, topic: str) -> bool:
         """Return whether a connected MQTT client subscribes to ``topic``."""
@@ -185,6 +204,7 @@ class LocalMQTTBroker:
                 and any(topic_matches(pattern, topic) for pattern in session.subscriptions)
             )
         delivered = 0
+        failed_sessions: list[_ClientSession] = []
         for session in clients:
             try:
                 session.websocket.send_binary(
@@ -196,13 +216,43 @@ class LocalMQTTBroker:
                     )
                 )
             except (ConnectionError, OSError):
+                failed_sessions.append(session)
                 continue
             delivered += 1
+        if failed_sessions:
+            with self._lock:
+                for session in failed_sessions:
+                    self._clients.discard(session)
+            for session in failed_sessions:
+                session.websocket.close()
         return delivered
 
     def clear_retained(self) -> None:
         with self._lock:
             self._retained.clear()
+
+    def reset_viewer_generation(self, generation: str) -> str:
+        """Start a clean viewer generation without stopping the broker.
+
+        Rotating the required MQTT client identifier prevents a page retained
+        from an earlier visual run from reconnecting after its socket has been
+        closed.  Detached sockets are closed after releasing the broker lock so
+        their WebSocket shutdown cannot block unrelated broker state access.
+        """
+
+        with self._lock:
+            _validate_viewer_generation(generation)
+            if self._closed:
+                raise RuntimeError("MQTT broker is closed.")
+            clients = tuple(self._clients)
+            self._clients.clear()
+            self._retained.clear()
+            self._viewer_generation = generation
+            self._viewer_client_id = _new_viewer_client_id()
+            client_id = self._viewer_client_id
+        for session in clients:
+            session.websocket.close()
+        return client_id
 
     def close(self) -> None:
         with self._lock:
@@ -218,11 +268,25 @@ class LocalMQTTBroker:
         flags = packet[0] & 0x0F
         body = _mqtt_packet_body(packet)
         if packet_type == 1:
+            if flags:
+                raise MQTTProtocolError("CONNECT must use flags 0b0000.")
             if session.protocol_level is not None:
                 raise MQTTProtocolError("A client sent CONNECT more than once.")
-            session.protocol_level = _connect_protocol_level(body)
-            response = b"\x20\x03\x00\x00\x00" if session.protocol_level == 5 else b"\x20\x02\x00\x00"
-            session.websocket.send_binary(response)
+            protocol_level, client_id = _parse_connect(body)
+            with self._lock:
+                if self._closed or session not in self._clients:
+                    raise MQTTProtocolError("The MQTT session is no longer active.")
+                if not _viewer_client_id_matches(client_id, self._viewer_client_id):
+                    raise MQTTProtocolError(
+                        "The MQTT client identifier is not valid for the current viewer."
+                    )
+                session.protocol_level = protocol_level
+                response = (
+                    b"\x20\x03\x00\x00\x00"
+                    if protocol_level == 5
+                    else b"\x20\x02\x00\x00"
+                )
+                session.websocket.send_binary(response)
             return
         if session.protocol_level is None:
             raise MQTTProtocolError("CONNECT must be the first MQTT packet.")
@@ -410,14 +474,82 @@ def _mqtt_packet_body(packet: bytes) -> bytes:
     return packet[offset:]
 
 
-def _connect_protocol_level(body: bytes) -> int:
+def _parse_connect(body: bytes) -> tuple[int, str]:
+    """Parse an MQTT 3.1.1/5 CONNECT body and return its level and client id."""
+
     protocol_name, offset = _read_mqtt_text(body, 0)
     if protocol_name != "MQTT" or offset >= len(body):
         raise MQTTProtocolError("Only the MQTT protocol is supported.")
     level = body[offset]
+    offset += 1
     if level not in {4, 5}:
         raise MQTTProtocolError("Only MQTT 3.1.1 and MQTT 5 are supported.")
-    return level
+    if offset + 3 > len(body):
+        raise MQTTProtocolError("CONNECT variable header is truncated.")
+    connect_flags = body[offset]
+    offset += 1
+    if connect_flags & 0x01:
+        raise MQTTProtocolError("CONNECT reserved flag must be zero.")
+    will_flag = bool(connect_flags & 0x04)
+    will_qos = (connect_flags >> 3) & 0x03
+    will_retain = bool(connect_flags & 0x20)
+    if will_qos == 3 or (not will_flag and (will_qos or will_retain)):
+        raise MQTTProtocolError("CONNECT will flags are invalid.")
+    # The keep-alive field is accepted as supplied; socket idleness is bounded
+    # independently by the interface server.
+    offset += 2
+    if level == 5:
+        offset = _skip_mqtt_properties(body, offset, "CONNECT")
+
+    client_id, offset = _read_mqtt_text(body, offset)
+
+    if will_flag:
+        if level == 5:
+            offset = _skip_mqtt_properties(body, offset, "CONNECT will")
+        _, offset = _read_mqtt_text(body, offset)
+        _, offset = _read_mqtt_binary(body, offset)
+    if connect_flags & 0x80:
+        _, offset = _read_mqtt_text(body, offset)
+    if connect_flags & 0x40:
+        _, offset = _read_mqtt_binary(body, offset)
+    if offset != len(body):
+        raise MQTTProtocolError("CONNECT payload has trailing data.")
+    return level, client_id
+
+
+def _skip_mqtt_properties(data: bytes, offset: int, label: str) -> int:
+    decoded = _decode_variable_integer(data, offset)
+    if decoded is None:  # pragma: no cover - incomplete_ok is false
+        raise MQTTProtocolError(f"{label} properties are truncated.")
+    property_length, offset = decoded
+    offset += property_length
+    if offset > len(data):
+        raise MQTTProtocolError(f"{label} properties are truncated.")
+    return offset
+
+
+def _new_viewer_client_id() -> str:
+    return "optpilot-unity-" + secrets.token_hex(8)
+
+
+def _viewer_client_id_matches(client_id: str, configured_id: str) -> bool:
+    """Accept the configured id and Unity's timestamp-suffixed derivative."""
+
+    return client_id == configured_id or (
+        client_id.startswith(configured_id + "-")
+        and len(client_id) <= len(configured_id) + 128
+    )
+
+
+def _validate_viewer_generation(generation: str) -> None:
+    if (
+        not isinstance(generation, str)
+        or _VIEWER_GENERATION_PATTERN.fullmatch(generation) is None
+    ):
+        raise ValueError(
+            "Viewer generation must be 1-128 URL-safe letters, digits, dots, "
+            "underscores, or hyphens, beginning with a letter or digit."
+        )
 
 
 def _parse_subscribe(body: bytes, protocol_level: int) -> tuple[int, tuple[str, ...]]:
@@ -516,6 +648,17 @@ def _read_mqtt_text(data: bytes, offset: int) -> tuple[str, int]:
     if "\x00" in text:
         raise MQTTProtocolError("MQTT text cannot contain NUL.")
     return text, end
+
+
+def _read_mqtt_binary(data: bytes, offset: int) -> tuple[bytes, int]:
+    if offset + 2 > len(data):
+        raise MQTTProtocolError("MQTT binary length is truncated.")
+    length = struct.unpack("!H", data[offset : offset + 2])[0]
+    offset += 2
+    end = offset + length
+    if end > len(data):
+        raise MQTTProtocolError("MQTT binary data is truncated.")
+    return data[offset:end], end
 
 
 def _mqtt_text(value: str, label: str) -> bytes:

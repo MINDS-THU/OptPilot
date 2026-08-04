@@ -151,14 +151,25 @@ The following utilities are available and **MUST** be used correctly:
 ## **[Script Requirements]**
 You must construct the script in the following **exact order**.
 
+### Startup Contract
+- The default demonstration MUST have a deterministic startup path and produce
+  meaningful observations after simulation time 0. Prefer a root model whose
+  source component schedules its own finite first event.
+- If the declared root protocol instead requires an external startup input and
+  no external schedule is supplied, create exactly one small, schema-valid
+  event at simulation time 0 and inject it with `ReliableInjectionSystem`.
+  Never call a model port directly or invent an undeclared startup port.
+
 ### 1. Imports
 - **General**: Import `Coordinator`, `SimulationClock` from `xdevs.sim`.
 - **Utils**: Import `set_global_clock` from `devs_project.devs_utils.devs_context`.
 - **Event trace**: Import `attach_event_trace` from
   `devs_project.devs_utils.event_trace`.
-- **Injection (Conditional)**: IF the scenario requires external event injection:
+- **Injection (Conditional)**: IF the scenario supplies external events OR the
+  declared root protocol requires the deterministic default startup event:
     - Import `ReliableInjectionSystem` from `devs_project.devs_utils.inject`.
-    - Import `get_raw_input_content` from `devs_project.devs_utils.inject`.
+    - Import `get_raw_input_content` from `devs_project.devs_utils.inject` only
+      when an external schedule must be read.
 - **Target Model**: Use a **relative import** for the model class. 
     - Logic: If script is at `runner.py` and model is at `target.py`, use `from .target import {class_name}`.
 
@@ -184,11 +195,15 @@ You must construct the script in the following **exact order**.
     - If it Simulation Scenario mentioned to read from file / stdin, call `raw_text = get_raw_input_content()` to safely read Stdin. 
     - Implement a helper function (e.g., `parse_schedule(text)`) to parse `raw_text` into a list of event dicts `[{{"time":..., "port":..., "payload":...}}]`.
     - Ensure the parser matches the data format described in the Scenario.
+- **Step 2.3 (Default Startup)**: IF the root model's declared protocol requires
+  an external input to begin and Step 2.2 did not supply one, create exactly one
+  deterministic event at time 0 for that input. Its payload must match the
+  declared port structure. Do not add a startup event to an autonomous model.
 
 ### 3. Initialization (The Logic is Strict)
 - **Step 3.1**: Create the clock: `clock = SimulationClock()`.
 - **Step 3.2**: **CRITICAL**: Register the clock globally: `set_global_clock(clock)`.
-- **Step 3.3**: Instantiate the model `{class_name}`.
+- **Step 3.3**: Instantiate the core model `{class_name}` as `{class_name}_instance`.
     - Ensure you pass the correct arguments (e.g., `name="{class_name}"`, `parent=None`, and other params defined in Step 2).
 - **Step 3.4 (Harness Wrapping)**:
     - **IF Injection is used**:

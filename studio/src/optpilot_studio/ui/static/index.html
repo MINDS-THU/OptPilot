@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260731j" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260804d" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -72,13 +72,6 @@
             <span class="nav-label">
               <strong>Runs</strong>
               <small aria-hidden="true">Progress and results</small>
-            </span>
-          </button>
-          <button class="nav-button" data-view="workspace" type="button">
-            <span class="nav-icon nav-icon-workspaces" aria-hidden="true"></span>
-            <span class="nav-label">
-              <strong>Workspaces</strong>
-              <small aria-hidden="true">Editable work</small>
             </span>
           </button>
         </nav>
@@ -335,6 +328,35 @@
               <div id="runDetail" class="detail-content"></div>
             </section>
           </div>
+        </section>
+
+        <section id="interfaceView" class="view interface-session-view" aria-label="Interface Session">
+          <article class="interface-session-shell">
+            <header class="interface-session-header">
+              <button id="interfaceSessionBackButton" class="ghost-button interface-session-back" type="button">Back</button>
+              <div class="interface-session-identity">
+                <span id="interfaceSessionEyebrow" class="eyebrow">Interface Session</span>
+                <h2 id="interfaceSessionTitle">Interactive interface</h2>
+                <p id="interfaceSessionSource" class="path-text">Preparing the exact interface session.</p>
+              </div>
+              <div class="interface-session-actions">
+                <span id="interfaceSessionStatus" class="status-pill">Preparing</span>
+                <a id="interfaceSessionOpenButton" class="ghost-button" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in new window</a>
+                <button id="interfaceSessionStopButton" class="danger-button" type="button" hidden>Stop</button>
+              </div>
+            </header>
+            <div id="interfaceSessionNotice" class="interface-session-notice" role="status" aria-live="polite">Preparing the interactive view…</div>
+            <div class="interface-session-stage">
+              <iframe id="interfaceSessionFrame" title="Interactive interface" loading="eager" referrerpolicy="no-referrer" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"></iframe>
+              <div id="interfaceSessionEmpty" class="interface-session-empty">
+                <div>
+                  <h3 id="interfaceSessionEmptyTitle">Preparing the interactive view</h3>
+                  <p id="interfaceSessionEmptyBody">The interface will appear here when its runtime is ready.</p>
+                  <button id="interfaceSessionRetryButton" class="ghost-button" type="button">Check again</button>
+                </div>
+              </div>
+            </div>
+          </article>
         </section>
       </main>
     </div>
@@ -638,6 +660,6 @@
       </div>
 
     <div id="selectionContentDrawerHost"></div>
-    <script src="/static/app.js?v=studio-20260731j"></script>
+    <script src="/static/app.js?v=studio-20260804d"></script>
   </body>
 </html>

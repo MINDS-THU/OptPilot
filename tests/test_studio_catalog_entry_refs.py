@@ -769,7 +769,7 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
         self.assertEqual(response["workspace_id"], workspace_id)
         self.assertEqual(runtime_start.call_args.args[0]["id"], workspace_id)
         index = json.loads(
-            (self.state.workspaces_dir / "index.json").read_text(encoding="utf-8")
+            self.state.workspace_index_path.read_text(encoding="utf-8")
         )
         self.assertIn(workspace_id, {item["id"] for item in index["workspaces"]})
 

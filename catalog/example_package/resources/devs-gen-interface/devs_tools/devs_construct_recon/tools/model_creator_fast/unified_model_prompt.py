@@ -49,7 +49,12 @@ MUST implement all the following methods!
 5. **`deltint()`**: This runs after `lambdaf()` when an internal event fires.
     - Update internal state and call `self.hold_in(phase, sigma)`.
     - If the next scheduled phase will emit an output, prepare the payload before calling `hold_in(...)`.
-6. **`exit()`**: Release resources and write final external IO only if required by `external_io`.
+6. **`trace_state()`**: Return a small teaching-oriented snapshot of the domain state already maintained by this atomic model.
+    - Return a `dict` with roughly 1–8 educationally meaningful fields such as queue length, inventory, backlog, busy/idle status, current item identifier, completed count, or accumulated outcome counters.
+    - Prefer `bool`, finite `int`/`float`, short `str`, and very small primitive `list`/`dict` values. Return counts or identifiers instead of full queues, packet histories, object graphs, configuration dictionaries, or random-generator state.
+    - Keep it deterministic, side-effect-free, and O(1): do not mutate state, perform IO, sample randomness, iterate over a potentially large collection, or import OptPilot. Do not duplicate `phase` or `sigma`; the recorder supplies those automatically.
+    - This method is observational only and must not change the DEVS behavior.
+7. **`exit()`**: Release resources and write final external IO only if required by `external_io`.
 
 #### Output Scheduling Contract
 For every scheduled DEVS port output, use this cycle:

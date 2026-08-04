@@ -59,16 +59,22 @@ _FILE_FLAGS = (
 _STORE_ID_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
-# macOS 26 and some macOS file-provider volumes attach these OS-maintained
-# provenance/recency markers to ordinary files.  Neither carries user content
-# and both change independently of the file bytes, so they are deliberately
-# neither hashed nor serialized.  Docker Desktop's ownership transport marker
-# is handled separately and accepted only when its encoded permission mode is
-# identical to the descriptor mode.  Every other xattr, including quarantine,
-# resource forks, ACL/security metadata, and arbitrary user values, remains
-# rejected.
+# macOS 26 and some macOS/file-provider volumes attach these OS-maintained
+# provenance, recency, and transparent-compression markers to ordinary files.
+# They do not add semantics beyond the bytes returned by the open descriptor,
+# so they are deliberately neither hashed nor serialized.  In particular,
+# ``com.apple.decmpfs`` may contain the on-disk compressed representation, but
+# descriptor reads already return the canonical uncompressed file bytes that
+# OptPilot seals.  Docker Desktop's ownership transport marker is handled
+# separately and accepted only when its encoded permission mode is identical
+# to the descriptor mode.  Every other xattr, including quarantine, resource
+# forks, ACL/security metadata, and arbitrary user values, remains rejected.
 DARWIN_IGNORED_NONCONTENT_XATTRS = frozenset(
-    {"com.apple.provenance", "com.apple.lastuseddate#PS"}
+    {
+        "com.apple.decmpfs",
+        "com.apple.provenance",
+        "com.apple.lastuseddate#PS",
+    }
 )
 _DARWIN_DOCKER_OWNERSHIP_XATTR = "com.docker.grpcfuse.ownership"
 _MAX_DARWIN_DOCKER_OWNERSHIP_XATTR_BYTES = 1024

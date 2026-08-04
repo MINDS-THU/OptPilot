@@ -7,13 +7,30 @@ from factory_sim.utils.config_loader import load_factory_config
 from factory_sim.config.schemas import DATABASE_SCHEMA
 
 
+class SimulationDatabaseError(RuntimeError):
+    """A trace write or close failed and the retained evidence is unusable."""
+
+
 class SimulationDatabase:
     def __init__(self, db_path: str, layout_config: Dict):
         self.layout_config = layout_config
         self._lock = threading.RLock()
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn = None
         self._closed = False
-        self._init_table()
+        self._failure: SimulationDatabaseError | None = None
+        try:
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._init_table()
+        except Exception:
+            connection = self.conn
+            self.conn = None
+            self._closed = True
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+            raise
     
     def _init_table(self):
         self._get_table_names()
@@ -81,29 +98,43 @@ class SimulationDatabase:
         self.kpi_table = ['kpi']
     
     def insert_data(self, table_name: str, data: Dict):
-        if self._closed or self.conn is None:
-            return
         normalized = {key: self._normalize_value(value) for key, value in data.items()}
         columns = ', '.join(normalized.keys())
         placeholders = ', '.join(['?'] * len(normalized))
         sql = f'INSERT INTO "{table_name}" ({columns}) VALUES ({placeholders})'
         with self._lock:
+            if self._failure is not None:
+                raise self._failure
+            if self._closed or self.conn is None:
+                raise self._record_failure(
+                    "write",
+                    sqlite3.ProgrammingError("database connection is closed"),
+                )
             try:
                 cursor = self.conn.cursor()
-            except sqlite3.ProgrammingError:
-                # Connection already closed elsewhere; mark as closed and ignore the write.
-                self.conn = None
-                self._closed = True
-                return
-            try:
-                cursor.execute(sql, tuple(normalized.values()))
-                self.conn.commit()
+                self._execute_insert(cursor, sql, tuple(normalized.values()))
             except sqlite3.Error as exc:
                 try:
                     self.conn.rollback()
                 except sqlite3.Error:
                     pass
-                print(f"SQLite insert error for {table_name}: {exc}")
+                raise self._record_failure(f"insert into {table_name}", exc) from exc
+
+    def _execute_insert(self, cursor, sql: str, values: tuple) -> None:
+        """Execute one atomic insert; kept separate for failure-injection tests."""
+
+        cursor.execute(sql, values)
+        assert self.conn is not None
+        self.conn.commit()
+
+    def _record_failure(
+        self, operation: str, exc: BaseException
+    ) -> SimulationDatabaseError:
+        if self._failure is None:
+            self._failure = SimulationDatabaseError(
+                f"SQLite trace {operation} failed: {type(exc).__name__}: {exc}"
+            )
+        return self._failure
 
     def _normalize_value(self, value):
         if isinstance(value, (list, tuple, dict)):
@@ -115,16 +146,27 @@ class SimulationDatabase:
         return str(value)
 
     def close(self) -> None:
-        if self._closed:
-            return
         with self._lock:
-            if self.conn is not None:
-                try:
-                    self.conn.close()
-                except Exception:
-                    pass
+            if self._closed:
+                if self._failure is not None:
+                    raise self._failure
+                return
+            connection = self.conn
             self.conn = None
             self._closed = True
+            if connection is not None:
+                try:
+                    self._close_connection(connection)
+                except Exception as exc:
+                    self._record_failure("close", exc)
+            if self._failure is not None:
+                raise self._failure
+
+    @staticmethod
+    def _close_connection(connection) -> None:
+        """Close the SQLite handle; kept separate for failure-injection tests."""
+
+        connection.close()
 
 
 if __name__ == "__main__":

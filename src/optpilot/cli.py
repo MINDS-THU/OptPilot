@@ -7,13 +7,28 @@ import importlib.metadata
 import json
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 from .config import validate_authoring_config
 from .package_index import index_package
 from .package_validation import validate_package
 from .runner import run_study
+from .realm.config import default_realm_root
+from .realm.provider_trust_policy import RealmProviderTrustPolicyService
+from .realm.provider_trust_records import (
+    PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE,
+    PROVIDER_TRUST_GATEWAY_CONTRACT,
+    ProviderTrustDecision,
+    ProviderTrustHead,
+    validate_provider_image_ref,
+)
 from .setup import run_process_setup
+
+
+_ENVIRONMENT_PREVIEW_TRUST_OUTPUT_SCHEMA = (
+    "optpilot.environment-preview-trust-command.v1"
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -74,6 +89,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     package_smoke_parser.add_argument("--json", action="store_true", help="Print machine-readable smoke output")
     package_smoke_parser.set_defaults(handler=_package_smoke_command)
+
+    preview_parser = subparsers.add_parser(
+        "environment-preview",
+        help="Manage local Environment Preview settings",
+    )
+    preview_subparsers = preview_parser.add_subparsers(
+        dest="environment_preview_command",
+        required=True,
+    )
+    trust_parser = preview_subparsers.add_parser(
+        "trust",
+        help="Manage exact container images approved for Environment Preview",
+    )
+    trust_subparsers = trust_parser.add_subparsers(
+        dest="environment_preview_trust_command",
+        required=True,
+    )
+    trust_approve_parser = trust_subparsers.add_parser(
+        "approve",
+        help="Approve one digest-pinned container image",
+    )
+    _add_environment_preview_trust_arguments(
+        trust_approve_parser,
+        image=True,
+        confirmation=True,
+    )
+    trust_approve_parser.set_defaults(
+        handler=_environment_preview_trust_approve_command
+    )
+    trust_revoke_parser = trust_subparsers.add_parser(
+        "revoke",
+        help="Revoke approval for one digest-pinned container image",
+    )
+    _add_environment_preview_trust_arguments(
+        trust_revoke_parser,
+        image=True,
+        confirmation=True,
+    )
+    trust_revoke_parser.set_defaults(
+        handler=_environment_preview_trust_revoke_command
+    )
+    trust_list_parser = trust_subparsers.add_parser(
+        "list",
+        help="List active Environment Preview image approvals",
+    )
+    _add_environment_preview_trust_arguments(
+        trust_list_parser,
+        image=False,
+        confirmation=False,
+    )
+    trust_list_parser.set_defaults(handler=_environment_preview_trust_list_command)
 
     _load_command_providers(subparsers)
 
@@ -182,6 +248,217 @@ def _package_smoke_command(args) -> int:
         for error in result.get("errors", []):
             print(f"- {error}")
     return 0 if result["valid"] else 1
+
+
+def _add_environment_preview_trust_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    image: bool,
+    confirmation: bool,
+) -> None:
+    if image:
+        parser.add_argument(
+            "image",
+            help=(
+                "Exact digest-pinned image reference "
+                "(for example, registry.example/preview@sha256:<64 hex>)"
+            ),
+        )
+    parser.add_argument(
+        "--realm-root",
+        help="Private local Realm root (default: secure OS user-data location)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable trust-policy output",
+    )
+    if confirmation:
+        parser.add_argument(
+            "--yes",
+            action="store_true",
+            help="Apply the trust change without an interactive confirmation",
+        )
+
+
+def _environment_preview_trust_approve_command(args) -> int:
+    args.image = validate_provider_image_ref(args.image)
+    if not _confirm_environment_preview_trust_change(
+        action="approve",
+        image_ref=args.image,
+        assume_yes=bool(args.yes),
+    ):
+        return _print_environment_preview_trust_cancelled(args, action="approve")
+    return _apply_environment_preview_trust_change(args, action="approve")
+
+
+def _environment_preview_trust_revoke_command(args) -> int:
+    args.image = validate_provider_image_ref(args.image)
+    if not _confirm_environment_preview_trust_change(
+        action="revoke",
+        image_ref=args.image,
+        assume_yes=bool(args.yes),
+    ):
+        return _print_environment_preview_trust_cancelled(args, action="revoke")
+    return _apply_environment_preview_trust_change(args, action="revoke")
+
+
+def _environment_preview_trust_list_command(args) -> int:
+    root = _environment_preview_trust_realm_root(args.realm_root)
+    with RealmProviderTrustPolicyService.open_local(root) as service:
+        active = [
+            _environment_preview_trust_head_payload(record)
+            for record in service.list_active()
+        ]
+    payload = {
+        "schema": _ENVIRONMENT_PREVIEW_TRUST_OUTPUT_SCHEMA,
+        "action": "list",
+        "realm_root": str(root),
+        "active": active,
+        "count": len(active),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif not active:
+        print("No Environment Preview container images are approved.")
+    else:
+        print("Approved Environment Preview container images:")
+        for record in active:
+            print(f"- {record['image_ref']}")
+    return 0
+
+
+def _apply_environment_preview_trust_change(args, *, action: str) -> int:
+    root = _environment_preview_trust_realm_root(args.realm_root)
+    with RealmProviderTrustPolicyService.open_local(root) as service:
+        operation = getattr(service, action)
+        current = next(
+            (
+                head
+                for head in service.list_heads()
+                if head.image_ref == args.image
+            ),
+            None,
+        )
+        python_executable = (
+            current.python_executable
+            if action == "revoke" and current is not None
+            else PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE
+        )
+        contract = (
+            current.contract
+            if action == "revoke" and current is not None
+            else PROVIDER_TRUST_GATEWAY_CONTRACT
+        )
+        decision = operation(
+            operation_id=(
+                f"cli/environment-preview/trust/{action}/"
+                f"{uuid.uuid4().hex}"
+            ),
+            image_ref=args.image,
+            python_executable=python_executable,
+            contract=contract,
+            reason=f"Requested by optpilot environment-preview trust {action}.",
+        )
+        active = service.read_active(image_ref=args.image)
+    payload = {
+        "schema": _ENVIRONMENT_PREVIEW_TRUST_OUTPUT_SCHEMA,
+        "action": action,
+        "realm_root": str(root),
+        "studio_restart_required": True,
+        "decision": _environment_preview_trust_decision_payload(decision),
+        "active": (
+            None
+            if active is None
+            else _environment_preview_trust_head_payload(active)
+        ),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        past_tense = "Approved" if action == "approve" else "Revoked"
+        print(f"{past_tense} Environment Preview image: {args.image}")
+        print("Restart Studio to load the updated Realm trust snapshot.")
+    return 0
+
+
+def _environment_preview_trust_head_payload(
+    record: ProviderTrustHead,
+) -> dict[str, object]:
+    return {
+        "image_ref": record.image_ref,
+        "python_executable": record.python_executable,
+        "contract": record.contract,
+        "decision_id": record.decision_id,
+        "sequence": record.sequence,
+        "approved_at": record.created_at,
+    }
+
+
+def _environment_preview_trust_decision_payload(
+    record: ProviderTrustDecision,
+) -> dict[str, object]:
+    return {
+        "image_ref": record.image_ref,
+        "python_executable": record.python_executable,
+        "contract": record.contract,
+        "decision_id": record.decision_id,
+        "sequence": record.sequence,
+        "state": record.state.value,
+        "decided_at": record.created_at,
+    }
+
+
+def _environment_preview_trust_realm_root(value: str | None) -> Path:
+    if value is None:
+        return default_realm_root()
+    root = Path(value).expanduser()
+    if not root.is_absolute():
+        raise ValueError("--realm-root must be an absolute path.")
+    return root
+
+
+def _confirm_environment_preview_trust_change(
+    *,
+    action: str,
+    image_ref: str,
+    assume_yes: bool,
+) -> bool:
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Environment Preview trust changes require confirmation; "
+            "re-run with --yes in a noninteractive session."
+        )
+    confirmation = action.upper()
+    print(
+        f"Type {confirmation} to {action} this exact Environment Preview image:\n"
+        f"  {image_ref}\n> ",
+        end="",
+        file=sys.stderr,
+        flush=True,
+    )
+    return sys.stdin.readline().strip() == confirmation
+
+
+def _print_environment_preview_trust_cancelled(args, *, action: str) -> int:
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "schema": _ENVIRONMENT_PREVIEW_TRUST_OUTPUT_SCHEMA,
+                    "action": action,
+                    "cancelled": True,
+                    "image_ref": args.image,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+    else:
+        print("No Environment Preview trust change was made.")
+    return 0
 
 
 def _package_setup_check(package: str, *, run_setup: bool) -> dict:

@@ -111,9 +111,9 @@ h2 { font-size: 1.2rem; letter-spacing: -0.015em; }
 
 .run-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(110px, auto)) 1fr;
+  grid-template-columns: repeat(4, minmax(86px, auto)) minmax(220px, 1fr);
   align-items: center;
-  gap: 18px;
+  gap: 14px;
   padding: 14px 18px 16px;
 }
 
@@ -152,6 +152,15 @@ input[type="number"], select {
 
 .check-field { display: flex; align-items: center; gap: 8px; margin: 13px 0; }
 .check-field span { margin: 0; }
+
+.input-hint {
+  border-left: 3px solid #c98726;
+  color: #79500f;
+  font-size: .76rem;
+  line-height: 1.45;
+  margin: 10px 0 0;
+  padding-left: 9px;
+}
 
 .actions { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 14px; }
 button {

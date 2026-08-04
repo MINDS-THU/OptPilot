@@ -468,6 +468,85 @@ class RealmProcessExecutionBinderTest(unittest.TestCase):
             self.preparation.resource_ttl_seconds,
         )
 
+    def test_reserved_commit_retries_run_head_drift_without_second_preflight(
+        self,
+    ) -> None:
+        prepared = self.binder.prepare_prepared(
+            actor_principal_id="operator",
+            run_id=self.preparation.attempt.run_id,
+            attempt_id=self.preparation.attempt.attempt_id,
+        )
+        reservation = self._reserve(prepared)
+
+        # Advance only the shared run/owner head after provider preflight.  The
+        # exact prepared attempt and all of its realized resource authority stay
+        # unchanged, so the reserved commit must refresh and retry rather than
+        # abandoning a valid reservation.
+        snapshot = self.ledger.read_run_snapshot(
+            actor_principal_id="operator",
+            run_id=self.preparation.attempt.run_id,
+        )
+        owner = self.ledger.read_owner(
+            actor_principal_id="operator",
+            owner_id=snapshot.run.owner_id,
+            permission=OwnerPermission.DERIVE,
+        )
+        change = self.ledger.begin_owner_change(
+            operation_id=self.op("concurrent-admission/begin"),
+            actor_principal_id="operator",
+            owner_id=snapshot.run.owner_id,
+            expected_owner_revision=owner.revision,
+            ttl_seconds=300,
+        )
+        envelope = NormalizedCandidateEnvelope.build(
+            candidate_format="parameters", spec={"x": 0.75}
+        )
+        self.ledger.commit_run_candidate_admissions(
+            operation_id=self.op("concurrent-admission/commit"),
+            actor_principal_id="operator",
+            run_id=snapshot.run.run_id,
+            expected_run_revision=snapshot.revision.revision,
+            expected_owner_revision=owner.revision,
+            change_id=change.change_id,
+            plan=RunAdmissionPlan(
+                candidates=(
+                    CandidateAdmission(
+                        "candidate-b",
+                        envelope,
+                        lineage={"parents": []},
+                        generator={"method_id": "external"},
+                    ),
+                ),
+                logical_trials=(
+                    LogicalTrialAdmission(
+                        "trial-b", "candidate-b", seed=None, repetition_index=0
+                    ),
+                ),
+            ),
+            **self.controller_arguments(),
+        )
+
+        commit = self.ledger.commit_run_attempt_binding
+        with mock.patch.object(
+            self.ledger,
+            "commit_run_attempt_binding",
+            wraps=commit,
+        ) as commit_spy, mock.patch.object(
+            self.ledger,
+            "preflight_run_attempt_binding",
+            side_effect=AssertionError(
+                "reserved commit retry must use the atomic commit validation"
+            ),
+        ):
+            binding = prepared._commit_reserved_launch(reservation)
+
+        self.assertEqual(commit_spy.call_count, 2)
+        self.assertEqual(binding.receipt.binding.attempt_id, "attempt-a")
+        self.assertEqual(
+            binding.launch_intent.launch_request_digest,
+            reservation.launch_request_digest,
+        )
+
     def test_prepare_prepared_recovers_resources_left_before_binding_commit(self) -> None:
         class SimulatedCrash(BaseException):
             pass

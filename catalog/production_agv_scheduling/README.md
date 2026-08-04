@@ -65,11 +65,26 @@ evaluation conditions:
   `environment_faults.yaml`: robustness conditions for re-evaluating a frozen
   policy.
 
+`studies/parallel_smoke.yaml` is a release check rather than a paper
+experiment: it evaluates four deterministic GA candidates with capacity three
+using the paper-default ten-replication environment. The longer real evaluator
+workload makes all three running-attempt intervals overlap, so three-way
+execution can be verified without an LLM call. Use `studies/smoke.yaml` for the
+short single-replication integration check.
+
 Each successful evaluation reports mean, sample standard deviation, minimum,
 and maximum total score; mean score components; stability fitness; and the seed
 and score of the worst replication. `metrics.json` and `worst_run.db` are
 declared run artifacts. Evaluation or policy errors fail the trial rather than
 being converted into a zero score.
+
+OptPilot runs each retained evaluator attempt in its configured isolated
+process runtime. Replications within one attempt are deliberately sequential;
+the evaluator removes candidate-owned Python modules between seeds, verifies
+the Candidate bundle digest after every replication and replay, and fails if
+the executable bundle changes. This resets Python import state, but it does not
+turn in-process policy execution into a hostile-code sandbox or prevent a
+policy from using other process-global or writable external state.
 
 ## Optional 3D interface
 
@@ -98,6 +113,12 @@ handoffs so an AGV releases a package before its destination claims it. These
 visual-only records do not change candidate decisions, KPIs, or evaluator
 traces.
 
+Each **Run candidate** or **Replay last run** starts a fresh viewer generation.
+The interface unloads the previous Unity scene, rotates its launch-local MQTT
+identity, and waits for the replacement viewer to subscribe before publishing
+event zero. This prevents objects or in-progress movement from a previous
+visual run from leaking into the next one.
+
 That outer launch-scoped workspace or container is the security boundary.
 Within it, candidate code runs as a same-user child process with conservative
 CPU, memory, process-count, file-size, and descriptor limits. Those child
@@ -111,7 +132,16 @@ temporary replay telemetry and its trace are removed with the interface
 session and are not reported as saveable interface outputs.
 
 Candidate preview also requires an operator-approved local container image.
-Start Studio with the exact package-declared digest in its trust set:
+Approve the exact package-declared digest once in the local Realm, then restart
+Studio so it loads the updated trust snapshot:
+
+```bash
+uv run optpilot environment-preview trust approve \
+  python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+```
+
+For a deliberately temporary session, the legacy startup option remains
+available:
 
 ```bash
 uv run optpilot ui \
@@ -119,12 +149,8 @@ uv run optpilot ui \
   python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 ```
 
-The equivalent environment setting is useful for a persistent local
-configuration:
-
-```bash
-export OPTPILOT_ENVIRONMENT_PREVIEW_TRUSTED_IMAGES=python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
-```
+That option selects the exact trust set for only that Studio process; it does
+not extend or update persistent Realm approvals.
 
 OptPilot does not trust an image merely because a package declares it; **Try
 interactively** fails closed until the operator has approved the exact digest.
@@ -139,12 +165,30 @@ uv run optpilot package validate catalog/production_agv_scheduling \
 
 uv run optpilot run catalog/production_agv_scheduling/studies/smoke.yaml \
   --package-root catalog/production_agv_scheduling
+
+uv run python \
+  catalog/production_agv_scheduling/scripts/run_package_tests.py
+
+cd catalog/production_agv_scheduling
+shasum -a 256 --check UNITY_BUILD.sha256
 ```
 
 The smoke study deliberately uses the initial `DEFAULT/DEFAULT/DEFAULT` rule
 bundle and a short horizon. Paper-scale studies are substantially more
 expensive: the rule grid has 135 trials, each evolutionary study can admit 704
-trials, and the LLM study can admit one baseline plus forty revisions.
+trials, and the default LLM study admits one baseline plus twenty revisions.
+
+For the LLM method, a trial budget and an improvement iteration are different
+things. Each iteration proposes four candidates, while the initial policy uses
+one trial before those iterations begin:
+
+```text
+maxTrials = 1 initial policy + candidatesPerIteration × desired iterations
+```
+
+For example, five complete four-candidate improvement iterations require
+`maxIterations: 5` in the Method and `maxTrials: 21` in the Study. Setting only
+`maxTrials: 5` admits the initial policy and one four-candidate iteration.
 
 ## Optional setup
 
@@ -153,6 +197,14 @@ OpenRouter by default. Add `OPENROUTER_API_KEY` in Studio's local environment
 variables or export it before a CLI run. Provider URL, model, token limit, and
 temperature are ordinary settings in
 `methods/process_aware_llm/method.yaml`.
+
+Launching that method sends bounded manager/editor prompts—including policy
+source, metrics, and selected trace evidence—to OpenRouter and the inference
+provider it routes to. The default permits OpenRouter provider fallbacks for
+the configured model. Review those providers' data-retention terms and account
+spending limits before a paper-scale run. OptPilot records bounded request,
+response, token, cost, and provider metadata as Candidate provenance; it never
+stores the API key in that provenance.
 
 One manager/query/editor round can legitimately outlast the CLI's conservative
 10-second method-callback default. Launch the paper-scale LLM study with a
@@ -169,10 +221,11 @@ uv run optpilot run catalog/production_agv_scheduling/studies/process_aware_llm.
 This launch-time value is separate from `execution.timeoutSeconds`, which
 limits each environment evaluation attempt.
 
-The paper-scale Study evaluates the four sibling revisions serially. The LLM
-still designs them together as one parallel-edit round; serial evaluation
-avoids local Realm lifecycle contention on laptop-sized installations and adds
-little time compared with the model calls.
+The paper-scale Study permits three concurrent evaluations. The LLM designs
+four sibling revisions together as one parallel-editor round; three begin at
+once and the fourth begins when one evaluator slot becomes available. Reduce
+`execution.parallelism` for a smaller machine without changing the candidates
+or their retained evaluation settings.
 
 Rolling-MILP evaluation requires `gurobipy` and a valid Gurobi license in the
 environment worker's Python runtime. The package can still be validated and the
@@ -200,5 +253,6 @@ production_agv_scheduling/
 ```
 
 See `SOURCE_PROVENANCE.md` for the extraction map, deliberate cleanup, and
-reproducibility boundaries. See `NOTICE.md` before redistributing extracted
-research code.
+reproducibility boundaries. `RELEASE_READINESS.md` records the verified release
+gates and remaining blockers. See `NOTICE.md` before redistributing extracted
+research code, and `SIMPY_PROVENANCE.md` for the exact vendored dependency.

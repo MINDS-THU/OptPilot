@@ -157,9 +157,9 @@ The following utilities are available and **MUST** be used correctly:
 You must construct the script in the following **exact order**.
 
 ### Runner Scope
-- The runner only parses command line arguments, creates the global clock, instantiates the root model, creates the Coordinator, and calls initialize/simulate/exit.
+- The runner only parses command line arguments, creates the global clock, instantiates the root model, optionally wraps it with the standard deterministic startup harness described below, creates the Coordinator, and calls initialize/simulate/exit.
 - Do NOT read or consume stdin in the runner. If any model uses `external_io.target="stdin"`, that model is responsible for reading stdin itself.
-- Do NOT parse business input streams, create business DEVS events, inject startup messages, or call model ports directly from the runner. Startup behavior must be implemented inside the model according to its port protocol and `initial_signal`.
+- The default demonstration MUST have a deterministic startup path and produce meaningful observations after simulation time 0. Prefer an autonomous source model that schedules its own finite first event. If the root model's declared protocol instead requires an external startup input, create exactly one small, schema-valid demonstration event for that declared input and wrap the root model with `ReliableInjectionSystem`. Do not invent undeclared ports, build a general business input stream, or call model ports directly.
 - Do NOT implement business output, logging, or arbitrary file writing in the
   runner unless the root model specification explicitly requires it. The only
   standard exceptions are the event-trace attachment and exact result-summary
@@ -170,6 +170,9 @@ You must construct the script in the following **exact order**.
 - **Utils**: Import `set_global_clock` from `devs_project.devs_utils.devs_context`.
 - **Event trace**: Import `attach_event_trace` from
   `devs_project.devs_utils.event_trace`.
+- **Startup injection (Conditional)**: Import `ReliableInjectionSystem` from
+  `devs_project.devs_utils.inject` only when the root model requires a declared
+  external startup input for the default demonstration.
 - **Target Model**: Use a **relative import** for the model class. 
     - Logic: If script is at `runner.py` and model is at `target.py`, use `from .target import {class_name}`.
 
@@ -196,10 +199,15 @@ Initialize `argparse.ArgumentParser`:
 ### 3. Initialization (The Logic is Strict)
 - **Step 3.1**: Create the clock: `clock = SimulationClock()`.
 - **Step 3.2**: **CRITICAL**: Register the clock globally: `set_global_clock(clock)`.
-- **Step 3.3**: Instantiate the model `{class_name}`: `model = {class_name}(...)`.
+- **Step 3.3**: Instantiate the core model `{class_name}`: `core_model = {class_name}(...)`.
     - Ensure you pass the correct arguments (e.g., `name="{class_name}"`, `parent=None`, and other params defined in Step 2).
-- **Step 3.4**: Create the Simulator: `sim = Coordinator(model, clock)`.
-- **Step 3.5**: Immediately call `attach_event_trace(sim, model)`. This standard
+- **Step 3.4 (Startup Harness)**:
+    - Normally use the autonomous core directly: `model = core_model`.
+    - Only when the declared root input is required to start the demonstration,
+      create one deterministic event at simulation time 0 whose port and payload
+      exactly match that input's schema, then set `model = ReliableInjectionSystem(name="harness", parent=None, core_model=core_model, events=demo_events)`.
+- **Step 3.5**: Create the Simulator: `sim = Coordinator(model, clock)`.
+- **Step 3.6**: Immediately call `attach_event_trace(sim, model)`. This standard
   generated utility records atomic-model output ports as bounded JSONL when a
   managed result directory is available. Do not replace it with custom logging.
 
@@ -331,7 +339,7 @@ class TopSimulationCreatorFast(Tool):
         self.injected_utils = [
             "set_global_clock",
             "attach_event_trace",
-            # "injection_tools",
+            "injection_tools",
             # "get_raw_input_content",
             # "logger",
             "get_current_time",

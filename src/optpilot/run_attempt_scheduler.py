@@ -48,6 +48,14 @@ RunAttemptAdvanceAction: TypeAlias = Literal[
 ]
 
 
+# Canonical attempt writes are optimistic compare-and-swap operations.  The
+# scheduler serializes its own short phases, but provider binding commits are
+# deliberately allowed to advance the same run head while another evaluator is
+# realizing resources or waiting for a handshake.  A bounded retry therefore
+# handles unrelated, forward-only head drift without replaying provider work.
+_CANONICAL_HEAD_RETRY_LIMIT = 64
+
+
 class _MutableRunAuthority(Protocol):
     """The canonical cursor surface shared with ``RetainedRunAuthority``."""
 
@@ -172,10 +180,11 @@ class RunAttemptScheduler:
         self.heartbeat_factory = heartbeat_factory
         self.heartbeat_policy = policy
         # One authority cursor is shared by every attempt in this run.  Keep
-        # the short canonical phases serialized while allowing provider waits
-        # to overlap.  In particular, binding/launch/confirm and
-        # finalize/adopt each remain indivisible with respect to another
-        # attempt's run/owner revision changes.
+        # scheduler-owned canonical phases serialized while allowing provider
+        # realization, binding, launch, handshake, and evaluation to overlap.
+        # Provider binding commits intentionally sit outside this lock; the
+        # short compare-and-swap writes below refresh and retry when one of
+        # those commits advances the run head.
         self._canonical_phase_lock = threading.RLock()
 
     def advance(
@@ -324,38 +333,61 @@ class RunAttemptScheduler:
         attempt_id: str,
         attempt_ttl_seconds: float,
     ) -> RunLedgerSnapshot:
-        revision = snapshot.revision.revision
-        operation_id = _operation_id(
-            run_id=self.authority.run_id,
-            attempt_id=attempt_id,
-            action="prepare",
-            run_revision=revision,
-            owner_revision=snapshot.revision.owner_revision,
-        )
-        try:
-            self.authority.ledger.prepare_run_attempt(
-                operation_id=operation_id,
-                actor_principal_id=self.authority.actor_principal_id,
+        last_conflict: RealmConflict | None = None
+        current = snapshot
+        for _retry in range(_CANONICAL_HEAD_RETRY_LIMIT):
+            revision = current.revision.revision
+            operation_id = _operation_id(
                 run_id=self.authority.run_id,
-                logical_trial_id=logical_trial_id,
                 attempt_id=attempt_id,
-                expected_run_revision=revision,
-                controller_lease_id=self.authority.controller_lease_id,
-                controller_holder_id=self.authority.controller_holder_id,
-                controller_fencing_token=self.authority.controller_fencing_token,
-                attempt_ttl_seconds=attempt_ttl_seconds,
+                action="prepare",
+                run_revision=revision,
+                owner_revision=current.revision.owner_revision,
             )
-        except Exception as error:
-            recovered = self._refresh_after_error(error, "attempt preparation")
-            attempt = _find_attempt(recovered, attempt_id)
-            if (
-                attempt is None
-                or attempt.logical_trial_id != logical_trial_id
-                or attempt.prepared_run_revision != revision + 1
-            ):
-                raise
-            return recovered
-        return self._refresh()
+            try:
+                self.authority.ledger.prepare_run_attempt(
+                    operation_id=operation_id,
+                    actor_principal_id=self.authority.actor_principal_id,
+                    run_id=self.authority.run_id,
+                    logical_trial_id=logical_trial_id,
+                    attempt_id=attempt_id,
+                    expected_run_revision=revision,
+                    controller_lease_id=self.authority.controller_lease_id,
+                    controller_holder_id=self.authority.controller_holder_id,
+                    controller_fencing_token=(
+                        self.authority.controller_fencing_token
+                    ),
+                    attempt_ttl_seconds=attempt_ttl_seconds,
+                )
+            except Exception as error:
+                recovered = self._refresh_after_error(error, "attempt preparation")
+                attempt = _find_attempt(recovered, attempt_id)
+                if (
+                    attempt is not None
+                    and attempt.logical_trial_id == logical_trial_id
+                    and attempt.prepared_run_revision == revision + 1
+                ):
+                    return recovered
+                if (
+                    not isinstance(error, RealmConflict)
+                    or attempt is not None
+                    or not _run_head_advanced(current, recovered)
+                ):
+                    raise
+                # Another evaluator committed a binding (or another short
+                # controller phase advanced the head) after our refresh.  No
+                # attempt was created by this operation, so retry only the
+                # canonical preparation against the new head.
+                last_conflict = error
+                current = recovered
+                continue
+            return self._refresh()
+        assert last_conflict is not None
+        last_conflict.add_note(
+            "Attempt preparation could not acquire a stable run head after "
+            "repeated concurrent canonical commits."
+        )
+        raise last_conflict
 
     def _reconcile_stale(
         self, *, snapshot: RunLedgerSnapshot, attempt: RunAttemptRecord
@@ -458,50 +490,85 @@ class RunAttemptScheduler:
         try:
             heartbeat.start()
             heartbeat.raise_if_failed()
-            # Starting a provider commits its binding/launch intent.  Keep that
-            # commit and canonical launch confirmation in one serialized phase;
-            # release the lock only after the attempt is durably running.
+            # Re-read immediately before crossing into provider startup.  A
+            # cancellation or replacement controller may have resolved this
+            # attempt since ``advance`` selected it.  The provider also checks
+            # the exact durable attempt authority at bind/commit time, but this
+            # short canonical check avoids entering it when resolution already
+            # won the race.
             with self._canonical_phase_lock:
                 snapshot = self._refresh()
                 attempt = _require_attempt(snapshot, attempt.attempt_id)
-                provider_entered = True
-                observation = self.provider.start_or_attach(
-                    run_id=attempt.run_id,
-                    attempt_id=attempt.attempt_id,
-                    heartbeat=heartbeat,  # type: ignore[arg-type]
+                terminal_before_start = attempt.state == "terminal"
+            if terminal_before_start:
+                heartbeat.stop()
+                heartbeat_stopped = True
+                return self._terminal_result(
+                    snapshot=snapshot,
+                    attempt=attempt,
+                    action="cleanup_only",
+                    physically_started=_physical_start_from_snapshot(
+                        snapshot, attempt.attempt_id
+                    ),
                 )
-                heartbeat.raise_if_failed()
-                if not isinstance(
-                    observation, (LocalAttemptStarted, LocalAttemptTerminal)
-                ):
-                    raise TypeError(
-                        "provider.start_or_attach() returned an unsupported observation."
-                    )
-                physically_started = (
-                    True
-                    if isinstance(observation, LocalAttemptStarted)
-                    else observation.started
+            # Provider startup owns its own exact attempt coordinate and its
+            # binding commit retries harmless run-head drift.  Do not hold the
+            # run's canonical cursor lock while realizing resources, launching
+            # the worker, or waiting for its authenticated handshake: those
+            # operations can dominate a short evaluation and would otherwise
+            # make declared evaluator capacity appear serial.  Re-enter the
+            # canonical phase only to confirm the observed physical start.
+            provider_entered = True
+            observation = self.provider.start_or_attach(
+                run_id=attempt.run_id,
+                attempt_id=attempt.attempt_id,
+                heartbeat=heartbeat,  # type: ignore[arg-type]
+            )
+            heartbeat.raise_if_failed()
+            if not isinstance(
+                observation, (LocalAttemptStarted, LocalAttemptTerminal)
+            ):
+                raise TypeError(
+                    "provider.start_or_attach() returned an unsupported observation."
                 )
+            physically_started = (
+                True
+                if isinstance(observation, LocalAttemptStarted)
+                else observation.started
+            )
+            with self._canonical_phase_lock:
                 snapshot = self._refresh()
                 attempt = _require_attempt(snapshot, attempt.attempt_id)
-                if physically_started:
+                terminal_during_start = attempt.state == "terminal"
+                if not terminal_during_start and physically_started:
                     snapshot = self._confirm_started_or_recover(
                         snapshot=snapshot,
                         attempt=attempt,
                         observation=observation,
                     )
                     attempt = _require_attempt(snapshot, attempt.attempt_id)
-                else:
+                elif not terminal_during_start:
                     if attempt.state != "prepared":
                         raise RealmIntegrityError(
                             "Never-started evidence requires a prepared attempt."
                         )
                     _validate_terminal_observation(snapshot, attempt, observation)
 
-            # This is the only deliberately concurrent phase.  The provider
-            # wait may retain terminal evidence, but it does not mutate the
-            # run/owner revision cursor used by another attempt's canonical
-            # phase.
+            if terminal_during_start:
+                heartbeat.stop()
+                heartbeat_stopped = True
+                return self._terminal_result(
+                    snapshot=snapshot,
+                    attempt=attempt,
+                    action="cleanup_only",
+                    physically_started=_physical_start_from_snapshot(
+                        snapshot, attempt.attempt_id
+                    ),
+                )
+
+            # The provider wait remains concurrent.  It may retain terminal
+            # evidence, but it does not mutate the run/owner revision cursor
+            # used by another attempt's canonical phase.
             if isinstance(observation, LocalAttemptStarted):
                 terminal = self.provider.wait_terminal(
                     run_id=attempt.run_id,
@@ -558,53 +625,84 @@ class RunAttemptScheduler:
         attempt: RunAttemptRecord,
         observation: LocalAttemptStarted | LocalAttemptTerminal,
     ) -> RunLedgerSnapshot:
-        _validate_started_observation(snapshot, attempt, observation)
-        if attempt.state == "running":
-            return snapshot
-        if attempt.state != "prepared":
-            raise RealmConflict(
-                "Physically started attempt is neither prepared nor running."
+        attempt_id = attempt.attempt_id
+        current = snapshot
+        canonical = attempt
+        last_conflict: RealmConflict | None = None
+        for _retry in range(_CANONICAL_HEAD_RETRY_LIMIT):
+            _validate_started_observation(current, canonical, observation)
+            if canonical.state == "running":
+                return current
+            if canonical.state != "prepared":
+                raise RealmConflict(
+                    "Physically started attempt is neither prepared nor running."
+                )
+            binding, launch, _ = _execution_records(current, attempt_id)
+            assert binding is not None and launch is not None
+            revision = current.revision.revision
+            operation_id = _operation_id(
+                run_id=canonical.run_id,
+                attempt_id=attempt_id,
+                action="confirm",
+                run_revision=revision,
+                owner_revision=current.revision.owner_revision,
             )
-        binding, launch, _ = _execution_records(snapshot, attempt.attempt_id)
-        assert binding is not None and launch is not None
-        revision = snapshot.revision.revision
-        operation_id = _operation_id(
-            run_id=attempt.run_id,
-            attempt_id=attempt.attempt_id,
-            action="confirm",
-            run_revision=revision,
-            owner_revision=snapshot.revision.owner_revision,
-        )
-        try:
-            self.authority.ledger.confirm_run_attempt_launch(
-                operation_id=operation_id,
-                actor_principal_id=self.authority.actor_principal_id,
-                run_id=attempt.run_id,
-                attempt_id=attempt.attempt_id,
-                launch_token=attempt.launch_token,
-                binding_id=binding.binding_id,
-                evidence_fingerprint=binding.evidence_fingerprint,
-                launch_request_digest=launch.launch_request_digest,
-                expected_run_revision=revision,
-                controller_lease_id=self.authority.controller_lease_id,
-                controller_holder_id=self.authority.controller_holder_id,
-                controller_fencing_token=self.authority.controller_fencing_token,
-            )
-        except Exception as error:
-            recovered = self._refresh_after_error(error, "attempt confirmation")
-            canonical = _require_attempt(recovered, attempt.attempt_id)
-            if canonical.state != "running":
-                raise
-            _validate_started_observation(recovered, canonical, observation)
+            try:
+                self.authority.ledger.confirm_run_attempt_launch(
+                    operation_id=operation_id,
+                    actor_principal_id=self.authority.actor_principal_id,
+                    run_id=canonical.run_id,
+                    attempt_id=attempt_id,
+                    launch_token=canonical.launch_token,
+                    binding_id=binding.binding_id,
+                    evidence_fingerprint=binding.evidence_fingerprint,
+                    launch_request_digest=launch.launch_request_digest,
+                    expected_run_revision=revision,
+                    controller_lease_id=self.authority.controller_lease_id,
+                    controller_holder_id=self.authority.controller_holder_id,
+                    controller_fencing_token=(
+                        self.authority.controller_fencing_token
+                    ),
+                )
+            except Exception as error:
+                recovered = self._refresh_after_error(error, "attempt confirmation")
+                recovered_attempt = _require_attempt(recovered, attempt_id)
+                if recovered_attempt.state == "running":
+                    _validate_started_observation(
+                        recovered, recovered_attempt, observation
+                    )
+                    return recovered
+                if (
+                    not isinstance(error, RealmConflict)
+                    or recovered_attempt.state != "prepared"
+                    or not _run_head_advanced(current, recovered)
+                ):
+                    raise
+                # Binding commits for other evaluators are deliberately not
+                # serialized with their resource realization or handshake.
+                # They may win this exact compare-and-swap window; retain the
+                # physical-start observation and retry only confirmation.
+                _validate_started_observation(
+                    recovered, recovered_attempt, observation
+                )
+                last_conflict = error
+                current = recovered
+                canonical = recovered_attempt
+                continue
+            recovered = self._refresh()
+            recovered_attempt = _require_attempt(recovered, attempt_id)
+            if recovered_attempt.state != "running":
+                raise RealmIntegrityError(
+                    "Launch confirmation did not produce running state."
+                )
+            _validate_started_observation(recovered, recovered_attempt, observation)
             return recovered
-        recovered = self._refresh()
-        canonical = _require_attempt(recovered, attempt.attempt_id)
-        if canonical.state != "running":
-            raise RealmIntegrityError(
-                "Launch confirmation did not produce running state."
-            )
-        _validate_started_observation(recovered, canonical, observation)
-        return recovered
+        assert last_conflict is not None
+        last_conflict.add_note(
+            "Attempt launch confirmation could not acquire a stable run head "
+            "after repeated concurrent binding commits."
+        )
+        raise last_conflict
 
     def _adopt_finalization(
         self,
@@ -615,15 +713,21 @@ class RunAttemptScheduler:
         physically_started: bool,
         action: RunAttemptAdvanceAction = "adopted",
     ) -> RunAttemptAdvanceResult:
-        attempt = _require_attempt(snapshot, attempt_id)
-        if attempt.state == "terminal":
-            if not _has_exact_finalization(snapshot, attempt, finalization.digest):
-                raise RealmConflict(
-                    "Terminal attempt contains a different finalization."
-                )
-        else:
-            revision = snapshot.revision.revision
-            owner_revision = snapshot.revision.owner_revision
+        current = snapshot
+        last_conflict: RealmConflict | None = None
+        for _retry in range(_CANONICAL_HEAD_RETRY_LIMIT):
+            attempt = _require_attempt(current, attempt_id)
+            if attempt.state == "terminal":
+                if not _has_exact_finalization(
+                    current, attempt, finalization.digest
+                ):
+                    raise RealmConflict(
+                        "Terminal attempt contains a different finalization."
+                    )
+                break
+            _validate_finalization(finalization, attempt)
+            revision = current.revision.revision
+            owner_revision = current.revision.owner_revision
             operation_id = _operation_id(
                 run_id=attempt.run_id,
                 attempt_id=attempt.attempt_id,
@@ -643,23 +747,49 @@ class RunAttemptScheduler:
                     expected_owner_revision=owner_revision,
                     controller_lease_id=self.authority.controller_lease_id,
                     controller_holder_id=self.authority.controller_holder_id,
-                    controller_fencing_token=self.authority.controller_fencing_token,
+                    controller_fencing_token=(
+                        self.authority.controller_fencing_token
+                    ),
                 )
             except Exception as error:
                 recovered = self._refresh_after_error(error, "attempt adoption")
-                canonical = _require_attempt(recovered, attempt.attempt_id)
-                if not _has_exact_finalization(
+                canonical = _require_attempt(recovered, attempt_id)
+                if _has_exact_finalization(
                     recovered, canonical, finalization.digest
                 ):
+                    current = recovered
+                    break
+                if (
+                    not isinstance(error, RealmConflict)
+                    or canonical.state == "terminal"
+                    or not _run_head_advanced(current, recovered)
+                ):
                     raise
-                snapshot = recovered
-            else:
-                snapshot = self._refresh()
-            attempt = _require_attempt(snapshot, attempt.attempt_id)
-            if not _has_exact_finalization(snapshot, attempt, finalization.digest):
+                # The captured finalization remains immutable.  If a provider
+                # binding for another evaluator advanced only the run head,
+                # retry adoption instead of repeating collection/capture.
+                _validate_finalization(finalization, canonical)
+                last_conflict = error
+                current = recovered
+                continue
+            current = self._refresh()
+            canonical = _require_attempt(current, attempt_id)
+            if not _has_exact_finalization(
+                current, canonical, finalization.digest
+            ):
                 raise RealmIntegrityError(
                     "Adoption response differs from the canonical finalization."
                 )
+            break
+        else:
+            assert last_conflict is not None
+            last_conflict.add_note(
+                "Attempt adoption could not acquire a stable run/owner head "
+                "after repeated concurrent canonical commits."
+            )
+            raise last_conflict
+        snapshot = current
+        attempt = _require_attempt(snapshot, attempt_id)
         return self._terminal_result(
             snapshot=snapshot,
             attempt=attempt,
@@ -816,6 +946,19 @@ def _find_attempt(
     return next(
         (item for item in snapshot.attempts if item.attempt_id == attempt_id),
         None,
+    )
+
+
+def _run_head_advanced(
+    before: RunLedgerSnapshot, after: RunLedgerSnapshot
+) -> bool:
+    """Return whether an exact-controller refresh observed forward CAS drift."""
+
+    if before.run.run_id != after.run.run_id:
+        raise RealmIntegrityError("Canonical retry crossed run identities.")
+    return (
+        after.revision.revision > before.revision.revision
+        or after.revision.owner_revision > before.revision.owner_revision
     )
 
 

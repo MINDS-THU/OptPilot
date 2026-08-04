@@ -43,10 +43,25 @@ Each enhanced product also contains:
 - `metrics.next_op_time`;
 - `metrics.remaining_ops`.
 
-AGV records include status, current/target points, battery, payload, and payload
-capacity. Station and conveyor records expose their finite buffers. A policy
-should avoid issuing a new task to an AGV that is moving, interacting,
-charging, carrying a different product, or already committed in policy state.
+AGV records use the exact fields shown below. In particular, the battery field
+is named `battery_level` (not `battery`). Typical AGV status values are `idle`,
+`moving`, `interacting`, `charging`, and `fault`.
+
+```python
+{
+    "id": "AGV_1",
+    "status": "idle",
+    "current_point": "P0",
+    "target_point": None,
+    "battery_level": 87.5,
+    "payload": [],
+    "payload_capacity": 1,
+}
+```
+
+Station and conveyor records expose their finite buffers. A policy should avoid
+issuing a new task to an AGV that is moving, interacting, charging, carrying a
+different product, or already committed in policy state.
 
 ## Commands
 
@@ -73,4 +88,3 @@ The maximum total is 100:
 The default paper setting uses a 500-minute horizon, a 0.5-minute policy step,
 fixed 10-minute order intervals, and no faults. Other environment variants
 change only fidelity inputs, not the policy contract or scoring implementation.
-

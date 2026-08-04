@@ -24,6 +24,8 @@ id: my-method
 entrypoint:
   python: method:MyMethod
   protocol: batch
+  # Optional. Maximum duration of one propose/observe exchange.
+  exchangeTimeoutSeconds: 60
 
 settings:
   batchSize: 4
@@ -36,6 +38,14 @@ accepts:
 ```
 
 `entrypoint` points to the method implementation. `settings` is a free object passed to that implementation. `accepts` declares the environment surface the method needs to run.
+
+`entrypoint.exchangeTimeoutSeconds` declares how long OptPilot should wait for
+one complete Method request/response exchange, such as one `propose(...)` or
+`observe(...)` call. Studio automatically uses the value from the selected
+Method revision for every Study; it is not a Study setting. The default is 10
+seconds when omitted. This limit does **not** bound the whole Run, and it is
+distinct from any timeout the Method applies to its own HTTP or model-provider
+calls inside that exchange.
 
 The environment owns the candidate contract. A method declares the candidate
 formats and context it can use, then OptPilot validates every proposed candidate

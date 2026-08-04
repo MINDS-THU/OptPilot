@@ -1,11 +1,32 @@
 
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef, useId } from 'react';
 import * as d3 from 'd3';
 import { GraphNode, GraphLink } from '../types';
 import { ZoomIn, ZoomOut, Move } from 'lucide-react';
 import { hierarchyDepthById } from '../services/graphHierarchyService.js';
 
-interface Props {
+export interface GraphActivityPort {
+  nodeId: string;
+  direction: 'input' | 'output';
+  portName: string;
+}
+
+export interface GraphActivityOverlay {
+  // Nodes with direct trace evidence. Route endpoints belong in activePorts;
+  // keeping those concepts separate avoids presenting an inferred recipient
+  // as though its transition was observed.
+  activeNodeIds?: readonly string[];
+  sourceNodeIds?: readonly string[];
+  recipientNodeIds?: readonly string[];
+  stateNodeIds?: readonly string[];
+  activePorts?: readonly GraphActivityPort[];
+  activeLinkIds?: readonly string[];
+  dimInactive?: boolean;
+  tone?: 'active' | 'warning' | 'failure';
+  ariaLabel?: string;
+}
+
+export interface GraphVisualizerProps {
   nodes: GraphNode[];
   links: GraphLink[];
   physicsEnabled: boolean; // Ignored
@@ -15,6 +36,8 @@ interface Props {
   onToggleFixed: (nodeId: string, isFixed: boolean, x?: number, y?: number) => void;
   onNodeMove: (nodeId: string, x: number, y: number) => void; 
   onNodeSelect?: (node: GraphNode) => void;
+  activityOverlay?: GraphActivityOverlay | null;
+  readOnly?: boolean;
 }
 
 export interface GraphVisualizerHandle {
@@ -45,17 +68,27 @@ const COLORS = {
   text: '#1e293b'
 };
 
-export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({ 
+export const GraphVisualizer = forwardRef<GraphVisualizerHandle, GraphVisualizerProps>(({
     nodes, 
     links, 
     selectedNodeId,
     onExpand, 
     onCollapse, 
     onNodeMove,
-    onNodeSelect
+    onNodeSelect,
+    activityOverlay,
+    readOnly = false,
 }, ref) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Structure and replay graphs may be mounted at the same time. SVG marker
+  // fragment ids are document-wide in some browsers, so each graph needs its
+  // own ids rather than all instances referring to `#arrowhead`.
+  const markerPrefix = useId().replace(/:/g, '');
+  const markerId = `${markerPrefix}-arrowhead`;
+  const activeMarkerId = `${markerPrefix}-arrowhead-active`;
+  const warningMarkerId = `${markerPrefix}-arrowhead-warning`;
+  const failureMarkerId = `${markerPrefix}-arrowhead-failure`;
   
   const svgSelection = useRef<d3.Selection<SVGSVGElement, unknown, null, undefined> | null>(null);
   const gSelection = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
@@ -354,9 +387,11 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
       const linkEnter = link.enter().insert('path', '.node') 
         .attr('class', 'link')
         .attr('stroke', COLORS.link).attr('stroke-width', 2).attr('fill', 'none')
-        .attr('marker-end', 'url(#arrowhead)');
+        .attr('marker-end', `url(#${markerId})`);
       
-      linkEnter.merge(link as any).attr('d', (d: any) => {
+      linkEnter.merge(link as any)
+        .attr('data-link-id', (d: any) => d.id)
+        .attr('d', (d: any) => {
              const s = visualNodesRef.current.find(n => n.id === d.source.id || n.id === d.source);
              const t = visualNodesRef.current.find(n => n.id === d.target.id || n.id === d.target);
              if (!s || !t || isNaN(s.x) || isNaN(t.x)) return '';
@@ -386,6 +421,7 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
         .attr('stroke', '#ffffff')
         .attr('stroke-width', 3);
       linkLabelEnter.merge(linkLabel as any)
+        .attr('data-link-id', (d: any) => d.id)
         .text((d: any) => {
           const parts = [];
           if (d.couplingType) parts.push(String(d.couplingType));
@@ -411,10 +447,15 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
             .data(visualNodesRef.current, (d: any) => d.id);
       
       // ENTER
-      const nodeEnter = node.enter().append('g').attr('class', 'node')
-        .call(d3.drag<SVGGElement, any>().on("start", dragstarted).on("drag", dragged).on("end", dragended));
+      const nodeEnter = node.enter().append('g').attr('class', 'node');
 
-      nodeEnter.append('rect').attr('rx', 6).attr('ry', 6).attr('stroke-width', 2);
+      nodeEnter.append('rect')
+        .attr('class', 'activity-halo')
+        .attr('rx', 10)
+        .attr('ry', 10)
+        .attr('fill', 'none')
+        .style('pointer-events', 'none');
+      nodeEnter.append('rect').attr('class', 'node-shape').attr('rx', 6).attr('ry', 6).attr('stroke-width', 2);
       
       const labels = nodeEnter.append('g').attr('class', 'labels');
       labels.append('text').attr('class', 'label-instance').attr('text-anchor', 'middle').style('font-weight', 'bold').style('pointer-events', 'none');
@@ -427,6 +468,15 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
       
       // Update Selection
       const nodeUpdate = nodeEnter.merge(node);
+
+      nodeUpdate.attr('data-node-id', (d: any) => d.id);
+      if (readOnly) {
+        nodeUpdate.on('.drag', null).style('cursor', onNodeSelect ? 'pointer' : 'default');
+      } else {
+        nodeUpdate
+          .style('cursor', null)
+          .call(d3.drag<SVGGElement, any>().on("start", dragstarted).on("drag", dragged).on("end", dragended));
+      }
       
       // Events
       nodeUpdate.on('click', (event, d) => {
@@ -449,7 +499,7 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
       nodeUpdate.attr('transform', (d: any) => (!isNaN(d.x) && !isNaN(d.y)) ? `translate(${d.x},${d.y})` : 'scale(0)');
 
       // Visual Styles
-      nodeUpdate.select('rect')
+      nodeUpdate.select('.node-shape')
         .attr('width', (d: any) => d.visualWidth)
         .attr('height', (d: any) => d.visualHeight)
         .attr('x', (d: any) => -d.visualWidth / 2)
@@ -459,6 +509,12 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
         .attr('stroke-dasharray', (d: any) => d.expanded ? '4,4' : 'none')
         .attr('fill', (d: any) => d.type === 'atomic' ? COLORS.atomic : (d.expanded ? COLORS.coupledExpanded : COLORS.coupled));
 
+      nodeUpdate.select('.activity-halo')
+        .attr('width', (d: any) => d.visualWidth + 12)
+        .attr('height', (d: any) => d.visualHeight + 12)
+        .attr('x', (d: any) => -(d.visualWidth + 12) / 2)
+        .attr('y', (d: any) => -(d.visualHeight + 12) / 2);
+
       nodeUpdate.select('.labels').attr('transform', (d: any) => {
            const headerCenterY = -d.visualHeight/2 + (d.expanded ? PADDING_TOP/2 : d.visualHeight/2); 
            return `translate(0, ${headerCenterY})`;
@@ -466,7 +522,7 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
       nodeUpdate.select('.label-instance').text((d: any) => d.name).attr('fill', COLORS.text).attr('dy', (d:any) => d.expanded ? 0 : -5);
       nodeUpdate.select('.label-class').text((d: any) => `(${d.className})`).attr('dy', (d:any) => d.expanded ? 14 : 10).attr('fill', '#64748b').attr('font-size', 10);
 
-      nodeUpdate.select('.btn-expand').style('display', (d: any) => d.type === 'coupled' ? 'block' : 'none')
+      nodeUpdate.select('.btn-expand').style('display', (d: any) => d.type === 'coupled' && !readOnly ? 'block' : 'none')
         .attr('transform', (d: any) => `translate(${-d.visualWidth/2 + 12}, ${-d.visualHeight/2 + 12})`)
         .select('.expand-icon').text((d: any) => d.expanded ? '-' : '+');
 
@@ -488,7 +544,13 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
                const availableHeight = h - headerOffset; 
                const y = (-h/2 + headerOffset) + ((p.i + 1) * (availableHeight / (p.total + 1)));
 
-               const pg = g.append('g').attr('transform', `translate(${x}, ${y})`);
+               const direction = p.type === 'in' ? 'input' : 'output';
+               const pg = g.append('g')
+                 .attr('class', 'port')
+                 .attr('data-node-id', d.id)
+                 .attr('data-port-name', p.name)
+                 .attr('data-port-direction', direction)
+                 .attr('transform', `translate(${x}, ${y})`);
                pg.append('circle').attr('r', 4)
                  .attr('fill', p.type === 'in' ? COLORS.portInput : COLORS.portOutput)
                  .attr('stroke', 'white').attr('stroke-width', 1);
@@ -536,7 +598,76 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
         });
     }
 
-  }, [nodes, links, selectedNodeId, onExpand, onCollapse, onNodeMove, onNodeSelect]);
+  }, [nodes, links, markerId, selectedNodeId, onExpand, onCollapse, onNodeMove, onNodeSelect, readOnly]);
+
+  // Activity is a visual overlay only. Keeping it in a separate effect avoids
+  // rebuilding geometry or fitting the viewport for every playback step.
+  useEffect(() => {
+    const graph = gSelection.current;
+    if (!graph) return;
+
+    const activeNodeIds = new Set(activityOverlay?.activeNodeIds || []);
+    const sourceNodeIds = new Set(activityOverlay?.sourceNodeIds || []);
+    const recipientNodeIds = new Set(activityOverlay?.recipientNodeIds || []);
+    const stateNodeIds = new Set(activityOverlay?.stateNodeIds || []);
+    sourceNodeIds.forEach(id => activeNodeIds.add(id));
+    recipientNodeIds.forEach(id => activeNodeIds.add(id));
+    stateNodeIds.forEach(id => activeNodeIds.add(id));
+    const activeLinkIds = new Set(activityOverlay?.activeLinkIds || []);
+    const activePorts = activityOverlay?.activePorts || [];
+    const routeNodeIds = new Set(activePorts.map(port => port.nodeId));
+    const activePortKeys = new Set(activePorts.map(port => (
+      `${port.nodeId}\u0000${port.direction}\u0000${port.portName}`
+    )));
+    const hasActivity = activeNodeIds.size > 0 || activeLinkIds.size > 0 || activePortKeys.size > 0;
+    const dimInactive = Boolean(activityOverlay?.dimInactive && hasActivity);
+    const tone = activityOverlay?.tone || 'active';
+
+    graph.selectAll<SVGGElement, any>('.node')
+      .classed('has-activity', (d: any) => activeNodeIds.has(String(d.id)))
+      .classed('activity-tone-active', (d: any) => activeNodeIds.has(String(d.id)) && tone === 'active')
+      .classed('activity-tone-warning', (d: any) => activeNodeIds.has(String(d.id)) && tone === 'warning')
+      .classed('activity-tone-failure', (d: any) => activeNodeIds.has(String(d.id)) && tone === 'failure')
+      .classed('activity-role-source', (d: any) => sourceNodeIds.has(String(d.id)))
+      .classed('activity-role-recipient', (d: any) => recipientNodeIds.has(String(d.id)))
+      .classed('activity-role-state', (d: any) => stateNodeIds.has(String(d.id)))
+      .attr('opacity', (d: any) => {
+        const id = String(d.id);
+        if (!dimInactive || activeNodeIds.has(id)) return 1;
+        return routeNodeIds.has(id) ? 0.72 : 0.36;
+      });
+
+    graph.selectAll<SVGPathElement, any>('.link')
+      .classed('has-activity', (d: any) => activeLinkIds.has(String(d.id)))
+      .classed('activity-tone-active', (d: any) => activeLinkIds.has(String(d.id)) && tone === 'active')
+      .classed('activity-tone-warning', (d: any) => activeLinkIds.has(String(d.id)) && tone === 'warning')
+      .classed('activity-tone-failure', (d: any) => activeLinkIds.has(String(d.id)) && tone === 'failure')
+      .attr('marker-end', (d: any) => {
+        if (!activeLinkIds.has(String(d.id))) return `url(#${markerId})`;
+        if (tone === 'warning') return `url(#${warningMarkerId})`;
+        if (tone === 'failure') return `url(#${failureMarkerId})`;
+        return `url(#${activeMarkerId})`;
+      })
+      .attr('opacity', (d: any) => dimInactive && !activeLinkIds.has(String(d.id)) ? 0.24 : 1);
+
+    graph.selectAll<SVGTextElement, any>('.link-label')
+      .classed('has-activity', (d: any) => activeLinkIds.has(String(d.id)))
+      .attr('opacity', (d: any) => dimInactive && !activeLinkIds.has(String(d.id)) ? 0.24 : 1);
+
+    graph.selectAll<SVGGElement, any>('.port')
+      .classed('has-activity', function() {
+        const element = this as SVGGElement;
+        const key = [
+          element.getAttribute('data-node-id') || '',
+          element.getAttribute('data-port-direction') || '',
+          element.getAttribute('data-port-name') || '',
+        ].join('\u0000');
+        return activePortKeys.has(key);
+      })
+      .classed('activity-tone-active', tone === 'active')
+      .classed('activity-tone-warning', tone === 'warning')
+      .classed('activity-tone-failure', tone === 'failure');
+  }, [activityOverlay, activeMarkerId, failureMarkerId, links, markerId, nodes, warningMarkerId]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-slate-50 border border-slate-200 rounded-lg shadow-inner">
@@ -545,12 +676,50 @@ export const GraphVisualizer = forwardRef<GraphVisualizerHandle, Props>(({
          <button onClick={() => svgSelection.current?.transition().duration(750).call(zoomBehavior.current!.scaleBy, 0.8)} className="p-2 hover:bg-slate-100 rounded"><ZoomOut size={20} /></button>
          <button type="button" title="Fit structure" aria-label="Fit structure" onClick={fitGraphToViewport} className="p-2 hover:bg-slate-100 rounded"><Move size={20} /></button>
       </div>
-      <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing">
+      <svg
+        ref={svgRef}
+        className={`w-full h-full ${readOnly ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
+        role="img"
+        aria-label={activityOverlay?.ariaLabel || 'DEVS model structure'}
+      >
         <defs>
-            <marker id="arrowhead" viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+            <marker id={markerId} viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
                 <path d="M0,-5L10,0L0,5" fill={COLORS.link} />
             </marker>
+            <marker id={activeMarkerId} viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,-5L10,0L0,5" fill="#7c3aed" />
+            </marker>
+            <marker id={warningMarkerId} viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,-5L10,0L0,5" fill="#d97706" />
+            </marker>
+            <marker id={failureMarkerId} viewBox="0 -5 10 10" refX="10" refY="0" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0,-5L10,0L0,5" fill="#dc2626" />
+            </marker>
         </defs>
+        <style>{`
+          .activity-halo { opacity: 0; stroke-width: 4; }
+          .node.has-activity .activity-halo { opacity: 0.9; animation: devs-activity-pulse 1s ease-in-out infinite alternate; }
+          .has-activity.activity-tone-active .activity-halo { stroke: #7c3aed; }
+          .has-activity.activity-tone-warning .activity-halo { stroke: #d97706; }
+          .has-activity.activity-tone-failure .activity-halo { stroke: #dc2626; }
+          .node.activity-role-recipient:not(.activity-role-state):not(.activity-role-source) .activity-halo { stroke: #2563eb; stroke-dasharray: 6 4; }
+          .node.activity-role-state:not(.activity-role-source) .activity-halo { stroke: #16a34a; stroke-dasharray: none; }
+          .node.activity-role-source .activity-halo { stroke: #7c3aed; stroke-dasharray: none; }
+          .link.has-activity { stroke-width: 4; stroke-dasharray: 8 7; animation: devs-activity-flow 0.7s linear infinite; }
+          .link.has-activity.activity-tone-active { stroke: #7c3aed; }
+          .link.has-activity.activity-tone-warning { stroke: #d97706; }
+          .link.has-activity.activity-tone-failure { stroke: #dc2626; }
+          .link-label.has-activity { fill: #6d28d9; font-weight: 700; }
+          .port.has-activity circle { stroke: #ffffff; stroke-width: 2.5; r: 6px; }
+          .port.has-activity.activity-tone-active circle { filter: drop-shadow(0 0 4px #7c3aed); }
+          .port.has-activity.activity-tone-warning circle { filter: drop-shadow(0 0 4px #d97706); }
+          .port.has-activity.activity-tone-failure circle { filter: drop-shadow(0 0 4px #dc2626); }
+          @keyframes devs-activity-flow { to { stroke-dashoffset: -30; } }
+          @keyframes devs-activity-pulse { from { opacity: 0.5; } to { opacity: 1; } }
+          @media (prefers-reduced-motion: reduce) {
+            .node.has-activity .activity-halo, .link.has-activity { animation: none; }
+          }
+        `}</style>
         <g className="main-group"></g>
       </svg>
       {nodes.length === 0 && <div className="absolute inset-0 flex items-center justify-center text-slate-400 pointer-events-none">Waiting for data...</div>}

@@ -1048,29 +1048,12 @@ class RealmProcessExecutionBinder:
                     raise RealmConflict(
                         "Attempt authority changed after provider reservation."
                     ) from error
-                refreshed = self._ledger.preflight_run_attempt_binding(
-                    actor_principal_id=prepared._actor_principal_id,
-                    run_id=prepared.run_id,
-                    attempt_id=prepared.attempt_id,
-                    run_definition_digest=(
-                        prepared.draft.portable_spec.run_definition_digest
-                    ),
-                    provider=self._provider,
-                    projections=prepared.draft.projections,
-                    writable_volumes=prepared.draft.writable_volumes,
-                    resource_ttl_seconds=prepared.draft.resource_ttl_seconds,
-                    expected_run_revision=current.run.current_revision,
-                    controller_lease_id=current.controller_lease.lease_id,
-                    controller_holder_id=current.controller_lease.holder_id,
-                    controller_fencing_token=(
-                        current.controller_lease.fencing_token
-                    ),
-                )
-                if refreshed != prepared.draft:
-                    raise RealmIntegrityError(
-                        "Refreshed binding draft differs from provider reservation."
-                    )
+                # Retry the atomic transaction directly against the refreshed
+                # authority.  It independently reconstructs and compares the
+                # binding draft, so a second read-only preflight adds no safety
+                # and creates another unhandled compare-and-swap race window.
                 prepared._authority = current
+                continue
             except BaseException as error:
                 durable = self._read_exact_ambiguous_binding(
                     prepared=prepared,

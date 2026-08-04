@@ -257,6 +257,42 @@ class RealmStudyRunnerTest(unittest.TestCase):
                 method_request_timeout=17,
             )
 
+    def test_method_exchange_timeout_declaration_is_used_without_cli_override(
+        self,
+    ) -> None:
+        method_path = self.package_root / "configs" / "methods" / "method.yaml"
+        method_path.write_text(
+            method_path.read_text(encoding="utf-8").replace(
+                "  protocol: batch\n",
+                "  protocol: batch\n  exchangeTimeoutSeconds: 43\n",
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            run_execution_service,
+            "RealmRetainedBatchRunDriver",
+            _ProjectionOnlyDriver,
+        ):
+            realm_study_runner.run_local_realm_study(
+                runtime=self.runtime,
+                package_root=self.package_root,
+                study_config_path=self.study_path,
+                operation_id="realm-study-run/method-owned-exchange-timeout",
+            )
+
+        kwargs = _ProjectionOnlyDriver.calls[0]["kwargs"]
+        self.assertEqual(kwargs["method_request_timeout"], 43.0)
+        launch = self.runtime.study_launches.read_for_run(
+            run_id=_ProjectionOnlyDriver.calls[0]["run_id"]
+        )
+        self.assertEqual(
+            launch.to_dict()["execution_profile"][
+                "method_request_timeout_seconds"
+            ],
+            43.0,
+        )
+
     def test_execution_profile_rejects_unsafe_or_noncanonical_values(self) -> None:
         for kwargs in (
             {"controller_ttl_seconds": float("nan")},

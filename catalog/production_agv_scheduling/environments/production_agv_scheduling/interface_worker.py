@@ -27,6 +27,8 @@ class TelemetryRecorder:
         self._agv_statuses: dict[str, dict[str, Any]] = {}
         self._product_agv: dict[str, str] = {}
         self.event_count = 0
+        self.first_motion_time: float | None = None
+        self.motion_event_count = 0
         self.total_bytes = 0
         self.truncated = False
 
@@ -118,6 +120,11 @@ class TelemetryRecorder:
         decoded = _decoded_object(payload)
         if decoded is None:
             return
+        if str(decoded.get("status", "")).lower() == "moving":
+            self.motion_event_count += 1
+            motion_time = _simulation_time(payload)
+            if self.first_motion_time is None and motion_time is not None:
+                self.first_motion_time = motion_time
         previous = self._agv_statuses.get(topic, {})
         for product_id in _product_ids(previous.get("payload")):
             if self._product_agv.get(product_id) == topic:
@@ -158,7 +165,9 @@ def main(argv: list[str] | None = None) -> int:
         "event_bytes": recorder.total_bytes,
         "event_count": recorder.event_count,
         "events_truncated": recorder.truncated,
+        "first_motion_time": recorder.first_motion_time,
         "kpi": kpi,
+        "motion_event_count": recorder.motion_event_count,
         "seed": arguments.seed,
     }
     _write_json_atomic(Path(arguments.result).resolve(), result)

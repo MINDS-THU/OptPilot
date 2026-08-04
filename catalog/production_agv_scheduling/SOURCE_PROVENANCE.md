@@ -5,6 +5,23 @@ This package was extracted from the research prototype supplied with the paper
 Production and AGV Scheduling” by Jinbo Li and Chuanhao Li. The extraction was
 performed in July 2026 from the source snapshot placed in this repository.
 
+## Imported snapshot identity
+
+The supplied research-source directory had no nested VCS metadata, so it has
+no upstream commit identifier. Its imported content was frozen by a
+deterministic tree digest on 2026-08-04. After excluding only Finder metadata
+(`.DS_Store`) and generated Python bytecode (`__pycache__` and `*.pyc`), the
+snapshot contained 277 files. For each byte-sorted `./relative/path`, the
+verification command emits `SHA256(file)  ./relative/path`; hashing that full
+manifest yields:
+
+```text
+f28aa9c3281c10bf3ebdc83449c3ade033bc273b80db8e6c6719acb6d10a2aca
+```
+
+This digest identifies the local research import used for extraction. It does
+not substitute for an upstream release tag or grant redistribution rights.
+
 ## Preserved behavior
 
 - The three-line discrete-event factory layout, product routes, resource

@@ -176,6 +176,18 @@ from .projection_records import (
     ProjectionRealizationState,
     ProjectionRootRecord,
 )
+from .provider_trust_records import (
+    PROVIDER_TRUST_POLICY_ID,
+    PROVIDER_TRUST_POLICY_OWNER_ID,
+    PROVIDER_TRUST_POLICY_OWNER_KIND,
+    ProviderTrustDecision,
+    ProviderTrustHead,
+    ProviderTrustState,
+    validate_provider_contract,
+    validate_provider_image_ref,
+    validate_provider_python_executable,
+    validate_provider_trust_reason,
+)
 from .review_collection_ledger import ReviewCollectionLedgerMixin
 from .review_collections import REVIEW_COLLECTION_OWNER_KIND
 from .process_provider import ProcessProviderIdentity
@@ -361,7 +373,7 @@ def _sqlite_catalog_paths_overlap(left: object, right: object) -> int:
     return int(catalog_paths_overlap(left, right))
 
 
-_CURRENT_SCHEMA_VERSION = 34
+_CURRENT_SCHEMA_VERSION = 35
 _MIGRATION_DIRECTORY = Path(__file__).with_name("migrations")
 _MIGRATIONS = (
     (1, _MIGRATION_DIRECTORY / "0001_realm_core.sql"),
@@ -407,6 +419,7 @@ _MIGRATIONS = (
     (32, _MIGRATION_DIRECTORY / "0032_interface_output_session_resume.sql"),
     (33, _MIGRATION_DIRECTORY / "0033_workspace_metadata_revision.sql"),
     (34, _MIGRATION_DIRECTORY / "0034_selection_owner_adoptions.sql"),
+    (35, _MIGRATION_DIRECTORY / "0035_provider_trust_policy.sql"),
 )
 _ID_NAMESPACE = uuid.UUID("a811e801-fdc1-43c8-b985-dcab229ffcea")
 _MAX_OPERATION_ID_BYTES = 512
@@ -1544,6 +1557,611 @@ class RealmLedger(
         )
         return PrincipalRecord.from_dict(receipt)
 
+    # -- local provider trust policy --------------------------------------
+
+    def approve_provider_trust(
+        self,
+        *,
+        operation_id: str,
+        actor_principal_id: str,
+        image_ref: str,
+        python_executable: str,
+        contract: str,
+        reason: str = "",
+    ) -> ProviderTrustDecision:
+        """Approve one exact image and authenticated-gateway contract.
+
+        The first decision creates the singleton Realm policy owner for the
+        caller.  Every later decision requires that owner identity or an
+        explicit active ``admin`` grant.  Package declarations never create
+        or imply provider trust.
+        """
+
+        return self._record_provider_trust_decision(
+            operation_id=operation_id,
+            actor_principal_id=actor_principal_id,
+            image_ref=image_ref,
+            python_executable=python_executable,
+            contract=contract,
+            state=ProviderTrustState.APPROVED,
+            reason=reason,
+        )
+
+    def revoke_provider_trust(
+        self,
+        *,
+        operation_id: str,
+        actor_principal_id: str,
+        image_ref: str,
+        python_executable: str,
+        contract: str,
+        reason: str = "",
+    ) -> ProviderTrustDecision:
+        """Revoke trust for one exact image and previously approved facts."""
+
+        return self._record_provider_trust_decision(
+            operation_id=operation_id,
+            actor_principal_id=actor_principal_id,
+            image_ref=image_ref,
+            python_executable=python_executable,
+            contract=contract,
+            state=ProviderTrustState.REVOKED,
+            reason=reason,
+        )
+
+    def _record_provider_trust_decision(
+        self,
+        *,
+        operation_id: str,
+        actor_principal_id: str,
+        image_ref: str,
+        python_executable: str,
+        contract: str,
+        state: ProviderTrustState,
+        reason: str,
+    ) -> ProviderTrustDecision:
+        operation_id = _bounded_text(
+            operation_id,
+            "operation_id",
+            max_bytes=_MAX_OPERATION_ID_BYTES,
+        )
+        actor_principal_id = _text(
+            actor_principal_id,
+            "provider trust actor principal id",
+        )
+        image_ref = validate_provider_image_ref(image_ref)
+        python_executable = validate_provider_python_executable(python_executable)
+        contract = validate_provider_contract(contract)
+        reason = validate_provider_trust_reason(reason)
+        if not isinstance(state, ProviderTrustState):
+            raise TypeError("provider trust state must be a ProviderTrustState.")
+        if state is ProviderTrustState.APPROVED:
+            operation_kind = "provider_trust.approve"
+        else:
+            operation_kind = "provider_trust.revoke"
+        request = {
+            "actor_principal_id": actor_principal_id,
+            "contract": contract,
+            "image_ref": image_ref,
+            "policy_id": PROVIDER_TRUST_POLICY_ID,
+            "python_executable": python_executable,
+            "reason": reason,
+        }
+        decision_id = _stable_id("provider-trust-decision", operation_id)
+
+        def body(
+            connection: sqlite3.Connection,
+            txn_id: int,
+            now: float,
+        ) -> Mapping[str, Any]:
+            self._ensure_provider_trust_policy_in_txn(
+                connection,
+                txn_id=txn_id,
+                now=now,
+                actor_principal_id=actor_principal_id,
+            )
+            current = connection.execute(
+                "SELECT decision.decision_id, decision.sequence, "
+                "decision.python_executable, decision.contract "
+                "FROM provider_trust_heads head "
+                "JOIN provider_trust_decisions decision "
+                "ON decision.policy_id = head.policy_id "
+                "AND decision.image_ref = head.image_ref "
+                "AND decision.decision_id = head.decision_id "
+                "WHERE head.policy_id = ? AND head.image_ref = ?",
+                (PROVIDER_TRUST_POLICY_ID, image_ref),
+            ).fetchone()
+            if (
+                state is ProviderTrustState.REVOKED
+                and current is not None
+                and (
+                    current["python_executable"] != python_executable
+                    or current["contract"] != contract
+                )
+            ):
+                raise RealmConflict(
+                    "Provider trust revocation does not match the current exact facts."
+                )
+            sequence = 1 if current is None else int(current["sequence"]) + 1
+            previous_decision_id = (
+                None if current is None else str(current["decision_id"])
+            )
+            decision = ProviderTrustDecision(
+                decision_id=decision_id,
+                policy_id=PROVIDER_TRUST_POLICY_ID,
+                sequence=sequence,
+                image_ref=image_ref,
+                python_executable=python_executable,
+                contract=contract,
+                state=state,
+                reason=reason,
+                actor_principal_id=actor_principal_id,
+                previous_decision_id=previous_decision_id,
+                created_at=now,
+            )
+            request_json = canonical_json_bytes(
+                {"kind": operation_kind, "request": request}
+            ).decode("utf-8")
+            connection.execute(
+                "INSERT INTO provider_trust_decisions("
+                "decision_id, policy_id, sequence, image_ref, python_executable, "
+                "contract, state, reason, actor_principal_id, previous_decision_id, "
+                "request_json, created_txn_id, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    decision.decision_id,
+                    decision.policy_id,
+                    decision.sequence,
+                    decision.image_ref,
+                    decision.python_executable,
+                    decision.contract,
+                    decision.state.value,
+                    decision.reason,
+                    decision.actor_principal_id,
+                    decision.previous_decision_id,
+                    request_json,
+                    txn_id,
+                    now,
+                ),
+            )
+            if current is None:
+                connection.execute(
+                    "INSERT INTO provider_trust_heads("
+                    "policy_id, image_ref, decision_id, updated_txn_id, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?)",
+                    (
+                        PROVIDER_TRUST_POLICY_ID,
+                        image_ref,
+                        decision_id,
+                        txn_id,
+                        now,
+                    ),
+                )
+            else:
+                updated = connection.execute(
+                    "UPDATE provider_trust_heads SET decision_id = ?, "
+                    "updated_txn_id = ?, updated_at = ? "
+                    "WHERE policy_id = ? AND image_ref = ? AND decision_id = ?",
+                    (
+                        decision_id,
+                        txn_id,
+                        now,
+                        PROVIDER_TRUST_POLICY_ID,
+                        image_ref,
+                        previous_decision_id,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RealmConflict("Provider trust head changed concurrently.")
+            return decision.to_dict()
+
+        receipt = self._operate(
+            operation_id=operation_id,
+            operation_kind=operation_kind,
+            request=request,
+            body=body,
+        )
+        receipt_value = dict(receipt)
+        receipt_value.pop("receipt_version", None)
+        return ProviderTrustDecision.from_dict(receipt_value)
+
+    def _ensure_provider_trust_policy_in_txn(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        txn_id: int,
+        now: float,
+        actor_principal_id: str,
+    ) -> None:
+        policy = connection.execute(
+            "SELECT policy.*, owner.owner_kind, owner.principal_id, owner.state, "
+            "txn.operation_kind AS policy_operation_kind, "
+            "txn.committed_at AS policy_committed_at "
+            "FROM provider_trust_policies policy "
+            "LEFT JOIN owners owner ON owner.owner_id = policy.owner_id "
+            "LEFT JOIN ledger_transactions txn "
+            "ON txn.txn_id = policy.created_txn_id "
+            "WHERE policy.policy_id = ?",
+            (PROVIDER_TRUST_POLICY_ID,),
+        ).fetchone()
+        if policy is None:
+            owner = self._create_owner_in_txn(
+                connection,
+                txn_id=txn_id,
+                now=now,
+                owner_id=PROVIDER_TRUST_POLICY_OWNER_ID,
+                owner_kind=PROVIDER_TRUST_POLICY_OWNER_KIND,
+                principal_id=actor_principal_id,
+            )
+            connection.execute(
+                "INSERT INTO provider_trust_policies("
+                "policy_id, owner_id, created_by_principal_id, created_txn_id, "
+                "created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    PROVIDER_TRUST_POLICY_ID,
+                    owner.owner_id,
+                    actor_principal_id,
+                    txn_id,
+                    now,
+                ),
+            )
+            return
+        self._validate_provider_trust_policy_row(policy)
+        owner = self._authorize_owner(
+            connection,
+            actor_principal_id=actor_principal_id,
+            owner_id=PROVIDER_TRUST_POLICY_OWNER_ID,
+            permission=OwnerPermission.ADMIN,
+        )
+        self._require_active_owner(owner)
+
+    def list_provider_trust_decisions(
+        self,
+        *,
+        actor_principal_id: str,
+    ) -> Tuple[ProviderTrustDecision, ...]:
+        """Return the immutable policy history after owner/admin authorization."""
+
+        actor_principal_id = _text(
+            actor_principal_id,
+            "provider trust actor principal id",
+        )
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            if not self._authorize_provider_trust_policy_read(
+                connection,
+                actor_principal_id=actor_principal_id,
+            ):
+                connection.commit()
+                return ()
+            decisions, _heads = self._load_provider_trust_authority(connection)
+            connection.commit()
+            return decisions
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def list_provider_trust_heads(
+        self,
+        *,
+        actor_principal_id: str,
+    ) -> Tuple[ProviderTrustHead, ...]:
+        """Return all current heads, including explicit revocations."""
+
+        actor_principal_id = _text(
+            actor_principal_id,
+            "provider trust actor principal id",
+        )
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            if not self._authorize_provider_trust_policy_read(
+                connection,
+                actor_principal_id=actor_principal_id,
+            ):
+                connection.commit()
+                return ()
+            _decisions, heads = self._load_provider_trust_authority(connection)
+            connection.commit()
+            return heads
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def list_active_provider_trust(
+        self,
+        *,
+        actor_principal_id: str,
+    ) -> Tuple[ProviderTrustHead, ...]:
+        """Return only current exact approvals, after validating every head."""
+
+        return tuple(
+            head
+            for head in self.list_provider_trust_heads(
+                actor_principal_id=actor_principal_id
+            )
+            if head.state is ProviderTrustState.APPROVED
+        )
+
+    def read_active_provider_trust(
+        self,
+        *,
+        actor_principal_id: str,
+        image_ref: str,
+    ) -> Optional[ProviderTrustHead]:
+        """Return the active approval for one exact image, if one exists."""
+
+        image_ref = validate_provider_image_ref(image_ref)
+        return next(
+            (
+                head
+                for head in self.list_active_provider_trust(
+                    actor_principal_id=actor_principal_id
+                )
+                if head.image_ref == image_ref
+            ),
+            None,
+        )
+
+    def _authorize_provider_trust_policy_read(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        actor_principal_id: str,
+    ) -> bool:
+        policy = connection.execute(
+            "SELECT policy.*, owner.owner_kind, owner.principal_id, owner.state, "
+            "txn.operation_kind AS policy_operation_kind, "
+            "txn.committed_at AS policy_committed_at "
+            "FROM provider_trust_policies policy "
+            "LEFT JOIN owners owner ON owner.owner_id = policy.owner_id "
+            "LEFT JOIN ledger_transactions txn "
+            "ON txn.txn_id = policy.created_txn_id "
+            "WHERE policy.policy_id = ?",
+            (PROVIDER_TRUST_POLICY_ID,),
+        ).fetchone()
+        if policy is None:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM principals WHERE principal_id = ?",
+                    (actor_principal_id,),
+                ).fetchone()
+                is None
+            ):
+                raise _missing()
+            orphan = connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM provider_trust_decisions) "
+                "OR EXISTS(SELECT 1 FROM provider_trust_heads)"
+            ).fetchone()[0]
+            if int(orphan):
+                raise RealmIntegrityError(
+                    "Provider trust authority has records without its policy."
+                )
+            return False
+        self._validate_provider_trust_policy_row(policy)
+        owner = self._authorize_owner(
+            connection,
+            actor_principal_id=actor_principal_id,
+            owner_id=PROVIDER_TRUST_POLICY_OWNER_ID,
+            permission=OwnerPermission.ADMIN,
+        )
+        self._require_active_owner(owner)
+        return True
+
+    @staticmethod
+    def _validate_provider_trust_policy_row(row: sqlite3.Row) -> None:
+        try:
+            created_at = finite_time(
+                row["created_at"],
+                "provider trust policy created_at",
+            )
+            committed_at = finite_time(
+                row["policy_committed_at"],
+                "provider trust policy committed_at",
+            )
+            if (
+                row["policy_id"] != PROVIDER_TRUST_POLICY_ID
+                or row["owner_id"] != PROVIDER_TRUST_POLICY_OWNER_ID
+                or row["owner_kind"] != PROVIDER_TRUST_POLICY_OWNER_KIND
+                or row["principal_id"] != row["created_by_principal_id"]
+                or row["state"] not in {
+                    OwnerState.ACTIVE.value,
+                    OwnerState.CLOSED.value,
+                    OwnerState.DELETED.value,
+                }
+                or row["policy_operation_kind"]
+                not in {"provider_trust.approve", "provider_trust.revoke"}
+                or committed_at != created_at
+            ):
+                raise ValueError("provider trust policy facts disagree")
+        except (KeyError, TypeError, ValueError) as error:
+            raise RealmIntegrityError(
+                "Provider trust policy authority is malformed."
+            ) from error
+
+    def _load_provider_trust_authority(
+        self,
+        connection: sqlite3.Connection,
+    ) -> Tuple[Tuple[ProviderTrustDecision, ...], Tuple[ProviderTrustHead, ...]]:
+        rows = connection.execute(
+            "SELECT decision.*, txn.operation_id, txn.operation_kind, "
+            "txn.request_digest, txn.receipt_json, txn.committed_at "
+            "FROM provider_trust_decisions decision "
+            "JOIN ledger_transactions txn ON txn.txn_id = decision.created_txn_id "
+            "WHERE decision.policy_id = ? "
+            "ORDER BY CAST(decision.image_ref AS BLOB), decision.sequence",
+            (PROVIDER_TRUST_POLICY_ID,),
+        ).fetchall()
+        policy_txn = connection.execute(
+            "SELECT created_txn_id FROM provider_trust_policies "
+            "WHERE policy_id = ?",
+            (PROVIDER_TRUST_POLICY_ID,),
+        ).fetchone()
+        if (
+            policy_txn is None
+            or not rows
+            or sum(
+                int(row["created_txn_id"]) == int(policy_txn["created_txn_id"])
+                for row in rows
+            )
+            != 1
+        ):
+            raise RealmIntegrityError(
+                "Provider trust policy is not anchored to its first decision."
+            )
+        decisions = tuple(self._provider_trust_decision_from_row(row) for row in rows)
+        by_image: Dict[str, list[ProviderTrustDecision]] = {}
+        for decision in decisions:
+            by_image.setdefault(decision.image_ref, []).append(decision)
+        for image_decisions in by_image.values():
+            previous: ProviderTrustDecision | None = None
+            for decision in image_decisions:
+                if previous is None:
+                    if (
+                        decision.sequence != 1
+                        or decision.previous_decision_id is not None
+                    ):
+                        raise RealmIntegrityError(
+                            "Provider trust decision history does not start at one."
+                        )
+                elif (
+                    decision.sequence != previous.sequence + 1
+                    or decision.previous_decision_id != previous.decision_id
+                ):
+                    raise RealmIntegrityError(
+                        "Provider trust decision history is not contiguous."
+                    )
+                previous = decision
+
+        head_rows = connection.execute(
+            "SELECT head.updated_txn_id AS head_updated_txn_id, "
+            "head.updated_at AS head_updated_at, decision.*, "
+            "txn.operation_id, txn.operation_kind, txn.request_digest, "
+            "txn.receipt_json, txn.committed_at "
+            "FROM provider_trust_heads head "
+            "LEFT JOIN provider_trust_decisions decision "
+            "ON decision.policy_id = head.policy_id "
+            "AND decision.image_ref = head.image_ref "
+            "AND decision.decision_id = head.decision_id "
+            "LEFT JOIN ledger_transactions txn "
+            "ON txn.txn_id = decision.created_txn_id "
+            "WHERE head.policy_id = ? "
+            "ORDER BY CAST(head.image_ref AS BLOB)",
+            (PROVIDER_TRUST_POLICY_ID,),
+        ).fetchall()
+        heads: list[ProviderTrustHead] = []
+        for row in head_rows:
+            try:
+                if row["decision_id"] is None:
+                    raise ValueError("head decision is absent")
+                decision = self._provider_trust_decision_from_row(row)
+                if (
+                    int(row["head_updated_txn_id"])
+                    != int(row["created_txn_id"])
+                    or float(row["head_updated_at"]) != decision.created_at
+                ):
+                    raise ValueError("head transaction facts disagree")
+                head = ProviderTrustHead(
+                    decision=decision,
+                    updated_at=float(row["head_updated_at"]),
+                )
+            except RealmIntegrityError:
+                raise
+            except (KeyError, TypeError, ValueError) as error:
+                raise RealmIntegrityError(
+                    "Provider trust head does not match its decision transaction."
+                ) from error
+            heads.append(head)
+        if {head.image_ref for head in heads} != set(by_image):
+            raise RealmIntegrityError(
+                "Provider trust heads do not cover the decision histories."
+            )
+        for head in heads:
+            if head.decision != by_image[head.image_ref][-1]:
+                raise RealmIntegrityError(
+                    "Provider trust head is not the latest decision."
+                )
+        return decisions, tuple(heads)
+
+    @staticmethod
+    def _provider_trust_decision_from_row(
+        row: sqlite3.Row,
+    ) -> ProviderTrustDecision:
+        try:
+            decision = ProviderTrustDecision.from_dict(
+                {
+                    "decision_id": row["decision_id"],
+                    "policy_id": row["policy_id"],
+                    "sequence": int(row["sequence"]),
+                    "image_ref": row["image_ref"],
+                    "python_executable": row["python_executable"],
+                    "contract": row["contract"],
+                    "state": row["state"],
+                    "reason": row["reason"],
+                    "actor_principal_id": row["actor_principal_id"],
+                    "previous_decision_id": row["previous_decision_id"],
+                    "created_at": float(row["created_at"]),
+                }
+            )
+            operation_id = _text(
+                row["operation_id"],
+                "provider trust operation id",
+            )
+            operation_kind = (
+                "provider_trust.approve"
+                if decision.state is ProviderTrustState.APPROVED
+                else "provider_trust.revoke"
+            )
+            expected_request = {
+                "kind": operation_kind,
+                "request": {
+                    "actor_principal_id": decision.actor_principal_id,
+                    "contract": decision.contract,
+                    "image_ref": decision.image_ref,
+                    "policy_id": decision.policy_id,
+                    "python_executable": decision.python_executable,
+                    "reason": decision.reason,
+                },
+            }
+            request_value = _load_json_object(
+                row["request_json"],
+                "provider trust decision request",
+            )
+            receipt_value = _load_json_object(
+                row["receipt_json"],
+                "provider trust decision receipt",
+            )
+            expected_receipt = decision.to_dict()
+            expected_receipt["receipt_version"] = 1
+            if (
+                request_value != expected_request
+                or canonical_json_bytes(request_value).decode("utf-8")
+                != row["request_json"]
+                or receipt_value != expected_receipt
+                or canonical_json_bytes(receipt_value).decode("utf-8")
+                != row["receipt_json"]
+                or row["operation_kind"] != operation_kind
+                or row["request_digest"] != request_digest(expected_request)
+                or decision.decision_id
+                != _stable_id("provider-trust-decision", operation_id)
+                or float(row["committed_at"]) != decision.created_at
+            ):
+                raise RealmIntegrityError(
+                    "Provider trust decision transaction proof is inconsistent."
+                )
+            return decision
+        except RealmIntegrityError:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise RealmIntegrityError(
+                "Persisted provider trust decision is malformed."
+            ) from error
+
     def register_store(
         self,
         *,
@@ -1645,13 +2263,14 @@ class RealmLedger(
         owner_id = _text(owner_id, "owner_id")
         owner_kind = _text(owner_kind, "owner kind")
         principal_id = _text(principal_id, "principal_id")
-        if owner_kind in {
+        if owner_id == PROVIDER_TRUST_POLICY_OWNER_ID or owner_kind in {
             CATALOG_PACKAGE_GOVERNANCE_OWNER_KIND,
             CATALOG_PACKAGE_OWNER_KIND,
             CATALOG_PUBLICATION_ATTEMPT_OWNER_KIND,
             _WORKSPACE_ASSEMBLY_ATTEMPT_OWNER_KIND,
             CONFIGURED_PACKAGE_INGRESS_ARTIFACT_OWNER_KIND,
             REVIEW_COLLECTION_OWNER_KIND,
+            PROVIDER_TRUST_POLICY_OWNER_KIND,
         }:
             raise RealmConflict(
                 "Reserved owner kinds can only be created by their typed domain command."

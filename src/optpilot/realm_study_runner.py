@@ -20,7 +20,11 @@ from pathlib import Path
 from .realm._validation import required_text
 from .realm.local_runtime import LocalRealmRuntime
 from .realm.run_projection import RunSummaryProjection
-from .run_execution_profile import RunExecutionProfile
+from .run_execution_profile import (
+    RunExecutionProfile,
+    method_exchange_timeout_seconds,
+)
+from .spec import load_study_spec
 from .study_launch_ids import local_study_operation_identities
 
 
@@ -79,7 +83,7 @@ def run_local_realm_study(
     heartbeat_interval_seconds: float | None = None,
     attempt_ttl_seconds: float = 300.0,
     method_start_timeout: float = 10.0,
-    method_request_timeout: float = 10.0,
+    method_request_timeout: float | None = None,
     method_environment: Mapping[str, str] | None = None,
 ) -> RunSummaryProjection:
     """Freeze and execute one supported local package through Realm only.
@@ -99,6 +103,30 @@ def run_local_realm_study(
     if not isinstance(study_config_path, Path):
         raise TypeError("study_config_path must be a Path.")
     required_text(operation_id, "local study operation_id", max_bytes=512)
+    # Preserve the launch boundary before reading Method semantics.  The
+    # retained preparation service repeats the complete portable-path check;
+    # this early containment check prevents a timeout lookup from changing the
+    # established error for an out-of-package Study path.
+    try:
+        canonical_root = package_root.resolve(strict=True)
+        canonical_study = study_config_path.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ValueError(
+            "package_root and study_config_path must name existing paths."
+        ) from error
+    try:
+        canonical_study.relative_to(canonical_root)
+    except ValueError as error:
+        raise ValueError(
+            "study_config_path must be inside the explicit package_root."
+        ) from error
+    method_runtime = load_study_spec(str(study_config_path)).method.get(
+        "runtime", {}
+    )
+    selected_method_request_timeout = method_exchange_timeout_seconds(
+        method_runtime,
+        override=method_request_timeout,
+    )
 
     planned = runtime.study_launches.plan_local_package(
         operation_id=operation_id,
@@ -114,7 +142,7 @@ def run_local_realm_study(
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             attempt_ttl_seconds=attempt_ttl_seconds,
             method_start_timeout_seconds=method_start_timeout,
-            method_request_timeout_seconds=method_request_timeout,
+            method_request_timeout_seconds=selected_method_request_timeout,
         ),
     )
     completed = runtime.study_launches.execute(

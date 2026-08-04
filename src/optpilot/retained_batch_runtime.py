@@ -146,6 +146,7 @@ _PUBLIC_MESSAGES = {
     ),
     "worker_start_failed": "The retained batch worker could not be started safely.",
     "worker_terminal": "The retained batch worker is terminal.",
+    "worker_request_timeout": "The retained batch worker request timed out.",
     "worker_unavailable": "The retained batch worker is unavailable.",
     "worker_protocol_error": "The retained batch worker response is invalid.",
     "heartbeat_failed": "The retained batch runtime heartbeat failed.",
@@ -2623,7 +2624,7 @@ class RetainedPythonBatchRuntime:
                     else timeout_override
                 ),
             )
-        except Exception:
+        except Exception as error:
             proof = self._lookup_terminal_proof()
             if proof is not None:
                 with self._state_lock:
@@ -2633,6 +2634,14 @@ class RetainedPythonBatchRuntime:
                 except Exception:
                     pass
                 raise RetainedBatchRuntimeError("worker_terminal") from None
+            # Preserve an explicit configured-deadline outcome.  A generic
+            # transport loss remains recoverable, while a socket/request
+            # timeout tells the retained driver that reissuing this exact
+            # callback under successive controller terms would only loop.
+            if isinstance(error, TimeoutError):
+                raise RetainedBatchRuntimeError(
+                    "worker_request_timeout"
+                ) from None
             raise RetainedBatchRuntimeError("worker_unavailable") from None
         if not isinstance(response, Mapping):
             raise RetainedBatchRuntimeError("worker_protocol_error")

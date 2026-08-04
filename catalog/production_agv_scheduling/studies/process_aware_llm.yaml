@@ -1,7 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-process-aware-llm
-description: Paper-style baseline plus up to ten four-candidate process-aware LLM improvement rounds.
+description: Paper-style baseline plus up to five four-candidate process-aware LLM improvement rounds.
 tags: [production, agv, llm, heuristic-design, files]
 
 environmentConfig: ../environments/production_agv_scheduling/environment_llm.yaml
@@ -13,14 +13,13 @@ objective:
   secondaryMetrics: [std_total_score, min_total_score, max_total_score, mean_efficiency_score, mean_quality_cost_score, mean_agv_score]
 
 budget:
-  maxTrials: 41
+  # One initial policy plus five complete four-candidate improvement rounds.
+  maxTrials: 21
 
 execution:
-  # The Method still proposes four sibling revisions per round. Evaluate them
-  # serially so a laptop-sized local Realm does not contend over four attempt
-  # lifecycle transactions at once; simulation time is small relative to the
-  # LLM calls, so this does not materially change experiment wall time.
-  parallelism: 1
+  # Evaluate up to three sibling revisions concurrently. The method can emit
+  # four candidates in one round; the fourth starts as soon as capacity frees.
+  parallelism: 3
   timeoutSeconds: 1800
 
 evidence:

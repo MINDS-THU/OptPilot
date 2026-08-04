@@ -83,6 +83,8 @@ const state = {
   shortlistRequestIntents: loadStoredJson(STORAGE_KEYS.durableShortlistIntents),
   workbenchActionErrors: {},
   environmentPreviewProfileSelections: {},
+  interfaceSessionRoute: null,
+  interfaceSessionLaunchSnapshot: null,
   semanticInspections: {},
   candidateComparisonRunId: null,
   candidateComparisonHead: null,
@@ -213,6 +215,7 @@ function storeSessionValue(key, value) {
 }
 
 let appInitialized = false;
+const operatorJobsPanelRenderCache = new WeakMap();
 
 function initializeApp() {
   if (appInitialized) return;
@@ -320,6 +323,19 @@ function cacheElements() {
     "planSearch",
     "runsTable",
     "runDetail",
+    "interfaceSessionBackButton",
+    "interfaceSessionEyebrow",
+    "interfaceSessionTitle",
+    "interfaceSessionSource",
+    "interfaceSessionStatus",
+    "interfaceSessionOpenButton",
+    "interfaceSessionStopButton",
+    "interfaceSessionNotice",
+    "interfaceSessionFrame",
+    "interfaceSessionEmpty",
+    "interfaceSessionEmptyTitle",
+    "interfaceSessionEmptyBody",
+    "interfaceSessionRetryButton",
     "selectionContentDrawerHost",
     "assistantLauncherSubtitle",
     "settingsModal",
@@ -473,6 +489,7 @@ function bindEvents() {
   on(els.candidateTryCancelButton, "click", () => closeCandidateTrySheet());
   on(els.candidateTrySubmitButton, "click", confirmCandidateTry);
   on(els.candidateTryBody, "change", updateCandidateTrySheet);
+  on(els.candidateTryBody, "click", copyCandidatePreviewTrustCommand);
   on(els.candidateTryModal, "click", (event) => {
     if (event.target === els.candidateTryModal) closeCandidateTrySheet();
   });
@@ -522,6 +539,9 @@ function bindEvents() {
   on(els.assistantToggleButton, "click", toggleAssistant);
   on(els.activeInterfaceOpenButton, "click", openActiveInterfaceLocation);
   on(els.activeInterfaceStopButton, "click", stopActiveInterfaceFromGlobalControl);
+  on(els.interfaceSessionBackButton, "click", leaveInterfaceSession);
+  on(els.interfaceSessionStopButton, "click", stopCurrentInterfaceSession);
+  on(els.interfaceSessionRetryButton, "click", refreshCurrentInterfaceSession);
   on(els.returnToActiveInterfaceButton, "click", openActiveInterfaceLocation);
   on(els.stopActiveInterfaceButton, "click", stopActiveInterfaceFromGlobalControl);
   on(els.assistantResizeHandle, "pointerdown", startAssistantResize);
@@ -769,7 +789,10 @@ async function loadRunsAndJobs() {
     if (state.view === "runs") renderRuns();
     if (refreshDetail) {
       try {
-        await loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
+        await loadRunDetail(state.selectedRunId, {
+          keepTab: true,
+          skipListRender: true,
+        });
       } catch (error) {
         // A live head may advance during refresh; the next poll will retry coherently.
       }
@@ -1404,6 +1427,13 @@ function isActiveInterfaceLaunch(launch = state.interfaceLaunch) {
 }
 
 function isViewingActiveInterface(launch = state.interfaceLaunch, session = currentSession()) {
+  const routedLaunch = state.view === "interface" && state.interfaceSessionRoute;
+  if (
+    isActiveInterfaceLaunch(launch)
+    && routedLaunch
+    && ["catalog", "workspace"].includes(routedLaunch.kind)
+    && String(routedLaunch.launchId || "") === String(launch.launch_id || "")
+  ) return true;
   if (
     !isActiveInterfaceLaunch(launch)
     || state.view !== "workspace"
@@ -1533,6 +1563,10 @@ async function openActiveInterfaceLocation() {
   const launchKey = String(launch.key || "");
   const launchStartedAt = Number(launch.startedAt || 0);
   const fallbackUrl = String(state.interfaceReturnFallbackUrl || "");
+  if (launchId) {
+    openLaunchInterfaceSession(launch);
+    return;
+  }
   if (fallbackUrl) {
     const externalWindow = reserveExternalWindow();
     if (!externalWindow) {
@@ -1543,6 +1577,15 @@ async function openActiveInterfaceLocation() {
     } else {
       state.interfaceReturnError = "The original source view is unavailable, so the running interface opened in a separate window.";
     }
+    renderActiveInterfaceReturnState();
+    return;
+  }
+
+  // The shared Interface Session is the stable presentation surface for
+  // Catalog and Workspace launches.  Keep the historical source-recovery
+  // path below as a fallback for incomplete legacy launch coordinates.
+  if (openLaunchInterfaceSession(launch)) {
+    resetActiveInterfaceReturnState();
     renderActiveInterfaceReturnState();
     return;
   }
@@ -1742,6 +1785,7 @@ function renderAll() {
   renderCatalog();
   renderExperiments();
   renderRuns();
+  renderInterfaceSession();
   renderSelectionContentHost();
   renderAssistant();
   renderSettingsModal();
@@ -2071,6 +2115,29 @@ function parseStudioRoute(hash = window.location.hash) {
   if (page === "workspaces") return { view: "workspace", workspaceId: parts[1] || "" };
   if (page === "catalog") return { view: "catalog", componentKey: parts[1] || "" };
   if (page === "studies") return { view: "experiments", planId: parts[1] || "" };
+  if (page === "interfaces") {
+    const kind = parts[1] || "";
+    if (kind === "candidate") {
+      if (!parts[2] || !parts[3] || !parts[4]) return null;
+      return {
+        view: "interface",
+        kind,
+        runId: parts[2] || "",
+        candidateId: parts[3] || "",
+        jobId: parts[4] || "",
+      };
+    }
+    if (kind === "catalog" || kind === "workspace") {
+      if (!parts[2] || !parts[3]) return null;
+      return {
+        view: "interface",
+        kind,
+        sourceId: parts[2] || "",
+        launchId: parts[3] || "",
+      };
+    }
+    return null;
+  }
   if (page === "runs") {
     return {
       view: "runs",
@@ -2100,6 +2167,15 @@ function studioRouteHash() {
     const run = `#/runs/${segment(state.selectedRunId)}`;
     return state.routedCandidateId ? `${run}/candidates/${segment(state.routedCandidateId)}` : run;
   }
+  if (state.view === "interface" && state.interfaceSessionRoute) {
+    const route = state.interfaceSessionRoute;
+    if (route.kind === "candidate") {
+      return `#/interfaces/candidate/${segment(route.runId)}/${segment(route.candidateId)}/${segment(route.jobId)}`;
+    }
+    if (["catalog", "workspace"].includes(route.kind)) {
+      return `#/interfaces/${segment(route.kind)}/${segment(route.sourceId)}/${segment(route.launchId)}`;
+    }
+  }
   return "#/workspaces";
 }
 
@@ -2116,6 +2192,10 @@ function applyStudioRoute(options = {}) {
     return "";
   }
   state.view = route.view;
+  state.interfaceSessionRoute = route.view === "interface" ? { ...route } : null;
+  if (route.view !== "interface" || route.kind === "candidate") {
+    state.interfaceSessionLaunchSnapshot = null;
+  }
   if (route.view === "workspace" && state.sessions.some((item) => item.id === route.workspaceId)) {
     state.selectedSessionId = route.workspaceId;
   } else if (route.view === "catalog" && allComponents().some((item) => item.key === route.componentKey)) {
@@ -2131,12 +2211,436 @@ function applyStudioRoute(options = {}) {
     }
     state.routedCandidateId = candidateId;
     if (candidateId) state.activeRunTab = "candidate";
+  } else if (route.view === "interface" && route.kind === "candidate") {
+    state.selectedRunId = route.runId || state.selectedRunId;
+    state.routedCandidateId = route.candidateId || null;
+    if (route.runId) {
+      selectOperatorJobsRun(route.runId);
+      state.selectedOperatorJobId = route.jobId || null;
+      if (!state.selectedOperatorJob || state.selectedOperatorJob.job_id !== route.jobId) {
+        state.selectedOperatorJob = null;
+      }
+      if (route.jobId) loadOperatorJobDetail(route.jobId, { silent: true });
+    }
   }
   if (options.render !== false) renderAll();
-  if (options.loadRun && route.view === "runs" && route.runId) {
+  if (options.loadRun && ["runs", "interface"].includes(route.view) && route.runId) {
     loadRunDetail(route.runId, { keepTab: true, skipListRender: true, fromRoute: true }).catch(() => {});
   }
-  return route.view === "runs" ? route.runId || "" : "";
+  return ["runs", "interface"].includes(route.view) ? route.runId || "" : "";
+}
+
+function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
+  const runId = String(route && route.runId || "");
+  const candidateId = String(route && route.candidateId || "");
+  const jobId = String(route && route.jobId || "");
+  const backHash = `#/runs/${encodeURIComponent(runId)}/candidates/${encodeURIComponent(candidateId)}`;
+  const base = {
+    kind: "candidate",
+    key: `candidate:${runId}:${candidateId}:${jobId}`,
+    eyebrow: "Candidate interface",
+    title: candidateId || "Interactive Candidate",
+    source: runId ? `Candidate from Run ${runId}` : "Candidate try",
+    status: "preparing",
+    statusLabel: "Preparing",
+    message: "Loading the exact saved Candidate and its interactive Environment.",
+    emptyTitle: "Preparing the interactive view",
+    emptyBody: "The interface will appear here after the isolated Environment is ready.",
+    openUrl: "",
+    backHash,
+    backLabel: "Back to Candidate",
+    canStop: false,
+    stopPending: false,
+    stop: null,
+    retry: null,
+    frameSandbox: "allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts",
+    referrerPolicy: "no-referrer",
+  };
+  if (!runId || !candidateId || !jobId) {
+    return {
+      ...base,
+      status: "failed",
+      statusLabel: "Unavailable",
+      message: "This Interface Session URL is incomplete.",
+      emptyTitle: "Interface unavailable",
+      emptyBody: "Return to the Candidate and open its interface again.",
+    };
+  }
+  const job = state.selectedOperatorJob;
+  if (!job || String(job.job_id || "") !== jobId) {
+    const detailFailed = Boolean(state.operatorJobDetailError);
+    return {
+      ...base,
+      retry: () => loadOperatorJobDetail(jobId),
+      message: state.operatorJobDetailError || base.message,
+      status: detailFailed ? "failed" : base.status,
+      statusLabel: detailFailed ? "Unavailable" : base.statusLabel,
+      emptyTitle: detailFailed ? "Interactive try unavailable" : base.emptyTitle,
+      emptyBody: detailFailed
+        ? "Studio could not load this exact try. Check again or return to the Candidate."
+        : base.emptyBody,
+    };
+  }
+  const target = job.target && typeof job.target === "object" ? job.target : {};
+  const targetRunId = String(target.run_id || "");
+  const targetCandidateId = String(target.candidate_id || "");
+  if (
+    job.job_kind !== "environment-preview"
+    || targetRunId !== runId
+    || targetCandidateId !== candidateId
+  ) {
+    return {
+      ...base,
+      status: "failed",
+      statusLabel: "Mismatch",
+      message: "This try does not match the Run and Candidate in the Interface Session URL.",
+      emptyTitle: "Interface identity mismatch",
+      emptyBody: "For safety, Studio did not open this interface. Return to the Candidate and try again.",
+    };
+  }
+  const presentation = job.presentation && typeof job.presentation === "object"
+    ? job.presentation
+    : {};
+  const presentationStatus = String(presentation.status || "pending");
+  const openUrl = presentationStatus === "available"
+    ? String(presentation.open_url || "")
+    : "";
+  const jobState = String(job.state || "queued");
+  const active = operatorJobIsActive(job);
+  const stopPending = state.pendingOperatorJobStops.has(jobId);
+  const closed = presentationStatus === "closed" || ["succeeded", "failed", "cancelled"].includes(jobState);
+  const failed = jobState === "failed";
+  const reconnecting = presentationStatus === "reconciling";
+  return {
+    ...base,
+    title: targetCandidateId,
+    source: `Candidate from Run ${targetRunId}`,
+    status: failed ? "failed" : closed ? "stopped" : openUrl ? "ready" : "running",
+    statusLabel: failed
+      ? "Failed"
+      : closed
+        ? "Closed"
+        : openUrl
+          ? "Running"
+          : reconnecting
+            ? "Reconnecting"
+            : "Starting",
+    message: state.operatorJobDetailError
+      || state.operatorJobStopErrors[jobId]
+      || (openUrl
+        ? "This interface is running with the exact saved Candidate."
+        : reconnecting
+          ? "The Environment is running while Studio reconnects the interactive view."
+          : closed
+            ? "This interactive try has finished. Its result remains in the Candidate try history."
+            : "The isolated Environment is starting. The view will open automatically."),
+    emptyTitle: failed
+      ? "Interactive try failed"
+      : closed
+        ? "Interactive view closed"
+        : reconnecting
+          ? "Reconnecting the interactive view"
+          : "Starting the interactive Environment",
+    emptyBody: failed
+      ? "Return to the Candidate to inspect the saved failure details or try again."
+      : closed
+        ? "Return to the Candidate to inspect this try's metrics, outputs, and result."
+        : "Studio is waiting for the Environment's presentation endpoint.",
+    openUrl,
+    canStop: active && Boolean(job.can_stop),
+    stopPending,
+    stop: () => stopOperatorJob(jobId),
+    retry: () => loadOperatorJobDetail(jobId),
+  };
+}
+
+function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
+  const kind = String(route && route.kind || "");
+  const sourceId = String(route && route.sourceId || "");
+  const launchId = String(route && route.launchId || "");
+  const liveLaunch = state.interfaceLaunch;
+  const snapshot = state.interfaceSessionLaunchSnapshot;
+  const launch = liveLaunch && String(liveLaunch.launch_id || "") === launchId
+    ? liveLaunch
+    : snapshot && String(snapshot.launch_id || "") === launchId
+      ? snapshot
+      : null;
+  const workspace = kind === "workspace";
+  const backHash = workspace
+    ? `#/workspaces/${encodeURIComponent(sourceId)}`
+    : `#/catalog/${encodeURIComponent(sourceId)}`;
+  const base = {
+    kind,
+    key: `${kind}:${sourceId}:${launchId}`,
+    eyebrow: workspace ? "Workspace interface" : "Catalog interface",
+    title: "Interactive interface",
+    source: workspace ? "Editable Workspace" : "Exact published Catalog version",
+    status: "preparing",
+    statusLabel: "Restoring",
+    message: "Restoring the running Interface Session.",
+    emptyTitle: "Restoring the interactive view",
+    emptyBody: "The interface will reappear after Studio confirms the launch.",
+    openUrl: "",
+    backHash,
+    backLabel: workspace ? "Back to Workspace" : "Back to Catalog item",
+    canStop: false,
+    stopPending: false,
+    stop: null,
+    retry: null,
+    frameSandbox: null,
+    referrerPolicy: null,
+  };
+  if (!sourceId || !launchId) {
+    return {
+      ...base,
+      status: "failed",
+      statusLabel: "Unavailable",
+      message: "This Interface Session URL is incomplete.",
+      emptyTitle: "Interface unavailable",
+      emptyBody: "Return to the source and launch its interface again.",
+    };
+  }
+  if (!launch) {
+    const storedLaunchId = String(state.storedInterfaceLaunch && state.storedInterfaceLaunch.launch_id || "");
+    return storedLaunchId === launchId
+      ? base
+      : {
+          ...base,
+          status: "failed",
+          statusLabel: "Unavailable",
+          message: "This temporary Interface Session is not active in this browser tab.",
+          emptyTitle: "Interface Session unavailable",
+          emptyBody: "Return to the source and launch its interface again.",
+        };
+  }
+  const matchesLaunch = String(launch.launch_id || "") === launchId;
+  const matchesSource = workspace
+    ? launch.launch_scope === "workspace-transient"
+      && String(launch.source_workspace_id || "") === sourceId
+    : launch.launch_scope !== "workspace-transient"
+      && String(launch.key || "") === sourceId;
+  if (!matchesLaunch || !matchesSource) {
+    return {
+      ...base,
+      status: "failed",
+      statusLabel: "Mismatch",
+      message: "The active interface does not match this Interface Session URL.",
+      emptyTitle: "Interface identity mismatch",
+      emptyBody: "For safety, Studio did not open a different running interface.",
+    };
+  }
+  const status = String(launch.status || "queued");
+  const preview = launch.result && launch.result.preview && typeof launch.result.preview === "object"
+    ? launch.result.preview
+    : {};
+  const openUrl = status === "ready" ? String(preview.preview_url || "") : "";
+  const stopping = status === "stopping";
+  const terminal = ["failed", "stopped", "cleanup_pending"].includes(status);
+  return {
+    ...base,
+    title: String(launch.label || "Interactive interface"),
+    status,
+    statusLabel: status === "ready"
+      ? "Running"
+      : stopping
+        ? "Stopping"
+        : status === "cleanup_pending"
+          ? "Cleanup needed"
+          : status === "failed"
+            ? "Failed"
+            : status === "stopped"
+              ? "Stopped"
+              : "Starting",
+    message: String(launch.stop_error || launch.error || (openUrl
+      ? workspace
+        ? "This interface is running from the selected Workspace."
+        : "This interface is running from the exact published Catalog version."
+      : stopping
+        ? "Studio is stopping the temporary interface runtime."
+        : terminal
+          ? "The interface is no longer available."
+          : "Studio is preparing the temporary interface runtime.")),
+    emptyTitle: status === "failed"
+      ? "Interface could not start"
+      : status === "stopped"
+        ? "Interface stopped"
+        : status === "cleanup_pending"
+          ? "Interface cleanup needs attention"
+          : stopping
+            ? "Stopping the interface"
+            : "Starting the interface",
+    emptyBody: String(launch.error || (terminal
+      ? "Return to the source to launch it again."
+      : "The interactive view will appear automatically when it is ready.")),
+    openUrl,
+    canStop: !["failed", "stopped", "stopping"].includes(status),
+    stopPending: stopping,
+    stop: () => stopInterfaceLaunch(launch.key),
+  };
+}
+
+function interfaceSessionModel() {
+  const route = state.interfaceSessionRoute;
+  if (route && route.kind === "candidate") return candidateInterfaceSessionModel(route);
+  if (route && ["catalog", "workspace"].includes(route.kind)) {
+    return launchInterfaceSessionModel(route);
+  }
+  return {
+    kind: "unknown",
+    key: "unknown",
+    eyebrow: "Interface Session",
+    title: "Interactive interface",
+    source: "No interface selected",
+    status: "failed",
+    statusLabel: "Unavailable",
+    message: "Choose an interface from Catalog, a Workspace, or a saved Candidate.",
+    emptyTitle: "No Interface Session selected",
+    emptyBody: "Return to Studio and open an interface.",
+    openUrl: "",
+    backHash: "#/catalog",
+    backLabel: "Back to Catalog",
+    canStop: false,
+    stopPending: false,
+    stop: null,
+    retry: null,
+  };
+}
+
+function renderInterfaceSession() {
+  if (!els.interfaceSessionFrame) return;
+  const model = interfaceSessionModel();
+  if (
+    state.interfaceSessionRoute
+    && ["catalog", "workspace"].includes(state.interfaceSessionRoute.kind)
+    && state.interfaceLaunch
+    && String(state.interfaceLaunch.launch_id || "") === String(state.interfaceSessionRoute.launchId || "")
+  ) {
+    state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
+  }
+  if (els.interfaceSessionEyebrow) els.interfaceSessionEyebrow.textContent = model.eyebrow;
+  if (els.interfaceSessionTitle) els.interfaceSessionTitle.textContent = model.title;
+  if (els.interfaceSessionSource) els.interfaceSessionSource.textContent = model.source;
+  if (els.interfaceSessionStatus) {
+    els.interfaceSessionStatus.textContent = model.statusLabel;
+    els.interfaceSessionStatus.className = `status-pill ${statusClass(model.status)}`;
+  }
+  if (els.interfaceSessionNotice) {
+    els.interfaceSessionNotice.textContent = model.message;
+    els.interfaceSessionNotice.classList.toggle("error", ["failed", "mismatch"].includes(model.status));
+    els.interfaceSessionNotice.setAttribute(
+      "role",
+      ["failed", "mismatch"].includes(model.status) ? "alert" : "status",
+    );
+  }
+  if (els.interfaceSessionBackButton) els.interfaceSessionBackButton.textContent = model.backLabel;
+  if (els.interfaceSessionOpenButton) {
+    els.interfaceSessionOpenButton.hidden = !model.openUrl;
+    if (model.openUrl) els.interfaceSessionOpenButton.setAttribute("href", model.openUrl);
+    else els.interfaceSessionOpenButton.removeAttribute("href");
+  }
+  if (els.interfaceSessionStopButton) {
+    els.interfaceSessionStopButton.hidden = !model.canStop && !model.stopPending;
+    els.interfaceSessionStopButton.disabled = model.stopPending || !model.canStop;
+    els.interfaceSessionStopButton.textContent = model.stopPending ? "Stopping…" : "Stop";
+  }
+  if (els.interfaceSessionEmptyTitle) els.interfaceSessionEmptyTitle.textContent = model.emptyTitle;
+  if (els.interfaceSessionEmptyBody) els.interfaceSessionEmptyBody.textContent = model.emptyBody;
+  if (els.interfaceSessionRetryButton) els.interfaceSessionRetryButton.hidden = !model.retry;
+  const previousFrameKey = String(els.interfaceSessionFrame.dataset.sessionKey || "");
+  const sameFrameSession = previousFrameKey === model.key;
+  if (!sameFrameSession && els.interfaceSessionFrame.hasAttribute("src")) {
+    // A presentation URL is a capability for one exact Interface Session.
+    // Detach it before changing iframe policy or mounting another session,
+    // even when two launches happen to return the same URL.
+    els.interfaceSessionFrame.removeAttribute("src");
+  }
+  if (model.frameSandbox) {
+    if (els.interfaceSessionFrame.getAttribute("sandbox") !== model.frameSandbox) {
+      els.interfaceSessionFrame.setAttribute("sandbox", model.frameSandbox);
+    }
+  } else if (els.interfaceSessionFrame.hasAttribute("sandbox")) {
+    els.interfaceSessionFrame.removeAttribute("sandbox");
+  }
+  if (model.referrerPolicy) {
+    if (els.interfaceSessionFrame.getAttribute("referrerpolicy") !== model.referrerPolicy) {
+      els.interfaceSessionFrame.setAttribute("referrerpolicy", model.referrerPolicy);
+    }
+  } else if (els.interfaceSessionFrame.hasAttribute("referrerpolicy")) {
+    els.interfaceSessionFrame.removeAttribute("referrerpolicy");
+  }
+  const currentUrl = els.interfaceSessionFrame.getAttribute("src") || "";
+  const retainCurrentFrame = Boolean(
+    sameFrameSession
+    && currentUrl
+    && !["failed", "stopped", "cleanup_pending"].includes(model.status),
+  );
+  if (model.openUrl && currentUrl !== model.openUrl) {
+    els.interfaceSessionFrame.setAttribute("src", model.openUrl);
+  } else if (!model.openUrl && currentUrl && !retainCurrentFrame) {
+    els.interfaceSessionFrame.removeAttribute("src");
+  }
+  els.interfaceSessionFrame.dataset.sessionKey = model.key;
+  const frameMounted = Boolean(els.interfaceSessionFrame.getAttribute("src"));
+  els.interfaceSessionFrame.hidden = !frameMounted;
+  if (els.interfaceSessionEmpty) els.interfaceSessionEmpty.hidden = frameMounted;
+}
+
+function openCandidateInterfaceSession(runId, candidateId, jobId) {
+  if (!runId || !candidateId || !jobId) return;
+  state.interfaceSessionRoute = {
+    view: "interface",
+    kind: "candidate",
+    runId: String(runId),
+    candidateId: String(candidateId),
+    jobId: String(jobId),
+  };
+  state.interfaceSessionLaunchSnapshot = null;
+  state.view = "interface";
+  state.selectedRunId = String(runId);
+  state.routedCandidateId = String(candidateId);
+  selectOperatorJobsRun(runId);
+  state.selectedOperatorJobId = String(jobId);
+  syncStudioRoute();
+  renderNavigation();
+  renderInterfaceSession();
+  loadOperatorJobDetail(jobId, { silent: true });
+}
+
+function openLaunchInterfaceSession(launch = state.interfaceLaunch) {
+  const launchId = String(launch && launch.launch_id || "");
+  if (!launchId) return false;
+  const workspace = launch.launch_scope === "workspace-transient";
+  const sourceId = workspace
+    ? String(launch.source_workspace_id || "")
+    : String(launch.key || "");
+  if (!sourceId) return false;
+  state.interfaceSessionRoute = {
+    view: "interface",
+    kind: workspace ? "workspace" : "catalog",
+    sourceId,
+    launchId,
+  };
+  state.interfaceSessionLaunchSnapshot = { ...launch };
+  state.view = "interface";
+  syncStudioRoute();
+  renderNavigation();
+  renderInterfaceSession();
+  return true;
+}
+
+function leaveInterfaceSession() {
+  const model = interfaceSessionModel();
+  if (model.backHash) window.location.hash = model.backHash;
+}
+
+function stopCurrentInterfaceSession() {
+  const model = interfaceSessionModel();
+  if (typeof model.stop === "function") model.stop();
+}
+
+function refreshCurrentInterfaceSession() {
+  const model = interfaceSessionModel();
+  if (typeof model.retry === "function") model.retry();
 }
 
 function setView(view, options = {}) {
@@ -2155,6 +2659,10 @@ function setView(view, options = {}) {
     state.routedCandidateResolution = null;
     state.routedCandidateFocusApplied = "";
   }
+  if (view !== "interface") {
+    state.interfaceSessionRoute = null;
+    state.interfaceSessionLaunchSnapshot = null;
+  }
   state.view = view;
   renderNavigation();
   if (view === "workspace") renderWorkspace();
@@ -2167,6 +2675,7 @@ function setView(view, options = {}) {
       loadRunDetail(state.selectedRunId, { keepTab: true, skipListRender: true });
     }
   }
+  if (view === "interface") renderInterfaceSession();
   renderAssistant();
   if (!options.fromRoute) syncStudioRoute();
 }
@@ -2704,6 +3213,9 @@ function assistantPromptForContext() {
       ? `Summarize evidence for ${runName}, compare candidates, and explain failures or metrics.`
       : "Summarize the selected run, compare candidates, and inspect failures or artifacts.";
   }
+  if (state.view === "interface") {
+    return "Help me understand this interface session, its exact source, status, or saved try result.";
+  }
   if (state.view === "catalog") return "Help me inspect this Catalog item or open it as an editable Workspace.";
   if (state.view === "experiments") return "Help me configure this Study, check it, and prepare it to launch a Run.";
   const workspace = currentSession();
@@ -2736,6 +3248,10 @@ function assistantContextSummary() {
         parts.push(`Selection: ${selected.kind} ${selected.id}`);
       }
     }
+  } else if (state.view === "interface") {
+    const model = interfaceSessionModel();
+    parts.push(`${model.eyebrow}: ${model.title}`);
+    if (model.source) parts.push(model.source);
   } else {
     const workspace = currentSession();
     const agentSession = currentAgentSession();
@@ -2758,11 +3274,21 @@ function selectedRunSummary() {
 
 function renderNavigation() {
   const catalogSourceView = state.view === "workspace" && isCatalogSourceView();
-  ["workspace", "catalog", "experiments", "runs"].forEach((view) => {
+  ["workspace", "catalog", "experiments", "runs", "interface"].forEach((view) => {
     document.body.classList.toggle(`view-${view}`, state.view === view);
   });
+  const interfaceSourceView = state.view === "interface" && state.interfaceSessionRoute
+    ? state.interfaceSessionRoute.kind === "candidate"
+      ? "runs"
+      : state.interfaceSessionRoute.kind === "catalog"
+        ? "catalog"
+        : "workspace"
+    : "";
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === (catalogSourceView ? "catalog" : state.view));
+    button.classList.toggle(
+      "active",
+      button.dataset.view === (catalogSourceView ? "catalog" : interfaceSourceView || state.view),
+    );
   });
   document.querySelectorAll(".view").forEach((section) => {
     section.classList.toggle("active-view", section.id === `${state.view}View`);
@@ -2772,6 +3298,7 @@ function renderNavigation() {
     catalog: ["Catalog", "Reusable environments, methods, and resources."],
     experiments: ["Studies", "Configure and launch optimization Runs."],
     runs: ["Runs", "Progress, metrics, Candidates, trials, and saved results."],
+    interface: ["Interface Session", "Run and inspect an interactive Environment interface."],
   };
   els.pageTitle.textContent = catalogSourceView ? "Catalog item" : titles[state.view][0];
   els.pageSubtitle.textContent = catalogSourceView
@@ -2785,6 +3312,7 @@ function currentViewLabel() {
     catalog: "Catalog",
     experiments: "Studies",
     runs: "Runs",
+    interface: "Interface Session",
   }[state.view] || "Editor";
 }
 
@@ -2957,7 +3485,6 @@ function savedStudyDraftPlan(saved) {
     maxFailures: budget.maxFailures || "",
     parallelism: execution.parallelism || "",
     timeoutSeconds: execution.timeoutSeconds || "",
-    methodRequestTimeoutSeconds: 10,
     maxRetries: (execution.retry && execution.retry.maxRetries) ?? "",
     evidenceLevel: evidence.level || "standard",
     seed: reproducibility.seed ?? "",
@@ -3015,7 +3542,6 @@ function buildPlans() {
       maxFailures: budget.maxFailures || "",
       parallelism: execution.parallelism || "",
       timeoutSeconds: execution.timeoutSeconds || "",
-      methodRequestTimeoutSeconds: 10,
       maxRetries: (execution.retry && execution.retry.maxRetries) ?? "",
       evidenceLevel: evidence.level || "",
       seed: reproducibility.seed ?? "",
@@ -5719,9 +6245,11 @@ function selectedInterfaceProfile(profiles, selectionKey, defaultProfileId = "")
   const selectedId = state.interfaceProfileSelections[selectionKey];
   const selected = profiles.find((profile) => profile.id === selectedId);
   if (selected) return selected;
-  const fallback = profiles.find((profile) => profile.id === defaultProfileId)
-    || profiles.find((profile) => profile.id === "default")
-    || profiles[0];
+  const eligibleProfiles = profiles.filter((profile) => !profile.launch || profile.launch.eligible === true);
+  const fallbacks = eligibleProfiles.length ? eligibleProfiles : profiles;
+  const fallback = fallbacks.find((profile) => profile.id === defaultProfileId)
+    || fallbacks.find((profile) => profile.id === "default")
+    || fallbacks[0];
   state.interfaceProfileSelections[selectionKey] = fallback.id;
   return fallback;
 }
@@ -7340,12 +7868,14 @@ function studyStatusPills(plan) {
   `;
 }
 
-function setStudyActionError(plan, kind, title, message) {
+function setStudyActionError(plan, kind, title, message, options = {}) {
   if (!plan) return;
   plan.actionError = {
     kind,
     title,
     message: publicStudyMessage(message),
+    code: String(options.code || ""),
+    guidance: String(options.guidance || ""),
   };
 }
 
@@ -7368,7 +7898,7 @@ function renderStudyActionStatus(plan) {
     <section class="study-action-status study-action-failed" role="alert">
       <strong>${escapeHtml(error.title || "Study action failed")}</strong>
       <p>${escapeHtml(error.message)}</p>
-      <small>Correct the Study if needed, then use the action above to try again.</small>
+      <small>${escapeHtml(error.guidance || "Correct the Study if needed, then use the action above to try again.")}</small>
     </section>
   `;
 }
@@ -7613,7 +8143,6 @@ function studyConfigEditor(plan, locked) {
       ${studyAdvancedGroup("Execution limits", "Adjust concurrency and stopping behavior for unusual or expensive evaluations.", `
         <div class="control-grid">
           ${inputField("Timeout seconds", "timeoutSeconds", plan.timeoutSeconds || "", "number", locked, "1", "Per-trial time limit.")}
-          ${inputField("Method callback timeout", "methodRequestTimeoutSeconds", plan.methodRequestTimeoutSeconds ?? 10, "number", locked, "1", "Maximum time for one Method proposal or observation callback. Long external model calls may need a larger value.")}
           ${inputField("Parallelism", "parallelism", plan.parallelism || "", "number", locked, "1", "Number of trials allowed to run at the same time.")}
           ${inputField("Max failures", "maxFailures", plan.maxFailures ?? "", "number", locked, "1", "Optional stop limit for failed trials. Leave blank for no limit.")}
           ${inputField("Max retries", "maxRetries", plan.maxRetries ?? "", "number", locked, "0", "Retries allowed for a failed trial.")}
@@ -7836,11 +8365,6 @@ function bindPlanConfigControls(plan) {
 }
 
 function updatePlanField(plan, field, value) {
-  if (field === "methodRequestTimeoutSeconds") {
-    plan.methodRequestTimeoutSeconds = value;
-    plan.actionError = null;
-    return;
-  }
   if (plan.study) convertSavedPlanToDraft(plan);
   plan.actionError = null;
   plan.draftSaveRequestId = null;
@@ -8240,8 +8764,11 @@ async function loadSelectedRunOperatorJobs(options = {}) {
   if (state.operatorJobsRefreshInFlight) return;
   const requestSeq = ++state.operatorJobsRequestSeq;
   state.operatorJobsRefreshInFlight = true;
-  if (!options.silent || !state.operatorJobsLoaded) state.operatorJobsLoading = true;
-  renderOperatorJobsPanel();
+  const showLoadingState = !options.silent || !state.operatorJobsLoaded;
+  if (showLoadingState) {
+    state.operatorJobsLoading = true;
+    renderOperatorJobsPanel();
+  }
   try {
     const payload = await getJson(`/api/runs/${encodeURIComponent(runId)}/operator-jobs`);
     if (requestSeq !== state.operatorJobsRequestSeq || state.operatorJobsRunId !== runId) return;
@@ -8249,18 +8776,38 @@ async function loadSelectedRunOperatorJobs(options = {}) {
     state.operatorJobs = operatorJobsFromPayload(payload);
     state.operatorJobsLoaded = true;
     state.operatorJobsError = "";
-    if (!state.selectedOperatorJobId || !state.operatorJobs.some((job) => job.job_id === state.selectedOperatorJobId)) {
+    const routedJobId = state.view === "interface"
+      && state.interfaceSessionRoute
+      && state.interfaceSessionRoute.kind === "candidate"
+      && state.interfaceSessionRoute.runId === runId
+      ? String(state.interfaceSessionRoute.jobId || "")
+      : "";
+    if (routedJobId && !state.operatorJobs.some((job) => job.job_id === routedJobId)) {
+      state.selectedOperatorJobId = routedJobId;
+      if (!state.selectedOperatorJob || state.selectedOperatorJob.job_id !== routedJobId) {
+        state.selectedOperatorJob = null;
+      }
+    } else if (!state.selectedOperatorJobId || !state.operatorJobs.some((job) => job.job_id === state.selectedOperatorJobId)) {
       state.selectedOperatorJobId = state.operatorJobs[0] && state.operatorJobs[0].job_id || null;
       state.selectedOperatorJob = state.operatorJobs[0] || null;
     } else {
       const summary = state.operatorJobs.find((job) => job.job_id === state.selectedOperatorJobId);
-      if (!state.selectedOperatorJob || Number(summary.revision || 0) > Number(state.selectedOperatorJob.revision || 0)) {
+      // List projections intentionally omit presentation credentials. Never
+      // replace a materialized detail projection with that summary; the
+      // shared Interface Session may still be using its authenticated URL.
+      if (!state.selectedOperatorJob || state.selectedOperatorJob.job_id !== summary.job_id) {
         state.selectedOperatorJob = summary;
       }
     }
-    renderOperatorJobsPanel();
-    if (state.selectedOperatorJobId) {
+    const selectedSummary = state.operatorJobs.find(
+      (job) => job.job_id === state.selectedOperatorJobId,
+    ) || null;
+    if (routedJobId && !selectedSummary) {
+      await loadOperatorJobDetail(routedJobId, { silent: true });
+    } else if (operatorJobNeedsDetailRefresh(selectedSummary, state.selectedOperatorJob)) {
       await loadOperatorJobDetail(state.selectedOperatorJobId, { silent: true });
+    } else {
+      renderOperatorJobsPanel();
     }
   } catch (error) {
     if (requestSeq === state.operatorJobsRequestSeq && state.operatorJobsRunId === runId) {
@@ -8288,6 +8835,28 @@ function operatorJobFromPayload(payload) {
 
 function operatorJobRunId(job) {
   return String(job && job.target && job.target.run_id || "");
+}
+
+function operatorJobNeedsDetailRefresh(summary, detail) {
+  if (!summary || !summary.job_id) return false;
+  if (!detail || detail.job_id !== summary.job_id) return true;
+  if (String(summary.state || "") !== String(detail.state || "")) return true;
+  if (Number(summary.revision || 0) > Number(detail.revision || 0)) return true;
+  if (summary.job_kind !== "environment-preview") return false;
+  const summaryPresentation = summary.presentation && typeof summary.presentation === "object"
+    ? summary.presentation
+    : {};
+  const detailPresentation = detail.presentation && typeof detail.presentation === "object"
+    ? detail.presentation
+    : {};
+  if (
+    summaryPresentation.status === "ready"
+    && !(detailPresentation.status === "available" && detailPresentation.open_url)
+  ) return true;
+  // Presentation health can change without advancing the durable job
+  // revision.  Continue materializing active Preview details; the keyed DOM
+  // update below keeps the existing frame connected when its lease is stable.
+  return operatorJobIsActive(summary);
 }
 
 function upsertOperatorJob(job) {
@@ -8512,15 +9081,23 @@ function operatorJobsSection(runId, candidateId = "") {
 }
 
 function renderOperatorJobsPanel() {
+  if (state.view === "interface") renderInterfaceSession();
   if (!els.runDetail) return;
   const panel = els.runDetail.querySelector("[data-operator-jobs-panel]");
   const runId = selectedCanonicalRunId();
   if (!panel || !runId || panel.dataset.runId !== runId || state.operatorJobsRunId !== runId) return;
+  const body = operatorJobsPanelBody(runId, panel.dataset.candidateId || "");
+  // Polling unchanged state must not collapse user-controlled details.
+  if (operatorJobsPanelRenderCache.get(panel) === body) return;
+  const moreOpen = Boolean(panel.querySelector(".operator-job-more[open]"));
   const focusedJob = document.activeElement
     && document.activeElement.closest
     && document.activeElement.closest("[data-operator-job-id]");
   const focusedJobId = focusedJob && focusedJob.dataset.operatorJobId || "";
-  panel.innerHTML = operatorJobsPanelBody(runId, panel.dataset.candidateId || "");
+  panel.innerHTML = body;
+  const nextMore = panel.querySelector(".operator-job-more");
+  if (moreOpen && nextMore) nextMore.open = true;
+  operatorJobsPanelRenderCache.set(panel, body);
   bindOperatorJobEvents();
   if (focusedJobId) {
     window.requestAnimationFrame(() => {
@@ -8540,15 +9117,17 @@ function operatorJobsPanelBody(runId, candidateId = "") {
         - Number(left && (left.updated_at || left.created_at) || 0)
       ))
     : allJobs;
-  const selected = state.selectedOperatorJobId
-    ? jobs.find((job) => job.job_id === state.selectedOperatorJobId)
-      || (
-        state.selectedOperatorJob
-        && jobs.some((job) => job.job_id === state.selectedOperatorJob.job_id)
-        ? state.selectedOperatorJob
-        : null
-      )
+  const selectedSummary = state.selectedOperatorJobId
+    ? jobs.find((job) => job.job_id === state.selectedOperatorJobId) || null
     : null;
+  const selectedDetail = state.selectedOperatorJob
+    && state.selectedOperatorJob.job_id === state.selectedOperatorJobId
+    && jobs.some((job) => job.job_id === state.selectedOperatorJob.job_id)
+    ? state.selectedOperatorJob
+    : null;
+  // The detail projection is a strict enrichment of the list summary and is
+  // the only projection allowed to carry an authenticated presentation URL.
+  const selected = selectedDetail || selectedSummary;
   const visibleSelected = selected || (candidateId && jobs.length ? jobs[0] : null);
   const visibleSelectedJobId = visibleSelected && visibleSelected.job_id || "";
   const loadingOnly = state.operatorJobsLoading && !state.operatorJobsLoaded;
@@ -8626,7 +9205,7 @@ function renderOperatorJobSummary(job) {
     ${state.operatorJobStopErrors[job.job_id] ? `<div class="operator-job-notice error" role="alert">Could not stop this try: ${escapeHtml(state.operatorJobStopErrors[job.job_id])}</div>` : ""}
     ${state.operatorJobDetailError && job.job_id === state.selectedOperatorJobId ? `<div class="operator-job-notice error" role="alert">Could not refresh this try: ${escapeHtml(state.operatorJobDetailError)}</div>` : ""}
     ${renderOperatorJobReviewAction(job)}
-    ${renderOperatorJobPresentation(job)}
+    ${renderOperatorJobInterfaceAction(job)}
     ${renderOperatorJobInterfaceOutputs(job)}
     ${result ? renderOperatorJobResult(result, { includeOutputs: false }) : `<div class="operator-job-pending-result">${operatorJobIsActive(job) ? "Waiting for results." : "This try has no saved result."}</div>`}
     <details class="operator-job-more">
@@ -8673,21 +9252,20 @@ function renderOperatorJobReviewAction(job) {
   return `<div class="operator-job-review-action"><span>Open this Candidate from the Candidates list and save it to the Shortlist before saving the try result.</span></div>`;
 }
 
-function renderOperatorJobPresentation(job) {
+function renderOperatorJobInterfaceAction(job) {
   if (!job || job.job_kind !== "environment-preview") return "";
   const presentation = job.presentation && typeof job.presentation === "object" ? job.presentation : {};
   const status = String(presentation.status || "pending");
   if (status === "available" && presentation.open_url) {
     return `
-      <section class="operator-job-presentation" aria-label="Interactive Candidate interface">
-        <div class="operator-job-presentation-heading">
+      <section class="operator-job-interface-action" aria-label="Interactive Candidate interface">
+        <div class="operator-job-interface-action-heading">
           <div>
             <h4>Interactive interface</h4>
-            <p>This interface uses the saved Candidate and selected Environment profile.</p>
+            <p>The full Interface Session uses this saved Candidate and selected Environment profile.</p>
           </div>
-          <a class="ghost-button compact-action" href="${escapeHtml(presentation.open_url)}" target="_blank" rel="noopener noreferrer">Open larger</a>
+          <button class="primary-button compact-action" data-open-operator-interface="${escapeHtml(job.job_id)}" title="Interactive Candidate interface" type="button">Open interface</button>
         </div>
-        <iframe title="Interactive Candidate interface" src="${escapeHtml(presentation.open_url)}" loading="eager" referrerpolicy="no-referrer" sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"></iframe>
       </section>
     `;
   }
@@ -8774,11 +9352,27 @@ function renderOperatorJobOutput(output) {
 
 function bindOperatorJobEvents() {
   if (!els.runDetail) return;
+  const panel = els.runDetail.querySelector("[data-operator-jobs-panel]");
+  const runId = selectedCanonicalRunId();
+  if (panel && runId && panel.dataset.runId === runId && state.operatorJobsRunId === runId) {
+    operatorJobsPanelRenderCache.set(
+      panel,
+      operatorJobsPanelBody(runId, panel.dataset.candidateId || ""),
+    );
+  }
   els.runDetail.querySelectorAll("[data-operator-job-id]").forEach((button) => {
     button.addEventListener("click", () => selectOperatorJob(button.dataset.operatorJobId));
   });
   els.runDetail.querySelectorAll("[data-stop-operator-job]").forEach((button) => {
     button.addEventListener("click", () => stopOperatorJob(button.dataset.stopOperatorJob));
+  });
+  els.runDetail.querySelectorAll("[data-open-operator-interface]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const job = state.operatorJobs.find((item) => item.job_id === button.dataset.openOperatorInterface)
+        || state.selectedOperatorJob;
+      const target = job && job.target || {};
+      if (job) openCandidateInterfaceSession(target.run_id, target.candidate_id, job.job_id);
+    });
   });
   els.runDetail.querySelectorAll("[data-attach-job-to-review]").forEach((button) => {
     button.addEventListener("click", () => attachOperatorJobToReview(button.dataset.attachJobToReview));
@@ -11061,6 +11655,12 @@ function actionCapability(item, page, actionName) {
     eligible: Boolean(value && value.supported && value.eligible),
     reason: value && value.reason || `${actionName}_unavailable`,
     profiles: Array.isArray(value && value.profiles) ? value.profiles.filter((profile) => profile && profile.id) : [],
+    profile_diagnostics: Array.isArray(value && value.profile_diagnostics)
+      ? value.profile_diagnostics.filter((profile) => profile && profile.id)
+      : [],
+    eligibility_detail: value && value.eligibility_detail && typeof value.eligibility_detail === "object"
+      ? value.eligibility_detail
+      : null,
     selected_profile_id: String(value && value.selected_profile_id || ""),
     inspection_plan: value && value.inspection_plan && typeof value.inspection_plan === "object"
       ? value.inspection_plan
@@ -11245,6 +11845,73 @@ function startCandidateTry(selectionId, trigger = null) {
   renderCandidateTrySheet();
 }
 
+function shellSingleQuote(value) {
+  return `'${String(value || "").replaceAll("'", `'"'"'`)}'`;
+}
+
+function candidatePreviewTrustCommand(remediation) {
+  if (!remediation || remediation.kind !== "approve_container_gateway_image") return "";
+  const imageRef = String(remediation.image_ref || "");
+  if (!imageRef) return "";
+  return `uv run optpilot environment-preview trust approve ${shellSingleQuote(imageRef)} --yes`;
+}
+
+function renderCandidatePreviewProfileDiagnostics(mode) {
+  if (!mode || mode.action !== "environment_preview") return "";
+  const blockers = (mode.profile_diagnostics || []).filter(
+    (profile) => profile && profile.applicable !== false && !profile.eligible,
+  );
+  if (!blockers.length) return "";
+  return `
+    <span class="candidate-try-profile-diagnostics">
+      ${blockers.map((profile) => {
+        const command = candidatePreviewTrustCommand(profile.remediation);
+        const trustSource = String(profile.eligibility_detail && profile.eligibility_detail.trust_source || "");
+        const restartInstruction = trustSource === "session"
+          ? "This Studio is using an exact session-only trust list. After approving, restart without that override, or add this image to the session list."
+          : "Run this command, then restart Studio.";
+        return `
+          <small><strong>${escapeHtml(profile.label || profile.id)}:</strong> ${escapeHtml(capabilityReason(profile.reason))}</small>
+          ${command ? `
+            <span class="candidate-try-remediation">
+              <code>${escapeHtml(command)}</code>
+              <button class="ghost-button compact-action" type="button" data-copy-preview-trust-command="${escapeHtml(command)}">Copy command</button>
+              <small>${escapeHtml(restartInstruction)}</small>
+            </span>
+          ` : ""}
+        `;
+      }).join("")}
+    </span>
+  `;
+}
+
+async function copyCandidatePreviewTrustCommand(event) {
+  const button = event.target && event.target.closest
+    ? event.target.closest("[data-copy-preview-trust-command]")
+    : null;
+  if (!button) return;
+  const command = String(button.dataset.copyPreviewTrustCommand || "");
+  if (!command) return;
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = command;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    button.textContent = "Command copied — run it in Terminal";
+  } catch (_error) {
+    button.textContent = "Select and copy the command";
+  }
+}
+
 function renderCandidateTrySheet() {
   const pending = state.pendingCandidateTry;
   if (!els.candidateTryModal || !els.candidateTryBody) return;
@@ -11297,6 +11964,7 @@ function renderCandidateTrySheet() {
             <span>
               <span class="candidate-try-mode-heading"><strong>${escapeHtml(capabilityActionLabel(mode.action))}</strong><span class="tag status-unavailable">Unavailable</span></span>
               <small>${escapeHtml(capabilityReason(mode.reason))}</small>
+              ${renderCandidatePreviewProfileDiagnostics(mode)}
             </span>
           </div>
         `).join("")}
@@ -11791,11 +12459,30 @@ async function performWorkbenchAction(actionName, selectionId, options = {}) {
       const job = operatorJobFromPayload(payload);
       if (!job) throw new Error(`${capabilityActionLabel(actionName)} did not return a Candidate try.`);
       if (operatorJobRunId(job) && operatorJobRunId(job) !== runId) throw new Error("Candidate try belongs to another Run.");
+      if (
+        String(job.target && job.target.candidate_id || "")
+        && String(job.target.candidate_id) !== String(item.id || "")
+      ) throw new Error("Candidate try belongs to another Candidate.");
       selectOperatorJobsRun(runId);
       upsertOperatorJob(job);
       state.selectedOperatorJobId = job.job_id;
       state.selectedOperatorJob = job;
       createdOperatorJobId = job.job_id;
+      if (actionName === "environment_preview") {
+        state.interfaceSessionRoute = {
+          view: "interface",
+          kind: "candidate",
+          runId,
+          candidateId: String(job.target && job.target.candidate_id || item.id || ""),
+          jobId: job.job_id,
+        };
+        openCandidateInterfaceSession(
+          state.interfaceSessionRoute.runId,
+          state.interfaceSessionRoute.candidateId,
+          state.interfaceSessionRoute.jobId,
+        );
+        syncStudioRoute();
+      }
     }
     completeDurableWorkbenchIntent(durableIntentKey);
   } catch (error) {
@@ -13189,6 +13876,7 @@ async function openComponentInterface(component) {
   ) {
     session.catalogLaunchId = String(launch.launch_id || "");
     renderWorkspace();
+    openLaunchInterfaceSession(launch);
     return;
   }
   await launchComponentInterface(component);
@@ -13206,6 +13894,10 @@ async function resumeStoredInterfaceLaunch() {
     state.interfaceLaunch = mergeInterfaceLaunchPayload(state.interfaceLaunch, launch, launchKey);
     if (state.interfaceLaunch.status === "stopped") {
       closeInterfaceStopConfirmation();
+      if (
+        state.interfaceSessionRoute
+        && String(state.interfaceSessionRoute.launchId || "") === String(launchId)
+      ) state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
       state.interfaceLaunch = null;
       resetActiveInterfaceReturnState();
       persistActiveInterfaceLaunch(null);
@@ -13234,7 +13926,7 @@ async function resumeStoredInterfaceLaunch() {
             error: state.interfaceLaunch.error || "This interface launch could not be restored.",
           };
           persistActiveInterfaceLaunch(null);
-          renderWorkspace();
+          renderInterfaceLaunchSurface(state.interfaceLaunch);
         }
       });
     } else {
@@ -13305,6 +13997,7 @@ async function launchComponentInterface(component) {
       sourceSession.catalogLaunchId = String(state.interfaceLaunch.launch_id);
     }
     renderInterfaceLaunchSurface(state.interfaceLaunch);
+    openLaunchInterfaceSession(state.interfaceLaunch);
     await pollComponentInterfaceLaunch(launchKey, launch.launch_id);
   } catch (error) {
     if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
@@ -13334,6 +14027,7 @@ async function pollComponentInterfaceLaunch(launchKey, launchId) {
     const launch = payload.launch || {};
     if (!state.interfaceLaunch || state.interfaceLaunch.key !== launchKey || state.interfaceLaunch.launch_id !== launchId) return;
     state.interfaceLaunch = mergeInterfaceLaunchPayload(state.interfaceLaunch, launch, launchKey);
+    if (state.view === "interface") renderInterfaceSession();
     if (launch.status === "ready") {
       const firstReady = !readyObserved;
       readyObserved = true;
@@ -13768,7 +14462,20 @@ async function discardPendingInterfaceOutputsAndStop() {
 }
 
 function renderInterfaceLaunchSurface(launch) {
+  const route = state.interfaceSessionRoute;
+  if (
+    route
+    && ["catalog", "workspace"].includes(route.kind)
+    && launch
+    && String(route.launchId || "") === String(launch.launch_id || "")
+  ) {
+    state.interfaceSessionLaunchSnapshot = { ...launch };
+  }
   renderActiveInterfaceIndicator();
+  if (state.view === "interface") {
+    renderInterfaceSession();
+    return;
+  }
   if (launch && launch.launch_scope === "workspace-transient") {
     renderWorkspace();
     return;
@@ -14030,6 +14737,21 @@ async function savePlanDraft(plan, options = {}) {
     { tolerateError: true },
   );
   if (result && result.error) {
+    const storageUnavailable = result.code === "studio_storage_unavailable";
+    if (storageUnavailable) {
+      setStudyActionError(
+        plan,
+        options.errorKind || "save",
+        "Studio local storage is temporarily unavailable",
+        result.error,
+        {
+          code: result.code,
+          guidance: "Your Study was not rejected or changed. Wait briefly, then use the action above to try again.",
+        },
+      );
+      if (options.render !== false) renderExperiments();
+      return null;
+    }
     plan.draft = {
       ...(plan.draft || {}),
       error: result.error,
@@ -14180,25 +14902,15 @@ async function launchPlan(plan) {
     return;
   }
   const requestId = newRequestId();
-  const configuredMethodRequestTimeout = plan.methodRequestTimeoutSeconds;
-  const methodRequestTimeoutSeconds = Number(
-    configuredMethodRequestTimeout === ""
-      || configuredMethodRequestTimeout === null
-      || configuredMethodRequestTimeout === undefined
-      ? 10
-      : configuredMethodRequestTimeout,
-  );
   const request = catalogStudyRef
     ? {
         schema: "optpilot.studio-study-launch-request.v1",
         request_id: requestId,
-        method_request_timeout_seconds: methodRequestTimeoutSeconds,
         study_ref: catalogStudyRef,
       }
     : {
         schema: "optpilot.studio-study-launch-request.v1",
         request_id: requestId,
-        method_request_timeout_seconds: methodRequestTimeoutSeconds,
         workspace_id: plan.draft.workspace_id,
         study_relative_path: plan.draft.study_relative_path,
         expected_workspace_revision: plan.draft.workspace_revision,
@@ -14979,6 +15691,7 @@ async function launchWorkspaceInterface() {
       throw new Error("Interface launch did not preserve the source workspace boundary.");
     }
     renderWorkspace();
+    openLaunchInterfaceSession(state.interfaceLaunch);
     await pollWorkspaceInterfaceLaunch(launchKey, state.interfaceLaunch.launch_id);
   } catch (error) {
     if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
@@ -14993,6 +15706,7 @@ async function launchWorkspaceInterface() {
     preview.message = boundedPublicActionError(error, "This interface could not be started.");
     session.timeline.push(["tool", "interface launch failed", preview.message]);
     renderWorkspace();
+    renderInterfaceLaunchSurface(state.interfaceLaunch);
   }
 }
 
@@ -15012,6 +15726,7 @@ async function pollWorkspaceInterfaceLaunch(launchKey, launchId) {
     if (!state.interfaceLaunch || state.interfaceLaunch.key !== launchKey || state.interfaceLaunch.launch_id !== launchId) return;
     const expectedWorkspaceId = state.interfaceLaunch.source_workspace_id;
     state.interfaceLaunch = mergeInterfaceLaunchPayload(state.interfaceLaunch, launch, launchKey);
+    if (state.view === "interface") renderInterfaceSession();
     if (state.interfaceLaunch.launch_scope !== "workspace-transient"
       || String(state.interfaceLaunch.source_workspace_id || "") !== String(expectedWorkspaceId || "")) {
       throw new Error("Interface launch escaped its source workspace boundary.");
@@ -15054,10 +15769,12 @@ async function pollWorkspaceInterfaceLaunch(launchKey, launchId) {
     if (status === "stopped") {
       clearWorkspaceInterfacePreview(state.interfaceLaunch, "idle", "Interface stopped. Launch it again when you want to inspect this workspace.");
       closeInterfaceStopConfirmation();
+      const stoppedLaunch = { ...state.interfaceLaunch };
       state.interfaceLaunch = null;
       resetActiveInterfaceReturnState();
       persistActiveInterfaceLaunch(null);
       if (sourceIsSelected) renderWorkspace();
+      renderInterfaceLaunchSurface(stoppedLaunch);
       return;
     }
     if (status === "failed") {
@@ -15410,7 +16127,6 @@ function planFromPair(pair) {
     maxFailures: "",
     parallelism: 1,
     timeoutSeconds,
-    methodRequestTimeoutSeconds: 10,
     maxRetries: "",
     evidenceLevel: "standard",
     seed: 0,
@@ -15744,14 +16460,16 @@ function sessionCard(session) {
         ${workspaceBadges(session)}
       </button>
       ${(assistantAvailable || canDelete) ? `
-        <details class="session-card-more">
-          <summary aria-label="Actions for ${escapeHtml(session.title)}">Actions</summary>
+        <details class="session-card-more" name="workspace-actions">
+          <summary aria-label="Actions for ${escapeHtml(session.title)}" title="Workspace actions">
+            <span class="session-card-more-icon" aria-hidden="true">&#8230;</span>
+          </summary>
           <div class="session-card-actions">
             ${assistantAvailable ? attached
               ? `<button class="ghost-button compact-action" data-close-workspace-id="${escapeHtml(session.id)}" type="button">Remove from ${escapeHtml(assistantLabel)}</button>`
               : `<button class="ghost-button compact-action" data-attach-workspace-id="${escapeHtml(session.id)}" type="button">Ask in ${escapeHtml(assistantLabel)}</button>`
             : ""}
-            ${canDelete ? `<button class="ghost-button compact-action" data-delete-workspace-id="${escapeHtml(session.id)}" type="button">${escapeHtml(destructiveLabel)}</button>` : ""}
+            ${canDelete ? `<button class="ghost-button compact-action session-card-destructive-action" data-delete-workspace-id="${escapeHtml(session.id)}" type="button">${escapeHtml(destructiveLabel)}</button>` : ""}
           </div>
         </details>
       ` : ""}

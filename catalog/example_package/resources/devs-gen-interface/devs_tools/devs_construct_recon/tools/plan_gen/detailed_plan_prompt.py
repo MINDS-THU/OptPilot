@@ -27,6 +27,13 @@ Generate a detailed specification for the COUPLED module and simple specificatio
 - external_io: Describe ONLY direct external IO performed by this coupled wrapper itself. This is usually an empty list because coupled wrappers are normally pure structural containers. Do NOT put child/subtree IO here.
 
 [STEP 2: Design Children (children_plans)]
+Return exactly one `children_plans` entry for every name in `Direct Children`,
+and no other entries. Preserve each approved child's model type from the global
+plan. Never add, rename, omit, or duplicate a child type. If the scenario needs
+multiple instances of one approved child type, represent that multiplicity with
+init arguments and coupling semantics on the single child entry; do not create
+extra child entries.
+
 For each direct child, execute this workflow:
 1. Copy `model_type` based on the global plan.
 2. Briefly describe responsibility in `function`.

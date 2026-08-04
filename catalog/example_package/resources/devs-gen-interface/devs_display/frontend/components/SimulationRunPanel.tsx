@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, CircleStop, Clock3, Download, Eye, File, ListTree, Loader2, Play, RotateCcw, RotateCw, Terminal, X } from 'lucide-react';
 import { downloadSimulationResultFile, getSimulationResultPreview, getSimulationRun, getSimulationSpec, startSimulationRun, stopSimulationRun } from '../services/agentService';
 import {
@@ -9,154 +9,25 @@ import {
   resetSuggestedValues,
   suggestedValuesChanged,
 } from '../services/simulationRunFormService.js';
-import { SimulationParameter, SimulationResultFile, SimulationResultPreview, SimulationRun, SimulationSpec } from '../types';
+import { shouldRefreshSimulationSpecAfterProjectUpdate } from '../services/projectSelectionService.js';
+import { compactSimulationTime, parseBehaviorTrace } from '../services/behaviorReplayService.js';
+import { BehaviorReplaySeekRequest, BehaviorTrace } from '../behaviorReplayTypes';
+import { GraphLink, GraphNode, SimulationParameter, SimulationResultFile, SimulationResultPreview, SimulationRun, SimulationSpec } from '../types';
+import { BehaviorReplay } from './BehaviorReplay';
 
 interface Props {
   sessionId: string;
   simulationId: string | null;
   simulationName: string | null;
+  simulationStatus: 'ready' | 'updating' | 'error' | null;
+  graphNodes: GraphNode[];
+  graphLinks: GraphLink[];
+  active: boolean;
 }
 
 const terminalStatuses = new Set(['succeeded', 'completed', 'failed', 'timed_out', 'stopped', 'cancelled']);
 const EVENT_TRACE_FILE = 'event_trace.jsonl';
 const MAX_RENDERED_TRACE_EVENTS = 1000;
-
-interface EventTraceRow {
-  sequence: string;
-  simulationTime: string;
-  component: string;
-  port: string;
-  value: string;
-}
-
-interface ParsedEventTrace {
-  rows: EventTraceRow[];
-  recordedEvents?: number;
-  droppedEvents?: number;
-  complete: boolean;
-  truncated: boolean;
-  malformedLines: number;
-  hiddenRows: number;
-}
-
-const recordValue = (record: Record<string, unknown>, names: string[]): unknown => {
-  for (const name of names) {
-    if (record[name] !== undefined && record[name] !== null) return record[name];
-  }
-  return undefined;
-};
-
-const displayTraceValue = (value: unknown): string => {
-  if (value === undefined || value === null) return '—';
-  if (typeof value === 'string') return value || '—';
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-
-const compactSimulationTime = (value: string): string => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return value;
-  if (Number.isInteger(numeric)) return String(numeric);
-  return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-};
-
-const finiteCount = (value: unknown): number | undefined => (
-  typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : undefined
-);
-
-const parseEventTrace = (content: string): ParsedEventTrace => {
-  const rows: EventTraceRow[] = [];
-  let malformedLines = 0;
-  let recordedEvents: number | undefined;
-  let droppedEvents: number | undefined;
-  let complete = false;
-  let truncated = false;
-  let eventIndex = 0;
-
-  content.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      malformedLines += 1;
-      return;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      malformedLines += 1;
-      return;
-    }
-
-    const record = parsed as Record<string, unknown>;
-    const recordType = String(recordValue(record, ['record_type', 'type', 'kind']) || '').toLowerCase();
-    const looksLikeSummary = recordType === 'summary'
-      || recordType === 'footer'
-      || recordType === 'metadata'
-      || recordType === 'meta'
-      || record.truncated !== undefined
-      || record.dropped_events !== undefined
-      || record.recorded_events !== undefined;
-
-    if (looksLikeSummary && recordType !== 'event') {
-      complete = true;
-      recordedEvents = finiteCount(recordValue(record, ['recorded_events', 'event_count', 'count'])) ?? recordedEvents;
-      droppedEvents = finiteCount(recordValue(record, ['dropped_events', 'omitted_events', 'dropped', 'omitted'])) ?? droppedEvents;
-      truncated = record.truncated === true || (droppedEvents !== undefined && droppedEvents > 0) || truncated;
-      return;
-    }
-
-    const simulationTime = recordValue(record, [
-      'simulation_time', 'sim_time', '_sim_time', 'time', 'timestamp'
-    ]);
-    const component = recordValue(record, [
-      'component', 'model_path', '_model_path', 'component_path', 'model', 'model_name'
-    ]);
-    const port = recordValue(record, ['port', 'port_name']);
-    let value = recordValue(record, ['value', 'event', 'payload', 'data', 'message']);
-    if (value === undefined) {
-      const contextualKeys = new Set([
-        'schema_version', 'record_type', 'type', 'kind', 'sequence', 'index',
-        'simulation_time', 'sim_time', '_sim_time', 'time', 'timestamp',
-        'component', 'model_path', '_model_path', 'component_path', 'model', 'model_name',
-        'port', 'port_name', 'direction'
-      ]);
-      const remaining = Object.fromEntries(
-        Object.entries(record).filter(([key]) => !contextualKeys.has(key))
-      );
-      if (Object.keys(remaining).length > 0) value = remaining;
-    }
-
-    eventIndex += 1;
-    rows.push({
-      sequence: displayTraceValue(recordValue(record, ['sequence', 'index']) ?? eventIndex),
-      simulationTime: displayTraceValue(simulationTime),
-      component: displayTraceValue(component),
-      port: displayTraceValue(port),
-      value: displayTraceValue(value),
-    });
-  });
-
-  const visibleRows = rows.slice(0, MAX_RENDERED_TRACE_EVENTS);
-  return {
-    rows: visibleRows,
-    recordedEvents,
-    droppedEvents,
-    complete,
-    truncated,
-    malformedLines,
-    hiddenRows: rows.length - visibleRows.length,
-  };
-};
 
 const choiceValue = (
   parameter: SimulationParameter,
@@ -202,7 +73,15 @@ const formattedPreview = (preview: SimulationResultPreview): string => {
   return preview.content;
 };
 
-export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, simulationName }) => {
+export const SimulationRunPanel: React.FC<Props> = ({
+  sessionId,
+  simulationId,
+  simulationName,
+  simulationStatus,
+  graphNodes,
+  graphLinks,
+  active,
+}) => {
   const [spec, setSpec] = useState<SimulationSpec | null>(null);
   const [values, setValues] = useState<Record<string, string | number | boolean>>({});
   const [run, setRun] = useState<SimulationRun | null>(null);
@@ -215,13 +94,34 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
   const [resultPreview, setResultPreview] = useState<SimulationResultPreview | null>(null);
   const [activeResultPath, setActiveResultPath] = useState<string | null>(null);
   const [resultFileError, setResultFileError] = useState<string | null>(null);
-  const [eventTrace, setEventTrace] = useState<ParsedEventTrace | null>(null);
+  const [eventTrace, setEventTrace] = useState<BehaviorTrace | null>(null);
   const [eventTraceStatus, setEventTraceStatus] = useState<'idle' | 'loading' | 'loaded' | 'failed'>('idle');
   const [eventTraceError, setEventTraceError] = useState<string | null>(null);
+  const [replaySeekRequest, setReplaySeekRequest] = useState<BehaviorReplaySeekRequest | null>(null);
+  const replaySeekSequenceRef = useRef(0);
+  const replayRegionRef = useRef<HTMLDivElement | null>(null);
+  const specRequestSequenceRef = useRef(0);
+  const runRef = useRef<SimulationRun | null>(run);
+  const validationRunIdRef = useRef<string | null>(validationRunId);
+  const scopeKey = `${sessionId}\u0000${simulationId || ''}`;
+  const scopeKeyRef = useRef(scopeKey);
+  const projectStateRef = useRef<{ scopeKey: string; status: Props['simulationStatus'] } | null>(null);
+  scopeKeyRef.current = scopeKey;
+  runRef.current = run;
+  validationRunIdRef.current = validationRunId;
 
   const loadSpec = async () => {
+    const requestId = ++specRequestSequenceRef.current;
+    const requestScope = scopeKey;
+    const isCurrentRequest = () => (
+      specRequestSequenceRef.current === requestId
+      && scopeKeyRef.current === requestScope
+    );
     if (!sessionId || !simulationId || simulationId.startsWith('local-')) {
-      setUnavailable(Boolean(simulationId));
+      if (isCurrentRequest()) {
+        setUnavailable(Boolean(simulationId));
+        setLoadingSpec(false);
+      }
       return;
     }
     setLoadingSpec(true);
@@ -229,15 +129,17 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
     setError(null);
     try {
       const nextSpec = await getSimulationSpec(sessionId, simulationId);
+      if (!isCurrentRequest()) return;
       setSpec(nextSpec);
       setValues(previous => initializeScenarioValues(nextSpec.parameters, previous));
     } catch (reason: any) {
+      if (!isCurrentRequest()) return;
       const missing = reason?.status === 404 || reason?.status === 405 || reason?.status === 501;
       setUnavailable(missing);
       setError(missing ? null : (reason?.message || 'Could not load the simulation runner.'));
       setSpec(null);
     } finally {
-      setLoadingSpec(false);
+      if (isCurrentRequest()) setLoadingSpec(false);
     }
   };
 
@@ -253,29 +155,83 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
     setEventTrace(null);
     setEventTraceStatus('idle');
     setEventTraceError(null);
+    setReplaySeekRequest(null);
     setValidationRunId(null);
-    loadSpec();
+    setStarting(false);
+    setStopping(false);
+    runRef.current = null;
+    validationRunIdRef.current = null;
+    void loadSpec();
+    return () => {
+      specRequestSequenceRef.current += 1;
+    };
   }, [sessionId, simulationId]);
 
   useEffect(() => {
+    const currentProjectState = { scopeKey, status: simulationStatus };
+    const previousProjectState = projectStateRef.current;
+    projectStateRef.current = currentProjectState;
+    if (shouldRefreshSimulationSpecAfterProjectUpdate(
+      previousProjectState,
+      currentProjectState
+    )) {
+      // Generation completes in place: the simulation id is unchanged, but
+      // the temporary "runner unavailable" response is now obsolete.
+      void loadSpec();
+    }
+  }, [scopeKey, simulationStatus]);
+
+  useEffect(() => {
     if (!run || terminalStatuses.has(run.status) || !sessionId || !simulationId) return;
-    const timer = window.setInterval(async () => {
+    const requestScope = scopeKey;
+    const runId = run.run_id;
+    let cancelled = false;
+    let timer: number | null = null;
+
+    const poll = async () => {
+      const currentRun = runRef.current;
+      if (
+        cancelled
+        || scopeKeyRef.current !== requestScope
+        || !currentRun
+        || currentRun.run_id !== runId
+        || terminalStatuses.has(currentRun.status)
+      ) return;
       try {
-        const next = await getSimulationRun(sessionId, simulationId, run.run_id);
+        const next = await getSimulationRun(sessionId, simulationId, runId);
+        const latestRun = runRef.current;
+        if (
+          cancelled
+          || scopeKeyRef.current !== requestScope
+          || !latestRun
+          || latestRun.run_id !== runId
+          || terminalStatuses.has(latestRun.status)
+        ) return;
+        runRef.current = next;
         setRun(next);
         if (next.error && ['failed', 'timed_out'].includes(next.status)) {
           setError(next.error);
         }
-        if (terminalStatuses.has(next.status) && next.run_id === validationRunId) {
+        if (terminalStatuses.has(next.status) && next.run_id === validationRunIdRef.current) {
+          validationRunIdRef.current = null;
           setValidationRunId(null);
           void loadSpec();
         }
       } catch (reason: any) {
+        if (cancelled || scopeKeyRef.current !== requestScope || runRef.current?.run_id !== runId) return;
         setError(reason?.message || 'Lost contact with the simulation run.');
       }
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [run?.run_id, run?.status, sessionId, simulationId, validationRunId]);
+      if (!cancelled && !terminalStatuses.has(runRef.current?.status || '')) {
+        timer = window.setTimeout(poll, 1000);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [run?.run_id, sessionId, simulationId]);
 
   const eventTraceFile = useMemo(
     () => run?.result_files?.find(file => file.path.toLowerCase() === EVENT_TRACE_FILE) || null,
@@ -310,7 +266,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
       eventTraceFile.path
     ).then((preview) => {
       if (cancelled) return;
-      setEventTrace(parseEventTrace(preview.content));
+      setEventTrace(parseBehaviorTrace(preview.content, { maxEvents: MAX_RENDERED_TRACE_EVENTS }));
       setEventTraceStatus('loaded');
     }).catch((reason: any) => {
       if (cancelled) return;
@@ -334,7 +290,11 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
   const isRunning = Boolean(run && !terminalStatuses.has(run.status));
   const canStop = Boolean(run && ['queued', 'running', 'stopping'].includes(run.status));
   const validationBlocksRun = spec?.validation_status === 'validating';
-  const missingRequired = spec ? missingRequiredParameters(spec.parameters, values) : [];
+  // The helper's JavaScript declaration intentionally describes only the
+  // fields it reads, but it returns the original SimulationParameter objects.
+  const missingRequired = spec
+    ? missingRequiredParameters(spec.parameters, values) as SimulationParameter[]
+    : [];
   const suggestedParameterCount = spec?.parameters.filter(hasSuggestedValue).length || 0;
   const suggestionsChanged = Boolean(spec && suggestedValuesChanged(spec.parameters, values));
   const inputsValid = Boolean(spec && spec.parameters.every(parameter => {
@@ -365,6 +325,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
 
   const start = async () => {
     if (!simulationId || !canRun) return;
+    const requestScope = scopeKey;
     setStarting(true);
     setError(null);
     setResultPreview(null);
@@ -373,12 +334,16 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
     setEventTrace(null);
     setEventTraceStatus('idle');
     setEventTraceError(null);
+    setReplaySeekRequest(null);
     try {
       const next = await startSimulationRun(
         sessionId,
         simulationId,
         parsedValues
       );
+      if (scopeKeyRef.current !== requestScope) return;
+      validationRunIdRef.current = next.run_id;
+      runRef.current = next;
       setValidationRunId(next.run_id);
       setRun(next);
       setSpec(previous => previous ? {
@@ -387,22 +352,45 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
         validation_message: 'Running this scenario against the exact current simulation files.'
       } : previous);
     } catch (reason: any) {
+      if (scopeKeyRef.current !== requestScope) return;
       setError(reason?.message || 'The simulation could not be started.');
     } finally {
-      setStarting(false);
+      if (scopeKeyRef.current === requestScope) setStarting(false);
     }
   };
 
   const stop = async () => {
     if (!simulationId || !run) return;
+    const requestScope = scopeKey;
+    const runId = run.run_id;
     setStopping(true);
     try {
-      setRun(await stopSimulationRun(sessionId, simulationId, run.run_id));
+      const next = await stopSimulationRun(sessionId, simulationId, runId);
+      if (
+        scopeKeyRef.current !== requestScope
+        || runRef.current?.run_id !== runId
+        || terminalStatuses.has(runRef.current?.status || '')
+      ) return;
+      runRef.current = next;
+      setRun(next);
     } catch (reason: any) {
+      if (scopeKeyRef.current !== requestScope) return;
       setError(reason?.message || 'The simulation could not be stopped.');
     } finally {
-      setStopping(false);
+      if (scopeKeyRef.current === requestScope) setStopping(false);
     }
+  };
+
+  const showObservationInReplay = (eventIndex: number) => {
+    replaySeekSequenceRef.current += 1;
+    setReplaySeekRequest({
+      eventIndex,
+      requestId: replaySeekSequenceRef.current,
+    });
+    window.requestAnimationFrame(() => {
+      replayRegionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      replayRegionRef.current?.focus({ preventScroll: true });
+    });
   };
 
   const downloadResult = async (file: SimulationResultFile) => {
@@ -605,15 +593,33 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                   {Object.entries(run.metrics).map(([name, value]) => <div key={name} className="rounded border border-slate-200 bg-slate-50 p-3"><div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{name}</div><div className="mt-1 break-all text-lg font-semibold text-slate-900">{String(value ?? '—')}</div></div>)}
                 </div>
               )}
+              {terminalStatuses.has(run.status) && eventTraceStatus === 'loaded' && eventTrace && eventTrace.events.length > 0 && graphNodes.length > 0 && (
+                <div ref={replayRegionRef} tabIndex={-1} className="scroll-mt-4 focus:outline-none" aria-label="Behavior replay">
+                  <BehaviorReplay
+                    nodes={graphNodes}
+                    links={graphLinks}
+                    trace={eventTrace}
+                    seekRequest={replaySeekRequest}
+                    failureMessage={['failed', 'timed_out', 'stopped'].includes(run.status) ? (run.error || null) : null}
+                    active={active}
+                  />
+                </div>
+              )}
+              {terminalStatuses.has(run.status) && eventTraceStatus === 'loaded' && eventTrace && eventTrace.events.length > 0 && graphNodes.length === 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                  The run recorded behavior, but its structure is not available yet. Open <strong>Structure</strong> and refresh it, then return here to replay the run on the model.
+                </div>
+              )}
               {terminalStatuses.has(run.status) && (
                 <div className="overflow-hidden rounded-lg border border-slate-200">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
                     <div className="flex min-w-0 items-center gap-2">
                       <ListTree size={15} className="shrink-0 text-blue-600" />
-                      <span className="text-xs font-semibold text-slate-800">Event trace</span>
+                      <span className="text-xs font-semibold text-slate-800">Recorded observations</span>
                       {eventTrace && (
                         <span className="text-[10px] text-slate-500">
-                          {eventTrace.recordedEvents ?? (eventTrace.rows.length + eventTrace.hiddenRows)} recorded
+                          {eventTrace.recordedEvents ?? eventTrace.events.filter(event => event.recordKind === 'event').length} port events
+                          {eventTrace.recordedStates !== undefined && ` · ${eventTrace.recordedStates} state updates`}
                         </span>
                       )}
                     </div>
@@ -651,7 +657,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                     </div>
                   )}
 
-                  {eventTraceStatus === 'loaded' && eventTrace && eventTrace.rows.length === 0 && (
+                  {eventTraceStatus === 'loaded' && eventTrace && eventTrace.events.length === 0 && (
                     <div className="px-3 py-3 text-xs leading-5 text-slate-600">
                       {eventTrace.malformedLines > 0
                         ? `The trace file contains ${eventTrace.malformedLines} line${eventTrace.malformedLines === 1 ? '' : 's'} that could not be read as events. Open the raw file to inspect it.`
@@ -661,7 +667,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                     </div>
                   )}
 
-                  {eventTraceStatus === 'loaded' && eventTrace && eventTrace.rows.length > 0 && (
+                  {eventTraceStatus === 'loaded' && eventTrace && eventTrace.events.length > 0 && (
                     <>
                       <div className="max-h-80 overflow-auto">
                         <table className="w-full min-w-[760px] table-fixed text-left text-[11px]">
@@ -671,6 +677,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                             <col className="w-56" />
                             <col className="w-40" />
                             <col />
+                            <col className="w-20" />
                           </colgroup>
                           <thead className="sticky top-0 z-10 bg-white text-[10px] uppercase tracking-wide text-slate-500 shadow-[0_1px_0_0_rgb(226,232,240)]">
                             <tr>
@@ -679,22 +686,35 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                               <th className="whitespace-nowrap px-3 py-2 font-semibold">Component</th>
                               <th className="whitespace-nowrap px-3 py-2 font-semibold">Port</th>
                               <th className="px-3 py-2 font-semibold">Value</th>
+                              <th className="px-3 py-2 text-right font-semibold">Replay</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {eventTrace.rows.map((row, index) => (
-                              <tr key={`${row.sequence}-${index}`} className="align-top hover:bg-blue-50/40">
+                            {eventTrace.events.map((row) => (
+                              <tr key={row.id} className="align-top hover:bg-blue-50/60 focus-within:bg-blue-50">
                                 <td className="px-3 py-2 font-mono text-slate-400">{row.sequence}</td>
                                 <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-mono text-slate-700" title={row.simulationTime}>{compactSimulationTime(row.simulationTime)}</td>
                                 <td className="overflow-hidden text-ellipsis whitespace-nowrap px-3 py-2 font-medium text-slate-700" title={row.component}>{row.component}</td>
-                                <td className="truncate px-3 py-2 font-mono text-slate-600" title={row.port}>{row.port}</td>
+                                <td className="truncate px-3 py-2 font-mono text-slate-600" title={row.recordKind === 'state' ? 'State after transition' : row.port}>{row.recordKind === 'state' ? 'State' : row.port}</td>
                                 <td className="truncate px-3 py-2 font-mono text-slate-600" title={row.value}>{row.value}</td>
+                                <td className="px-3 py-1.5 text-right">
+                                  {graphNodes.length > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => showObservationInReplay(row.index)}
+                                      className="rounded px-2 py-1 text-[10px] font-semibold text-purple-700 hover:bg-purple-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                                      aria-label={`Show observation ${row.sequence} at simulation time ${compactSimulationTime(row.simulationTime)} in Behavior replay`}
+                                    >
+                                      Show
+                                    </button>
+                                  ) : <span className="text-slate-300" aria-label="Replay unavailable">—</span>}
+                                </td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                      {(!eventTrace.complete || eventTrace.truncated || eventTrace.hiddenRows > 0 || eventTrace.malformedLines > 0) && (
+                      {(!eventTrace.complete || eventTrace.truncated || eventTrace.hiddenEvents > 0 || eventTrace.malformedLines > 0) && (
                         <div className="border-t border-amber-100 bg-amber-50 px-3 py-2 text-[10px] leading-4 text-amber-800">
                           {!eventTrace.complete && <span>The run ended before the trace summary was written; these are the events retained up to that point.</span>}
                           {eventTrace.truncated && (
@@ -703,7 +723,7 @@ export const SimulationRunPanel: React.FC<Props> = ({ sessionId, simulationId, s
                               {eventTrace.droppedEvents !== undefined ? ` and omitted ${eventTrace.droppedEvents} event${eventTrace.droppedEvents === 1 ? '' : 's'}` : ''}.
                             </span>
                           )}
-                          {eventTrace.hiddenRows > 0 && <span> Showing the first {eventTrace.rows.length} events here; use the raw file for the rest.</span>}
+                          {eventTrace.hiddenEvents > 0 && <span> Showing the first {eventTrace.events.length} observations here; use the raw file for the rest.</span>}
                           {eventTrace.malformedLines > 0 && <span> Skipped {eventTrace.malformedLines} malformed line{eventTrace.malformedLines === 1 ? '' : 's'}.</span>}
                         </div>
                       )}

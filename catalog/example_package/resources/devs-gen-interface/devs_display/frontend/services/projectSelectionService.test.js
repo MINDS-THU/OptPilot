@@ -7,7 +7,8 @@ import {
   projectToOpenAfterGeneration,
   resolveActivityPreviewPath,
   selectedFileAfterProjectRefresh,
-  shouldFocusFilesForProjectRefresh
+  shouldFocusFilesForProjectRefresh,
+  shouldRefreshSimulationSpecAfterProjectUpdate
 } from './projectSelectionService.js';
 
 const project = (project_id, status, updated_at, version = 1) => ({
@@ -166,6 +167,46 @@ test('validation polling of the selected simulation does not pull Run back to Fi
   );
   assert.equal(
     shouldFocusFilesForProjectRefresh('restaurant', validating.project_id),
+    false
+  );
+});
+
+test('refreshes the runner when the selected simulation finishes generating', () => {
+  assert.equal(
+    shouldRefreshSimulationSpecAfterProjectUpdate(
+      { scopeKey: 'session-a\0restaurant', status: 'updating' },
+      { scopeKey: 'session-a\0restaurant', status: 'ready' }
+    ),
+    true
+  );
+});
+
+test('refreshes the runner failure details when generation ends in error', () => {
+  assert.equal(
+    shouldRefreshSimulationSpecAfterProjectUpdate(
+      { scopeKey: 'session-a\0restaurant', status: 'updating' },
+      { scopeKey: 'session-a\0restaurant', status: 'error' }
+    ),
+    true
+  );
+});
+
+test('does not treat a different simulation as an in-place runner update', () => {
+  assert.equal(
+    shouldRefreshSimulationSpecAfterProjectUpdate(
+      { scopeKey: 'session-a\0restaurant', status: 'updating' },
+      { scopeKey: 'session-a\0supply-chain', status: 'ready' }
+    ),
+    false
+  );
+});
+
+test('does not refresh merely because a ready simulation starts validation', () => {
+  assert.equal(
+    shouldRefreshSimulationSpecAfterProjectUpdate(
+      { scopeKey: 'session-a\0restaurant', status: 'ready' },
+      { scopeKey: 'session-a\0restaurant', status: 'updating' }
+    ),
     false
   );
 });

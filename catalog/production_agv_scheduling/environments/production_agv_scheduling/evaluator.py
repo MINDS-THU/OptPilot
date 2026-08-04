@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import statistics
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
         raise ValueError("candidateRoot must be inside the disposable trial workspace.") from exc
     workspace.mkdir(parents=True, exist_ok=True)
     settings = normalize_settings(context.get("settings", {}))
+    candidate_sha256 = candidate_fingerprint(candidate_root)
 
     records: list[JsonDict] = []
     for seed in settings["seeds"]:
@@ -35,6 +37,11 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
             settings=settings,
             seed=seed,
             database_path=None,
+        )
+        _require_candidate_fingerprint(
+            candidate_root,
+            candidate_sha256,
+            phase=f"replication seed {seed}",
         )
         records.append({"seed": seed, "kpi": kpi})
 
@@ -48,23 +55,20 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
         seed=worst_seed,
         database_path=trace_path,
     )
-    if not math.isclose(
-        float(replayed_kpi["total_score"]),
-        worst_total_score,
-        rel_tol=0.0,
-        abs_tol=1e-9,
-    ):
-        raise RuntimeError(
-            "Worst-seed replay did not reproduce its score: "
-            f"first={worst_total_score}, replay={replayed_kpi['total_score']}."
-        )
+    _require_candidate_fingerprint(
+        candidate_root,
+        candidate_sha256,
+        phase=f"worst-seed replay {worst_seed}",
+    )
     if not trace_path.is_file():
         raise RuntimeError("Worst-seed replay did not create worst_run.db.")
+    _validate_trace_database(trace_path)
+    _assert_canonical_kpi_equal(worst_record["kpi"], replayed_kpi)
 
     metrics = _aggregate(records, settings)
     report = {
         "schema": "production-agv-evaluation.v1",
-        "candidate_sha256": candidate_fingerprint(candidate_root),
+        "candidate_sha256": candidate_sha256,
         "settings": settings,
         "metrics": metrics,
         "worst_run": {
@@ -75,7 +79,9 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
         "replications": records,
     }
     metrics_path = workspace / "metrics.json"
-    metrics_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    metrics_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
     return {
         "status": "success",
@@ -108,9 +114,151 @@ def evaluate(candidate_runtime: JsonDict, context: JsonDict) -> JsonDict:
             "replication_count": len(records),
             "seeds": list(settings["seeds"]),
             "worst_seed": worst_seed,
-            "candidate_sha256": report["candidate_sha256"],
+            "candidate_sha256": candidate_sha256,
         },
     }
+
+
+def _require_candidate_fingerprint(
+    candidate_root: Path,
+    expected_sha256: str,
+    *,
+    phase: str,
+) -> None:
+    actual_sha256 = candidate_fingerprint(candidate_root)
+    if actual_sha256 != expected_sha256:
+        raise RuntimeError(
+            "Candidate bundle changed during evaluation "
+            f"({phase}); expected sha256={expected_sha256}, "
+            f"found sha256={actual_sha256}."
+        )
+
+
+def _assert_canonical_kpi_equal(
+    first: Any,
+    replayed: Any,
+    *,
+    path: str = "$",
+) -> None:
+    if isinstance(first, bool) or isinstance(replayed, bool):
+        if type(first) is not bool or type(replayed) is not bool or first != replayed:
+            raise RuntimeError(
+                f"Worst-seed replay KPI mismatch at {path}: {first!r} != {replayed!r}."
+            )
+        return
+    if isinstance(first, (int, float)) or isinstance(replayed, (int, float)):
+        if not isinstance(first, (int, float)) or not isinstance(
+            replayed, (int, float)
+        ):
+            raise RuntimeError(
+                f"Worst-seed replay KPI structure mismatch at {path}: "
+                f"{type(first).__name__} != {type(replayed).__name__}."
+            )
+        first_number = float(first)
+        replayed_number = float(replayed)
+        if not math.isfinite(first_number) or not math.isfinite(replayed_number):
+            raise RuntimeError(
+                f"Worst-seed replay KPI contains a non-finite number at {path}."
+            )
+        if not math.isclose(
+            first_number,
+            replayed_number,
+            rel_tol=1e-12,
+            abs_tol=1e-9,
+        ):
+            raise RuntimeError(
+                f"Worst-seed replay KPI mismatch at {path}: "
+                f"{first_number!r} != {replayed_number!r}."
+            )
+        return
+    if isinstance(first, Mapping) or isinstance(replayed, Mapping):
+        if not isinstance(first, Mapping) or not isinstance(replayed, Mapping):
+            raise RuntimeError(
+                f"Worst-seed replay KPI structure mismatch at {path}: "
+                f"{type(first).__name__} != {type(replayed).__name__}."
+            )
+        first_keys = set(first)
+        replayed_keys = set(replayed)
+        if first_keys != replayed_keys:
+            raise RuntimeError(
+                f"Worst-seed replay KPI keys differ at {path}: "
+                f"first_only={sorted(first_keys - replayed_keys)!r}, "
+                f"replay_only={sorted(replayed_keys - first_keys)!r}."
+            )
+        for key in sorted(first_keys):
+            _assert_canonical_kpi_equal(
+                first[key],
+                replayed[key],
+                path=f"{path}.{key}",
+            )
+        return
+    is_first_sequence = isinstance(first, Sequence) and not isinstance(
+        first, (str, bytes, bytearray)
+    )
+    is_replayed_sequence = isinstance(replayed, Sequence) and not isinstance(
+        replayed, (str, bytes, bytearray)
+    )
+    if is_first_sequence or is_replayed_sequence:
+        if (
+            not is_first_sequence
+            or not is_replayed_sequence
+            or type(first) is not type(replayed)
+            or len(first) != len(replayed)
+        ):
+            raise RuntimeError(
+                f"Worst-seed replay KPI sequence structure mismatch at {path}."
+            )
+        for index, (first_item, replayed_item) in enumerate(
+            zip(first, replayed, strict=True)
+        ):
+            _assert_canonical_kpi_equal(
+                first_item,
+                replayed_item,
+                path=f"{path}[{index}]",
+            )
+        return
+    if type(first) is not type(replayed) or first != replayed:
+        raise RuntimeError(
+            f"Worst-seed replay KPI mismatch at {path}: {first!r} != {replayed!r}."
+        )
+
+
+def _validate_trace_database(trace_path: Path) -> None:
+    required_tables = ("kpi", "order")
+    try:
+        with sqlite3.connect(f"{trace_path.resolve().as_uri()}?mode=ro", uri=True) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            quick_check = [
+                str(row[0]) for row in connection.execute("PRAGMA quick_check").fetchall()
+            ]
+            if quick_check != ["ok"]:
+                raise RuntimeError(
+                    "Worst-seed SQLite trace failed PRAGMA quick_check: "
+                    + "; ".join(quick_check)
+                )
+            available_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            missing = sorted(set(required_tables).difference(available_tables))
+            if missing:
+                raise RuntimeError(
+                    f"Worst-seed SQLite trace is missing required tables: {missing!r}."
+                )
+            for table in required_tables:
+                row_count = int(
+                    connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                )
+                if row_count <= 0:
+                    raise RuntimeError(
+                        f"Worst-seed SQLite trace table {table!r} has no rows."
+                    )
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Worst-seed SQLite trace is unreadable or corrupt: {exc}"
+        ) from exc
 
 
 def _aggregate(records: list[JsonDict], settings: Mapping[str, Any]) -> dict[str, float | int]:

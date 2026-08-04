@@ -18,7 +18,12 @@
         "python": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
         "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
         "command": {"$ref": "defs/common.schema.json#/definitions/command"},
-        "protocol": {"enum": ["batch", "session"]}
+        "protocol": {"enum": ["batch", "session"]},
+        "exchangeTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
       },
       "oneOf": [
         {"required": ["python"]},

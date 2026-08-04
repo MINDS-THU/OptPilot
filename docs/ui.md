@@ -68,15 +68,20 @@ Start with this path:
 
 _Captured from the current Studio source checkout with `catalog/example_package/` loaded._
 
-## Main Views
+## Primary Navigation And Workspaces
 
 | View | What it is for |
 | --- | --- |
 | Catalog | Browse reusable environments, methods, and resources from packages. |
 | Studies | Edit and launch concrete study plans, including study YAML files shipped with packages. |
 | Runs | Inspect completed and running study evidence. |
-| Workspaces | Open editable projects and connected local folders. Read-only Catalog source and Runs do not appear here. |
-| Settings | Configure assistant settings and declared local environment values for future launches. |
+
+The primary navigation contains only Catalog, Studies, and Runs. Select an item
+from the persistent **Workspaces** list in the left rail to open its editor
+canvas. Workspaces contain editable projects and connected local folders;
+read-only Catalog source and Runs do not appear there. Use the settings button
+to configure assistant settings and declared local environment values for
+future launches.
 
 Configured filesystem sources are mutable imports. Realm catalog revisions are
 immutable. Studio creates an editable workspace only when the user asks to edit

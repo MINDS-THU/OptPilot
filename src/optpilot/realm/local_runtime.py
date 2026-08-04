@@ -46,6 +46,7 @@ from .process_provider import (
     current_process_provider_identity,
 )
 from .projection_service import RealmProjectionService
+from .provider_trust_policy import RealmProviderTrustPolicyService
 from .refs import request_digest
 from .run_reader import (
     LOCAL_REALM_PRINCIPAL_KIND,
@@ -122,6 +123,9 @@ class LocalRealmRuntime:
     environment_preview_binder: RealmEnvironmentPreviewBinder | None
     container_web_provider: LocalContainerWebProvider | None
     container_web_broker_authority: object | None
+    provider_trust_policy: RealmProviderTrustPolicyService
+    container_gateway_trust_source: str
+    container_gateway_trust_generation: str
 
     def __init__(self) -> None:
         raise TypeError("Use LocalRealmRuntime.open().")
@@ -133,7 +137,9 @@ class LocalRealmRuntime:
         realm_root: Path,
         actor_principal_id: str | None = None,
         container_web_executable: str | None = None,
-        trusted_container_gateway_images: Sequence[ContainerGatewayImageTrust] = (),
+        trusted_container_gateway_images: (
+            Sequence[ContainerGatewayImageTrust] | None
+        ) = None,
     ) -> "LocalRealmRuntime":
         """Open the exact local service graph rooted below ``realm_root``.
 
@@ -153,10 +159,14 @@ class LocalRealmRuntime:
                 container_web_executable,
                 "local container web executable",
             )
-        trusted_container_gateway_images = tuple(trusted_container_gateway_images)
-        if any(
+        session_gateway_images = (
+            None
+            if trusted_container_gateway_images is None
+            else tuple(trusted_container_gateway_images)
+        )
+        if session_gateway_images is not None and any(
             not isinstance(item, ContainerGatewayImageTrust)
-            for item in trusted_container_gateway_images
+            for item in session_gateway_images
         ):
             raise TypeError(
                 "trusted_container_gateway_images must contain "
@@ -177,6 +187,40 @@ class LocalRealmRuntime:
                     ledger=ledger,
                     actor_principal_id=actor_principal_id,
                 )
+            provider_trust_policy = RealmProviderTrustPolicyService(
+                ledger,
+                actor_principal_id,
+            )
+            if session_gateway_images is None:
+                gateway_images = tuple(
+                    ContainerGatewayImageTrust(
+                        image_ref=head.image_ref,
+                        python_executable=head.python_executable,
+                        contract=head.contract,
+                    )
+                    for head in provider_trust_policy.list_active()
+                )
+                gateway_trust_source = "realm"
+            else:
+                gateway_images = session_gateway_images
+                gateway_trust_source = "session"
+            gateway_trust_generation = request_digest(
+                {
+                    "schema": "optpilot.container-gateway-trust-snapshot.v1",
+                    "source": gateway_trust_source,
+                    "trusts": [
+                        {
+                            "contract": trust.contract,
+                            "image_ref": trust.image_ref,
+                            "python_executable": trust.python_executable,
+                        }
+                        for trust in sorted(
+                            gateway_images,
+                            key=lambda item: item.image_ref.encode("utf-8"),
+                        )
+                    ],
+                }
+            )
 
             capacity_limits = conservative_local_host_capacity_limits()
             capacity_pool = ledger.ensure_operator_capacity_pool(
@@ -248,7 +292,7 @@ class LocalRealmRuntime:
                         root / _CONTAINER_WEB_DIRECTORY
                     ),
                     broker_authority=container_web_broker_authority,
-                    trusted_gateway_images=trusted_container_gateway_images,
+                    trusted_gateway_images=gateway_images,
                 )
                 environment_preview_binder = RealmEnvironmentPreviewBinder(
                     ledger,
@@ -397,6 +441,9 @@ class LocalRealmRuntime:
         runtime.environment_preview_binder = environment_preview_binder
         runtime.container_web_provider = container_web_provider
         runtime.container_web_broker_authority = container_web_broker_authority
+        runtime.provider_trust_policy = provider_trust_policy
+        runtime.container_gateway_trust_source = gateway_trust_source
+        runtime.container_gateway_trust_generation = gateway_trust_generation
         runtime._closed = False
         return runtime
 
@@ -413,7 +460,10 @@ class LocalRealmRuntime:
             return
         self._closed = True
         try:
-            self.content_store.close()
+            try:
+                self.provider_trust_policy.close()
+            finally:
+                self.content_store.close()
         finally:
             self.ledger.close()
 

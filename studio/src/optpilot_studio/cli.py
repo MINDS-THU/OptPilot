@@ -36,6 +36,9 @@ def _run_ui_command(args) -> int:
             environment_preview_trusted_images=(
                 args.environment_preview_trusted_image
             ),
+            environment_preview_trust_source=(
+                args.environment_preview_trust_source
+            ),
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:

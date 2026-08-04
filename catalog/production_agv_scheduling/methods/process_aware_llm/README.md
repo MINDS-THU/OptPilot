@@ -22,6 +22,23 @@ network-disabled evaluator process. The current design therefore protects the
 provider credential from ordinary environment inheritance but does not claim
 to confine hostile native code or same-user operating-system attacks.
 
+## Candidate trust boundary
+
+The method rejects generated source that declares the simulation-bound
+`create_controller` entry point, directly imports simulator/runtime modules, or
+uses the obsolete AGV field name `battery`. The environment also rejects an
+ambiguous module that exposes both `create_scheduler` and `create_controller`;
+the controller-only entry point remains available to the packaged rolling-MILP
+baseline.
+
+These checks enforce the package contract and catch common model mistakes, but
+they are not a Python security sandbox. A snapshot policy is still imported and
+executed in the evaluator process. Therefore only run generated Candidates
+inside the environment's configured OptPilot sandbox/container, and do not
+treat the static checks as protection from deliberately hostile Python. Full
+hostile-code confinement requires a separate interpreter or container behind a
+narrow snapshot/command IPC boundary.
+
 ## Recovery and provenance
 
 Proposal keys, prompt IDs, model records, candidate IDs, and generator metadata
@@ -32,14 +49,20 @@ response content in `provenance/llm_exchanges.json`. When the runtime provides
 `prompt_store_dir`, each canonical prompt is additionally stored under its
 digest without placing a physical host path in candidate metadata.
 
-The method supports a durable state/response cache when the runtime projects a
-writable `runtime_context.method_state_dir`. Current retained OptPilot workers
-only project a per-exchange `candidate_staging_dir`; they do not yet project a
-method-state or prompt-store directory. Under that current API, pending
-exchange replay is protected by the retained worker protocol, but a completely
-replaced worker cannot reconstruct the full iterative LLM search state. The
-method deliberately does not escape the candidate inbox or invent an authored
-host path to work around that missing capability.
+The method can persist iteration state when the runtime projects a writable
+`runtime_context.method_state_dir`, but its current persistence boundaries are
+not a crash-safe response cache: a successful provider call is first recorded
+in memory and state is written only at the surrounding baseline, proposal, or
+observation boundary. A crash between those points can repeat a paid call.
+Current retained OptPilot workers also project only a per-exchange
+`candidate_staging_dir`; they do not yet project a method-state or prompt-store
+directory. Under that current API, pending exchange replay is protected by the
+retained worker protocol, but a completely replaced worker cannot reconstruct
+the full iterative LLM search state. The method deliberately does not escape
+the candidate inbox or invent an authored host path to work around that missing
+capability. Crash-safe recovery requires both a Realm-owned state/object
+projection and atomic persistence of every successful provider exchange before
+the method continues.
 
 ## Running with the required method timeout
 

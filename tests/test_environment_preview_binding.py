@@ -16,6 +16,7 @@ from optpilot.realm.environment_preview_binding import (
     ENVIRONMENT_PREVIEW_PIDS_LIMIT,
     EnvironmentPreviewBindingEvidence,
     EnvironmentPreviewCleanupEvidence,
+    EnvironmentPreviewProviderPlanError,
     RealmEnvironmentPreviewBinder,
     _projection_spec,
     _validate_retained_prepared_layers,
@@ -281,7 +282,10 @@ class EnvironmentPreviewBindingTest(unittest.TestCase):
         self.assertEqual(request.image_ref, _IMAGE)
         self.assertEqual(request.platform, "linux/amd64")
         self.assertEqual(request.command, ("python", "-m", "local_package.viewer"))
-        self.assertEqual(request.workdir, "/optpilot/interface/app")
+        self.assertEqual(
+            request.workdir,
+            "/optpilot/interface/app/configs/environments",
+        )
         self.assertEqual(request.ports, (5173, 5174))
         self.assertEqual(request.primary_port, 5173)
         self.assertEqual(request.ready_path, "/ready")
@@ -917,8 +921,26 @@ class EnvironmentPreviewBindingTest(unittest.TestCase):
             parameter_spec=thaw_json(context.parameter_spec),
             outputs_enabled=self.preview_plan.outputs_enabled,
         )
-        with self.assertRaisesRegex(RealmConflict, "engine"):
+        with self.assertRaises(EnvironmentPreviewProviderPlanError) as caught:
             self.binder.validate_plan(wrong_engine)
+        self.assertEqual(caught.exception.code, "container_engine_unsupported")
+
+        untrusted_provider = LocalContainerWebProvider(
+            executable="docker",
+            control_root=self.fixture.root / "untrusted-preview-control",
+            broker_authority=object(),
+        )
+        untrusted_binder = RealmEnvironmentPreviewBinder(
+            self.fixture.ledger,
+            self.fixture.projection_service,
+            self.fixture.volume_service,
+            untrusted_provider,
+        )
+        with self.assertRaises(EnvironmentPreviewProviderPlanError) as caught:
+            untrusted_binder.validate_plan(self.preview_plan)
+        self.assertEqual(
+            caught.exception.code, "container_gateway_image_untrusted"
+        )
 
         closure = self.target.evaluation.closure
         prepared_layer = closure.environment_revision.source_layers[0]

@@ -1880,7 +1880,17 @@ const App: React.FC = () => {
               ) : <div className="flex h-full items-center justify-center p-6"><div className="max-w-md rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center"><Network className="mx-auto mb-3 text-slate-400" size={28} /><h2 className="font-semibold text-slate-800">No simulation selected</h2><p className="mt-2 text-sm leading-6 text-slate-500">Ask the agent to generate one, then choose it above to explore its structure.</p></div></div>
             )}
 
-            {mainTab === 'run' && <SimulationRunPanel sessionId={currentSessionId} simulationId={currentProjectId} simulationName={currentProjectName} />}
+            <div className={mainTab === 'run' ? 'h-full min-h-0' : 'hidden'} aria-hidden={mainTab !== 'run'}>
+              <SimulationRunPanel
+                sessionId={currentSessionId}
+                simulationId={currentProjectId}
+                simulationName={currentProjectName}
+                simulationStatus={currentProject?.status || null}
+                graphNodes={nodes}
+                graphLinks={links}
+                active={mainTab === 'run'}
+              />
+            </div>
 
             {mainTab === 'files' && (
               <div className="flex h-full min-h-0 flex-col bg-white md:flex-row">

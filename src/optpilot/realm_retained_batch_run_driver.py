@@ -58,6 +58,7 @@ from .retained_batch_runtime import (
     RetainedBatchExchangeCoordinate,
     RetainedBatchMethodError,
     RetainedBatchProtocolError,
+    RetainedBatchRuntimeError,
     RetainedBatchRuntimeProvider,
     RetainedBatchWorkerResponse,
     RetainedBatchWorkerStatus,
@@ -695,7 +696,11 @@ class RealmRetainedBatchRunDriver:
 
             pending = self._pending_exchange(snapshot)
             if pending is not None and pending.kind == "proposal":
-                self._process_preparation(snapshot, pending, method, heartbeat)
+                inactive = self._process_preparation(
+                    snapshot, pending, method, heartbeat
+                )
+                if inactive is not None:
+                    return inactive
                 continue
 
             self._sweep_terminal_attempt_cleanup(snapshot, heartbeat)
@@ -713,7 +718,11 @@ class RealmRetainedBatchRunDriver:
             if pending is not None:
                 if pending.kind != "observation":
                     raise RealmRetainedBatchRunError("canonical_state_invalid")
-                self._process_preparation(snapshot, pending, method, heartbeat)
+                inactive = self._process_preparation(
+                    snapshot, pending, method, heartbeat
+                )
+                if inactive is not None:
+                    return inactive
                 continue
 
             round_index = self._round_awaiting_observation(snapshot)
@@ -886,9 +895,27 @@ class RealmRetainedBatchRunDriver:
         preparation: RunMethodExchangePreparationRecord,
         method: Any,
         heartbeat: _Heartbeat,
-    ) -> None:
+    ) -> _InactiveMethodDrive | None:
         exchange = self._exchange(snapshot, preparation, completion=None)
-        invocation = self._invoke(method, exchange)
+        try:
+            invocation = self._invoke(method, exchange)
+        except RetainedBatchRuntimeError as error:
+            if error.code != "worker_request_timeout":
+                # Generic transport loss remains recoverable through exact
+                # worker attachment/replay.  Only the configured request
+                # deadline is a definitive response-less Method outcome.
+                raise
+            # The configured callback deadline produced no canonical Method
+            # response.  Do not manufacture a completion and do not leave the
+            # prepared exchange for endless controller-term replay.  A hard
+            # method_failed close atomically retains the exact preparation as
+            # abandoned, so recovery sees why the Run stopped without
+            # reissuing the same over-deadline external Method call.
+            return _InactiveMethodDrive(
+                self._abandon_timed_out_method_exchange(
+                    preparation, runtime_error_code=error.code
+                )
+            )
         heartbeat.raise_if_failed()
         if preparation.kind == "proposal":
             completion = self._complete_proposal(
@@ -899,6 +926,53 @@ class RealmRetainedBatchRunDriver:
         self.authority.refresh_controller()
         self._ack_completion(method, exchange, completion)
         heartbeat.raise_if_failed()
+        return None
+
+    def _abandon_timed_out_method_exchange(
+        self,
+        preparation: RunMethodExchangePreparationRecord,
+        *,
+        runtime_error_code: str,
+    ) -> RunLedgerSnapshot:
+        """Retain one response-less Method failure and hard-stop its Run.
+
+        A timed-out callback differs from a canonical ``ok:false`` Method
+        response: there is no honest response digest to complete.  The Realm
+        hard-stop operation already provides the correct response-less
+        primitive by retaining ``method_exchange_abandoned`` beside the
+        ``method_failed`` submission close.
+        """
+
+        if runtime_error_code != "worker_request_timeout":
+            raise RealmRetainedBatchRunError("canonical_state_invalid")
+        snapshot = self.authority.refresh_controller()
+        pending = self._pending_exchange(snapshot)
+        if snapshot.run.state != "running" or pending != preparation:
+            raise RealmRetainedBatchRunError("canonical_state_invalid")
+
+        operation_id = (
+            f"run/{self.authority.run_id}/method/"
+            f"{preparation.exchange_id}/runtime-{runtime_error_code}"
+        )
+        submission = snapshot.control.current_submission
+        if submission.state == "accepting":
+            self.authority.close_submissions(
+                operation_id=f"{operation_id}/close",
+                stop_code="method_failed",
+            )
+        elif submission.state == "draining":
+            if submission.stop_code not in METHOD_EXCHANGE_ABANDON_STOP_CODES:
+                self.authority.escalate_stop(
+                    operation_id=f"{operation_id}/escalate",
+                    stop_code="method_failed",
+                )
+        else:
+            raise RealmRetainedBatchRunError("canonical_state_invalid")
+
+        snapshot = self.authority.refresh_controller()
+        if not method_feedback_obligations_resolved(snapshot):
+            raise RealmRetainedBatchRunError("canonical_state_invalid")
+        return snapshot
 
     def _complete_proposal(
         self,

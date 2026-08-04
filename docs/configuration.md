@@ -553,6 +553,9 @@ entrypoint:
   python: method:MyMethod
   protocol: batch        # enum: batch | session
   pythonPath: [.]
+  # Maximum duration of one propose/observe exchange. Defaults to 10 seconds.
+  # This is not a whole-Run or internal HTTP-client timeout.
+  exchangeTimeoutSeconds: 60
 
   # Alternative command entrypoint. Batch-shaped in the schema but not yet
   # executable by the retained runner.

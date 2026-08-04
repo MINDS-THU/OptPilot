@@ -8,14 +8,17 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 from optpilot.realm.catalog_publication import CatalogPackageHead
 from optpilot.realm.refs import SnapshotRef, canonical_json_bytes, request_digest
 from optpilot_studio.ui.coordination_store import (
     ActionState,
+    COORDINATION_STORAGE_UNAVAILABLE_MESSAGE,
     CoordinationConflict,
     CoordinationIntegrityError,
     CoordinationNotFound,
+    CoordinationStorageUnavailable,
     EntityCoordinate,
     RegistrationCheck,
     RegistrationSetupData,
@@ -26,6 +29,8 @@ from optpilot_studio.ui.coordination_store import (
     WorkspacePurpose,
     _sqlite_request_digest,
     coordination_database_path,
+    prepare_coordination_database,
+    studio_project_state_directory,
 )
 
 
@@ -715,6 +720,219 @@ class StudioCoordinationStoreTest(unittest.TestCase):
             connection.execute("CREATE TABLE unrelated(value TEXT)")
         with self.assertRaisesRegex(CoordinationIntegrityError, "unversioned non-empty"):
             StudioCoordinationStore(other)
+
+
+class StudioCoordinationMigrationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.project = self.root / "projects" / "project-a"
+        self.project.mkdir(parents=True)
+        self.authority = self.root / "local-authority"
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_project_state_path_is_deterministic_and_authority_local(self) -> None:
+        first = studio_project_state_directory(
+            self.project, authority_root=self.authority
+        )
+        second = studio_project_state_directory(
+            self.project / ".", authority_root=self.authority
+        )
+        other = studio_project_state_directory(
+            self.root / "projects" / "project-b", authority_root=self.authority
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.parent, self.authority / "studio" / "projects")
+        self.assertRegex(first.name, r"^[0-9a-f]{64}$")
+        self.assertNotEqual(first, other)
+        self.assertEqual(
+            coordination_database_path(
+                self.project, authority_root=self.authority
+            ),
+            first / "studio-coordination.sqlite3",
+        )
+        self.assertEqual(
+            coordination_database_path(self.project),
+            self.project / ".optpilot-ui" / "studio-coordination.sqlite3",
+        )
+
+    def test_migration_copies_committed_wal_and_preserves_legacy(self) -> None:
+        legacy = coordination_database_path(self.project)
+        legacy_store = StudioCoordinationStore(legacy, clock=_Clock())
+        keeper: sqlite3.Connection | None = None
+        migrated_store: StudioCoordinationStore | None = None
+        try:
+            keeper = sqlite3.connect(legacy)
+            keeper.execute("PRAGMA journal_mode = WAL")
+            keeper.execute("PRAGMA wal_autocheckpoint = 0")
+            record = legacy_store.put_workspace_purpose(
+                operation_id="legacy/wal-record",
+                workspace_id="workspace-from-wal",
+                purpose=WorkspacePurpose.USER_PROJECT,
+                label="Committed in WAL",
+            )
+            legacy_identity = legacy_store.instance_id
+            legacy_wal = Path(f"{legacy}-wal")
+            self.assertTrue(legacy_wal.is_file())
+            before_database = legacy.read_bytes()
+            before_wal = legacy_wal.read_bytes()
+
+            target = prepare_coordination_database(
+                self.project, authority_root=self.authority
+            )
+            migrated_store = StudioCoordinationStore(target, clock=_Clock())
+
+            self.assertEqual(migrated_store.instance_id, legacy_identity)
+            self.assertEqual(
+                migrated_store.get_workspace_purpose("workspace-from-wal"), record
+            )
+            self.assertEqual(legacy.read_bytes(), before_database)
+            self.assertEqual(legacy_wal.read_bytes(), before_wal)
+        finally:
+            if migrated_store is not None:
+                migrated_store.close()
+            if keeper is not None:
+                keeper.close()
+            legacy_store.close()
+
+    def test_existing_target_wins_without_inspecting_or_overwriting_it(self) -> None:
+        legacy = coordination_database_path(self.project)
+        target = coordination_database_path(
+            self.project, authority_root=self.authority
+        )
+        legacy_store = StudioCoordinationStore(legacy, clock=_Clock())
+        target_store = StudioCoordinationStore(target, clock=_Clock())
+        try:
+            legacy_store.put_workspace_purpose(
+                operation_id="legacy/record",
+                workspace_id="legacy-workspace",
+                purpose=WorkspacePurpose.USER_PROJECT,
+            )
+            target_record = target_store.put_workspace_purpose(
+                operation_id="target/record",
+                workspace_id="target-workspace",
+                purpose=WorkspacePurpose.USER_PROJECT,
+            )
+            target_identity = target_store.instance_id
+
+            self.assertEqual(
+                prepare_coordination_database(
+                    self.project, authority_root=self.authority
+                ),
+                target,
+            )
+            self.assertEqual(target_store.instance_id, target_identity)
+            self.assertEqual(
+                target_store.get_workspace_purpose("target-workspace"), target_record
+            )
+            with self.assertRaises(CoordinationNotFound):
+                target_store.get_workspace_purpose("legacy-workspace")
+        finally:
+            target_store.close()
+            legacy_store.close()
+
+    def test_invalid_legacy_history_is_rejected_and_left_in_place(self) -> None:
+        legacy = coordination_database_path(self.project)
+        store = StudioCoordinationStore(legacy, clock=_Clock())
+        store.close()
+        with sqlite3.connect(legacy) as connection:
+            connection.execute(
+                "UPDATE coordination_schema_migrations SET migration_digest = ? "
+                "WHERE version = 1",
+                ("0" * 64,),
+            )
+            connection.commit()
+        before = legacy.read_bytes()
+
+        with self.assertRaisesRegex(
+            CoordinationIntegrityError, "migration 1 changed"
+        ):
+            prepare_coordination_database(
+                self.project, authority_root=self.authority
+            )
+
+        self.assertEqual(legacy.read_bytes(), before)
+        target = coordination_database_path(
+            self.project, authority_root=self.authority
+        )
+        self.assertFalse(target.exists())
+        self.assertEqual(tuple(target.parent.glob("*.tmp")), ())
+
+    def test_migration_fsyncs_copy_and_parent_before_returning(self) -> None:
+        legacy = coordination_database_path(self.project)
+        store = StudioCoordinationStore(legacy, clock=_Clock())
+        store.close()
+        from optpilot_studio.ui import coordination_store as module
+
+        file_calls: list[Path] = []
+        directory_calls: list[Path] = []
+        real_file_fsync = module._fsync_file
+        real_directory_fsync = module._fsync_directory
+
+        def record_file(path: Path) -> None:
+            file_calls.append(path)
+            real_file_fsync(path)
+
+        def record_directory(path: Path) -> None:
+            directory_calls.append(path)
+            real_directory_fsync(path)
+
+        with mock.patch.object(
+            module, "_fsync_file", side_effect=record_file
+        ), mock.patch.object(
+            module, "_fsync_directory", side_effect=record_directory
+        ):
+            target = prepare_coordination_database(
+                self.project, authority_root=self.authority
+            )
+
+        self.assertEqual(len(file_calls), 1)
+        self.assertEqual(file_calls[0].parent, target.parent)
+        self.assertGreaterEqual(directory_calls.count(target.parent), 2)
+
+    def test_sqlite_operational_errors_are_typed_and_redacted(self) -> None:
+        database = self.root / "state" / "coordination.sqlite3"
+        store = StudioCoordinationStore(database, clock=_Clock())
+
+        class BrokenConnection:
+            def execute(self, *_args: object, **_kwargs: object) -> object:
+                raise sqlite3.OperationalError(
+                    "disk I/O error at /private/secret/coordination.sqlite3"
+                )
+
+            def rollback(self) -> None:
+                raise sqlite3.OperationalError("rollback exposed another path")
+
+            def close(self) -> None:
+                return None
+
+        try:
+            with mock.patch.object(store, "_connect", return_value=BrokenConnection()):
+                with self.assertRaises(CoordinationStorageUnavailable) as read_error:
+                    store.get_workspace_purpose("workspace-a")
+            self.assertEqual(
+                str(read_error.exception),
+                COORDINATION_STORAGE_UNAVAILABLE_MESSAGE,
+            )
+            self.assertNotIn("secret", str(read_error.exception))
+
+            with mock.patch.object(store, "_connect", return_value=BrokenConnection()):
+                with self.assertRaises(CoordinationStorageUnavailable) as write_error:
+                    store.put_workspace_purpose(
+                        operation_id="unavailable/write",
+                        workspace_id="workspace-a",
+                        purpose=WorkspacePurpose.USER_PROJECT,
+                    )
+            self.assertEqual(
+                str(write_error.exception),
+                COORDINATION_STORAGE_UNAVAILABLE_MESSAGE,
+            )
+            self.assertNotIn("secret", str(write_error.exception))
+        finally:
+            store.close()
 
 
 if __name__ == "__main__":

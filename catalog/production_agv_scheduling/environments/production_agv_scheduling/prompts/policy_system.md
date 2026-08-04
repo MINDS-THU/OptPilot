@@ -11,6 +11,10 @@ def create_scheduler():
     ...
 ```
 
+Do not define `create_controller`; that simulation-bound entry point is
+reserved for packaged, trusted baselines and is rejected for LLM-generated
+policies.
+
 The returned object must define `run(snapshot)`, which returns a list of command
 objects. Supporting Python files may be placed below `policy/`. Do not perform
 network, subprocess, filesystem, or wall-clock operations from a policy.
@@ -41,4 +45,3 @@ quality and cost (30), and AGV efficiency (30). Evaluation uses explicit common
 seeds. The retained SQLite file is a deterministic replay of the lowest-scoring
 replication and should be used together with aggregate KPIs to diagnose the
 incumbent.
-

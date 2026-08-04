@@ -8,10 +8,11 @@ executes the selected candidate inside a simulation trial.
 from __future__ import annotations
 
 import fnmatch
+import math
 import pprint
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, List, Mapping
 
 from optpilot.candidate_staging import CandidateBundleStager, CandidateFileMapping
 
@@ -142,7 +143,7 @@ def _candidate_source_files() -> Dict[str, Path]:
 def _normalize_variants(raw: Any) -> List[str]:
     if isinstance(raw, str):
         raw = [raw]
-    if not isinstance(raw, Iterable):
+    if not isinstance(raw, (list, tuple)):
         raise TypeError("settings.variants must be a variant name or a list of variant names.")
     variants: List[str] = []
     for item in raw:
@@ -173,18 +174,22 @@ def _policy_settings(config: Mapping[str, Any], variant: str) -> JsonDict:
         "min_replan_interval_sec": _nonnegative_float(
             config, "minReplanIntervalMinutes", 8.0
         ),
-        "max_raw_products": int(config.get("maxRawProducts", 24)),
-        "max_future_tasks": int(config.get("maxFutureTasks", 24)),
-        "future_horizon_sec": float(config.get("futureHorizonMinutes", 120.0)),
-        "max_mip_tasks": int(config.get("maxMipTasks", 120)),
-        "accept_partial_mip_solution": bool(config.get("acceptPartialSolution", False)),
+        "max_raw_products": _nonnegative_int(config, "maxRawProducts", 24),
+        "max_future_tasks": _nonnegative_int(config, "maxFutureTasks", 24),
+        "future_horizon_sec": _nonnegative_float(
+            config, "futureHorizonMinutes", 120.0
+        ),
+        "max_mip_tasks": _positive_int(config, "maxMipTasks", 120),
+        "accept_partial_mip_solution": _boolean(
+            config, "acceptPartialSolution", False
+        ),
         "fallback_mode": fallback_mode,
         "use_two_stage_decomposition": variant == "two_stage",
         # The enhanced two-stage implementation introduced the adaptive cap;
         # the original monolithic comparison keeps the static upstream cap.
         "adaptive_task_cap": variant == "two_stage",
-        "adaptive_min_mip_tasks": int(config.get("adaptiveMinMipTasks", 48)),
-        "adaptive_max_mip_tasks": int(config.get("adaptiveMaxMipTasks", 200)),
+        "adaptive_min_mip_tasks": _positive_int(config, "adaptiveMinMipTasks", 48),
+        "adaptive_max_mip_tasks": _positive_int(config, "adaptiveMaxMipTasks", 200),
     }
     overrides = config.get("variantOverrides", {})
     if isinstance(overrides, Mapping) and isinstance(overrides.get(variant), Mapping):
@@ -197,26 +202,92 @@ def _policy_settings(config: Mapping[str, Any], variant: str) -> JsonDict:
     if str(settings["fallback_mode"]).strip().lower() not in {"error", "heuristic"}:
         raise ValueError("The effective fallback_mode must be 'error' or 'heuristic'.")
     settings["fallback_mode"] = str(settings["fallback_mode"]).strip().lower()
-    if float(settings["solver_time_limit_sec"]) <= 0.0:
-        raise ValueError("The effective solver_time_limit_sec must be positive.")
-    if float(settings["step_sec"]) <= 0.0:
-        raise ValueError("The effective step_sec must be positive.")
-    if float(settings["min_replan_interval_sec"]) < 0.0:
-        raise ValueError("The effective min_replan_interval_sec must be nonnegative.")
+    settings["solver_time_limit_sec"] = _finite_float(
+        settings["solver_time_limit_sec"],
+        "effective solver_time_limit_sec",
+        minimum=0.0,
+        exclusive=True,
+    )
+    settings["step_sec"] = _finite_float(
+        settings["step_sec"], "effective step_sec", minimum=0.0, exclusive=True
+    )
+    settings["min_replan_interval_sec"] = _finite_float(
+        settings["min_replan_interval_sec"],
+        "effective min_replan_interval_sec",
+        minimum=0.0,
+    )
+    settings["future_horizon_sec"] = _finite_float(
+        settings["future_horizon_sec"],
+        "effective future_horizon_sec",
+        minimum=0.0,
+    )
+    for key in ("max_raw_products", "max_future_tasks"):
+        settings[key] = _checked_int(settings[key], f"effective {key}", minimum=0)
+    for key in ("max_mip_tasks", "adaptive_min_mip_tasks", "adaptive_max_mip_tasks"):
+        settings[key] = _checked_int(settings[key], f"effective {key}", minimum=1)
+    for key in (
+        "accept_partial_mip_solution",
+        "use_two_stage_decomposition",
+        "adaptive_task_cap",
+    ):
+        if not isinstance(settings[key], bool):
+            raise TypeError(f"The effective {key} must be a boolean.")
+    if settings["adaptive_min_mip_tasks"] > settings["adaptive_max_mip_tasks"]:
+        raise ValueError(
+            "effective adaptive_min_mip_tasks may not exceed "
+            "adaptive_max_mip_tasks."
+        )
     return settings
 
 
 def _positive_float(config: Mapping[str, Any], key: str, default: float) -> float:
-    value = float(config.get(key, default))
-    if value <= 0.0:
-        raise ValueError(f"settings.{key} must be positive.")
-    return value
+    return _finite_float(
+        config.get(key, default), f"settings.{key}", minimum=0.0, exclusive=True
+    )
 
 
 def _nonnegative_float(config: Mapping[str, Any], key: str, default: float) -> float:
-    value = float(config.get(key, default))
-    if value < 0.0:
-        raise ValueError(f"settings.{key} must be nonnegative.")
+    return _finite_float(config.get(key, default), f"settings.{key}", minimum=0.0)
+
+
+def _positive_int(config: Mapping[str, Any], key: str, default: int) -> int:
+    return _checked_int(config.get(key, default), f"settings.{key}", minimum=1)
+
+
+def _nonnegative_int(config: Mapping[str, Any], key: str, default: int) -> int:
+    return _checked_int(config.get(key, default), f"settings.{key}", minimum=0)
+
+
+def _boolean(config: Mapping[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    if not isinstance(value, bool):
+        raise TypeError(f"settings.{key} must be a boolean.")
+    return value
+
+
+def _finite_float(
+    value: Any,
+    label: str,
+    *,
+    minimum: float,
+    exclusive: bool = False,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{label} must be a number.")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{label} must be finite.")
+    if normalized < minimum or (exclusive and normalized == minimum):
+        comparison = "greater than" if exclusive else "at least"
+        raise ValueError(f"{label} must be {comparison} {minimum}.")
+    return normalized
+
+
+def _checked_int(value: Any, label: str, *, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} must be an integer.")
+    if value < minimum:
+        raise ValueError(f"{label} must be at least {minimum}.")
     return value
 
 

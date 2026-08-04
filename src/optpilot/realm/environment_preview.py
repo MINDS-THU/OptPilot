@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, Dict, Optional, Tuple
 
@@ -96,6 +97,28 @@ _FIXED_INTERFACE_ENV_PATHS = {
     "OPTPILOT_INTERFACE_OUTPUT_ROOT": "/optpilot/interface/output",
     "OPTPILOT_INTERFACE_OUTPUTS_FILE": "/optpilot/interface/control/outputs.jsonl",
 }
+
+
+class EnvironmentPreviewCompileError(RealmConflict):
+    """Stable, path-free reason why one retained Preview plan cannot compile.
+
+    The exception remains a :class:`RealmConflict` for existing callers while
+    giving capability surfaces a code that does not depend on matching human
+    error text.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        normalized_code = required_text(
+            code, "environment preview compile error code", max_bytes=128
+        )
+        if re.fullmatch(r"[a-z][a-z0-9_]*", normalized_code) is None:
+            raise ValueError("environment preview compile error code is invalid.")
+        self.code = normalized_code
+        super().__init__(
+            required_text(
+                message, "environment preview compile error message", max_bytes=4096
+            )
+        )
 
 
 def _exact_keys(payload: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -979,20 +1002,28 @@ def compile_environment_preview_plan(
     if profile_id is not None and not isinstance(profile_id, str):
         raise TypeError("profile_id must be a string or None.")
     if not target.runnable:
-        raise RealmConflict("Selected candidate inspection content is unavailable.")
+        raise EnvironmentPreviewCompileError(
+            "candidate_content_unavailable",
+            "Selected candidate inspection content is unavailable.",
+        )
     if target.selection.kind != "candidate":  # pragma: no cover - target invariant
-        raise RealmConflict("Environment Preview requires a candidate selection.")
+        raise EnvironmentPreviewCompileError(
+            "candidate_selection_required",
+            "Environment Preview requires a candidate selection.",
+        )
     candidate_format = target.candidate.admission.envelope.candidate_format
     if candidate_format not in {"parameters", "files"}:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "candidate_format_unsupported",
             "Environment Preview supports retained parameter and file candidates; "
-            "opaque candidates are unsupported."
+            "opaque candidates are unsupported.",
         )
     try:
         evaluation_spec = target.compile_evaluation_spec()
     except (TypeError, ValueError) as error:
-        raise RealmConflict(
-            f"Selected candidate is incompatible with its retained environment: {error}"
+        raise EnvironmentPreviewCompileError(
+            "candidate_environment_incompatible",
+            f"Selected candidate is incompatible with its retained environment: {error}",
         ) from error
 
     closure = target.evaluation.closure
@@ -1025,22 +1056,29 @@ def compile_environment_preview_plan(
     }
     collisions = set(authored_env) & reserved_names
     if collisions:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "profile_reserved_environment_override",
             "Environment Preview profile overrides reserved interface variables: "
-            f"{sorted(collisions)!r}."
+            f"{sorted(collisions)!r}.",
         )
     authored_env.update(reserved)
-    workdir = paths.app if profile.cwd == "." else f"{paths.app}/{profile.cwd}"
+    projected_cwd = _projected_interface_cwd(environment, profile.cwd)
+    workdir = (
+        paths.app
+        if projected_cwd == "."
+        else f"{paths.app}/{projected_cwd}"
+    )
     try:
         invocation = EnvironmentPreviewInvocation(
             command=profile.command,
-            authored_cwd=profile.cwd,
+            authored_cwd=projected_cwd,
             workdir=workdir,
             environment=authored_env,
         )
     except (TypeError, ValueError) as error:
-        raise RealmConflict(
-            f"Environment Preview profile environment is unsafe: {error}"
+        raise EnvironmentPreviewCompileError(
+            "profile_environment_unsafe",
+            f"Environment Preview profile environment is unsafe: {error}",
         ) from error
 
     runtime_fingerprint = request_digest(
@@ -1086,13 +1124,62 @@ def compile_environment_preview_plan(
     )
 
 
+def _projected_interface_cwd(environment: Any, profile_cwd: str) -> str:
+    """Resolve a config-relative interface cwd inside the projected app tree.
+
+    Interface ``cwd`` is authored relative to the component configuration
+    file. Retained source layers can instead contain a whole package, or map a
+    source subtree to another destination. Resolve through those exact layer
+    mappings so the container starts where authoring validation proved the
+    command lives.
+    """
+
+    config_path = PurePosixPath(environment.authored_config.relative_path)
+    config_parent = config_path.parent
+    logical_cwd = (
+        config_parent
+        if profile_cwd == "."
+        else config_parent / PurePosixPath(profile_cwd)
+    )
+    logical_parts = _portable_parts(str(logical_cwd))
+    destinations: set[tuple[str, ...]] = set()
+    for layer in environment.source_layers:
+        if layer.scope != environment.authored_config.scope:
+            continue
+        source_parts = _portable_parts(layer.source_subpath)
+        if logical_parts[: len(source_parts)] != source_parts:
+            continue
+        destination_parts = _portable_parts(layer.destination_subpath)
+        destinations.add(destination_parts + logical_parts[len(source_parts) :])
+
+    if not destinations:
+        raise EnvironmentPreviewCompileError(
+            "profile_workdir_unretained",
+            "Environment Preview profile working directory is absent from the "
+            "retained environment source layers.",
+        )
+    if len(destinations) != 1:
+        raise EnvironmentPreviewCompileError(
+            "profile_workdir_ambiguous",
+            "Environment Preview profile working directory maps to multiple "
+            "retained application locations.",
+        )
+    selected = next(iter(destinations))
+    return "." if not selected else "/".join(selected)
+
+
+def _portable_parts(value: str) -> tuple[str, ...]:
+    return () if value == "." else PurePosixPath(value).parts
+
+
 def _select_profile(
     profiles: Sequence[InterfaceLaunchProfile], profile_id: str | None
 ) -> InterfaceLaunchProfile:
     profile_list = tuple(profiles)
     if not profile_list:
-        raise RealmConflict(
-            "The retained environment revision declares no Preview profiles."
+        raise EnvironmentPreviewCompileError(
+            "profile_unavailable",
+            "The retained environment revision declares no Preview profiles.",
         )
     requested = "" if profile_id is None else profile_id.strip()
     if requested:
@@ -1100,9 +1187,10 @@ def _select_profile(
             if profile.profile_id == requested:
                 return profile
         available = ", ".join(profile.profile_id for profile in profile_list)
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "profile_unknown",
             f"Unknown retained Environment Preview profile {requested!r}; "
-            f"available profiles: {available}."
+            f"available profiles: {available}.",
         )
     for profile in profile_list:
         if profile.profile_id == "default":
@@ -1110,50 +1198,62 @@ def _select_profile(
     if len(profile_list) == 1:
         return profile_list[0]
     available = ", ".join(profile.profile_id for profile in profile_list)
-    raise RealmConflict(
+    raise EnvironmentPreviewCompileError(
+        "profile_selection_required",
         "profile_id is required when the retained environment declares multiple "
-        f"named Preview profiles; available profiles: {available}."
+        f"named Preview profiles; available profiles: {available}.",
     )
 
 
 def _validate_profile_compatibility(profile: InterfaceLaunchProfile) -> None:
     if "candidate" not in profile.accepts.selection_kinds:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "profile_candidate_selection_unsupported",
             f"Environment Preview profile {profile.profile_id!r} does not accept "
-            "candidate selections."
+            "candidate selections.",
         )
     media_types = profile.accepts.media_types
     if media_types and ENVIRONMENT_PREVIEW_CANDIDATE_MEDIA_TYPE not in media_types:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "profile_candidate_media_type_unsupported",
             f"Environment Preview profile {profile.profile_id!r} does not accept "
-            f"{ENVIRONMENT_PREVIEW_CANDIDATE_MEDIA_TYPE!r}."
+            f"{ENVIRONMENT_PREVIEW_CANDIDATE_MEDIA_TYPE!r}.",
         )
     if profile.presentation.kind != _PRESENTATION_KIND:
-        raise RealmConflict("Environment Preview currently supports only web presentation.")
+        raise EnvironmentPreviewCompileError(
+            "profile_presentation_unsupported",
+            "Environment Preview currently supports only web presentation.",
+        )
     if 1 + len(profile.presentation.extra_ports) > _MAX_PLAN_PORTS:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "profile_port_count_unsupported",
             f"Environment Preview profile {profile.profile_id!r} requests more "
-            f"than {_MAX_PLAN_PORTS} container ports."
+            f"than {_MAX_PLAN_PORTS} container ports.",
         )
     if profile.grants.network != "disabled":
-        raise RealmConflict(
-            "Environment Preview first release requires denied container network access."
+        raise EnvironmentPreviewCompileError(
+            "profile_network_policy_unsupported",
+            "Environment Preview first release requires denied container network access.",
         )
     if profile.grants.env_from_host:
-        raise RealmConflict(
-            "Environment Preview first release does not support host environment variables."
+        raise EnvironmentPreviewCompileError(
+            "profile_host_environment_unsupported",
+            "Environment Preview first release does not support host environment variables.",
         )
     if profile.grants.secrets_from_host:
-        raise RealmConflict(
-            "Environment Preview first release does not support host secrets."
+        raise EnvironmentPreviewCompileError(
+            "profile_host_secrets_unsupported",
+            "Environment Preview first release does not support host secrets.",
         )
     if profile.runtime.setup is not None:
-        raise RealmConflict(
-            "Environment Preview first release does not run profile setup steps."
+        raise EnvironmentPreviewCompileError(
+            "profile_setup_unsupported",
+            "Environment Preview first release does not run profile setup steps.",
         )
     if profile.runtime.sandbox == "process":
-        raise RealmConflict(
-            "Environment Preview first release requires an enforceable container runtime."
+        raise EnvironmentPreviewCompileError(
+            "profile_process_runtime_not_applicable",
+            "Environment Preview first release requires an enforceable container runtime.",
         )
 
 
@@ -1165,13 +1265,20 @@ def _effective_container_runtime(
     container = profile.runtime.container
     if profile.runtime.sandbox == "container":
         if container is None:  # pragma: no cover - profile invariant
-            raise RealmConflict("Container Preview profile has no container settings.")
+            raise EnvironmentPreviewCompileError(
+                "profile_container_settings_missing",
+                "Container Preview profile has no container settings.",
+            )
         if container.build is not None:
-            raise RealmConflict(
-                "Environment Preview first release does not build container images."
+            raise EnvironmentPreviewCompileError(
+                "profile_container_build_unsupported",
+                "Environment Preview first release does not build container images.",
             )
         if container.image is None:  # pragma: no cover - profile invariant
-            raise RealmConflict("Container Preview profile has no image.")
+            raise EnvironmentPreviewCompileError(
+                "profile_container_image_missing",
+                "Container Preview profile has no image.",
+            )
         try:
             return EnvironmentPreviewContainerRuntime(
                 image_ref=container.image,
@@ -1188,18 +1295,25 @@ def _effective_container_runtime(
                 ),
             )
         except ValueError as error:
-            raise RealmConflict(str(error)) from error
+            raise EnvironmentPreviewCompileError(
+                "profile_container_runtime_invalid", str(error)
+            ) from error
 
     if profile.runtime.sandbox is not None:  # pragma: no cover - enum invariant
-        raise RealmConflict("Environment Preview profile runtime is unsupported.")
+        raise EnvironmentPreviewCompileError(
+            "profile_runtime_unsupported",
+            "Environment Preview profile runtime is unsupported.",
+        )
     if prepared.portability != "portable":
-        raise RealmConflict(
-            "Environment Preview can inherit only a portable retained prepared runtime."
+        raise EnvironmentPreviewCompileError(
+            "prepared_runtime_not_portable",
+            "Environment Preview can inherit only a portable retained prepared runtime.",
         )
     if prepared.runtime_kind != "container" or prepared.oci_image_digest is None:
-        raise RealmConflict(
+        raise EnvironmentPreviewCompileError(
+            "prepared_container_runtime_unavailable",
             "Environment Preview profile omits a container override, but the exact "
-            "retained prepared runtime is not a sha256-pinned container."
+            "retained prepared runtime is not a sha256-pinned container.",
         )
     return EnvironmentPreviewContainerRuntime(
         image_ref=prepared.oci_image_digest,
@@ -1215,6 +1329,7 @@ __all__ = [
     "ENVIRONMENT_PREVIEW_FILE_CANDIDATE_ROOT",
     "ENVIRONMENT_PREVIEW_PLAN_SCHEMA",
     "EnvironmentPreviewContainerRuntime",
+    "EnvironmentPreviewCompileError",
     "EnvironmentPreviewContext",
     "EnvironmentPreviewFingerprints",
     "EnvironmentPreviewInvocation",

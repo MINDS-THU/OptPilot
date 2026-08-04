@@ -34,6 +34,7 @@ class _FakeContainerEngine:
         self.concurrent_run_winner = False
         self.publish_host = "127.0.0.1"
         self.gateway_exits_immediately = False
+        self.gateway_publication_inspects_remaining = 0
         self.reject_isolated_network = False
         self.fail_next_stop = False
 
@@ -63,9 +64,13 @@ class _FakeContainerEngine:
         if command[1:3] == ("network", "connect"):
             network_name, container_name = command[3:5]
             record = self.containers[container_name]
+            network = self.networks[network_name]
             record["NetworkSettings"]["Networks"][network_name] = {
-                "NetworkID": hashlib.sha256(network_name.encode()).hexdigest()
+                "NetworkID": network["Id"]
             }
+            network["Containers"][record["Id"]] = {"Name": container_name}
+            if not network["Internal"]:
+                self._materialize_published_ports(record)
             return self._result(command)
         if command[1:3] == ("network", "rm"):
             existed = self.networks.pop(command[3], None)
@@ -106,12 +111,13 @@ class _FakeContainerEngine:
             index for index, item in enumerate(command) if "@sha256:" in item
         )
         image = command[image_index]
-        ports = {}
+        requested_ports = {}
         for index, item in enumerate(self._options(command, "--publish")):
             logical = int(item.rsplit(":", 1)[1].removesuffix("/tcp"))
-            ports[f"{logical}/tcp"] = [
-                {"HostIp": self.publish_host, "HostPort": str(31_000 + index)}
-            ]
+            requested_ports[f"{logical}/tcp"] = {
+                "HostIp": self.publish_host,
+                "HostPort": str(31_000 + index),
+            }
         mounts = []
         for raw in self._options(command, "--mount"):
             values = {}
@@ -148,16 +154,30 @@ class _FakeContainerEngine:
             },
             "Mounts": mounts,
             "State": {"Running": running, "ExitCode": 0 if running else 127},
+            "_RequestedPorts": requested_ports,
             "NetworkSettings": {
-                "Ports": ports,
+                # Docker Desktop retains the requested bindings in HostConfig
+                # but does not allocate them while a container is attached only
+                # to an internal network. The provider's ingress attachment is
+                # what makes those mappings observable.
+                "Ports": {key: [] for key in requested_ports},
                 "Networks": {
                     network_name: {"NetworkID": network["Id"]},
                 },
             },
         }
+        if not network["Internal"]:
+            self._materialize_published_ports(record)
         self.containers[name] = record
         network["Containers"][record["Id"]] = {"Name": name}
         return record
+
+    @staticmethod
+    def _materialize_published_ports(record: dict) -> None:
+        record["NetworkSettings"]["Ports"] = {
+            key: [dict(binding)]
+            for key, binding in record.get("_RequestedPorts", {}).items()
+        }
 
     def role(self, role: str) -> dict:
         return next(
@@ -171,6 +191,20 @@ class _FakeContainerEngine:
             name
             for name, record in self.containers.items()
             if record["Config"]["Labels"].get("optpilot.container_role") == role
+        )
+
+    def network(self, role: str) -> dict:
+        return next(
+            record
+            for record in self.networks.values()
+            if record["Labels"].get("optpilot.container_role") == role
+        )
+
+    def network_name(self, role: str) -> str:
+        return next(
+            name
+            for name, record in self.networks.items()
+            if record["Labels"].get("optpilot.container_role") == role
         )
 
     @staticmethod
@@ -196,7 +230,24 @@ class _FakeContainerEngine:
     ) -> subprocess.CompletedProcess[str]:
         if record is None:
             return self._result(command, code=1, stderr="not found")
-        return self._result(command, stdout=json.dumps([record]))
+        observed = record
+        if (
+            record.get("Config", {})
+            .get("Labels", {})
+            .get("optpilot.container_role")
+            == "gateway"
+            and self.gateway_publication_inspects_remaining > 0
+            and any(
+                bindings not in (None, [])
+                for bindings in record["NetworkSettings"]["Ports"].values()
+            )
+        ):
+            self.gateway_publication_inspects_remaining -= 1
+            observed = json.loads(json.dumps(record))
+            observed["NetworkSettings"]["Ports"] = {
+                key: None for key in record["NetworkSettings"]["Ports"]
+            }
+        return self._result(command, stdout=json.dumps([observed]))
 
 
 class LocalContainerWebProviderTests(unittest.TestCase):
@@ -346,10 +397,22 @@ class LocalContainerWebProviderTests(unittest.TestCase):
         self.assertEqual(set(endpoint.routes), {5173, 8000})
         self.assertEqual(endpoint.routes[5173], "http://127.0.0.1:31000")
 
-        network_create = next(
+        network_creates = [
             call for call in self.engine.calls if call[1:3] == ("network", "create")
+        ]
+        self.assertEqual(len(network_creates), 2)
+        network_create = next(
+            call
+            for call in network_creates
+            if "optpilot.container_role=network" in call
+        )
+        ingress_create = next(
+            call
+            for call in network_creates
+            if "optpilot.container_role=ingress-network" in call
         )
         self.assertIn("--internal", network_create)
+        self.assertNotIn("--internal", ingress_create)
         self.assertEqual(
             network_create[network_create.index("--driver") + 1], "bridge"
         )
@@ -357,15 +420,50 @@ class LocalContainerWebProviderTests(unittest.TestCase):
             "com.docker.network.bridge.gateway_mode_ipv4=isolated",
             network_create,
         )
-        network = next(iter(self.engine.networks.values()))
+        self.assertIn(
+            "com.docker.network.bridge.host_binding_ipv4=127.0.0.1",
+            ingress_create,
+        )
+        network = self.engine.network("network")
+        ingress = self.engine.network("ingress-network")
         self.assertEqual(network["Options"][
             "com.docker.network.bridge.gateway_mode_ipv4"
         ], "isolated")
+        self.assertEqual(
+            ingress["Options"]["com.docker.network.bridge.host_binding_ipv4"],
+            "127.0.0.1",
+        )
 
         app = self.engine.role("app")
         gateway = self.engine.role("gateway")
         self.assertEqual(app["NetworkSettings"]["Ports"], {})
         self.assertEqual(set(gateway["NetworkSettings"]["Ports"]), {"5173/tcp", "8000/tcp"})
+        self.assertEqual(
+            set(app["NetworkSettings"]["Networks"]),
+            {self.engine.network_name("network")},
+        )
+        self.assertEqual(
+            set(gateway["NetworkSettings"]["Networks"]),
+            {
+                self.engine.network_name("network"),
+                self.engine.network_name("ingress-network"),
+            },
+        )
+        self.assertEqual(
+            set(network["Containers"]), {app["Id"], gateway["Id"]}
+        )
+        self.assertEqual(set(ingress["Containers"]), {gateway["Id"]})
+        connect_calls = [
+            call for call in self.engine.calls if call[1:3] == ("network", "connect")
+        ]
+        self.assertEqual(len(connect_calls), 1)
+        self.assertEqual(
+            connect_calls[0][3:5],
+            (
+                self.engine.network_name("ingress-network"),
+                self.engine.role_name("gateway"),
+            ),
+        )
         self.assertFalse(
             any(
                 mount["Destination"].startswith(("/optpilot-gateway", "/run/optpilot-gateway"))
@@ -414,6 +512,21 @@ class LocalContainerWebProviderTests(unittest.TestCase):
         self.assertNotIn(token, json.dumps(app))
         self.assertNotIn(token, json.dumps(gateway))
         self.assertNotIn(token, repr(endpoint))
+
+    def test_gateway_publication_waits_for_delayed_docker_desktop_mapping(self) -> None:
+        self.engine.gateway_publication_inspects_remaining = 2
+
+        endpoint = self.provider.start_or_adopt(self._request())
+
+        self.assertIsInstance(endpoint, LocalContainerWebEndpoint)
+        assert isinstance(endpoint, LocalContainerWebEndpoint)
+        self.assertEqual(endpoint.routes[5173], "http://127.0.0.1:31000")
+        gateway_inspects = [
+            call
+            for call in self.engine.calls
+            if call[1] == "inspect" and "-gw-" in call[2]
+        ]
+        self.assertGreaterEqual(len(gateway_inspects), 3)
 
     def test_mount_identity_and_owner_access_fail_before_engine_side_effects(self) -> None:
         request = self._request()
@@ -467,7 +580,10 @@ class LocalContainerWebProviderTests(unittest.TestCase):
             sum(call[1] == "run" for call in self.engine.calls), 2
         )
         self.assertEqual(
-            sum(call[1:3] == ("network", "create") for call in self.engine.calls), 1
+            sum(call[1:3] == ("network", "create") for call in self.engine.calls), 2
+        )
+        self.assertEqual(
+            sum(call[1:3] == ("network", "connect") for call in self.engine.calls), 1
         )
 
     def test_adoption_rejects_changed_application_numeric_identity(self) -> None:
@@ -521,9 +637,27 @@ class LocalContainerWebProviderTests(unittest.TestCase):
     def test_endpoint_rejects_an_extra_private_network_participant(self) -> None:
         endpoint = self.provider.start_or_adopt(self._request())
         assert isinstance(endpoint, LocalContainerWebEndpoint)
-        network = next(iter(self.engine.networks.values()))
+        network = self.engine.network("network")
         network["Containers"]["unrelated-container-id"] = {"Name": "unrelated"}
         with self.assertRaisesRegex(RealmIntegrityError, "unauthorized participant"):
+            endpoint.validate()
+
+    def test_endpoint_rejects_an_extra_ingress_network_participant(self) -> None:
+        endpoint = self.provider.start_or_adopt(self._request())
+        assert isinstance(endpoint, LocalContainerWebEndpoint)
+        ingress = self.engine.network("ingress-network")
+        ingress["Containers"]["unrelated-container-id"] = {"Name": "unrelated"}
+        with self.assertRaisesRegex(RealmIntegrityError, "unauthorized participant"):
+            endpoint.validate()
+
+    def test_endpoint_rejects_gateway_ingress_membership_tamper(self) -> None:
+        endpoint = self.provider.start_or_adopt(self._request())
+        assert isinstance(endpoint, LocalContainerWebEndpoint)
+        gateway = self.engine.role("gateway")
+        del gateway["NetworkSettings"]["Networks"][
+            self.engine.network_name("ingress-network")
+        ]
+        with self.assertRaisesRegex(RealmIntegrityError, "network membership"):
             endpoint.validate()
 
     def test_enabled_network_fails_closed_before_shared_bridge_exposure(self) -> None:
@@ -583,12 +717,15 @@ class LocalContainerWebProviderTests(unittest.TestCase):
         rm_calls = [call for call in self.engine.calls if call[1:3] == ("rm", "-f")]
         self.assertIn("-gw-", rm_calls[0][3])
         self.assertIn("-app-", rm_calls[1][3])
-        network_rm_index = next(
+        network_rm_indices = [
             index
             for index, call in enumerate(self.engine.calls)
             if call[1:3] == ("network", "rm")
+        ]
+        self.assertEqual(len(network_rm_indices), 2)
+        self.assertTrue(
+            all(self.engine.calls.index(rm_calls[1]) < index for index in network_rm_indices)
         )
-        self.assertLess(self.engine.calls.index(rm_calls[1]), network_rm_index)
         self.assertFalse(any((self.root / "control").glob("*/token")))
         evidence_path = self._terminal_evidence_file()
         self.assertEqual(stat.S_IMODE(evidence_path.stat().st_mode), 0o600)

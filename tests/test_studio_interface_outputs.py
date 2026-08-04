@@ -2352,6 +2352,51 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
         self.assertEqual(self.state.interface_launches, {})
         self.assertEqual(list(self.state.runtime_dir.glob("interface-launch-*")), [])
 
+    def test_catalog_interface_falls_back_from_ineligible_default_profile(self) -> None:
+        profiles = studio_server._compile_component_interface_profiles(
+            {
+                "launchProfiles": [
+                    {
+                        "id": "default",
+                        "label": "Candidate container",
+                        "command": ["python", "-m", "http.server", "5173"],
+                        "runtime": {
+                            "sandbox": "container",
+                            "container": {
+                                "engine": "docker",
+                                "image": "example/viewer@sha256:" + "a" * 64,
+                            },
+                        },
+                        "presentation": {"kind": "web", "port": 5173},
+                    },
+                    {
+                        "id": "catalog",
+                        "label": "Catalog browser",
+                        "command": ["python", "-m", "http.server", "5174"],
+                        "runtime": {"sandbox": "process"},
+                        "presentation": {"kind": "web", "port": 5174},
+                    },
+                ]
+            },
+            component_kind="resource",
+        )
+        summary = studio_server._interface_summary_with_launch_capabilities(
+            self.state,
+            studio_server._interface_summary(profiles),
+            profiles,
+        )
+        capabilities = {
+            item["id"]: item["launch"] for item in summary["profiles"]
+        }
+
+        self.assertFalse(capabilities["default"]["eligible"])
+        self.assertTrue(capabilities["catalog"]["eligible"])
+        self.assertEqual(summary["actions"]["launch"]["profile_id"], "catalog")
+        selected = studio_server._select_launchable_interface_profile(
+            self.state, profiles, None
+        )
+        self.assertEqual(selected.profile_id, "catalog")
+
     def test_prestart_launch_failure_cleans_runtime_session_and_projection(self) -> None:
         error = "Workspace runtime image build failed: injected builder error"
         self.fake_runtime.on_exec = lambda _workspace: (_ for _ in ()).throw(

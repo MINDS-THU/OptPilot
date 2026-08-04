@@ -127,11 +127,12 @@ class ExecutionStateError(SimulationExecutionError):
 class BehaviorSmokeAssessment:
     """Conservative evidence from an execution's existing result artifacts.
 
-    ``stalled`` is intentionally narrow: a completed, lossless trace repeatedly
-    exercised an output component, the generated source statically connects it
-    to another output-capable atomic component, and no such downstream output
-    appeared.  Every ambiguous case is ``inconclusive`` or ``not_applicable``
-    so ordinary single-component and terminal-sink simulations are not rejected.
+    ``stalled`` is intentionally narrow: either a completed, lossless,
+    positive-horizon multi-stage trace never progressed beyond simulation time
+    zero, or repeated output from one component never reached a statically
+    connected downstream component.  Every ambiguous case is ``inconclusive``
+    or ``not_applicable`` so ordinary single-component and terminal-sink
+    simulations are not rejected.
     """
 
     status: str
@@ -999,6 +1000,10 @@ def assess_behavior_smoke(
         )
 
     events_by_component: dict[str, int] = {}
+    observation_times: list[float] = []
+    observation_rows = 0
+    recorded_state_rows = 0
+    observation_timing_complete = True
     footer: dict[str, Any] | None = None
     try:
         for raw_line in trace_lines:
@@ -1007,13 +1012,27 @@ def assess_behavior_smoke(
             row = json.loads(raw_line)
             if not isinstance(row, dict):
                 raise ValueError("Trace row must be an object.")
-            if row.get("record_type") == "event":
+            record_type = row.get("record_type")
+            if record_type in {"event", "state"}:
+                observation_rows += 1
+                raw_time = row.get("simulation_time", row.get("time"))
+                if (
+                    type(raw_time) in (int, float)
+                    and math.isfinite(float(raw_time))
+                    and float(raw_time) >= 0
+                ):
+                    observation_times.append(float(raw_time))
+                else:
+                    observation_timing_complete = False
+            if record_type == "event":
                 component = row.get("component")
                 if isinstance(component, str) and component:
                     events_by_component[component] = (
                         events_by_component.get(component, 0) + 1
                     )
-            elif row.get("record_type") == "summary":
+            elif record_type == "state":
+                recorded_state_rows += 1
+            elif record_type == "summary":
                 footer = row
     except (ValueError, json.JSONDecodeError):
         return BehaviorSmokeAssessment(
@@ -1026,10 +1045,10 @@ def assess_behavior_smoke(
             "The event trace did not finish with a summary.",
         )
     recorded_events = footer.get("recorded_events")
+    recorded_states = footer.get("recorded_states")
     if (
         type(recorded_events) is not int
         or recorded_events < 0
-        or footer.get("truncated") is True
         or footer.get("dropped_events") != 0
         or sum(events_by_component.values()) != recorded_events
     ):
@@ -1056,21 +1075,13 @@ def assess_behavior_smoke(
             tuple(sorted(events_by_component)),
             recorded_events=recorded_events,
         )
-    if not graph_complete:
-        return BehaviorSmokeAssessment(
-            "inconclusive",
-            "The generated structure uses dynamic topology, so behavior was not inferred.",
-            tuple(sorted(events_by_component)),
-            recorded_events=recorded_events,
-        )
-    if len(output_atomics) <= 1:
+    if graph_complete and len(output_atomics) <= 1:
         return BehaviorSmokeAssessment(
             "not_applicable",
             "The model has no multi-stage output path to validate.",
             tuple(sorted(events_by_component)),
             recorded_events=recorded_events,
         )
-
     active: set[str] = set()
     counts_by_node: dict[str, int] = {}
     for component, count in events_by_component.items():
@@ -1104,6 +1115,53 @@ def assess_behavior_smoke(
             origin_event_count += counts_by_node.get(origin, 0)
             if downstream & active:
                 downstream_observed = True
+
+    complete_timing_evidence = (
+        observation_timing_complete
+        and observation_rows == len(observation_times)
+        and type(recorded_states) is int
+        and recorded_states >= 0
+        and recorded_state_rows == recorded_states
+        and footer.get("dropped_states") == 0
+        and footer.get("dropped_records", 0) == 0
+        and footer.get("truncated") is not True
+    )
+    if (
+        len(output_atomics) > 1
+        and complete_timing_evidence
+        and observation_times
+        and all(simulation_time == 0.0 for simulation_time in observation_times)
+    ):
+        return BehaviorSmokeAssessment(
+            "stalled",
+            (
+                "The simulation exited successfully for a positive-time "
+                "scenario, but every recorded event and state observation "
+                "occurred at simulation time 0. The model became quiescent "
+                "before the scenario began. Ensure an autonomous source "
+                "schedules its first event, or have the runner inject the "
+                "declared deterministic startup input."
+            ),
+            tuple(sorted(events_by_component)),
+            tuple(sorted(expected_downstream)),
+            recorded_events,
+        )
+
+    if not graph_complete:
+        return BehaviorSmokeAssessment(
+            "inconclusive",
+            "The generated structure uses dynamic topology, so behavior was not inferred.",
+            tuple(sorted(events_by_component)),
+            recorded_events=recorded_events,
+        )
+
+    if len(output_atomics) <= 1:
+        return BehaviorSmokeAssessment(
+            "not_applicable",
+            "The model has no multi-stage output path to validate.",
+            tuple(sorted(events_by_component)),
+            recorded_events=recorded_events,
+        )
 
     if not expected_downstream:
         return BehaviorSmokeAssessment(

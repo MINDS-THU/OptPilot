@@ -8,6 +8,8 @@ entrypoint:
   python: method:ProcessAwareLLMHeuristicMethod
   pythonPath: [., ../../environments/production_agv_scheduling]
   protocol: batch
+  # One exchange can include manager calls, parallel editors, and retries.
+  exchangeTimeoutSeconds: 5000
 
 runtime:
   sandbox: process
@@ -16,7 +18,7 @@ runtime:
 settings:
   batchSize: 4
   candidatesPerIteration: 4
-  maxIterations: 10
+  maxIterations: 5
   patience: 3
   targetScore: 80
   managerQueryRounds: 2

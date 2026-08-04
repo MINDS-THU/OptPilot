@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from unittest import mock
 
 import optpilot.realm_retained_batch_run_driver as retained_batch_run_driver
+from optpilot.attempts import AttemptEnvelope, AttemptFinalization
 from optpilot.realm.content import LocalContentStore
 from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.method_exchange_records import method_exchange_sequence
@@ -32,6 +33,7 @@ from optpilot.retained_batch_runtime import (
     RetainedBatchCacheAck,
     RetainedBatchExchangeCoordinate,
     RetainedBatchMethodError,
+    RetainedBatchRuntimeError,
     RetainedBatchWorkerResponse,
     RetainedBatchWorkerStatus,
     retained_batch_worker_request_digest,
@@ -151,6 +153,93 @@ class _CancellingScheduler:
     def terminalize(self, *, logical_trial_id: str, attempt_id: str) -> None:
         self.terminalize_calls.append((logical_trial_id, attempt_id))
         raise AssertionError("driver test scheduler has no active provider attempt")
+
+
+class _SuccessfulScheduler:
+    """Adopt one synthetic successful evaluation and acknowledge cleanup."""
+
+    def __init__(self, authority: RetainedRunAuthority) -> None:
+        self.authority = authority
+        self.calls: list[tuple[str, str]] = []
+        self.cleanup_calls: list[tuple[str, str]] = []
+
+    def advance(
+        self,
+        *,
+        logical_trial_id: str,
+        attempt_id: str,
+        attempt_ttl_seconds: float,
+    ) -> None:
+        self.calls.append((logical_trial_id, attempt_id))
+        snapshot = self.authority.refresh_controller()
+        existing = next(
+            (
+                item
+                for item in snapshot.attempts
+                if item.attempt_id == attempt_id
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.state != "terminal":
+                raise AssertionError("synthetic attempt is unexpectedly active")
+            self.cleanup_calls.append((logical_trial_id, attempt_id))
+            return
+
+        prepared = self.authority.ledger.prepare_run_attempt(
+            operation_id=f"driver-test/success/prepare/{attempt_id}",
+            actor_principal_id=self.authority.actor_principal_id,
+            run_id=self.authority.run_id,
+            logical_trial_id=logical_trial_id,
+            attempt_id=attempt_id,
+            expected_run_revision=snapshot.revision.revision,
+            controller_lease_id=self.authority.controller_lease_id,
+            controller_holder_id=self.authority.controller_holder_id,
+            controller_fencing_token=self.authority.controller_fencing_token,
+            attempt_ttl_seconds=attempt_ttl_seconds,
+        )
+        envelope = AttemptEnvelope(
+            attempt_id=attempt_id,
+            evaluation_spec_digest=prepared.attempt.evaluation_spec_digest,
+            binding_id=prepared.attempt.binding_id,
+            outcome="success",
+            phase="environment_evaluation",
+            wall_clock_seconds=0.1,
+            validation={"accepted": True, "errors": []},
+            materialization={"runtime_spec": {"x": 1}, "metadata": {}},
+            metric_values={"score": 65.0754},
+            constraint_results={},
+            output_declarations=(),
+            event_summary={"primary_metric": "score"},
+            execution_metadata={"worker": "synthetic"},
+            error={},
+        )
+        self.authority.ledger.adopt_run_attempt(
+            operation_id=f"driver-test/success/adopt/{attempt_id}",
+            actor_principal_id=self.authority.actor_principal_id,
+            run_id=self.authority.run_id,
+            attempt_id=attempt_id,
+            change_id=prepared.attempt.capture_change_id,
+            finalization=AttemptFinalization(
+                attempt_id=attempt_id,
+                evaluation_spec_digest=prepared.attempt.evaluation_spec_digest,
+                binding_id=prepared.attempt.binding_id,
+                effective_outcome="success",
+                effective_code=None,
+                captured_artifacts=(),
+                envelope=envelope,
+            ),
+            expected_run_revision=prepared.revision.revision,
+            expected_owner_revision=prepared.revision.owner_revision,
+            controller_lease_id=self.authority.controller_lease_id,
+            controller_holder_id=self.authority.controller_holder_id,
+            controller_fencing_token=self.authority.controller_fencing_token,
+        )
+        self.authority.refresh_controller()
+
+    def terminalize(self, *, logical_trial_id: str, attempt_id: str) -> None:
+        del logical_trial_id, attempt_id
+        raise AssertionError("successful scheduler has no active attempt")
 
 
 class _GatedCancellingScheduler:
@@ -300,6 +389,7 @@ class _FakeRetainedWorker:
         shutdown_error_once: bool = False,
         force_stop_error: bool = False,
         corrupt_ack_chain_sequence: int | None = None,
+        runtime_error_sequence: int | None = None,
     ) -> None:
         self.ledger = ledger
         self.run_id = run_id
@@ -315,6 +405,7 @@ class _FakeRetainedWorker:
         self.shutdown_error_once = shutdown_error_once
         self.force_stop_error = force_stop_error
         self.corrupt_ack_chain_sequence = corrupt_ack_chain_sequence
+        self.runtime_error_sequence = runtime_error_sequence
         self.acknowledged_sequence = 0
         self.acknowledged_chain = INITIAL_BATCH_EXCHANGE_CHAIN
         self.pending: RetainedBatchExchangeCoordinate | None = None
@@ -352,6 +443,8 @@ class _FakeRetainedWorker:
 
         self.callback_calls.append((operation, exchange_id, exchange_sequence))
         self.callback_payloads.append((operation, copy.deepcopy(dict(payload))))
+        if self.runtime_error_sequence == exchange_sequence:
+            raise RetainedBatchRuntimeError("worker_request_timeout")
         error_code = (
             self.proposal_error_code
             if operation == "propose"
@@ -609,6 +702,43 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             manifest,
             self.closure_bindings,
             evaluator_capacity=evaluator_capacity,
+        )
+        receipt = self.ledger.create_run_namespace(
+            operation_id=f"driver/{run_id}/create",
+            actor_principal_id="operator",
+            controller_holder_id=f"controller-{run_id}",
+            controller_ttl_seconds=60,
+            run_definition=definition,
+            definition_bindings=definition_bindings,
+            source_owner_id=self.source_owner_id,
+            expected_source_owner_revision=self.source_revision,
+            run_id=run_id,
+            owner_id=f"owner-{run_id}",
+        )
+        return RetainedRunAuthority.from_create_receipt(
+            ledger=self.ledger,
+            actor_principal_id="operator",
+            receipt=receipt,
+            candidate_normalizer=_normalizer,
+            normalizer_version=manifest.normalizer_version,
+        )
+
+    def serial_authority(
+        self,
+        *,
+        run_id: str,
+        max_trials: int,
+    ) -> RetainedRunAuthority:
+        manifest = replace(
+            prepare_test_run_control_manifest(
+                self.closure, max_trials=max_trials
+            ),
+            proposal_width=1,
+        )
+        definition, definition_bindings = prepare_test_run_definition(
+            self.closure,
+            manifest,
+            self.closure_bindings,
         )
         receipt = self.ledger.create_run_namespace(
             operation_id=f"driver/{run_id}/create",
@@ -1099,6 +1229,157 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
         )
         self.assertEqual(scheduler.calls, [])
         self.assertEqual(worker.ack_calls, [1])
+
+    def test_second_proposal_transport_timeout_terminalizes_visible_method_failure(
+        self,
+    ) -> None:
+        authority = self.serial_authority(
+            run_id="run-method-timeout",
+            max_trials=2,
+        )
+        worker = _FakeRetainedWorker(
+            self.ledger,
+            run_id="run-method-timeout",
+            candidate=_candidate("candidate-baseline", 1),
+            runtime_error_sequence=3,
+        )
+        scheduler = _SuccessfulScheduler(authority)
+        driver = RealmRetainedBatchRunDriver(
+            self.runtime,
+            authority,
+            method_runtime_provider=_FakeMethodProvider(worker),
+            scheduler=scheduler,
+            heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
+            controller_ttl_seconds=60,
+            attempt_ttl_seconds=60,
+        )
+
+        summary = driver.run()
+        snapshot = self.ledger.read_run_snapshot(
+            actor_principal_id="operator",
+            run_id="run-method-timeout",
+        )
+        timeline = self.ledger.read_run_timeline_page(
+            actor_principal_id="operator",
+            run_id="run-method-timeout",
+            expected_run_revision=snapshot.revision.revision,
+            expected_head_sequence=snapshot.revision.last_sequence,
+        )
+
+        self.assertEqual(summary.run_status, "failed")
+        self.assertEqual(summary.stop_code, "method_failed")
+        self.assertEqual(snapshot.run.state, "failed")
+        self.assertEqual(snapshot.finalization.code, "method_failed")
+        self.assertEqual(snapshot.run.controller_generation, 1)
+        self.assertEqual(
+            [
+                (item.kind, item.outcome, item.error_code)
+                for item in snapshot.method_exchange_completions
+            ],
+            [
+                ("proposal", "admitted", None),
+                ("observation", "acknowledged", None),
+            ],
+        )
+        abandoned = [
+            event
+            for event in timeline.items
+            if event.event == "method_exchange_abandoned"
+        ]
+        self.assertEqual(len(abandoned), 1)
+        self.assertEqual(abandoned[0].method_round_index, 2)
+        self.assertEqual(abandoned[0].method_exchange_kind, "proposal")
+        self.assertEqual(abandoned[0].code, "method_failed")
+        terminal_transitions = [
+            transition
+            for transition in snapshot.logical_transitions
+            if transition.to_state == "terminal"
+        ]
+        self.assertEqual(
+            [transition.outcome for transition in terminal_transitions],
+            ["success"],
+        )
+        self.assertEqual(
+            snapshot.observations[0].envelope.metric_values,
+            {"score": 65.0754},
+        )
+        self.assertEqual(
+            [
+                operation
+                for operation, _exchange_id, _sequence in worker.callback_calls
+            ],
+            ["propose", "observe", "propose"],
+        )
+        self.assertEqual(worker.ack_calls, [1, 2])
+        self.assertTrue(worker.force_stop_called)
+        self.assertFalse(worker.shutdown_called)
+        self.assertNotIn(
+            "controller_replaced",
+            [event.event for event in timeline.items],
+        )
+
+    def test_observation_timeout_escalates_natural_drain_to_method_failure(
+        self,
+    ) -> None:
+        authority = self.authority_from_create()
+        worker = _FakeRetainedWorker(
+            self.ledger,
+            run_id="run-a",
+            candidate=_candidate("candidate-baseline", 1),
+            runtime_error_sequence=2,
+        )
+        scheduler = _SuccessfulScheduler(authority)
+        driver = RealmRetainedBatchRunDriver(
+            self.runtime,
+            authority,
+            method_runtime_provider=_FakeMethodProvider(worker),
+            scheduler=scheduler,
+            heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
+            controller_ttl_seconds=60,
+            attempt_ttl_seconds=60,
+        )
+
+        summary = driver.run()
+        snapshot = self.ledger.read_run_snapshot(
+            actor_principal_id="operator",
+            run_id="run-a",
+        )
+        timeline = self.ledger.read_run_timeline_page(
+            actor_principal_id="operator",
+            run_id="run-a",
+            expected_run_revision=snapshot.revision.revision,
+            expected_head_sequence=snapshot.revision.last_sequence,
+        )
+
+        self.assertEqual(summary.run_status, "failed")
+        self.assertEqual(summary.stop_code, "method_failed")
+        self.assertEqual(snapshot.finalization.code, "method_failed")
+        self.assertEqual(
+            [
+                (item.kind, item.outcome)
+                for item in snapshot.method_exchange_completions
+            ],
+            [("proposal", "admitted")],
+        )
+        abandoned = [
+            event
+            for event in timeline.items
+            if event.event == "method_exchange_abandoned"
+        ]
+        self.assertEqual(len(abandoned), 1)
+        self.assertEqual(abandoned[0].method_exchange_kind, "observation")
+        self.assertEqual(abandoned[0].code, "method_failed")
+        self.assertIn(
+            "run_stop_escalated",
+            [event.event for event in timeline.items],
+        )
+        self.assertNotIn(
+            "controller_replaced",
+            [event.event for event in timeline.items],
+        )
+        self.assertEqual(worker.ack_calls, [1])
+        self.assertTrue(worker.force_stop_called)
+        self.assertFalse(worker.shutdown_called)
 
     def test_same_generation_pending_completion_is_acked_without_callback_replay(
         self,

@@ -417,7 +417,7 @@ class StudioCatalogProjectionLifecycleTest(unittest.TestCase):
             "viewer revision one\n",
         )
 
-        index_path = self.state.workspaces_dir / "index.json"
+        index_path = self.state.workspace_index_path
         stored_payload = json.loads(index_path.read_text(encoding="utf-8"))
         stored = next(
             item for item in stored_payload["workspaces"] if item["id"] == workspace_id

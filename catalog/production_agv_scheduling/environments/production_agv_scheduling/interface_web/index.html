@@ -30,7 +30,7 @@
         <div class="viewer-frame">
           <iframe
             id="unity-viewer"
-            src="/unity/"
+            src="/unity/?generation=bootstrap"
             title="Interactive 3D production and AGV simulation"
             allow="fullscreen"
           ></iframe>
@@ -39,6 +39,10 @@
           <div>
             <span class="summary-label">Run</span>
             <strong id="run-id">—</strong>
+          </div>
+          <div>
+            <span class="summary-label">3D viewer</span>
+            <strong id="viewer-connection">Loading…</strong>
           </div>
           <div>
             <span class="summary-label">Telemetry</span>
@@ -82,15 +86,16 @@
             </select>
           </label>
         </div>
+        <p id="horizon-hint" class="input-hint" role="status" hidden></p>
         <label class="check-field">
           <input id="disable-faults" type="checkbox">
           <span>Disable injected equipment faults</span>
         </label>
 
         <div class="actions">
-          <button id="run-button" class="primary" type="button">Run candidate</button>
-          <button id="replay-button" type="button">Replay last run</button>
-          <button id="stop-button" class="danger" type="button">Stop</button>
+          <button id="run-button" class="primary" type="button" disabled>Run candidate</button>
+          <button id="replay-button" type="button" disabled>Replay last run</button>
+          <button id="stop-button" class="danger" type="button" disabled>Stop</button>
         </div>
 
         <details class="editor" open>
@@ -116,6 +121,6 @@
         </p>
       </aside>
     </main>
-    <script src="/assets/app.js" defer></script>
+    <script src="/assets/app.js?v=20260804-reset-boundary" defer></script>
   </body>
 </html>

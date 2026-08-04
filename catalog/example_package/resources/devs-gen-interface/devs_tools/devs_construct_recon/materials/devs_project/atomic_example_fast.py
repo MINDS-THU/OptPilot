@@ -105,6 +105,18 @@ class QueuedProcessor(Atomic):
             self.payload_to_send = None
             self.hold_in("IDLE", float("inf"))
 
+    def trace_state(self):
+        """Return a bounded, side-effect-free teaching projection."""
+        current_request_id = None
+        if self.current_request is not None:
+            current_request_id = self.current_request.get("request_id")
+        return {
+            "queue_length": len(self.queue),
+            "busy": self.current_request is not None,
+            "current_request_id": current_request_id,
+            "response_ready": self.payload_to_send is not None,
+        }
+
     def exit(self):
         print(json.dumps({
             "event": "simulation_finished",

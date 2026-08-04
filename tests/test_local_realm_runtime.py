@@ -244,6 +244,74 @@ class LocalRealmRuntimeTest(unittest.TestCase):
             self.root.resolve() / "container-web",
         )
 
+    def test_container_web_provider_loads_durable_realm_trust_on_reopen(self) -> None:
+        image = "example/durable-interface@sha256:" + "c" * 64
+        first = self.open()
+        first.provider_trust_policy.approve(
+            operation_id="local-runtime-test/approve-durable-image",
+            image_ref=image,
+            reason="Local runtime persistence test.",
+        )
+        first.close()
+
+        reopened = LocalRealmRuntime.open(
+            realm_root=self.root,
+            actor_principal_id="local-user:test",
+            container_web_executable="docker",
+        )
+        self.addCleanup(reopened.close)
+
+        assert reopened.container_web_provider is not None
+        self.assertEqual(reopened.container_gateway_trust_source, "realm")
+        self.assertTrue(
+            reopened.container_web_provider.is_gateway_image_trusted(image)
+        )
+
+    def test_exact_session_trust_replaces_durable_realm_policy(self) -> None:
+        durable_image = "example/durable-interface@sha256:" + "d" * 64
+        session_image = "example/session-interface@sha256:" + "e" * 64
+        first = self.open()
+        first.provider_trust_policy.approve(
+            operation_id="local-runtime-test/approve-realm-image",
+            image_ref=durable_image,
+        )
+        first.close()
+
+        session = LocalRealmRuntime.open(
+            realm_root=self.root,
+            actor_principal_id="local-user:test",
+            container_web_executable="docker",
+            trusted_container_gateway_images=(
+                ContainerGatewayImageTrust(session_image),
+            ),
+        )
+        self.addCleanup(session.close)
+
+        assert session.container_web_provider is not None
+        self.assertEqual(session.container_gateway_trust_source, "session")
+        self.assertTrue(
+            session.container_web_provider.is_gateway_image_trusted(session_image)
+        )
+        self.assertFalse(
+            session.container_web_provider.is_gateway_image_trusted(durable_image)
+        )
+
+        disabled = LocalRealmRuntime.open(
+            realm_root=self.root,
+            actor_principal_id="local-user:test",
+            container_web_executable="docker",
+            trusted_container_gateway_images=(),
+        )
+        self.addCleanup(disabled.close)
+        assert disabled.container_web_provider is not None
+        self.assertEqual(disabled.container_gateway_trust_source, "session")
+        self.assertFalse(
+            disabled.container_web_provider.is_gateway_image_trusted(durable_image)
+        )
+        self.assertFalse(
+            disabled.container_web_provider.is_gateway_image_trusted(session_image)
+        )
+
     def test_retained_package_prepare_and_run_launch_use_composed_services(
         self,
     ) -> None:

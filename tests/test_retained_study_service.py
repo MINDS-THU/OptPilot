@@ -23,6 +23,7 @@ from optpilot.realm.workspaces import WORKSPACE_REVISION_ROLE, WorkspaceLineage
 from optpilot.retained_study_compiler import RetainedStudyCompileError
 from optpilot.retained_study_service import (
     RETAINED_STUDY_SOURCE_OWNER_KIND,
+    RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES,
     RETAINED_STUDY_SOURCE_ROLE,
     RetainedStudyPreparationReceipt,
     RetainedStudyService,
@@ -624,6 +625,104 @@ class RetainedStudyServiceTest(unittest.TestCase):
             launched.definition_digest,
             second.study_definition.manifest.run_definition_digest,
         )
+
+    def test_local_capture_omits_only_fixed_generated_directories_deterministically(
+        self,
+    ) -> None:
+        expected_excluded_names = (
+            ".git",
+            ".mypy_cache",
+            ".optpilot",
+            ".optpilot-ui",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".runtime",
+            ".uv-cache",
+            ".venv",
+            "__pycache__",
+            "node_modules",
+            "runs",
+        )
+        self.assertEqual(
+            RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES,
+            expected_excluded_names,
+        )
+
+        ordinary = self.package_root / "ordinary"
+        ordinary.mkdir()
+        ordinary_files = {
+            "ordinary/__pycache__.txt": b"ordinary cache-named file",
+            "ordinary/node_modules.txt": b"ordinary modules-named file",
+            "ordinary/payload.pyc": b"ordinary filename suffix",
+            "ordinary/runs.txt": b"ordinary runs-named file",
+        }
+        for relative_path, payload in ordinary_files.items():
+            (self.package_root / relative_path).write_bytes(payload)
+
+        generated_parent = self.package_root / "generated"
+        generated_parent.mkdir()
+        (generated_parent / "keep.txt").write_text("retained", encoding="utf-8")
+        for index, name in enumerate(expected_excluded_names):
+            directory = generated_parent / name
+            directory.mkdir()
+            (directory / "cache.bin").write_bytes(f"cache-{index}".encode("ascii"))
+
+        first = self.prepare(operation_id="retained-service/generated-first")
+        first_manifest = self.store.verify_tree(
+            first.package.snapshot_ref,
+            verify_children=True,
+        )
+        first_files = {
+            entry.path for entry in first_manifest.entries if entry.kind == "file"
+        }
+        self.assertTrue(set(ordinary_files).issubset(first_files))
+        self.assertIn("generated/keep.txt", first_files)
+        self.assertFalse(
+            any(
+                part in expected_excluded_names
+                for path in first_files
+                for part in Path(path).parts
+            )
+        )
+
+        # Interpreter, test, and workspace caches are not authored package
+        # content.  Changing every excluded directory therefore preserves the
+        # exact retained tree and compiled definition.
+        for index, name in enumerate(expected_excluded_names):
+            directory = generated_parent / name
+            (directory / "cache.bin").write_bytes(
+                f"changed-cache-{index}".encode("ascii")
+            )
+            (directory / "new-cache.bin").write_bytes(b"new cache")
+
+        second = self.service.prepare_local_package(
+            operation_id="retained-service/generated-second",
+            actor_principal_id="operator",
+            store_id=self.store.store_id,
+            package_root=self.package_root,
+            study_config_path=self.study_path,
+            source_owner_id="generated-source-second",
+            study_definition_owner_id="generated-definition-second",
+        )
+        self.assertEqual(second.package.snapshot_ref, first.package.snapshot_ref)
+        self.assertEqual(
+            second.study_definition.manifest.run_definition_digest,
+            first.study_definition.manifest.run_definition_digest,
+        )
+
+        # Files are not filtered by name or suffix.  An ordinary file mutation
+        # must still change the retained source identity.
+        (ordinary / "payload.pyc").write_bytes(b"changed ordinary filename suffix")
+        third = self.service.prepare_local_package(
+            operation_id="retained-service/generated-third",
+            actor_principal_id="operator",
+            store_id=self.store.store_id,
+            package_root=self.package_root,
+            study_config_path=self.study_path,
+            source_owner_id="generated-source-third",
+            study_definition_owner_id="generated-definition-third",
+        )
+        self.assertNotEqual(third.package.snapshot_ref, first.package.snapshot_ref)
 
     def test_committed_replay_reconstructs_package_method_context_paths(self) -> None:
         environment = self.package_root / "configs/environments/environment.yaml"

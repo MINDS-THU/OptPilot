@@ -57,7 +57,7 @@ candidate:
   files:
     editable: [{path: scheduler.py}, {path: param_estimator.py}]
     required: [scheduler.py, param_estimator.py]
-    allow: [scheduler.py, param_estimator.py, "policy/**"]
+    allow: [scheduler.py, param_estimator.py, "policy/**", "provenance/**"]
     deny: ["**/__pycache__/**", "**/*.pyc"]
 
 methodContext:

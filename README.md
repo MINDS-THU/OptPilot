@@ -144,6 +144,20 @@ provider support it.
 Both are explicitly inspection-only: they never consume the source Run's
 budget or change its ranking or evidence.
 
+Container-backed interfaces require an explicit approval for their exact,
+digest-pinned image. Persistent approvals live in the selected private Realm:
+
+```bash
+optpilot environment-preview trust approve \
+  registry.example/preview@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+optpilot environment-preview trust list
+```
+
+Use the same absolute `--realm-root` as Studio when it does not use the default
+Realm, and restart Studio after changing an approval. See
+[Operations](https://MINDS-THU.github.io/OptPilot/operations/#environment-preview-image-approvals)
+for revocation, JSON output, confirmation, and session-only override behavior.
+
 **Inspect** shows semantic inputs without launching. **View files** browses
 retained file Candidates and artifacts through a bounded read-only view.
 **Edit in Workspace** is available only for an eligible complete project and

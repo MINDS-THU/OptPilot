@@ -76,11 +76,18 @@
 
       var buildUrl = "Build";
       var loaderUrl = buildUrl + "/SimPy.loader.js";
+      var requestedGeneration = new URLSearchParams(window.location.search).get("generation") || "bootstrap";
+      var viewerGeneration = /^[A-Za-z0-9_-]{1,64}$/.test(requestedGeneration)
+        ? requestedGeneration
+        : "bootstrap";
       var config = {
         dataUrl: buildUrl + "/SimPy.data.unityweb",
         frameworkUrl: buildUrl + "/SimPy.framework.js.unityweb",
         codeUrl: buildUrl + "/SimPy.wasm.unityweb",
-        streamingAssetsUrl: "StreamingAssets",
+        // Scope the dynamic MQTT configuration to this exact visual run. An
+        // older Unity instance may auto-reconnect, but its generation URL can
+        // no longer obtain the current run's broker identity.
+        streamingAssetsUrl: "StreamingAssets/" + viewerGeneration,
         companyName: "DefaultCompany",
         productName: "SimPyUnity",
         productVersion: "0.1.0",

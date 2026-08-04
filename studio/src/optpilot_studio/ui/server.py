@@ -19,6 +19,7 @@ import re
 import shlex
 import shutil
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -74,8 +75,12 @@ from optpilot.realm.catalog_publication import (
 )
 from optpilot.realm.content import AllowedTreeSource
 from optpilot.realm.environment_preview import (
+    EnvironmentPreviewCompileError,
     EnvironmentPreviewPlan,
     compile_environment_preview_plan,
+)
+from optpilot.realm.environment_preview_binding import (
+    EnvironmentPreviewProviderPlanError,
 )
 from optpilot.realm.errors import (
     ContentRejected,
@@ -173,8 +178,10 @@ from ..agent import (
 from .coordination_store import (
     ActionState,
     ActionIntentRecord,
+    COORDINATION_STORAGE_UNAVAILABLE_MESSAGE,
     CoordinationConflict,
     CoordinationNotFound,
+    CoordinationStorageUnavailable,
     EntityCoordinate,
     RegistrationCheck,
     RegistrationSetupData,
@@ -183,6 +190,8 @@ from .coordination_store import (
     StudioCoordinationStore,
     WorkspacePurpose,
     coordination_database_path,
+    prepare_coordination_database,
+    studio_project_state_directory,
 )
 from .presentation_broker import (
     OwnedWebEndpoint,
@@ -2916,9 +2925,30 @@ class UiState:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.workspaces_dir = self.cwd / ".optpilot-ui" / "workspaces"
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
-        self.coordination = StudioCoordinationStore(
-            coordination_database_path(self.cwd)
+        self._workspace_index_lock = threading.RLock()
+        legacy_workspace_index_path = self.workspaces_dir / "index.json"
+        self.workspace_index_path = (
+            studio_project_state_directory(
+                self.cwd,
+                authority_root=self.realm_runtime.root,
+            )
+            / "workspace-index.json"
+            if self.realm_runtime is not None
+            else legacy_workspace_index_path
         )
+        _prepare_workspace_index_storage(
+            self,
+            legacy_path=legacy_workspace_index_path,
+        )
+        coordination_path = (
+            prepare_coordination_database(
+                self.cwd,
+                authority_root=self.realm_runtime.root,
+            )
+            if self.realm_runtime is not None
+            else coordination_database_path(self.cwd)
+        )
+        self.coordination = StudioCoordinationStore(coordination_path)
         if self.realm_runtime is not None:
             runtime_namespace = request_digest(
                 {
@@ -3048,11 +3078,15 @@ class UiState:
         study_name: Optional[str] = None,
         environment_id: Optional[str] = None,
         operation_id: Optional[str] = None,
-        method_request_timeout_seconds: float = 10.0,
+        method_request_timeout_seconds: float | None = None,
     ) -> StudyLaunchView:
         selected_operation_id = operation_id or new_local_study_operation_id()
-        method_request_timeout = _canonical_method_request_timeout_seconds(
-            method_request_timeout_seconds
+        method_request_timeout = (
+            None
+            if method_request_timeout_seconds is None
+            else _canonical_method_request_timeout_seconds(
+                method_request_timeout_seconds
+            )
         )
         package_selection: SelectionRef | None = None
         selected_study_relative_path: str | None = None
@@ -3139,8 +3173,12 @@ class UiState:
                 package_root = _configured_study_package_root(self, study_path)
         try:
             runtime = _require_realm_runtime(self)
-            execution_profile = RunExecutionProfile(
-                method_request_timeout_seconds=method_request_timeout
+            execution_profile = (
+                None
+                if method_request_timeout is None
+                else RunExecutionProfile(
+                    method_request_timeout_seconds=method_request_timeout
+                )
             )
             if package_selection is not None:
                 assert selected_study_relative_path is not None
@@ -3919,10 +3957,22 @@ def run_ui(
     workspace_runtime_port_start: Optional[int] = None,
     environment_preview_container_executable: Optional[str] = None,
     environment_preview_trusted_images: Optional[List[str]] = None,
+    environment_preview_trust_source: str = "auto",
     open_browser: bool = False,
 ) -> None:
     cwd = Path.cwd().resolve()
-    runtime_supervisor_claim = StudioRuntimeSupervisorClaim.acquire(cwd)
+    # Validate and pin the Realm root before deriving or creating any
+    # project-local control path beneath it.  This prevents an unsafe terminal
+    # symlink from receiving even the supervisor lock before Realm startup.
+    realm_root = prepare_private_directory(default_realm_root())
+    project_state_root = studio_project_state_directory(
+        cwd,
+        authority_root=realm_root,
+    )
+    runtime_supervisor_claim = StudioRuntimeSupervisorClaim.acquire(
+        cwd,
+        control_root=project_state_root,
+    )
     try:
         runtime_options = WorkspaceRuntimeOptions.from_env()
         if workspace_runtime_executable:
@@ -3942,9 +3992,10 @@ def run_ui(
         preview_executable, preview_trust = _environment_preview_runtime_options(
             executable=environment_preview_container_executable,
             trusted_images=environment_preview_trusted_images,
+            trust_source=environment_preview_trust_source,
         )
         realm_runtime = LocalRealmRuntime.open(
-            realm_root=default_realm_root(),
+            realm_root=realm_root,
             container_web_executable=preview_executable,
             trusted_container_gateway_images=preview_trust,
         )
@@ -4077,8 +4128,18 @@ def _environment_preview_runtime_options(
     *,
     executable: Optional[str],
     trusted_images: Optional[Iterable[str]],
-) -> tuple[Optional[str], tuple[ContainerGatewayImageTrust, ...]]:
-    """Resolve one explicit local Preview provider and administrator trust set."""
+    trust_source: str = "auto",
+) -> tuple[
+    Optional[str],
+    Optional[tuple[ContainerGatewayImageTrust, ...]],
+]:
+    """Resolve the provider executable and an optional exact session trust set.
+
+    ``None`` means that :class:`LocalRealmRuntime` must load the durable Realm
+    policy.  A tuple, including an empty tuple, is an exact session override;
+    it is deliberately never unioned with durable approvals so a stale shell
+    variable cannot undo an operator revocation.
+    """
 
     requested = str(
         executable
@@ -4097,17 +4158,64 @@ def _environment_preview_runtime_options(
     if explicit and not resolved:
         raise RuntimeError("Environment Preview container executable is not available.")
 
-    values = [str(item).strip() for item in (trusted_images or ()) if str(item).strip()]
-    if not values:
-        values = [
-            item.strip()
-            for item in os.environ.get(
-                _ENVIRONMENT_PREVIEW_TRUSTED_IMAGES_ENV, ""
-            ).split(",")
-            if item.strip()
+    selected_source = str(trust_source or "auto").strip().casefold()
+    if selected_source not in {"auto", "realm", "session", "disabled"}:
+        raise ValueError("Environment Preview trust source is unsupported.")
+    explicit_values = None
+    if trusted_images is not None:
+        explicit_values = [
+            str(item).strip() for item in trusted_images if str(item).strip()
         ]
-    trusts = tuple(
-        ContainerGatewayImageTrust(image_ref=image) for image in dict.fromkeys(values)
+    legacy_environment = os.environ.get(
+        _ENVIRONMENT_PREVIEW_TRUSTED_IMAGES_ENV
+    )
+    environment_values = (
+        [item.strip() for item in legacy_environment.split(",") if item.strip()]
+        if legacy_environment is not None
+        else None
+    )
+
+    values: Optional[List[str]]
+    if selected_source == "realm":
+        if explicit_values is not None:
+            raise ValueError(
+                "--environment-preview-trust-source=realm cannot be combined "
+                "with --environment-preview-trusted-image."
+            )
+        values = None
+    elif selected_source == "disabled":
+        if explicit_values is not None:
+            raise ValueError(
+                "--environment-preview-trust-source=disabled cannot be combined "
+                "with --environment-preview-trusted-image."
+            )
+        values = []
+    elif selected_source == "session":
+        values = (
+            explicit_values
+            if explicit_values is not None
+            else environment_values or []
+        )
+    elif explicit_values is not None:
+        values = explicit_values
+    elif environment_values is not None:
+        values = environment_values
+        print(
+            "Warning: OPTPILOT_ENVIRONMENT_PREVIEW_TRUSTED_IMAGES is an exact "
+            "session-only trust override. Use `optpilot environment-preview "
+            "trust approve` for restart-persistent approval.",
+            file=sys.stderr,
+        )
+    else:
+        values = None
+
+    trusts = (
+        None
+        if values is None
+        else tuple(
+            ContainerGatewayImageTrust(image_ref=image)
+            for image in dict.fromkeys(values)
+        )
     )
     return resolved, trusts
 
@@ -4178,10 +4286,21 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
     parser.add_argument(
         "--environment-preview-trusted-image",
         action="append",
-        default=[],
+        default=None,
         help=(
-            "Administrator-approved sha256-pinned interface image capable of "
-            "hosting OptPilot's authenticated stdlib gateway. Repeat as needed."
+            "Exact sha256-pinned interface image trusted for this Studio session. "
+            "Supplying this option replaces, rather than extends, durable Realm "
+            "approvals. Repeat as needed."
+        ),
+    )
+    parser.add_argument(
+        "--environment-preview-trust-source",
+        choices=("auto", "realm", "session", "disabled"),
+        default="auto",
+        help=(
+            "Trust source for isolated Candidate interfaces. auto uses an exact "
+            "CLI/environment session override when supplied, otherwise the "
+            "durable Realm policy."
         ),
     )
     parser.add_argument(
@@ -4218,6 +4337,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             environment_preview_trusted_images=(
                 args.environment_preview_trusted_image
             ),
+            environment_preview_trust_source=(
+                args.environment_preview_trust_source
+            ),
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:
@@ -4231,6 +4353,36 @@ def _handler_factory(state: UiState):
 
     class OptPilotUiHandler(BaseHTTPRequestHandler):
         server_version = "OptPilotUI/0.1"
+
+        def _send_storage_unavailable(
+            self,
+            error: BaseException,
+            *,
+            path: str,
+        ) -> None:
+            # Keep the underlying diagnostic in the local Studio log while
+            # presenting one stable, retryable contract to the browser.  In
+            # particular, never turn a transient coordination-store failure
+            # into Study validation feedback or expose host paths/SQLite text.
+            print(
+                f"OptPilot Studio local storage unavailable for {path}: "
+                f"{type(error).__name__}: {error}",
+                file=sys.stderr,
+            )
+            message = COORDINATION_STORAGE_UNAVAILABLE_MESSAGE
+            if path.startswith("/api/studies/"):
+                message += " Your Study was not changed; try again."
+            else:
+                message += " Try again."
+            self._send_json(
+                {
+                    "error": message,
+                    "type": "CoordinationStorageUnavailable",
+                    "code": "studio_storage_unavailable",
+                    "retryable": True,
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -4436,6 +4588,8 @@ def _handler_factory(state: UiState):
                         self._send_json(_interface_output_tree_choices(state, parts[3]))
                         return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
+                self._send_storage_unavailable(exc, path=path)
             except RealmNotFound as exc:
                 self._send_json(
                     {"error": str(exc), "type": type(exc).__name__},
@@ -4711,6 +4865,8 @@ def _handler_factory(state: UiState):
                     self._send_json({"job": state.stop_job(job_id)})
                     return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
+                self._send_storage_unavailable(exc, path=parsed.path)
             except RealmNotFound as exc:
                 self._send_json(
                     {"error": str(exc), "type": type(exc).__name__},
@@ -4750,6 +4906,8 @@ def _handler_factory(state: UiState):
                         )
                         return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
+                self._send_storage_unavailable(exc, path=parsed.path)
             except KeyError as exc:
                 self._send_json(
                     {"error": f"Unknown id: {exc.args[0]}"}, status=HTTPStatus.NOT_FOUND
@@ -7615,9 +7773,15 @@ def _interface_summary_with_launch_capabilities(
         )
     eligible = [item for item in capabilities.values() if item.get("eligible")]
     default_profile_id = str(result.get("defaultProfileId") or "")
+    declared_default = capabilities.get(default_profile_id)
     aggregate = (
-        capabilities.get(default_profile_id)
-        or (eligible[0] if eligible else next(iter(capabilities.values())))
+        declared_default
+        if declared_default is not None and declared_default.get("eligible")
+        else (
+            eligible[0]
+            if eligible
+            else declared_default or next(iter(capabilities.values()))
+        )
     )
     result["actions"] = {"launch": deepcopy(aggregate)}
     return result
@@ -7649,6 +7813,25 @@ def _select_interface_profile(
         "profile_id is required when an interface declares multiple named "
         f"profiles; available profiles: {available}."
     )
+
+
+def _select_launchable_interface_profile(
+    state: UiState,
+    profiles: Iterable[InterfaceLaunchProfile],
+    profile_id: Optional[str],
+) -> InterfaceLaunchProfile:
+    """Respect an explicit selection, otherwise prefer an eligible profile."""
+
+    profile_list = list(profiles)
+    selected = _select_interface_profile(profile_list, profile_id)
+    if str(profile_id or "").strip():
+        return selected
+    if _interface_profile_launch_capability(state, selected).get("eligible"):
+        return selected
+    for profile in profile_list:
+        if _interface_profile_launch_capability(state, profile).get("eligible"):
+            return profile
+    return selected
 
 
 def _workspace_payload(state: UiState) -> JsonDict:
@@ -10933,13 +11116,21 @@ def _row_workbench_action_capabilities(
         debug_supported, debug_reason = _candidate_debug_runtime_capability(
             state, target=target
         )
-    preview_supported, preview_reason, preview_profiles = (
+    (
+        preview_supported,
+        preview_reason,
+        preview_profiles,
+        preview_profile_diagnostics,
+        preview_eligibility_detail,
+    ) = (
         _candidate_preview_runtime_capability(state, target=target)
         if runnable
         else (
             _environment_preview_provider_available(state),
             unavailable_reason,
             [],
+            [],
+            None,
         )
     )
     result: List[JsonDict] = []
@@ -10990,6 +11181,8 @@ def _row_workbench_action_capabilities(
                     None if preview_supported and preview_profiles else preview_reason
                 ),
                 profiles=preview_profiles,
+                profile_diagnostics=preview_profile_diagnostics,
+                eligibility_detail=preview_eligibility_detail,
                 selected_profile_id=selected_profile_id,
                 inspection_plan=(
                     _public_candidate_try_plan(
@@ -11201,58 +11394,187 @@ def _candidate_child_run_runtime_capability(
 
 def _candidate_preview_runtime_capability(
     state: UiState, *, target: Any
-) -> tuple[bool, Optional[str], List[JsonDict]]:
+) -> tuple[
+    bool,
+    Optional[str],
+    List[JsonDict],
+    List[JsonDict],
+    Optional[JsonDict],
+]:
     """Compile each retained profile and apply the exact provider preflight."""
 
     if not _environment_preview_provider_available(state):
-        return False, "environment_preview_provider_unavailable", []
+        return (
+            False,
+            "environment_preview_provider_unavailable",
+            [],
+            [],
+            {
+                "category": "provider_unavailable",
+                "code": "environment_preview_provider_unavailable",
+            },
+        )
     runtime = _require_realm_runtime(state)
     binder = runtime.environment_preview_binder
-    profiles: List[JsonDict] = []
+    trust_context: JsonDict = {}
+    trust_source = getattr(runtime, "container_gateway_trust_source", None)
+    if trust_source in {"realm", "session"}:
+        trust_context["trust_source"] = trust_source
+    trust_generation = getattr(
+        runtime, "container_gateway_trust_generation", None
+    )
+    if isinstance(trust_generation, str) and 0 < len(trust_generation) <= 256:
+        trust_context["trust_generation"] = trust_generation
+    diagnostics: List[JsonDict] = []
     retained_profiles = (
         target.evaluation.closure.environment_revision.interface_profiles
     )
     for profile in retained_profiles:
+        presentation = {
+            "kind": profile.presentation.kind,
+            "port": profile.presentation.port,
+            "extra_ports": list(profile.presentation.extra_ports),
+        }
+        if profile.runtime.sandbox == "process":
+            diagnostics.append(
+                {
+                    "id": profile.profile_id,
+                    "label": profile.label,
+                    "applicable": False,
+                    "eligible": False,
+                    "reason": "environment_preview_profile_incompatible",
+                    "eligibility_detail": {
+                        "category": "not_applicable",
+                        "code": "profile_process_runtime_not_applicable",
+                        **trust_context,
+                    },
+                    "presentation": presentation,
+                }
+            )
+            continue
         reason: Optional[str] = None
+        detail: JsonDict = {
+            "category": "ready",
+            "code": "ready",
+            **trust_context,
+        }
+        remediation: Optional[JsonDict] = None
         try:
             plan = compile_environment_preview_plan(
                 target, profile_id=profile.profile_id
             )
-            binder.validate_plan(plan)
-        except RealmConflict as error:
-            message = str(error).casefold()
-            reason = (
-                "environment_preview_image_untrusted"
-                if "not trusted" in message
-                else "environment_preview_profile_incompatible"
-            )
+        except EnvironmentPreviewCompileError as error:
+            reason = "environment_preview_profile_incompatible"
+            detail = {
+                "category": "unsupported_contract",
+                "code": error.code,
+                **trust_context,
+            }
+        except RealmConflict:
+            reason = "environment_preview_profile_incompatible"
+            detail = {
+                "category": "unsupported_contract",
+                "code": "profile_compile_conflict",
+                **trust_context,
+            }
         except (TypeError, ValueError):
             reason = "environment_preview_profile_incompatible"
-        profiles.append(
-            {
-                "id": profile.profile_id,
-                "label": profile.label,
-                "eligible": reason is None,
-                "reason": reason,
-                "presentation": {
-                    "kind": profile.presentation.kind,
-                    "port": profile.presentation.port,
-                    "extra_ports": list(profile.presentation.extra_ports),
-                },
+            detail = {
+                "category": "unsupported_contract",
+                "code": "profile_compile_invalid",
+                **trust_context,
             }
-        )
-    eligible = [profile for profile in profiles if profile["eligible"]]
+        if reason is None:
+            try:
+                binder.validate_plan(plan)
+            except EnvironmentPreviewProviderPlanError as error:
+                if error.code == "container_gateway_image_untrusted":
+                    reason = "environment_preview_image_untrusted"
+                    detail = {
+                        "category": "authorization_required",
+                        "code": error.code,
+                        **trust_context,
+                    }
+                    remediation = {
+                        "kind": "approve_container_gateway_image",
+                        "image_ref": plan.runtime.image_ref,
+                    }
+                else:
+                    reason = "environment_preview_profile_incompatible"
+                    detail = {
+                        "category": "provider_incompatible",
+                        "code": error.code,
+                        **trust_context,
+                    }
+            except RealmConflict:
+                reason = "environment_preview_profile_incompatible"
+                detail = {
+                    "category": "provider_incompatible",
+                    "code": "provider_plan_conflict",
+                    **trust_context,
+                }
+            except (TypeError, ValueError):
+                reason = "environment_preview_profile_incompatible"
+                detail = {
+                    "category": "provider_incompatible",
+                    "code": "provider_plan_invalid",
+                    **trust_context,
+                }
+        diagnostic: JsonDict = {
+            "id": profile.profile_id,
+            "label": profile.label,
+            "applicable": True,
+            "eligible": reason is None,
+            "reason": reason,
+            "eligibility_detail": detail,
+            "presentation": presentation,
+        }
+        if remediation is not None:
+            diagnostic["remediation"] = remediation
+        diagnostics.append(diagnostic)
+    eligible = [profile for profile in diagnostics if profile["eligible"]]
     if eligible:
-        return True, None, eligible
-    if not profiles:
-        return True, "environment_preview_profile_unavailable", []
-    reasons = {str(profile["reason"]) for profile in profiles}
-    reason = (
-        "environment_preview_image_untrusted"
-        if reasons == {"environment_preview_image_untrusted"}
-        else "environment_preview_profile_incompatible"
+        selected_profile_id = _default_preview_profile_id(eligible)
+        return (
+            True,
+            None,
+            eligible,
+            diagnostics,
+            {
+                "category": "ready",
+                "code": "ready",
+                "profile_id": selected_profile_id,
+                **trust_context,
+            },
+        )
+    if not diagnostics:
+        return (
+            True,
+            "environment_preview_profile_unavailable",
+            [],
+            [],
+            {
+                "category": "unavailable",
+                "code": "profile_unavailable",
+                **trust_context,
+            },
+        )
+    applicable_blockers = [item for item in diagnostics if item["applicable"]]
+    chosen = next(
+        (
+            item
+            for item in applicable_blockers
+            if item["reason"] == "environment_preview_image_untrusted"
+        ),
+        applicable_blockers[0] if applicable_blockers else diagnostics[0],
     )
-    return True, reason, []
+    aggregate_detail = {
+        **dict(chosen["eligibility_detail"]),
+        "profile_id": chosen["id"],
+    }
+    if chosen.get("remediation") is not None:
+        aggregate_detail["remediation"] = deepcopy(chosen["remediation"])
+    return True, str(chosen["reason"]), [], diagnostics, aggregate_detail
 
 
 def _default_preview_profile_id(profiles: Iterable[Mapping[str, Any]]) -> str:
@@ -12691,7 +13013,13 @@ def _execute_run_workbench_action(
     if selection_result.selection is None:
         raise RealmConflict("Run action requires a runnable candidate selection.")
     if action == "environment_preview":
-        preview_supported, preview_reason, preview_profiles = (
+        (
+            preview_supported,
+            preview_reason,
+            preview_profiles,
+            _preview_profile_diagnostics,
+            _preview_eligibility_detail,
+        ) = (
             _candidate_preview_runtime_capability(state, target=target)
         )
         eligible_profile_ids = {
@@ -15366,7 +15694,7 @@ def _execute_study_launch_request(
 
     try:
         method_request_timeout_seconds = request.get(
-            "method_request_timeout_seconds", 10.0
+            "method_request_timeout_seconds"
         )
         if "workspace_id" in request:
             launched = state.launch_study(
@@ -15569,7 +15897,106 @@ def _validate_study(
 
 
 def _workspace_index_path(state: UiState) -> Path:
-    return state.workspaces_dir / "index.json"
+    return state.workspace_index_path
+
+
+def _workspace_index_storage_unavailable(
+    error: BaseException,
+) -> CoordinationStorageUnavailable:
+    return CoordinationStorageUnavailable(
+        COORDINATION_STORAGE_UNAVAILABLE_MESSAGE
+    )
+
+
+def _workspace_index_payload(path: Path) -> JsonDict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise _workspace_index_storage_unavailable(error) from error
+    if not isinstance(raw, dict) or not isinstance(raw.get("workspaces"), list):
+        error = ValueError("Workspace index has an invalid structure.")
+        raise _workspace_index_storage_unavailable(error) from error
+    return raw
+
+
+def _atomic_write_workspace_index_payload(
+    path: Path,
+    payload: JsonDict,
+    *,
+    replace_existing: bool = True,
+) -> bool:
+    tmp_path: Optional[Path] = None
+    directory_fd: Optional[int] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            encoding="utf-8",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if replace_existing:
+            os.replace(tmp_path, path)
+            tmp_path = None
+        else:
+            try:
+                os.link(tmp_path, path)
+            except FileExistsError:
+                return False
+            tmp_path.unlink()
+            tmp_path = None
+        if os.name != "nt":
+            directory_fd = os.open(
+                path.parent,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            os.fsync(directory_fd)
+        return True
+    except (OSError, UnicodeError) as error:
+        raise _workspace_index_storage_unavailable(error) from error
+    finally:
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _prepare_workspace_index_storage(
+    state: UiState, *, legacy_path: Path
+) -> None:
+    """Migrate one valid legacy index without modifying its source file."""
+
+    target = state.workspace_index_path
+    if target == legacy_path:
+        return
+    with state._workspace_index_lock:
+        try:
+            target_exists = target.exists()
+            legacy_exists = legacy_path.exists()
+        except OSError as error:
+            raise _workspace_index_storage_unavailable(error) from error
+        if target_exists or not legacy_exists:
+            return
+        payload = _workspace_index_payload(legacy_path)
+        _atomic_write_workspace_index_payload(
+            target,
+            payload,
+            replace_existing=False,
+        )
 
 
 def _studio_actor_id(state: UiState) -> str:
@@ -20196,43 +20623,44 @@ def _assistant_page_name(value: Any) -> str:
 
 
 def _read_workspace_index(state: UiState) -> List[JsonDict]:
-    path = _workspace_index_path(state)
-    if not path.exists():
-        return []
-    raw = _read_json(path)
-    items = raw.get("workspaces", []) if isinstance(raw, dict) else []
-    if not isinstance(items, list):
-        return []
-    return [
-        item
-        for item in items
-        if isinstance(item, dict)
-        and item.get("id")
-        and (
-            item.get("root")
-            or item.get("ownership") == "realm-managed"
-            or item.get("source_type") == "realm-workspace"
-            or (
-                item.get("source_type") == "catalog"
-                and isinstance(item.get("catalog_origin"), dict)
-                and item.get("catalog_origin")
+    with state._workspace_index_lock:
+        path = _workspace_index_path(state)
+        try:
+            exists = path.exists()
+        except OSError as error:
+            raise _workspace_index_storage_unavailable(error) from error
+        if not exists:
+            return []
+        items = _workspace_index_payload(path)["workspaces"]
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and item.get("id")
+            and (
+                item.get("root")
+                or item.get("ownership") == "realm-managed"
+                or item.get("source_type") == "realm-workspace"
+                or (
+                    item.get("source_type") == "catalog"
+                    and isinstance(item.get("catalog_origin"), dict)
+                    and item.get("catalog_origin")
+                )
             )
-        )
-    ]
+        ]
 
 
 def _write_workspace_index(state: UiState, workspaces: List[JsonDict]) -> None:
-    path = _workspace_index_path(state)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cleaned = [_stored_workspace_record(item) for item in workspaces]
-    payload = {
-        "workspaces": sorted(
-            cleaned, key=lambda item: item.get("updated_at", ""), reverse=True
+    with state._workspace_index_lock:
+        cleaned = [_stored_workspace_record(item) for item in workspaces]
+        payload = {
+            "workspaces": sorted(
+                cleaned, key=lambda item: item.get("updated_at", ""), reverse=True
+            )
+        }
+        _atomic_write_workspace_index_payload(
+            _workspace_index_path(state), payload
         )
-    }
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
 
 
 def _stored_workspace_record(workspace: JsonDict) -> JsonDict:
@@ -20403,6 +20831,20 @@ def _list_ui_workspaces(
     include_support: bool = False,
     preserve_workspace_ids: Iterable[str] = (),
 ) -> List[JsonDict]:
+    with state._workspace_index_lock:
+        return _list_ui_workspaces_unlocked(
+            state,
+            include_support=include_support,
+            preserve_workspace_ids=preserve_workspace_ids,
+        )
+
+
+def _list_ui_workspaces_unlocked(
+    state: UiState,
+    *,
+    include_support: bool = False,
+    preserve_workspace_ids: Iterable[str] = (),
+) -> List[JsonDict]:
     workspaces = []
     returned = []
     changed = False
@@ -20552,15 +20994,16 @@ def _require_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
 
 
 def _upsert_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
-    workspaces = [
-        item
-        for item in _read_workspace_index(state)
-        if item.get("id") != workspace.get("id")
-    ]
     workspace = dict(workspace)
     workspace["updated_at"] = _now_iso()
-    workspaces.append(_stored_workspace_record(workspace))
-    _write_workspace_index(state, workspaces)
+    with state._workspace_index_lock:
+        workspaces = [
+            item
+            for item in _read_workspace_index(state)
+            if item.get("id") != workspace.get("id")
+        ]
+        workspaces.append(_stored_workspace_record(workspace))
+        _write_workspace_index(state, workspaces)
     return _decorate_ui_workspace(state, workspace)
 
 
@@ -20988,14 +21431,15 @@ def _remove_ui_workspace_reference(state: UiState, workspace_id: str) -> JsonDic
             session["updated_at"] = _now_iso()
         changed_sessions.append(session)
     _write_agent_session_index(state, changed_sessions)
-    _write_workspace_index(
-        state,
-        [
-            item
-            for item in _read_workspace_index(state)
-            if item.get("id") != workspace_id
-        ],
-    )
+    with state._workspace_index_lock:
+        _write_workspace_index(
+            state,
+            [
+                item
+                for item in _read_workspace_index(state)
+                if item.get("id") != workspace_id
+            ],
+        )
     runtime_deleted = state.workspace_runtime.delete(workspace_id)
     _release_catalog_workspace_projection(state, workspace_id)
     workspace = dict(workspace)
@@ -21111,14 +21555,15 @@ def _retire_managed_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDic
             session["updated_at"] = _now_iso()
         sessions.append(session)
     _write_agent_session_index(state, sessions)
-    _write_workspace_index(
-        state,
-        [
-            item
-            for item in _read_workspace_index(state)
-            if item.get("id") != workspace.get("id")
-        ],
-    )
+    with state._workspace_index_lock:
+        _write_workspace_index(
+            state,
+            [
+                item
+                for item in _read_workspace_index(state)
+                if item.get("id") != workspace.get("id")
+            ],
+        )
     result = dict(workspace)
     result.update(
         {
@@ -21161,10 +21606,13 @@ def _delete_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
             session["updated_at"] = _now_iso()
         changed_sessions.append(session)
     _write_agent_session_index(state, changed_sessions)
-    workspaces = [
-        item for item in _read_workspace_index(state) if item.get("id") != workspace_id
-    ]
-    _write_workspace_index(state, workspaces)
+    with state._workspace_index_lock:
+        workspaces = [
+            item
+            for item in _read_workspace_index(state)
+            if item.get("id") != workspace_id
+        ]
+        _write_workspace_index(state, workspaces)
     root = Path(str(workspace["root"])).resolve()
     files_deleted = False
     delete_error = ""
@@ -25650,7 +26098,7 @@ def _start_catalog_interface_launch(
     )
     try:
         profiles = _component_interface_profiles_for_uid(kind, action_uid)
-        profile = _select_interface_profile(profiles, profile_id)
+        profile = _select_launchable_interface_profile(state, profiles, profile_id)
         profile_capability = _interface_profile_launch_capability(state, profile)
         if not profile_capability.get("eligible"):
             raise ValueError(str(profile_capability["reason"]))
@@ -25731,7 +26179,7 @@ def _start_workspace_interface_launch(
 ) -> JsonDict:
     workspace = _require_ui_workspace(state, workspace_id)
     kind, config_path, _raw, profiles = _workspace_interface_config(state, workspace)
-    profile = _select_interface_profile(profiles, profile_id)
+    profile = _select_launchable_interface_profile(state, profiles, profile_id)
     profile_capability = _interface_profile_launch_capability(state, profile)
     if not profile_capability.get("eligible"):
         if profile_capability.get("code") == "interface_runtime_unavailable":

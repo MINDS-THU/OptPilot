@@ -257,14 +257,30 @@ an explicit repair step. Older or independently authored runners remain valid:
 their manifests do not declare `summary.json` unless the complete writer
 contract is present.
 
-The same generated runner attaches the resource's standard xDEVS event
-recorder before the simulation starts. It records atomic-model output-port
-events in `event_trace.jsonl`, including simulation time, component, port, and
-a JSON-safe value. The trace is bounded and ends with a summary that says when
-events were omitted because the limit was reached. It is created by the
-simulator inside the same prepared runtime as the DEVS Generator; OptPilot only
-provides the private result directory and transports the finished file. Older
-simulators are still runnable, but they do not gain a trace retroactively.
+The same generated runner attaches the resource's standard xDEVS behavior
+recorder before the simulation starts. Trace v2 keeps the existing atomic
+output-port event rows and adds canonical `root/...` component identities plus
+small post-transition observations (`phase`, time to the next transition, and
+an explicit bounded `trace_state()` teaching projection generated for each new
+atomic model). Typical fields are queue length, inventory, busy status, current
+item id, and outcome counters already maintained by the model. The projection
+is pure and adds no model call; independently authored models without the hook
+remain valid and show control state only. The recorder does not inspect
+arbitrary model attributes. Each coordinator observation cycle is numbered so
+zero-delay transitions at the same simulation time remain separate replay
+steps. State observations have their own
+small byte allowance, so a busy component cannot crowd later output events out
+of the bounded `event_trace.jsonl` file. The summary reports event and state
+loss separately. The simulator creates this evidence inside the same prepared
+runtime as the DEVS Generator; OptPilot only provides the private result
+directory and transports the finished file. Older v1 traces remain readable,
+although they cannot show state changes retroactively.
+
+The post-run replay organizes this evidence as an observed output, its
+configured recipient ports inferred from the implemented couplings, and any
+recipient state recorded after that transition cycle. Before/after domain
+values are displayed only when both projections exist; missing or truncated
+evidence is described rather than inferred.
 
 After the ordinary smoke execution, the backend also performs a conservative
 behavior check using that run's existing summary, event trace, and statically
@@ -293,12 +309,15 @@ The embedded interface deliberately uses one small mental model:
 5. Use **Run** to try the generated **Suggested scenario** or adjust its values,
    stop a long run, and inspect bounded logs and result files. Inputs for which
    an imported simulator has no safe default are visibly required instead of
-   being guessed. Normal generated simulations show both a
-   readable event-trace table and a formatted `summary.json` with model KPIs;
-   the raw files remain available. A trace limit is reported explicitly, and a
-   missing KPI is explained rather than replaced with a guessed score. A
-   successful run also verifies and publishes that exact source version; there
-   is no separate verification action to learn.
+   being guessed. After a run, **Behavior replay** places each recorded output
+   and state update on the same model graph used by Structure. Step through one
+   simulation time at a time, play it at a fixed teaching pace, or select a raw
+   observation to jump to that moment. Highlighted routes are derived from the
+   model's declared couplings; the recorded observations remain the source of
+   truth and the raw file stays available. A trace limit or mapping gap is
+   reported explicitly, and a missing KPI is explained rather than replaced
+   with a guessed score. A successful run also verifies and publishes that
+   exact source version; there is no separate verification action to learn.
 6. Back in Studio, choose **Save as Workspace** only when the simulation should
    become durable editable work.
 7. For optional optimization, open that Workspace, choose **Set up for

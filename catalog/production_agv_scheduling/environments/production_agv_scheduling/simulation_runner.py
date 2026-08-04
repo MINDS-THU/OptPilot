@@ -135,24 +135,26 @@ def run_policy_once(
     layout = _configured_layout(normalized)
     simulation: MultiLineFactorySimulation | None = None
     with _candidate_import_scope(candidate_root), _deterministic_randomness(seed), _quiet_output():
-        estimator_module = _load_module(estimator_path, "param_estimator")
-        del estimator_module
-        scheduler_module = _load_module(scheduler_path, "_optpilot_candidate_scheduler")
-        simulation = MultiLineFactorySimulation(
-            database_path=trace_path,
-            layout_config=layout,
-        )
-        simulation.initialize(
-            no_faults=normalized["disable_faults"],
-            no_mqtt=True,
-            telemetry_sink=telemetry_sink,
-        )
         policy = None
         factory = None
         command_handler = None
         static_data = None
         result: JsonDict | None = None
         try:
+            estimator_module = _load_module(estimator_path, "param_estimator")
+            del estimator_module
+            scheduler_module = _load_module(
+                scheduler_path, "_optpilot_candidate_scheduler"
+            )
+            simulation = MultiLineFactorySimulation(
+                database_path=trace_path,
+                layout_config=layout,
+            )
+            simulation.initialize(
+                no_faults=normalized["disable_faults"],
+                no_mqtt=True,
+                telemetry_sink=telemetry_sink,
+            )
             policy, controller_drives_simulation = _create_policy(
                 scheduler_module, simulation, normalized
             )
@@ -195,16 +197,19 @@ def run_policy_once(
                 json.dumps(diagnostics, allow_nan=False)
                 result["policy_diagnostics"] = copy.deepcopy(dict(diagnostics))
         finally:
-            simulation.shutdown()
-            # SimPy processes form reference cycles.  Finalize them while
-            # verbose legacy output is still redirected, not later during an
-            # unrelated evaluator step or interpreter shutdown.
-            policy = None
-            command_handler = None
-            static_data = None
-            factory = None
-            simulation = None
-            gc.collect()
+            try:
+                if simulation is not None:
+                    simulation.shutdown()
+            finally:
+                # SimPy processes form reference cycles.  Finalize them while
+                # verbose legacy output is still redirected, not later during an
+                # unrelated evaluator step or interpreter shutdown.
+                policy = None
+                command_handler = None
+                static_data = None
+                factory = None
+                simulation = None
+                gc.collect()
         if result is None:
             raise RuntimeError("Simulation completed without a KPI result.")
         return result
@@ -242,10 +247,19 @@ def _create_policy(
 ) -> tuple[Any, bool]:
     create_controller = getattr(scheduler_module, "create_controller", None)
     create_scheduler = getattr(scheduler_module, "create_scheduler", None)
-    if callable(create_controller):
+    has_controller = callable(create_controller)
+    has_scheduler = callable(create_scheduler)
+    if has_controller and has_scheduler:
+        raise ValueError(
+            "scheduler.py must expose exactly one policy factory: "
+            "create_scheduler() for snapshot policies or "
+            "create_controller(simulation, settings) for simulation-bound baselines, "
+            "not both."
+        )
+    if has_controller:
         policy = create_controller(simulation, dict(settings))
         controller_drives_simulation = True
-    elif callable(create_scheduler):
+    elif has_scheduler:
         policy = create_scheduler()
         controller_drives_simulation = False
     else:

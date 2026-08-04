@@ -21,6 +21,7 @@ import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import stat
 import time
@@ -41,6 +42,9 @@ from optpilot.realm.refs import SnapshotRef, canonical_json_bytes, request_diges
 
 
 COORDINATION_DATABASE_NAME = "studio-coordination.sqlite3"
+COORDINATION_STORAGE_UNAVAILABLE_MESSAGE = (
+    "Studio local storage is temporarily unavailable."
+)
 COORDINATION_RECORD_SCHEMA = "optpilot.studio-coordination-record.v1"
 ENTITY_COORDINATE_SCHEMA = "optpilot.studio-entity-coordinate.v1"
 WORKSPACE_PURPOSE_SCHEMA = "optpilot.studio-workspace-purpose.v1"
@@ -78,6 +82,10 @@ class CoordinationIntegrityError(RealmIntegrityError):
     """Persisted Studio coordination metadata failed validation."""
 
 
+class CoordinationStorageUnavailable(RealmConflict):
+    """The OS-local Studio coordination store cannot currently serve requests."""
+
+
 class WorkspacePurpose(str, Enum):
     USER_PROJECT = "user-project"
     STUDY_DRAFT_BACKING = "study-draft-backing"
@@ -103,10 +111,49 @@ class RegistrationSetupState(str, Enum):
     REGISTERED = "registered"
 
 
-def coordination_database_path(studio_root: Path) -> Path:
-    """Return the one coordination database beneath a Studio project root."""
+def _canonical_project_path(studio_root: Path) -> str:
+    selected = Path(studio_root).expanduser().absolute().resolve(strict=False)
+    return os.path.normcase(str(selected))
 
-    return Path(studio_root).expanduser().absolute() / ".optpilot-ui" / COORDINATION_DATABASE_NAME
+
+def studio_project_state_directory(
+    studio_root: Path, *, authority_root: Path
+) -> Path:
+    """Return the deterministic OS-local state directory for one project.
+
+    The project path is used only to derive an opaque key.  Mutable Studio
+    state therefore lives under the injected local authority rather than in
+    the user's project tree, while aliases that resolve to the same project
+    select the same state directory.
+    """
+
+    authority = Path(authority_root).expanduser().absolute()
+    project_key = request_digest(
+        {
+            "project_path": _canonical_project_path(studio_root),
+            "schema": "optpilot.studio-project-local-state.v1",
+        }
+    )
+    return authority / "studio" / "projects" / project_key
+
+
+def coordination_database_path(
+    studio_root: Path, *, authority_root: Path | None = None
+) -> Path:
+    """Return the coordination database for one Studio project.
+
+    Omitting ``authority_root`` retains the legacy project-local location for
+    realm-less callers.  Production callers inject their Realm authority root
+    and receive an OS-local, per-project location beneath that authority.
+    """
+
+    if authority_root is None:
+        root = Path(studio_root).expanduser().absolute() / ".optpilot-ui"
+    else:
+        root = studio_project_state_directory(
+            studio_root, authority_root=authority_root
+        )
+    return root / COORDINATION_DATABASE_NAME
 
 
 def _required_text(value: Any, label: str, *, max_bytes: int = 512) -> str:
@@ -1344,6 +1391,230 @@ def _sqlite_request_digest(value: object) -> str | None:
         return None
 
 
+def _storage_unavailable(_error: BaseException) -> CoordinationStorageUnavailable:
+    return CoordinationStorageUnavailable(COORDINATION_STORAGE_UNAVAILABLE_MESSAGE)
+
+
+def _validate_coordination_database(
+    connection: sqlite3.Connection,
+) -> str:
+    """Validate a complete coordination database and return its identity."""
+
+    quick_check = tuple(
+        str(row[0]) for row in connection.execute("PRAGMA quick_check").fetchall()
+    )
+    if quick_check != ("ok",):
+        raise CoordinationIntegrityError(
+            "Studio coordination database failed its integrity check."
+        )
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise CoordinationIntegrityError(
+            "Studio coordination database has invalid foreign-key references."
+        )
+    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if not (1 <= version <= _CURRENT_SCHEMA_VERSION):
+        raise CoordinationIntegrityError(
+            "Studio coordination database has an unsupported schema version."
+        )
+    table_names = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    required_tables = {"coordination_schema_migrations", "coordination_meta"}
+    if not required_tables.issubset(table_names):
+        raise CoordinationIntegrityError(
+            "Studio coordination database has no valid schema history."
+        )
+    rows = connection.execute(
+        "SELECT version, migration_digest FROM coordination_schema_migrations "
+        "ORDER BY version"
+    ).fetchall()
+    if tuple(int(row[0]) for row in rows) != tuple(range(1, version + 1)):
+        raise CoordinationIntegrityError(
+            "Studio coordination migration history is incomplete."
+        )
+    for migration_version, script in _MIGRATIONS[:version]:
+        expected = hashlib.sha256(script.encode("utf-8")).hexdigest()
+        if str(rows[migration_version - 1][1]) != expected:
+            raise CoordinationIntegrityError(
+                f"Studio coordination migration {migration_version} changed."
+            )
+    metadata = {
+        str(row[0]): str(row[1])
+        for row in connection.execute(
+            "SELECT key, value FROM coordination_meta WHERE key IN "
+            "('instance_id', 'schema_version')"
+        ).fetchall()
+    }
+    if metadata.get("schema_version") != str(version):
+        raise CoordinationIntegrityError(
+            "Studio coordination schema metadata is inconsistent."
+        )
+    try:
+        return _lower_hex_digest(
+            metadata.get("instance_id"), "coordination instance id"
+        )
+    except ValueError as error:
+        raise CoordinationIntegrityError(
+            "Studio coordination identity is missing or invalid."
+        ) from error
+
+
+def _connect_read_only_database(path: Path) -> sqlite3.Connection:
+    uri = f"{Path(path).expanduser().absolute().as_uri()}?mode=ro&nofollow=1"
+    connection = sqlite3.connect(uri, uri=True, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.create_function(
+        "studio_request_digest", 1, _sqlite_request_digest, deterministic=True
+    )
+    return connection
+
+
+def _fsync_file(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":  # pragma: no cover - Windows has no directory fsync
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _remove_migration_temporary_files(path: Path) -> None:
+    for candidate in (
+        path,
+        Path(f"{path}-journal"),
+        Path(f"{path}-shm"),
+        Path(f"{path}-wal"),
+    ):
+        try:
+            candidate.unlink()
+        except OSError:
+            # Cleanup is best-effort.  In particular, do not let a secondary
+            # unlink failure mask the stable typed migration outcome.
+            pass
+
+
+def prepare_coordination_database(
+    studio_root: Path,
+    *,
+    authority_root: Path,
+    legacy_path: Path | None = None,
+) -> Path:
+    """Prepare the OS-local database, safely adopting legacy state once.
+
+    An existing target always wins.  Otherwise a valid legacy SQLite database
+    is copied through SQLite's online-backup API, which includes committed WAL
+    state.  Promotion is atomic and non-overwriting, and the legacy database is
+    never renamed, truncated, or deleted.
+    """
+
+    target = coordination_database_path(
+        studio_root, authority_root=authority_root
+    )
+    try:
+        target_exists = target.exists()
+    except OSError as error:
+        raise _storage_unavailable(error) from error
+    if target_exists:
+        return target
+    source_path = (
+        coordination_database_path(studio_root)
+        if legacy_path is None
+        else Path(legacy_path).expanduser().absolute()
+    )
+    try:
+        prepared_parent = prepare_private_directory(target.parent)
+    except OSError as error:
+        raise _storage_unavailable(error) from error
+    target = prepared_parent / target.name
+    try:
+        target_exists = target.exists()
+        source_exists = source_path.exists()
+    except OSError as error:
+        raise _storage_unavailable(error) from error
+    if target_exists or not source_exists:
+        return target
+    temporary = target.with_name(
+        f".{target.name}.migrate-{secrets.token_hex(16)}.tmp"
+    )
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    source: sqlite3.Connection | None = None
+    destination: sqlite3.Connection | None = None
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        if os.name != "nt":
+            os.fchmod(descriptor, 0o600)
+        os.close(descriptor)
+        descriptor = None
+        source = _connect_read_only_database(source_path)
+        source_identity = _validate_coordination_database(source)
+        destination = sqlite3.connect(
+            temporary, isolation_level=None, timeout=10.0
+        )
+        destination.row_factory = sqlite3.Row
+        destination.create_function(
+            "studio_request_digest", 1, _sqlite_request_digest, deterministic=True
+        )
+        source.backup(destination)
+        destination.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        destination.execute("PRAGMA journal_mode = DELETE")
+        destination.close()
+        destination = None
+        source.close()
+        source = None
+        copied = _connect_read_only_database(temporary)
+        try:
+            copied_identity = _validate_coordination_database(copied)
+        finally:
+            copied.close()
+        if copied_identity != source_identity:
+            raise CoordinationIntegrityError(
+                "Copied Studio coordination identity did not match its source."
+            )
+        _fsync_file(temporary)
+        try:
+            os.link(temporary, target)
+        except FileExistsError:
+            return target
+        _fsync_directory(prepared_parent)
+        temporary.unlink()
+        _fsync_directory(prepared_parent)
+        return target
+    except sqlite3.OperationalError as error:
+        raise _storage_unavailable(error) from error
+    except sqlite3.DatabaseError as error:
+        raise CoordinationIntegrityError(
+            "Legacy Studio coordination database could not be migrated."
+        ) from error
+    except OSError as error:
+        raise _storage_unavailable(error) from error
+    finally:
+        if destination is not None:
+            destination.close()
+        if source is not None:
+            source.close()
+        if descriptor is not None:
+            os.close(descriptor)
+        _remove_migration_temporary_files(temporary)
+
+
 RecordT = TypeVar("RecordT")
 
 
@@ -1398,6 +1669,8 @@ class StudioCoordinationStore:
                 self._instance_id = _required_text(
                     row["value"], "coordination instance id", max_bytes=128
                 )
+            except sqlite3.OperationalError as error:
+                raise _storage_unavailable(error) from error
             except sqlite3.DatabaseError as error:
                 raise CoordinationIntegrityError(
                     "Studio coordination database could not be initialized."
@@ -1523,6 +1796,10 @@ class StudioCoordinationStore:
                         "Connected coordination database has another identity."
                     )
             return connection
+        except sqlite3.OperationalError as error:
+            if connection is not None:
+                connection.close()
+            raise _storage_unavailable(error) from error
         except BaseException:
             if connection is not None:
                 connection.close()
@@ -1682,8 +1959,17 @@ class StudioCoordinationStore:
             )
             connection.commit()
             return receipt
+        except sqlite3.OperationalError as error:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise _storage_unavailable(error) from error
         except BaseException:
-            connection.rollback()
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
             raise
         finally:
             connection.close()
@@ -1946,6 +2232,8 @@ class StudioCoordinationStore:
             row = connection.execute(
                 f"SELECT * FROM {table} WHERE {predicate}", tuple(parameters)
             ).fetchone()
+        except sqlite3.OperationalError as error:
+            raise _storage_unavailable(error) from error
         except sqlite3.DatabaseError as error:
             raise CoordinationIntegrityError(
                 f"Could not read {label} from Studio coordination."
@@ -1983,6 +2271,8 @@ class StudioCoordinationStore:
                 "ORDER BY updated_at DESC, rowid DESC LIMIT ?",
                 (*tuple(parameters), limit),
             ).fetchall()
+        except sqlite3.OperationalError as error:
+            raise _storage_unavailable(error) from error
         except sqlite3.DatabaseError as error:
             raise CoordinationIntegrityError(
                 "Could not list Studio coordination records."
@@ -2858,6 +3148,8 @@ class StudioCoordinationStore:
                     connection.execute("PRAGMA user_version").fetchone()[0]
                 ),
             }
+        except sqlite3.OperationalError as error:
+            raise _storage_unavailable(error) from error
         finally:
             connection.close()
 
@@ -2866,9 +3158,11 @@ __all__ = [
     "ActionIntentRecord",
     "ActionState",
     "COORDINATION_DATABASE_NAME",
+    "COORDINATION_STORAGE_UNAVAILABLE_MESSAGE",
     "CoordinationConflict",
     "CoordinationIntegrityError",
     "CoordinationNotFound",
+    "CoordinationStorageUnavailable",
     "EntityCoordinate",
     "RegistrationCheck",
     "RegistrationSetupData",
@@ -2881,4 +3175,6 @@ __all__ = [
     "WorkspacePurpose",
     "WorkspacePurposeRecord",
     "coordination_database_path",
+    "prepare_coordination_database",
+    "studio_project_state_directory",
 ]

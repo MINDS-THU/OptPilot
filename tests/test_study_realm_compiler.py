@@ -210,6 +210,25 @@ class StudyRealmCompilerTest(unittest.TestCase):
         self.assertEqual(RunDefinitionManifest.from_dict(first.to_dict()), first)
         self.assertEqual(RunDefinitionManifest.from_bytes(first.to_bytes()), first)
 
+    def test_method_exchange_timeout_is_retained_with_method_runtime(self) -> None:
+        study = _study()
+        self.assertEqual(study.method["runtime"]["exchangeTimeoutSeconds"], 10)
+        self.assertEqual(
+            expected_retained_method_contract(study)["runtime_requirements"][
+                "exchangeTimeoutSeconds"
+            ],
+            10,
+        )
+
+        study.method["runtime"]["exchangeTimeoutSeconds"] = 71
+        definition = _compile(study)
+        self.assertEqual(
+            definition.method_revision.method_contract["runtime_requirements"][
+                "exchangeTimeoutSeconds"
+            ],
+            71,
+        )
+
     def test_proposal_width_is_explicit_and_not_evaluator_capacity(self) -> None:
         study = _study()
         study.method["config"]["batchSize"] = 2

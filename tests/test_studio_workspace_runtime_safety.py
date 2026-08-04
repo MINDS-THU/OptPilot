@@ -88,6 +88,63 @@ class StudioWorkspaceRuntimeSafetyTest(unittest.TestCase):
             recovered.assert_active_for(root)
             recovered.close()
 
+    def test_runtime_supervisor_can_use_os_local_project_control_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            studio_root = root / "synchronized-project"
+            control_root = root / "local-state" / "project-a"
+            studio_root.mkdir()
+
+            claim = StudioRuntimeSupervisorClaim.acquire(
+                studio_root,
+                control_root=control_root,
+            )
+            try:
+                claim.assert_active_for(studio_root)
+                self.assertEqual(
+                    claim.path,
+                    control_root / "runtime-supervisor.lock",
+                )
+                legacy_lock = (
+                    studio_root / ".optpilot-ui" / "runtime-supervisor.lock"
+                )
+                self.assertTrue(legacy_lock.is_file())
+                with self.assertRaises(StudioRuntimeSupervisorBusy):
+                    StudioRuntimeSupervisorClaim.acquire(studio_root)
+                with self.assertRaises(StudioRuntimeSupervisorBusy):
+                    StudioRuntimeSupervisorClaim.acquire(
+                        studio_root,
+                        control_root=control_root,
+                    )
+            finally:
+                claim.close()
+
+            legacy_replacement = StudioRuntimeSupervisorClaim.acquire(studio_root)
+            legacy_replacement.close()
+
+    def test_os_local_supervisor_rejects_live_pre_upgrade_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            studio_root = root / "project"
+            control_root = root / "realm" / "studio" / "project-key"
+            studio_root.mkdir()
+            legacy_claim = StudioRuntimeSupervisorClaim.acquire(studio_root)
+            try:
+                with self.assertRaises(StudioRuntimeSupervisorBusy):
+                    StudioRuntimeSupervisorClaim.acquire(
+                        studio_root,
+                        control_root=control_root,
+                    )
+                self.assertFalse(control_root.exists())
+            finally:
+                legacy_claim.close()
+
+            migrated_claim = StudioRuntimeSupervisorClaim.acquire(
+                studio_root,
+                control_root=control_root,
+            )
+            migrated_claim.close()
+
     def test_runtime_supervisor_rejects_path_replaced_while_locking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

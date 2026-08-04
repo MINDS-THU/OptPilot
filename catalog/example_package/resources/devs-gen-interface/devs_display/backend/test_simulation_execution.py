@@ -71,9 +71,14 @@ def write_behavior_evidence(
     result_root: Path,
     components: list[str],
     *,
+    event_times: list[float] | None = None,
+    state_times: list[float] | None = None,
     truncated: bool = False,
+    state_truncated: bool = False,
     malformed: bool = False,
 ) -> None:
+    if event_times is not None and len(event_times) != len(components):
+        raise ValueError("event_times must contain one time for each component")
     result_root.mkdir(parents=True, exist_ok=True)
     (result_root / "summary.json").write_text(
         json.dumps(
@@ -91,12 +96,28 @@ def write_behavior_evidence(
                 "record_type": "event",
                 "component": component,
                 "port": "out",
-                "time": float(index + 1),
+                "simulation_time": (
+                    float(event_times[index])
+                    if event_times is not None
+                    else float(index + 1)
+                ),
                 "value": index,
             }
         )
         for index, component in enumerate(components)
     ]
+    rows.extend(
+        json.dumps(
+            {
+                "record_type": "state",
+                "component": "Runtime.source",
+                "observation": "post_transition",
+                "simulation_time": float(simulation_time),
+                "phase": "IDLE",
+            }
+        )
+        for simulation_time in (state_times or [])
+    )
     if malformed:
         rows.append("{not-json")
     else:
@@ -106,7 +127,9 @@ def write_behavior_evidence(
                     "record_type": "summary",
                     "recorded_events": len(components),
                     "dropped_events": 1 if truncated else 0,
-                    "truncated": truncated,
+                    "recorded_states": len(state_times or []),
+                    "dropped_states": 1 if state_truncated else 0,
+                    "truncated": truncated or state_truncated,
                 }
             )
         )
@@ -737,6 +760,84 @@ class SimulationExecutionTests(unittest.TestCase):
             write_behavior_evidence(
                 results,
                 ["Runtime.source"] * 3 + ["Runtime.worker"],
+            )
+
+            assessment = assess_behavior_smoke(bundle, results)
+
+            self.assertEqual(assessment.status, "passed")
+            self.assertEqual(assessment.recorded_events, 4)
+
+    def test_behavior_smoke_detects_sparse_time_zero_quiescence(self):
+        """A positive-horizon model must not silently finish at initialization."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_behavior_bundle(root, "pipeline")
+            results = root / "results"
+            write_behavior_evidence(
+                results,
+                ["Runtime.source", "Runtime.source"],
+                event_times=[0.0, 0.0],
+                state_times=[0.0],
+            )
+
+            assessment = assess_behavior_smoke(bundle, results)
+
+            self.assertEqual(assessment.status, "stalled")
+            self.assertEqual(assessment.recorded_events, 2)
+            self.assertEqual(assessment.observed_components, ("Runtime.source",))
+            self.assertEqual(
+                assessment.expected_downstream_components,
+                ("Root.worker",),
+            )
+
+    def test_behavior_smoke_keeps_sparse_trace_with_positive_time_permissive(self):
+        """Sparse evidence alone is not a stall once simulated time advances."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_behavior_bundle(root, "pipeline")
+            results = root / "results"
+            write_behavior_evidence(
+                results,
+                ["Runtime.source", "Runtime.source"],
+                event_times=[0.0, 0.0],
+                state_times=[0.5],
+            )
+
+            assessment = assess_behavior_smoke(bundle, results)
+
+            self.assertEqual(assessment.status, "passed")
+            self.assertEqual(assessment.recorded_events, 2)
+
+    def test_behavior_smoke_does_not_infer_time_zero_from_dropped_states(self):
+        """Missing state observations may hide otherwise positive-time progress."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_behavior_bundle(root, "pipeline")
+            results = root / "results"
+            write_behavior_evidence(
+                results,
+                ["Runtime.source", "Runtime.source"],
+                event_times=[0.0, 0.0],
+                state_truncated=True,
+            )
+
+            assessment = assess_behavior_smoke(bundle, results)
+
+            self.assertEqual(assessment.status, "passed")
+            self.assertEqual(assessment.recorded_events, 2)
+
+    def test_behavior_smoke_uses_complete_events_when_only_states_were_truncated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_behavior_bundle(root, "pipeline")
+            results = root / "results"
+            write_behavior_evidence(
+                results,
+                ["Runtime.source"] * 3 + ["Runtime.worker"],
+                state_truncated=True,
             )
 
             assessment = assess_behavior_smoke(bundle, results)

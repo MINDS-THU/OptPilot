@@ -4,6 +4,7 @@ import copy
 import inspect
 import os
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -392,23 +393,32 @@ class RunAttemptSchedulerTest(unittest.TestCase):
             fixture, provider_root="parallel-scheduler-provider"
         )
         scheduler = self.scheduler(fixture, provider)
+        startup_barrier = threading.Barrier(2, timeout=5)
+        start_or_attach = provider.start_or_attach
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = (
-                executor.submit(
-                    scheduler.advance,
-                    logical_trial_id="trial-a",
-                    attempt_id="attempt-a",
-                    attempt_ttl_seconds=60,
-                ),
-                executor.submit(
-                    scheduler.advance,
-                    logical_trial_id="trial-b",
-                    attempt_id="attempt-b",
-                    attempt_ttl_seconds=60,
-                ),
-            )
-            results = tuple(future.result(timeout=15) for future in futures)
+        def gated_start_or_attach(**kwargs):
+            startup_barrier.wait()
+            return start_or_attach(**kwargs)
+
+        with mock.patch.object(
+            provider, "start_or_attach", side_effect=gated_start_or_attach
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = (
+                    executor.submit(
+                        scheduler.advance,
+                        logical_trial_id="trial-a",
+                        attempt_id="attempt-a",
+                        attempt_ttl_seconds=60,
+                    ),
+                    executor.submit(
+                        scheduler.advance,
+                        logical_trial_id="trial-b",
+                        attempt_id="attempt-b",
+                        attempt_ttl_seconds=60,
+                    ),
+                )
+                results = tuple(future.result(timeout=15) for future in futures)
 
         self.assertEqual(
             [result.attempt.outcome for result in results], ["success", "success"]
@@ -416,6 +426,87 @@ class RunAttemptSchedulerTest(unittest.TestCase):
         self.assertEqual(
             {path.name for path in barrier.glob("*.ready")},
             {"0.5.ready", "0.75.ready"},
+        )
+
+    def test_launch_confirmation_retries_concurrent_provider_binding_commit(
+        self,
+    ) -> None:
+        """A provider bind may advance the run head inside confirm's CAS window."""
+
+        fixture = _RetainedRuntimeFixture(
+            include_second_candidate=True,
+            evaluation_delay_seconds=0.1,
+            attempt_ttl_seconds=60,
+        )
+        self.addCleanup(fixture.close)
+        _supervisor, _launcher, _binder, _finalizer, provider = self.provider(
+            fixture, provider_root="binding-confirm-race-provider"
+        )
+        scheduler = self.scheduler(fixture, provider)
+        allow_second_binding = threading.Event()
+        second_binding_committed = threading.Event()
+        stale_confirmation_injected = threading.Event()
+        confirmation_calls: list[str] = []
+        commit_binding = fixture.ledger.commit_run_attempt_binding
+        confirm_launch = fixture.ledger.confirm_run_attempt_launch
+
+        def racing_commit_binding(**kwargs):
+            attempt_id = kwargs["draft"].attempt_id
+            if attempt_id == "attempt-b" and not allow_second_binding.wait(
+                timeout=5
+            ):
+                raise RuntimeError("second binding race gate timed out")
+            receipt = commit_binding(**kwargs)
+            if attempt_id == "attempt-b":
+                second_binding_committed.set()
+            return receipt
+
+        def racing_confirm_launch(**kwargs):
+            attempt_id = kwargs["attempt_id"]
+            confirmation_calls.append(attempt_id)
+            if (
+                attempt_id == "attempt-a"
+                and not stale_confirmation_injected.is_set()
+            ):
+                # ``expected_run_revision`` was chosen before entering this
+                # wrapper.  Let B commit its binding now so A's first canonical
+                # compare-and-swap deterministically observes harmless drift.
+                stale_confirmation_injected.set()
+                allow_second_binding.set()
+                if not second_binding_committed.wait(timeout=5):
+                    raise RuntimeError("second binding did not commit in time")
+            return confirm_launch(**kwargs)
+
+        with mock.patch.object(
+            fixture.ledger,
+            "commit_run_attempt_binding",
+            side_effect=racing_commit_binding,
+        ), mock.patch.object(
+            fixture.ledger,
+            "confirm_run_attempt_launch",
+            side_effect=racing_confirm_launch,
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = (
+                    executor.submit(
+                        scheduler.advance,
+                        logical_trial_id="trial-a",
+                        attempt_id="attempt-a",
+                        attempt_ttl_seconds=60,
+                    ),
+                    executor.submit(
+                        scheduler.advance,
+                        logical_trial_id="trial-b",
+                        attempt_id="attempt-b",
+                        attempt_ttl_seconds=60,
+                    ),
+                )
+                results = tuple(future.result(timeout=15) for future in futures)
+
+        self.assertTrue(stale_confirmation_injected.is_set())
+        self.assertGreaterEqual(confirmation_calls.count("attempt-a"), 2)
+        self.assertEqual(
+            [result.attempt.outcome for result in results], ["success", "success"]
         )
 
     def test_prepared_and_running_attempts_are_recovered(self) -> None:
@@ -463,6 +554,43 @@ class RunAttemptSchedulerTest(unittest.TestCase):
         self.assertEqual(result.attempt.code, "worker_never_started")
         self.assertEqual(provider.start_calls, 0)
         self.assertEqual(provider.stop_calls, 1)
+
+    def test_terminalization_winning_startup_race_prevents_late_confirmation(
+        self,
+    ) -> None:
+        fixture = self.runtime(evaluation_delay_seconds=2.0)
+        _s, _l, _b, _f, provider = self.provider(fixture)
+        scheduler = self.scheduler(fixture, provider)
+        started = threading.Event()
+        release = threading.Event()
+        start_or_attach = provider.start_or_attach
+
+        def gated_start_or_attach(**kwargs):
+            observation = start_or_attach(**kwargs)
+            started.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("startup race gate timed out")
+            return observation
+
+        with mock.patch.object(
+            provider, "start_or_attach", side_effect=gated_start_or_attach
+        ):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self.advance, scheduler)
+                try:
+                    self.assertTrue(started.wait(timeout=5))
+                    terminalized = scheduler.terminalize(
+                        logical_trial_id="trial-a",
+                        attempt_id="attempt-a",
+                    )
+                finally:
+                    release.set()
+                raced = future.result(timeout=10)
+
+        self.assertEqual(terminalized.action, "terminalized")
+        self.assertEqual(raced.action, "cleanup_only")
+        self.assertEqual(raced.attempt, terminalized.attempt)
+        self.assertTrue(raced.physically_started)
 
     def test_never_started_prepared_attempt_is_adopted_without_false_start(
         self,

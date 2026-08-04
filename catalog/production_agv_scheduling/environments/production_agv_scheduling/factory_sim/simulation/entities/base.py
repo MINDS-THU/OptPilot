@@ -15,7 +15,7 @@ class Device:
     Base class for all simulated devices in the factory.
     Simplified for a basic fault model.
     """
-    def __init__(self, env: simpy.Environment, id: str, position: Tuple[int, int], device_type: str = "generic", mqtt_client=None, database=None, interacting_points: list = [], topic_manager: Optional[TopicManager] = None, line_id: Optional[str] = None):
+    def __init__(self, env: simpy.Environment, id: str, position: Tuple[int, int], device_type: str = "generic", mqtt_client=None, database=None, interacting_points: Optional[list] = None, topic_manager: Optional[TopicManager] = None, line_id: Optional[str] = None):
         if not isinstance(env, simpy.Environment):
             raise ValueError("env must be a valid simpy.Environment object.")
         
@@ -25,7 +25,7 @@ class Device:
         self.position = position
         self.mqtt_client = mqtt_client
         self.database = database
-        self.interacting_points = interacting_points if interacting_points is not None else []
+        self.interacting_points = list(interacting_points or ())
         self.topic_manager = topic_manager
         self.line_id = line_id
         
@@ -135,8 +135,18 @@ class BaseConveyor(Device, ABC):
     """
     Abstract base class for different types of conveyors.
     """
-    def __init__(self, env: simpy.Environment, id: str, position: Tuple[int, int], transfer_time: float, line_id: Optional[str] = None, interacting_points: list = [], topic_manager: Optional[TopicManager] = None, mqtt_client=None, database=None):
-        super().__init__(env, id, position, "conveyor", mqtt_client, database, interacting_points)
+    def __init__(self, env: simpy.Environment, id: str, position: Tuple[int, int], transfer_time: float, line_id: Optional[str] = None, interacting_points: Optional[list] = None, topic_manager: Optional[TopicManager] = None, mqtt_client=None, database=None):
+        super().__init__(
+            env,
+            id,
+            position,
+            "conveyor",
+            mqtt_client,
+            database,
+            interacting_points,
+            topic_manager,
+            line_id,
+        )
 
     @abstractmethod
     def push(self, product):

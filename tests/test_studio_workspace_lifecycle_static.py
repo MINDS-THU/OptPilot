@@ -82,8 +82,11 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("state.selectedSessionId", current)
         self.assertIn("No Workspace selected", self.source)
         self.assertIn("Workspace ready", self.source)
-        self.assertIn("Editable work", self.html)
-        self.assertIn('data-view="workspace"', self.html)
+        self.assertNotIn(
+            'class="nav-button" data-view="workspace"', self.html
+        )
+        self.assertIn('class="sidebar-workspaces"', self.html)
+        self.assertIn('id="sessionList"', self.html)
 
     def test_workspace_card_separates_storage_catalog_and_named_assistant_access(
         self,
@@ -305,6 +308,26 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
             self.styles,
             ".sidebar-workspaces .session-card-more > summary",
         )
+        more_open = _css_rule(
+            self.styles,
+            ".sidebar-workspaces .session-card-more[open]",
+        )
+        open_summary = _css_rule(
+            self.styles,
+            ".sidebar-workspaces .session-card-more[open] > summary",
+        )
+        card_actions = _css_rule(
+            self.styles,
+            ".sidebar-workspaces .session-card-actions",
+        )
+        session_main = _css_rule(
+            self.styles,
+            ".sidebar-workspaces .session-main",
+        )
+        compact_action = _css_rule(
+            self.styles,
+            ".sidebar-workspaces .compact-action",
+        )
         card_markup = _function_source(
             self.source,
             "sessionCard",
@@ -322,15 +345,35 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("min-width: 0", workspace_list)
         self.assertIn("grid-template-columns: minmax(0, 1fr)", card)
         self.assertIn("width: 100%", card)
+        self.assertIn("padding: 0 34px 0 0", session_main)
+        self.assertIn("position: static", more)
         self.assertIn("max-width: 100%", more)
-        self.assertIn("width: 100%", more_summary)
-        self.assertIn("min-height: 24px", more_summary)
+        self.assertIn("height: 0", more)
+        self.assertIn("height: auto", more_open)
+        self.assertNotIn(
+            ".sidebar-workspaces .session-card-more:not([open]) {",
+            self.styles,
+        )
+        self.assertIn("position: absolute", more_summary)
+        self.assertIn("top: 7px", more_summary)
+        self.assertIn("right: 8px", more_summary)
+        self.assertIn("width: 28px", more_summary)
+        self.assertIn("min-height: 28px", more_summary)
         self.assertIn("list-style: none", more_summary)
+        self.assertIn("margin-bottom: 0", open_summary)
+        self.assertIn("width: min(210px, calc(100% - 8px))", card_actions)
+        self.assertIn("margin: 5px 4px 0 auto", card_actions)
+        self.assertIn("border: 1px solid var(--line)", card_actions)
+        self.assertIn("box-shadow:", card_actions)
+        self.assertIn("text-align: left", compact_action)
         self.assertIn(
             '<summary aria-label="Actions for '
-            '${escapeHtml(session.title)}">Actions</summary>',
+            '${escapeHtml(session.title)}" title="Workspace actions">',
             card_markup,
         )
+        self.assertIn('name="workspace-actions"', card_markup)
+        self.assertIn('aria-hidden="true">&#8230;</span>', card_markup)
+        self.assertIn("session-card-destructive-action", card_markup)
         self.assertIn(
             ".sidebar-workspaces .session-card-more > summary:focus-visible",
             self.styles,

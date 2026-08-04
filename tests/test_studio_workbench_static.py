@@ -223,7 +223,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn('launch.can_stop && !active.stopPending', status)
         self.assertIn('active.status || "preparing"', status)
 
-    def test_method_callback_timeout_is_launch_metadata_not_study_yaml(self) -> None:
+    def test_method_exchange_timeout_is_owned_by_method_not_study_ui(self) -> None:
         editor = _function_source(
             self.source,
             "studyConfigEditor",
@@ -265,24 +265,13 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "planYamlPreview",
         )
 
-        self.assertIn('"Method callback timeout"', editor)
-        self.assertEqual(launch.count("method_request_timeout_seconds"), 2)
+        self.assertNotIn('"Method callback timeout"', editor)
+        self.assertNotIn("method_request_timeout_seconds", launch)
         self.assertNotIn("methodRequestTimeoutSeconds", payload)
         self.assertNotIn("methodRequestTimeoutSeconds", yaml_preview)
         for plan_source in (saved_draft_plan, catalog_plans, new_plan):
-            self.assertIn("methodRequestTimeoutSeconds: 10", plan_source)
-        launch_only_update = (
-            'if (field === "methodRequestTimeoutSeconds") {\n'
-            "    plan.methodRequestTimeoutSeconds = value;\n"
-            "    plan.actionError = null;\n"
-            "    return;\n"
-            "  }"
-        )
-        self.assertIn(launch_only_update, update)
-        self.assertLess(
-            update.index(launch_only_update),
-            update.index("if (plan.study) convertSavedPlanToDraft(plan);")
-        )
+            self.assertNotIn("methodRequestTimeoutSeconds", plan_source)
+        self.assertNotIn("methodRequestTimeoutSeconds", update)
 
     def test_pre_handoff_launches_are_not_public_run_rows(self) -> None:
         loading = _async_function_source(
@@ -452,7 +441,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         job_action = _function_source(
             self.source,
             "renderOperatorJobReviewAction",
-            "renderOperatorJobPresentation",
+            "renderOperatorJobInterfaceAction",
         )
         command_draft = _function_source(
             self.source,
@@ -929,16 +918,76 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
         presentation = _function_source(
             self.source,
-            "renderOperatorJobPresentation",
-            "renderOperatorJobResult",
+            "renderOperatorJobInterfaceAction",
+            "renderOperatorJobInterfaceOutputs",
         )
 
         self.assertIn("selected_profile_id", capability)
+        self.assertIn("profile_diagnostics", capability)
+        self.assertIn("eligibility_detail", capability)
         self.assertIn("data-preview-profile-selection", control)
         self.assertIn("{ profile_id: previewProfileId }", action)
         self.assertIn('job.job_kind !== "environment-preview"', presentation)
         self.assertIn("presentation.open_url", presentation)
         self.assertIn('title="Interactive Candidate interface"', presentation)
+
+    def test_live_candidate_interface_uses_stable_full_page_host_during_polls(
+        self,
+    ) -> None:
+        session = _function_source(
+            self.source,
+            "renderInterfaceSession",
+            "openCandidateInterfaceSession",
+        )
+        jobs_refresh = _async_function_source(
+            self.source,
+            "loadSelectedRunOperatorJobs",
+            "loadOperatorJobDetail",
+        )
+        detail_gate = _function_source(
+            self.source,
+            "operatorJobNeedsDetailRefresh",
+            "upsertOperatorJob",
+        )
+        panel_refresh = _function_source(
+            self.source,
+            "renderOperatorJobsPanel",
+            "operatorJobsPanelBody",
+        )
+        panel_body = _function_source(
+            self.source,
+            "operatorJobsPanelBody",
+            "renderOperatorJobRow",
+        )
+        presentation = _function_source(
+            self.source,
+            "renderOperatorJobInterfaceAction",
+            "renderOperatorJobInterfaceOutputs",
+        )
+
+        self.assertIn("els.interfaceSessionFrame", session)
+        self.assertIn('getAttribute("src")', session)
+        self.assertIn("currentUrl !== model.openUrl", session)
+        self.assertIn('setAttribute("src", model.openUrl)', session)
+        self.assertNotIn("<iframe", session)
+        self.assertIn("showLoadingState", jobs_refresh)
+        self.assertIn(
+            "operatorJobNeedsDetailRefresh(selectedSummary, state.selectedOperatorJob)",
+            jobs_refresh,
+        )
+        self.assertIn(
+            "state.selectedOperatorJob.job_id !== summary.job_id",
+            jobs_refresh,
+        )
+        self.assertIn('summaryPresentation.status === "ready"', detail_gate)
+        self.assertIn('detailPresentation.status === "available"', detail_gate)
+        self.assertIn("detailPresentation.open_url", detail_gate)
+        self.assertIn("return operatorJobIsActive(summary)", detail_gate)
+        self.assertIn('state.view === "interface"', panel_refresh)
+        self.assertIn("renderInterfaceSession()", panel_refresh)
+        self.assertIn("const selected = selectedDetail || selectedSummary", panel_body)
+        self.assertNotIn("<iframe", presentation)
+        self.assertIn('data-open-operator-interface="${escapeHtml(job.job_id)}"', presentation)
 
     def test_candidate_tries_hide_internal_operator_job_vocabulary(self) -> None:
         labels = _function_source(
@@ -963,7 +1012,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
         presentation = _function_source(
             self.source,
-            "renderOperatorJobPresentation",
+            "renderOperatorJobInterfaceAction",
             "renderOperatorJobInterfaceOutputs",
         )
         outputs = _function_source(
@@ -995,7 +1044,9 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn('<details class="operator-job-more">', summary)
         self.assertIn("<summary>More</summary>", summary)
         self.assertIn('aria-label="Interactive Candidate interface"', presentation)
-        self.assertIn(">Open larger</a>", presentation)
+        self.assertIn('data-open-operator-interface="${escapeHtml(job.job_id)}"', presentation)
+        self.assertIn(">Open interface</button>", presentation)
+        self.assertNotIn("<iframe", presentation)
         self.assertIn('aria-label="Candidate try outputs"', outputs)
         self.assertIn("kind: output && output.kind", try_outputs)
         for source in (panel, try_label, summary, presentation, outputs):
@@ -1082,6 +1133,16 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "renderCandidateTrySheet",
             "updateCandidateTrySheet",
         )
+        diagnostics = _function_source(
+            self.source,
+            "renderCandidatePreviewProfileDiagnostics",
+            "renderCandidateTrySheet",
+        )
+        trust_command = _function_source(
+            self.source,
+            "shellSingleQuote",
+            "renderCandidatePreviewProfileDiagnostics",
+        )
 
         self.assertIn('"Try Candidate"', primary_label)
         self.assertIn("!selectionId || !modes.length || pending", actions)
@@ -1123,6 +1184,28 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
         self.assertIn("cannot currently be tried", sheet)
         self.assertIn("Why it is unavailable", sheet)
+        self.assertIn("profile_diagnostics", diagnostics)
+        self.assertIn("profile.applicable !== false", diagnostics)
+        self.assertIn("approve_container_gateway_image", trust_command)
+        self.assertIn(
+            "optpilot environment-preview trust approve", trust_command
+        )
+        self.assertIn("shellSingleQuote(imageRef)", trust_command)
+        self.assertIn("escapeHtml(command)", diagnostics)
+        self.assertIn("data-copy-preview-trust-command", diagnostics)
+        self.assertIn("then restart Studio", diagnostics)
+        self.assertIn("exact session-only trust list", diagnostics)
+        self.assertIn('trustSource === "session"', diagnostics)
+        self.assertIn("navigator.clipboard.writeText(command)", diagnostics)
+        self.assertIn(
+            'button.textContent = "Command copied — run it in Terminal"',
+            diagnostics,
+        )
+        self.assertIn(
+            'on(els.candidateTryBody, "click", copyCandidatePreviewTrustCommand);',
+            self.source,
+        )
+        self.assertIn("renderCandidatePreviewProfileDiagnostics(mode)", sheet)
 
     def test_focused_candidate_actions_use_one_compact_responsive_toolbar(
         self,
@@ -1611,6 +1694,11 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "componentInterfaceProfiles",
             "componentSelectedInterfaceProfile",
         )
+        selection = _function_source(
+            self.source,
+            "selectedInterfaceProfile",
+            "componentInterfaceProfiles",
+        )
         launch = _async_function_source(
             self.source,
             "launchComponentInterface",
@@ -1640,6 +1728,8 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("catalog_source_unpublished", self.source)
         self.assertIn("summarizedInterfaceProfiles", profiles)
         self.assertNotIn("raw_config", profiles)
+        self.assertIn("eligibleProfiles", selection)
+        self.assertIn("eligibleProfiles.length ? eligibleProfiles : profiles", selection)
         self.assertIn("profile_id: profile.id", launch)
         self.assertIn(
             "componentInterfaceLaunchCapability(component, profile)", launch

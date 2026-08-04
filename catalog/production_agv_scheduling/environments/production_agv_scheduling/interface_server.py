@@ -9,7 +9,6 @@ import ipaddress
 import json
 import mimetypes
 import re
-import secrets
 import signal
 import threading
 from http import HTTPStatus
@@ -60,7 +59,6 @@ class InterfaceApplication:
             runtime_root=runtime_root,
             viewer_wait_seconds=viewer_wait_seconds,
         )
-        self.client_id = "optpilot-unity-" + secrets.token_hex(8)
         self._origin_lock = threading.Lock()
         self._websocket_origins: set[str] = set()
 
@@ -83,7 +81,7 @@ class InterfaceApplication:
                     self._websocket_origins.add(origin)
         connection = {
             "auto_reconnect": True,
-            "client_id": self.client_id,
+            "client_id": self.broker.viewer_client_id,
             "connect_timeout": 15,
             "host": host,
             "keep_alive": 30,
@@ -210,6 +208,33 @@ class InterfaceRequestHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, candidate, head_only=head_only)
             return
         if path == "/unity/StreamingAssets/MQTTBroker.json":
+            if self.application.broker.viewer_generation != "bootstrap":
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "This 3D viewer belongs to an earlier visual run."},
+                    head_only=head_only,
+                )
+                return
+            self._json(
+                HTTPStatus.OK,
+                self.application.mqtt_config(self.headers),
+                head_only=head_only,
+                cache_control="no-store",
+            )
+            return
+        generation_config = re.fullmatch(
+            r"/unity/StreamingAssets/([A-Za-z0-9_-]{1,64})/MQTTBroker[.]json",
+            path,
+        )
+        if generation_config is not None:
+            generation = generation_config.group(1)
+            if generation != self.application.broker.viewer_generation:
+                self._json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "This 3D viewer belongs to an earlier visual run."},
+                    head_only=head_only,
+                )
+                return
             self._json(
                 HTTPStatus.OK,
                 self.application.mqtt_config(self.headers),

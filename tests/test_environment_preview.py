@@ -11,6 +11,7 @@ from optpilot.realm._validation import thaw_json
 from optpilot.realm.environment_preview import (
     ENVIRONMENT_PREVIEW_CANDIDATE_MEDIA_TYPE,
     ENVIRONMENT_PREVIEW_FILE_CANDIDATE_ROOT,
+    EnvironmentPreviewCompileError,
     EnvironmentPreviewPlan,
     compile_environment_preview_plan,
 )
@@ -31,6 +32,8 @@ from optpilot.realm.run_closure import (
     InterfaceRuntimeSpec,
     InterfaceSetupSpec,
     RunEvaluationClosure,
+    ScopeLayer,
+    ScopePath,
     WebPresentationSpec,
 )
 from optpilot.realm.run_records import (
@@ -78,6 +81,7 @@ class EnvironmentPreviewCompilerTest(unittest.TestCase):
         env: dict[str, str] | None = None,
         extra_ports: tuple[int, ...] = (),
         outputs: bool = False,
+        cwd: str = "viewer",
     ) -> InterfaceLaunchProfile:
         if runtime is None:
             runtime = InterfaceRuntimeSpec(
@@ -94,7 +98,7 @@ class EnvironmentPreviewCompilerTest(unittest.TestCase):
             description="Inspect one exact parameter candidate.",
             process=InterfaceProcessInvocation(
                 command=("python", "-m", "viewer"),
-                cwd="viewer",
+                cwd=cwd,
                 env={"VIEW_MODE": "inspect"} if env is None else env,
             ),
             runtime=runtime,
@@ -177,6 +181,47 @@ class EnvironmentPreviewCompilerTest(unittest.TestCase):
             selection=selection,
             run_definition=run_definition,
             evaluation=evaluation,
+        )
+
+    def _with_environment_source_layout(
+        self,
+        target,
+        *,
+        authored_config: str,
+        source_layers: tuple[ScopeLayer, ...] | None = None,
+    ):
+        old = target.evaluation.closure
+        environment = replace(
+            old.environment_revision,
+            authored_config=ScopePath(
+                old.environment_revision.authored_config.scope,
+                authored_config,
+            ),
+            source_layers=(
+                old.environment_revision.source_layers
+                if source_layers is None
+                else source_layers
+            ),
+        )
+        runtime = replace(
+            old.prepared_runtime,
+            environment_revision_digest=environment.digest,
+        )
+        template = replace(
+            old.evaluation_template,
+            environment_revision_digest=environment.digest,
+            runtime_revision_digest=runtime.digest,
+        )
+        closure = RunEvaluationClosure(environment, runtime, template)
+        selection_payload = target.selection.to_dict()
+        selection_payload.pop("schema")
+        selection_payload.pop("selection_digest")
+        selection_payload["context_digest"] = template.digest
+        return replace(
+            target,
+            selection=SelectionRef.build(**selection_payload),
+            run_definition=replace(target.run_definition, evaluation_closure=closure),
+            evaluation=replace(target.evaluation, closure=closure),
         )
 
     def _with_candidate_contract_format(self, target, candidate_format: str):
@@ -273,6 +318,80 @@ class EnvironmentPreviewCompilerTest(unittest.TestCase):
         self.assertEqual(named_plan.profile_id, "inspect")
         self.assertEqual(only_plan.profile_id, "inspect")
         self.assertNotEqual(default_plan.digest, named_plan.digest)
+
+    def test_interface_cwd_is_resolved_from_the_retained_config_directory(self) -> None:
+        target = self._with_profiles(self._profile(cwd="."))
+        target = self._with_environment_source_layout(
+            target,
+            authored_config="environments/factory/environment.yaml",
+        )
+
+        plan = compile_environment_preview_plan(target)
+
+        self.assertEqual(
+            plan.invocation.authored_cwd,
+            "environments/factory",
+        )
+        self.assertEqual(
+            plan.invocation.workdir,
+            "/optpilot/interface/app/environments/factory",
+        )
+
+    def test_interface_cwd_follows_retained_source_subtree_mapping(self) -> None:
+        target = self._with_profiles(self._profile(cwd="viewer"))
+        old_layer = target.evaluation.closure.environment_revision.source_layers[0]
+        mapped_layer = ScopeLayer(
+            scope=old_layer.scope,
+            snapshot_ref=old_layer.snapshot_ref,
+            source_subpath="packages",
+            destination_subpath="application",
+        )
+        target = self._with_environment_source_layout(
+            target,
+            authored_config="packages/factory/environment.yaml",
+            source_layers=(mapped_layer,),
+        )
+
+        plan = compile_environment_preview_plan(target)
+
+        self.assertEqual(plan.invocation.authored_cwd, "application/factory/viewer")
+        self.assertEqual(
+            plan.invocation.workdir,
+            "/optpilot/interface/app/application/factory/viewer",
+        )
+
+    def test_interface_cwd_mapping_fails_closed_when_missing_or_ambiguous(self) -> None:
+        target = self._with_profiles(self._profile(cwd="."))
+        old_layer = target.evaluation.closure.environment_revision.source_layers[0]
+        missing = ScopeLayer(
+            scope=old_layer.scope,
+            snapshot_ref=old_layer.snapshot_ref,
+            source_subpath="another-component",
+            destination_subpath=".",
+        )
+        missing_target = self._with_environment_source_layout(
+            target,
+            authored_config="factory/environment.yaml",
+            source_layers=(missing,),
+        )
+        with self.assertRaises(EnvironmentPreviewCompileError) as caught:
+            compile_environment_preview_plan(missing_target)
+        self.assertEqual(caught.exception.code, "profile_workdir_unretained")
+
+        duplicate_destination = ScopeLayer(
+            scope=old_layer.scope,
+            snapshot_ref=old_layer.snapshot_ref,
+            source_subpath=".",
+            destination_subpath="copy",
+        )
+        ambiguous_target = self._with_environment_source_layout(
+            target,
+            authored_config="factory/environment.yaml",
+            source_layers=(old_layer, duplicate_destination),
+        )
+        with self.assertRaises(EnvironmentPreviewCompileError) as caught:
+            compile_environment_preview_plan(ambiguous_target)
+        self.assertEqual(caught.exception.code, "profile_workdir_ambiguous")
 
     def test_profile_resolution_and_candidate_compatibility_fail_closed(self) -> None:
         with self.subTest("missing"):
@@ -383,6 +502,16 @@ class EnvironmentPreviewCompilerTest(unittest.TestCase):
         for name, (profile, message) in cases.items():
             with self.subTest(name), self.assertRaisesRegex(RealmConflict, message):
                 compile_environment_preview_plan(self._with_profiles(profile))
+
+        with self.assertRaises(EnvironmentPreviewCompileError) as caught:
+            compile_environment_preview_plan(
+                self._with_profiles(
+                    self._profile(runtime=InterfaceRuntimeSpec(sandbox="process"))
+                )
+            )
+        self.assertEqual(
+            caught.exception.code, "profile_process_runtime_not_applicable"
+        )
 
     def test_omitted_profile_runtime_inherits_exact_pinned_container(self) -> None:
         profile = self._profile(runtime=InterfaceRuntimeSpec())

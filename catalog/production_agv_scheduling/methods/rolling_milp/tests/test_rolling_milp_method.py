@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 import sys
 import tempfile
 import unittest
@@ -156,6 +157,34 @@ class RollingMILPMethodTests(unittest.TestCase):
                 method.propose(
                     1, {"runtime_context": {"candidate_staging_dir": staging_dir}}
                 )
+
+    def test_rejects_ambiguous_nonfinite_and_inverted_settings(self):
+        invalid_settings = (
+            {"acceptPartialSolution": "false"},
+            {"solverTimeLimitSeconds": math.nan},
+            {"futureHorizonMinutes": math.inf},
+            {"maxMipTasks": True},
+            {"maxMipTasks": 0},
+            {"adaptiveMinMipTasks": 201, "adaptiveMaxMipTasks": 200},
+            {"variantOverrides": {"monolithic": {"adaptive_task_cap": "false"}}},
+        )
+        for settings in invalid_settings:
+            with self.subTest(settings=settings):
+                method = self._method(variants=["monolithic"], **settings)
+                with tempfile.TemporaryDirectory() as staging_dir:
+                    with self.assertRaises((TypeError, ValueError)):
+                        method.propose(
+                            1,
+                            {
+                                "runtime_context": {
+                                    "candidate_staging_dir": staging_dir
+                                }
+                            },
+                        )
+
+    def test_rejects_unordered_variant_collections(self):
+        with self.assertRaises(TypeError):
+            self._method(variants={"monolithic", "two_stage"})
 
     @staticmethod
     def _purge_candidate_modules():

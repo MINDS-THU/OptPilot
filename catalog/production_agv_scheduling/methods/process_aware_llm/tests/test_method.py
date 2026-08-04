@@ -7,6 +7,8 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
+import traceback
 import unittest
 import urllib.error
 from pathlib import Path
@@ -25,6 +27,7 @@ from method import (  # noqa: E402
     _canonical_json_bytes,
     _query_trace_database,
     _read_bounded_http_body,
+    _validate_policy_sources,
 )
 
 
@@ -69,6 +72,145 @@ def _completion(content: object, *, finish_reason: str = "stop") -> dict:
 
 
 class ProcessAwareMethodTest(unittest.TestCase):
+    def test_generated_policy_contract_accepts_snapshot_scheduler(self) -> None:
+        _validate_policy_sources(
+            {
+                "scheduler.py": SCHEDULER_SOURCE,
+                "param_estimator.py": ESTIMATOR_SOURCE,
+            }
+        )
+
+    def test_generated_policy_contract_rejects_controller_bindings(self) -> None:
+        invalid_sources = (
+            SCHEDULER_SOURCE
+            + "\ndef create_controller(simulation, settings):\n    return Scheduler()\n",
+            SCHEDULER_SOURCE
+            + "\ncreate_controller = lambda simulation, settings: Scheduler()\n",
+        )
+        for scheduler_source in invalid_sources:
+            with self.subTest(source=scheduler_source):
+                with self.assertRaisesRegex(ValueError, "create_controller is reserved"):
+                    _validate_policy_sources(
+                        {
+                            "scheduler.py": scheduler_source,
+                            "param_estimator.py": ESTIMATOR_SOURCE,
+                        }
+                    )
+
+    def test_generated_policy_contract_rejects_ambiguous_scheduler_factory(self) -> None:
+        invalid_sources = (
+            SCHEDULER_SOURCE + "\ncreate_scheduler = None\n",
+            SCHEDULER_SOURCE.replace(
+                "def create_scheduler():", "def create_scheduler(value):"
+            ),
+            SCHEDULER_SOURCE.replace(
+                "def create_scheduler():", "async def create_scheduler():"
+            ),
+        )
+        for scheduler_source in invalid_sources:
+            with self.subTest(source=scheduler_source):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "create_scheduler",
+                ):
+                    _validate_policy_sources(
+                        {
+                            "scheduler.py": scheduler_source,
+                            "param_estimator.py": ESTIMATOR_SOURCE,
+                        }
+                    )
+
+    def test_generated_policy_contract_rejects_runtime_imports(self) -> None:
+        for import_line in (
+            "import factory_sim\n",
+            "from simulation_runner import run_policy_once\n",
+            "import os\n",
+        ):
+            with self.subTest(import_line=import_line):
+                with self.assertRaisesRegex(ValueError, "imports forbidden module"):
+                    _validate_policy_sources(
+                        {
+                            "scheduler.py": import_line + SCHEDULER_SOURCE,
+                            "param_estimator.py": ESTIMATOR_SOURCE,
+                        }
+                    )
+
+    def test_generated_policy_contract_names_battery_level_exactly(self) -> None:
+        wrong_field = SCHEDULER_SOURCE.replace(
+            "return []", "return snapshot['lines']['line1']['agvs']['AGV_1']['battery']"
+        )
+        with self.assertRaisesRegex(ValueError, "use 'battery_level'"):
+            _validate_policy_sources(
+                {
+                    "scheduler.py": wrong_field,
+                    "param_estimator.py": ESTIMATOR_SOURCE,
+                }
+            )
+
+        correct_field = wrong_field.replace("['battery']", "['battery_level']")
+        _validate_policy_sources(
+            {
+                "scheduler.py": correct_field,
+                "param_estimator.py": ESTIMATOR_SOURCE,
+            }
+        )
+
+    def test_editor_retries_contract_failure_before_returning_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+            method._elite_sources = {
+                "scheduler.py": SCHEDULER_SOURCE,
+                "param_estimator.py": ESTIMATOR_SOURCE,
+            }
+            invalid = {
+                "summary": "wrong field",
+                "files": [
+                    {
+                        "path": "scheduler.py",
+                        "content": SCHEDULER_SOURCE.replace(
+                            "return []", "return snapshot['battery']"
+                        ),
+                    },
+                    {"path": "param_estimator.py", "content": ESTIMATOR_SOURCE},
+                ],
+            }
+            valid = {
+                "summary": "corrected field",
+                "files": [
+                    {"path": "scheduler.py", "content": SCHEDULER_SOURCE},
+                    {"path": "param_estimator.py", "content": ESTIMATOR_SOURCE},
+                ],
+            }
+            with patch.object(method, "_chat_json", side_effect=[invalid, valid]) as chat:
+                summary, sources = method._run_editor(
+                    {"title": "battery-aware"},
+                    [{"role": "user", "content": "Return JSON."}],
+                )
+
+            self.assertEqual(summary, "corrected field")
+            self.assertEqual(sources["scheduler.py"], SCHEDULER_SOURCE)
+            self.assertEqual(chat.call_count, 2)
+            correction = chat.call_args_list[1].args[0][-1]["content"]
+            self.assertIn("battery_level", correction)
+
+    def test_factory_prompt_publishes_exact_battery_level_field(self) -> None:
+        prompt_path = (
+            METHOD_ROOT.parents[1]
+            / "environments"
+            / "production_agv_scheduling"
+            / "prompts"
+            / "factory_description.md"
+        )
+        prompt = prompt_path.read_text(encoding="utf-8")
+        self.assertIn('"battery_level": 87.5', prompt)
+        self.assertIn("not `battery`", prompt)
+
+        policy_prompt = (prompt_path.parent / "policy_system.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Do not define `create_controller`", policy_prompt)
+
     def test_baseline_then_parallel_editor_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -104,6 +246,8 @@ class ProcessAwareMethodTest(unittest.TestCase):
                 ]
             )
 
+            editor_barrier = threading.Barrier(2, timeout=5)
+
             def fake_chat(messages):
                 if messages[0]["content"].startswith("You are the manager"):
                     return {
@@ -121,6 +265,7 @@ class ProcessAwareMethodTest(unittest.TestCase):
                             },
                         ],
                     }
+                editor_barrier.wait()
                 return {
                     "summary": "valid complete policy",
                     "files": [
@@ -231,6 +376,125 @@ class ProcessAwareMethodTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "32-byte limit"):
             _read_bounded_http_body(response, max_bytes=32, label="test response")
 
+    def test_invalid_content_length_cannot_escape_provider_secret(self) -> None:
+        api_key = "actual-openrouter-secret"
+        malformed_length = f"exceeds {api_key}"
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+
+            success = _http_response(_completion('{"plans": []}'))
+            success.headers["Content-Length"] = malformed_length  # type: ignore[index]
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch("method.urllib.request.urlopen", return_value=success),
+            ):
+                self.assertEqual(
+                    method._chat_json(
+                        [{"role": "user", "content": "Return JSON."}]
+                    ),
+                    {"plans": []},
+                )
+            self.assertNotIn(api_key, method._encode_provenance().decode("utf-8"))
+
+            unauthorized = urllib.error.HTTPError(
+                "https://openrouter.ai/api/v1/chat/completions",
+                401,
+                "unauthorized",
+                {"Content-Length": malformed_length},
+                io.BytesIO(b'{"error":{"message":"invalid key"}}'),
+            )
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch("method.urllib.request.urlopen", side_effect=unauthorized),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                method._chat_json(
+                    [{"role": "user", "content": "Return JSON."}]
+                )
+            self.assertIn("HTTP 401", str(raised.exception))
+            self.assertNotIn(api_key, str(raised.exception))
+
+    def test_provider_exceptions_do_not_retain_secrets_in_traceback_chains(self) -> None:
+        api_key = "traceback-openrouter-secret"
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+
+            failure_factories = {
+                "url-error": lambda: urllib.error.URLError(
+                    f"provider transport echoed {api_key}"
+                ),
+                "http-error": lambda: urllib.error.HTTPError(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    401,
+                    f"provider reason echoed {api_key}",
+                    {},
+                    io.BytesIO(
+                        json.dumps(
+                            {"error": {"message": f"api_key={api_key}"}}
+                        ).encode("utf-8")
+                    ),
+                ),
+            }
+            for label, factory in failure_factories.items():
+                with self.subTest(label=label):
+                    with (
+                        patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                        patch(
+                            "method.urllib.request.urlopen",
+                            side_effect=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                                factory()
+                            ),
+                        ),
+                        self.assertRaises(RuntimeError) as raised,
+                    ):
+                        method._chat_json(
+                            [{"role": "user", "content": "Return JSON."}]
+                        )
+                    self._assert_exception_chain_excludes(
+                        raised.exception, api_key
+                    )
+
+            malformed_responses = []
+            for _ in range(method.request_retries + 1):
+                response = io.BytesIO(
+                    f'{{"provider_echo":"{api_key}"'.encode("utf-8")
+                )
+                response.headers = {}  # type: ignore[attr-defined]
+                malformed_responses.append(response)
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    side_effect=malformed_responses,
+                ),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                method._chat_json(
+                    [{"role": "user", "content": "Return JSON."}]
+                )
+            self._assert_exception_chain_excludes(raised.exception, api_key)
+
+            class LeakyReadResponse(io.BytesIO):
+                headers = {}
+
+                def read(self, *_args, **_kwargs):
+                    raise RuntimeError(f"provider read echoed {api_key}")
+
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    side_effect=lambda *_args, **_kwargs: LeakyReadResponse(),
+                ),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                method._chat_json(
+                    [{"role": "user", "content": "Return JSON."}]
+                )
+            self._assert_exception_chain_excludes(raised.exception, api_key)
+
     def test_chat_retries_transient_http_and_records_safe_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             method = self._method(Path(temporary))
@@ -303,6 +567,172 @@ class ProcessAwareMethodTest(unittest.TestCase):
                         [{"role": "user", "content": "Return JSON."}]
                     )
             urlopen.assert_called_once()
+
+    def test_provider_http_error_redacts_exact_and_pattern_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+            api_key = "actual-openrouter-secret"
+            leaked_password = "provider-password"
+            leaked_bearer = "provider-bearer-token"
+            error_body = json.dumps(
+                {
+                    "error": {
+                        "message": (
+                            f"key={api_key}; password={leaked_password}; "
+                            f"Authorization: Bearer {leaked_bearer}"
+                        )
+                    }
+                }
+            ).encode("utf-8")
+            unauthorized = urllib.error.HTTPError(
+                "https://openrouter.ai/api/v1/chat/completions",
+                401,
+                "unauthorized",
+                {},
+                io.BytesIO(error_body),
+            )
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen", side_effect=unauthorized
+                ),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                method._run_editor(
+                    {"title": "unreachable plan"},
+                    [{"role": "user", "content": "Return JSON."}],
+                )
+
+            diagnostic = str(raised.exception)
+            self.assertIn("[REDACTED]", diagnostic)
+            for secret in (api_key, leaked_password, leaked_bearer):
+                self.assertNotIn(secret, diagnostic)
+                self.assertNotIn(secret, method._encode_provenance().decode("utf-8"))
+
+    def test_provider_envelope_and_success_content_are_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+            api_key = "envelope-api-secret"
+            envelope_password = "envelope-password"
+            provider_error = {
+                "error": {
+                    "code": 401,
+                    "message": (
+                        f"api_key={api_key}; password={envelope_password}"
+                    ),
+                }
+            }
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    return_value=_http_response(provider_error),
+                ),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                method._chat_json([{"role": "user", "content": "Return JSON."}])
+            diagnostic = str(raised.exception)
+            self.assertNotIn(api_key, diagnostic)
+            self.assertNotIn(envelope_password, diagnostic)
+            self.assertIn("[REDACTED]", diagnostic)
+
+            completion_password = "completion-password"
+            completion = _completion(
+                json.dumps(
+                    {
+                        "plans": [],
+                        "note": api_key,
+                        "password": completion_password,
+                    }
+                )
+            )
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    return_value=_http_response(completion),
+                ),
+            ):
+                result = method._chat_json(
+                    [{"role": "user", "content": "Return JSON."}]
+                )
+            encoded = method._encode_provenance().decode("utf-8")
+            self.assertEqual(result["note"], "[REDACTED]")
+            self.assertEqual(result["password"], "[REDACTED]")
+            self.assertNotIn(api_key, encoded)
+            self.assertNotIn(completion_password, encoded)
+
+            key_password = "provider-key-password"
+            structured_completion = _completion(
+                [
+                    {
+                        "type": "text",
+                        "text": '{"plans": []}',
+                        api_key: "echoed exact key",
+                        f"password={key_password}": "echoed credential key",
+                        "[REDACTED]": "pre-existing redacted key",
+                    }
+                ]
+            )
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    return_value=_http_response(structured_completion),
+                ),
+            ):
+                self.assertEqual(
+                    method._chat_json(
+                        [{"role": "user", "content": "Return JSON."}]
+                    ),
+                    {"plans": []},
+                )
+            encoded = method._encode_provenance().decode("utf-8")
+            self.assertNotIn(api_key, encoded)
+            self.assertNotIn(key_password, encoded)
+            self.assertIn('"[REDACTED]#2"', encoded)
+
+    def test_success_redaction_preserves_ordinary_token_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            method = self._method(Path(temporary))
+            self.addCleanup(method.close)
+            api_key = "source-redaction-api-secret"
+            source = (
+                "class Scheduler:\n"
+                "    def run(self, snapshot):\n"
+                "        token = snapshot.get(\"token\")\n"
+                "        return [] if token is None else []\n"
+            )
+            completion = _completion(
+                json.dumps(
+                    {
+                        "summary": "Preserve an ordinary token variable.",
+                        "files": [
+                            {"path": "scheduler.py", "content": source},
+                            {
+                                "path": "param_estimator.py",
+                                "content": ESTIMATOR_SOURCE,
+                            },
+                        ],
+                        "api_key": api_key,
+                    }
+                )
+            )
+            with (
+                patch.dict(os.environ, {"OPENROUTER_API_KEY": api_key}),
+                patch(
+                    "method.urllib.request.urlopen",
+                    return_value=_http_response(completion),
+                ),
+            ):
+                result = method._chat_json(
+                    [{"role": "user", "content": "Return JSON."}]
+                )
+            self.assertEqual(result["files"][0]["content"], source)
+            self.assertEqual(result["api_key"], "[REDACTED]")
+            self.assertNotIn(api_key, method._encode_provenance().decode("utf-8"))
 
     def test_chat_retries_incomplete_and_provider_error_envelopes(self) -> None:
         invalid_envelopes = [
@@ -558,6 +988,27 @@ class ProcessAwareMethodTest(unittest.TestCase):
             },
         }
         return ProcessAwareLLMHeuristicMethod(definition, study, rng=None)
+
+    def _assert_exception_chain_excludes(
+        self, error: BaseException, secret: str
+    ) -> None:
+        formatted = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
+        self.assertNotIn(secret, formatted)
+        pending = [error]
+        seen = set()
+        while pending:
+            current = pending.pop()
+            if id(current) in seen:
+                continue
+            seen.add(id(current))
+            self.assertNotIn(secret, str(current))
+            self.assertNotIn(secret, repr(current))
+            if current.__cause__ is not None:
+                pending.append(current.__cause__)
+            if current.__context__ is not None:
+                pending.append(current.__context__)
 
 
 if __name__ == "__main__":

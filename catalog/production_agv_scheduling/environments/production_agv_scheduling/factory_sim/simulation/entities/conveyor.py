@@ -440,7 +440,7 @@ class TripleBufferConveyor(BaseConveyor):
     - lower_buffer: for P3 products, AGV pickup
     All buffers use simpy.Store for event-driven simulation.
     """
-    def __init__(self, env, id, main_capacity, upper_capacity, lower_capacity, position: Tuple[int, int], transfer_time: float =5.0, mqtt_client=None, database=None, interacting_points: list = [], kpi_calculator=None, topic_manager: Optional[TopicManager] = None, line_id: Optional[str] = None):
+    def __init__(self, env, id, main_capacity, upper_capacity, lower_capacity, position: Tuple[int, int], transfer_time: float =5.0, mqtt_client=None, database=None, interacting_points: Optional[list] = None, kpi_calculator=None, topic_manager: Optional[TopicManager] = None, line_id: Optional[str] = None):
         super().__init__(env, id, position, transfer_time, line_id, interacting_points, topic_manager, mqtt_client, database)
         self.topic_manager = topic_manager
         self.line_id = line_id

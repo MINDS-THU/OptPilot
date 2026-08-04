@@ -95,6 +95,9 @@ from optpilot_studio.ui.runtime_supervisor import (
     StudioRuntimeSupervisorBusy,
     StudioRuntimeSupervisorClaim,
 )
+from optpilot_studio.ui.coordination_store import (
+    studio_project_state_directory,
+)
 from tests.realm_run_support import (
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
@@ -543,14 +546,21 @@ class StudioRealmRunsTest(unittest.TestCase):
         )
         return run_id
 
-    def _enable_fake_environment_preview(self) -> _FakeContainerEngine:
+    def _enable_fake_environment_preview(
+        self,
+        *,
+        trusted_images: tuple[str, ...] = (_STUDIO_PREVIEW_IMAGE,),
+    ) -> _FakeContainerEngine:
         authority = object()
         engine = _FakeContainerEngine()
         provider = LocalContainerWebProvider(
             executable="docker",
             control_root=self.runtime.root / "studio-preview-provider",
             broker_authority=authority,
-            trusted_gateway_images=(ContainerGatewayImageTrust(_STUDIO_PREVIEW_IMAGE),),
+            trusted_gateway_images=tuple(
+                ContainerGatewayImageTrust(image_ref)
+                for image_ref in trusted_images
+            ),
             run_command=engine,
             gateway_probe=lambda _routes, _token, _primary, _path, _timeout: True,
         )
@@ -768,6 +778,42 @@ class StudioRealmRunsTest(unittest.TestCase):
         stopped = self.state.stop_job(job.launch_id)
         self.assertEqual(stopped["launch_state"], "cancelled")
         self.assertFalse(stopped["can_stop"])
+
+    def test_launch_uses_exchange_timeout_from_selected_method_revision(self) -> None:
+        study_path = _write_package(self.package)
+        method_path = self.package / "configs" / "methods" / "method.yaml"
+        method_path.write_text(
+            method_path.read_text(encoding="utf-8").replace(
+                "  protocol: batch\n",
+                "  protocol: batch\n  exchangeTimeoutSeconds: 37\n",
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            mock.patch(
+                "optpilot_studio.ui.server._validate_study",
+                return_value={
+                    "valid": True,
+                    "launch": {"eligible": True, "code": "ready", "reason": None},
+                },
+            ),
+            mock.patch(
+                "optpilot_studio.ui.server._schedule_study_launch_execution",
+                return_value=True,
+            ),
+        ):
+            launch = self.state.launch_study(
+                study_path,
+                operation_id="studio-test/method-owned-exchange-timeout",
+            )
+
+        self.assertEqual(
+            launch.job.plan.input_facts["execution_profile"][
+                "method_request_timeout_seconds"
+            ],
+            37.0,
+        )
 
     def test_http_study_launch_recovers_lost_response_without_second_job(self) -> None:
         study_path = _write_package(self.package)
@@ -4260,6 +4306,92 @@ class StudioRealmRunsTest(unittest.TestCase):
         self.assertEqual(engine.networks, {})
         self.assertEqual(self.state.presentation_broker._leases, {})
 
+    def test_environment_preview_ignores_process_profile_and_reports_untrusted_image(
+        self,
+    ) -> None:
+        candidate_profile = yaml.safe_load(_STUDIO_PREVIEW_INTERFACE)["interface"]
+        process_profile = {
+            **candidate_profile,
+            "label": "Catalog interface",
+            "runtime": {"sandbox": "process"},
+        }
+        interface = yaml.safe_dump(
+            {
+                "interface": {
+                    "launchProfiles": [
+                        {"id": "default", **process_profile},
+                        {"id": "candidate", **candidate_profile},
+                    ]
+                }
+            },
+            sort_keys=False,
+        )
+        run_id = self._create_runnable_operator_run(
+            environment_interface=interface
+        )
+        self._enable_fake_environment_preview(trusted_images=())
+
+        detail = _realm_run_detail(self.state, ref=RunViewRef(run_id=run_id))
+        candidate = detail["pages"]["candidate"]["items"][0]
+        capability = next(
+            item
+            for item in candidate["eligibility"]
+            if item["action"] == "environment_preview"
+        )
+
+        self.assertTrue(capability["supported"])
+        self.assertFalse(capability["eligible"])
+        self.assertEqual(
+            capability["reason"], "environment_preview_image_untrusted"
+        )
+        self.assertEqual(capability["profiles"], [])
+        diagnostics = {
+            item["id"]: item for item in capability["profile_diagnostics"]
+        }
+        self.assertFalse(diagnostics["default"]["applicable"])
+        self.assertEqual(
+            diagnostics["default"]["eligibility_detail"]["category"],
+            "not_applicable",
+        )
+        self.assertEqual(
+            diagnostics["default"]["eligibility_detail"]["code"],
+            "profile_process_runtime_not_applicable",
+        )
+        self.assertTrue(diagnostics["candidate"]["applicable"])
+        self.assertEqual(
+            diagnostics["candidate"]["remediation"],
+            {
+                "kind": "approve_container_gateway_image",
+                "image_ref": _STUDIO_PREVIEW_IMAGE,
+            },
+        )
+        self.assertEqual(
+            capability["eligibility_detail"]["remediation"],
+            diagnostics["candidate"]["remediation"],
+        )
+        self.assertIn(
+            capability["eligibility_detail"].get("trust_source"),
+            {"realm", "session"},
+        )
+        self.assertTrue(
+            capability["eligibility_detail"].get("trust_generation")
+        )
+
+        self._enable_fake_environment_preview()
+        refreshed = _realm_run_detail(self.state, ref=RunViewRef(run_id=run_id))
+        refreshed_candidate = refreshed["pages"]["candidate"]["items"][0]
+        refreshed_capability = next(
+            item
+            for item in refreshed_candidate["eligibility"]
+            if item["action"] == "environment_preview"
+        )
+        self.assertTrue(refreshed_capability["eligible"])
+        self.assertEqual(refreshed_capability["selected_profile_id"], "candidate")
+        self.assertEqual(
+            [item["id"] for item in refreshed_capability["profiles"]],
+            ["candidate"],
+        )
+
     def test_environment_preview_reports_the_exact_selected_profile(self) -> None:
         base_profile = yaml.safe_load(_STUDIO_PREVIEW_INTERFACE)["interface"]
         interface = yaml.safe_dump(
@@ -5002,7 +5134,7 @@ class StudioRealmRunsTest(unittest.TestCase):
             )
 
         open_runtime.assert_called_once_with(
-            realm_root=configured_root,
+            realm_root=configured_root.resolve(),
             container_web_executable=None,
             trusted_container_gateway_images=(),
         )
@@ -5014,12 +5146,23 @@ class StudioRealmRunsTest(unittest.TestCase):
     def test_busy_runtime_supervisor_prevents_realm_and_server_construction(
         self,
     ) -> None:
-        claim = StudioRuntimeSupervisorClaim.acquire(self.root)
+        realm_root = self.root / "busy-supervisor-realm"
+        claim = StudioRuntimeSupervisorClaim.acquire(
+            self.root,
+            control_root=studio_project_state_directory(
+                self.root,
+                authority_root=realm_root,
+            ),
+        )
         try:
             with (
                 mock.patch(
                     "optpilot_studio.ui.server.Path.cwd",
                     return_value=self.root,
+                ),
+                mock.patch(
+                    "optpilot_studio.ui.server.default_realm_root",
+                    return_value=realm_root,
                 ),
                 mock.patch(
                     "optpilot_studio.ui.server.LocalRealmRuntime.open"
@@ -5039,6 +5182,37 @@ class StudioRealmRunsTest(unittest.TestCase):
         open_runtime.assert_not_called()
         state_constructor.assert_not_called()
         server_constructor.assert_not_called()
+
+    def test_run_ui_rejects_unsafe_realm_root_before_creating_claims(self) -> None:
+        unsafe_target = self.root / "unsafe-realm-target"
+        unsafe_target.mkdir()
+        unsafe_root = self.root / "unsafe-realm-link"
+        unsafe_root.symlink_to(unsafe_target, target_is_directory=True)
+        with (
+            mock.patch(
+                "optpilot_studio.ui.server.Path.cwd",
+                return_value=self.root,
+            ),
+            mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=unsafe_root,
+            ),
+            mock.patch(
+                "optpilot_studio.ui.server.LocalRealmRuntime.open"
+            ) as open_runtime,
+            mock.patch(
+                "optpilot_studio.ui.server.ThreadingHTTPServer"
+            ) as server_constructor,
+        ):
+            with self.assertRaises(RealmIntegrityError):
+                run_ui(catalog_roots=[], run_roots=[])
+
+        open_runtime.assert_not_called()
+        server_constructor.assert_not_called()
+        self.assertFalse(
+            (self.root / ".optpilot-ui" / "runtime-supervisor.lock").exists()
+        )
+        self.assertFalse((unsafe_target / "studio").exists())
 
     def test_run_ui_releases_supervisor_when_realm_open_fails(self) -> None:
         fake_claim = mock.Mock()
@@ -5167,7 +5341,7 @@ class StudioRealmRunsTest(unittest.TestCase):
             ),
             mock.patch(
                 "optpilot_studio.ui.server.StudioRuntimeSupervisorClaim.acquire",
-                side_effect=lambda _root: (
+                side_effect=lambda _root, **_kwargs: (
                     events.append("claim-acquire") or fake_claim
                 ),
             ),

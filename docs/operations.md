@@ -104,17 +104,26 @@ metadata attributes while sealing content, and conditionally accepts Docker
 Desktop ownership metadata after validating its full permission mode. This
 does **not** make a synchronized folder a supported operational-data location.
 
-Studio still places settings and local coordination records in `.optpilot-ui/`
-below the directory from which Studio was launched. The larger and more
-mutation-heavy Workspace runtimes, interface output folders, logs, and prepared
-runtime cache live under the OS-local Realm instead, so launching an interface
-does not put transient output traffic into the source checkout. For the fully
-supported path, the remaining checkout-local Studio state should also be on a
-local, non-synchronized filesystem. A configured Catalog source or externally
-connected folder may point elsewhere, but OptPilot treats it as mutable input
-and may reject capture if it changes. A synchronized source is not a durability
-or concurrency guarantee; prefer a local checkout for Check, registration, and
-setup work.
+Studio keeps its high-write coordination SQLite database, Workspace index, and
+process-lifetime supervisor lock in a deterministic per-project directory under
+the OS-local Realm. The Studio start path is used only to derive an opaque
+project key. A small checkout-local compatibility lock is also held while
+Studio runs so a pre-upgrade process cannot remain active during migration; it
+does not contain coordination state.
+Workspace runtimes, interface output folders, logs, and prepared runtime caches
+also live under the Realm. Settings, job and Assistant-session records, and
+Studio-owned draft or editable-copy folders remain below `.optpilot-ui/` in the
+Studio start directory, and Workspace or project content remains at its existing
+owned location.
+
+This split avoids putting SQLite and lock traffic into a synchronized checkout,
+but it does **not** make synchronized source folders universally supported. A
+configured Catalog source or externally connected folder may point elsewhere,
+but OptPilot treats it as mutable input and may reject capture if it changes.
+A synchronized source is not a durability or concurrency guarantee; prefer a
+local checkout for Check, registration, and setup work. For the strongest
+supported boundary, keep the remaining checkout-local Studio state on a local,
+non-synchronized filesystem too.
 
 Realm projection and writable-volume roots and namespaces, Realm-managed
 editable Workspace checkouts, and each Studio workspace-runtime directory carry
@@ -182,15 +191,86 @@ The Realm root contains one authority database and provider-private storage:
 | `retained-dependency-cache/` | Exact offline Python dependency preparation for Environments and Methods. |
 | `runtime-cache/studio-prepared-runtimes/` | Reusable prepared output for eligible Studio interfaces. |
 | `runtime-cache/studio-workspace-runtimes/` | Per-Studio Workspace containers, interface launch roots, logs, control files, and temporary generated outputs. |
+| `studio/projects/<opaque-project-key>/` | Per-project Studio coordination database, Workspace index, and runtime-supervisor lock. |
 | `container-web/` | Provider control state when container Preview is enabled. |
 
 These are implementation directories, not public APIs. Do not edit, copy
 individual files from, or partially delete them. Use Studio and Realm services
 to read canonical Runs, Catalog revisions, and Workspaces.
 
-### Checkout-local Studio data
+### Environment Preview image approvals
 
-Studio stores its local coordination state below `<studio-start-directory>/.optpilot-ui/`:
+An Environment Preview container can execute package interface code. OptPilot
+therefore requires an explicit approval for the exact digest-pinned image and
+gateway contract before it can launch. Tags such as `latest` are not accepted.
+
+Approve an image in the same Realm used by Studio:
+
+```bash
+uv run optpilot environment-preview trust approve \
+  registry.example/preview@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --realm-root /absolute/local/optpilot-realm
+```
+
+The command asks you to type `APPROVE`. Automation and other noninteractive
+sessions must make the decision explicit with `--yes`. List or revoke approvals
+with the corresponding commands:
+
+```bash
+uv run optpilot environment-preview trust list \
+  --realm-root /absolute/local/optpilot-realm
+uv run optpilot environment-preview trust revoke \
+  registry.example/preview@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --realm-root /absolute/local/optpilot-realm
+```
+
+`approve`, `revoke`, and `list` also accept `--json`. Approval decisions are
+stored in the selected private Realm and survive process and Studio restarts.
+Replace the example image and digest with the exact reference declared by the
+Environment, then restart Studio so its startup trust snapshot is refreshed.
+The `--realm-root` value must be absolute and must identify the same Realm that
+Studio opens; omitting it uses the normal secure per-user default.
+
+The existing Studio `--environment-preview-trusted-image` option and
+`OPTPILOT_ENVIRONMENT_PREVIEW_TRUSTED_IMAGES` fallback remain available for
+compatibility. Supplying either selects an exact session-only trust set for that
+Studio process; it does not update or combine with the Realm's persistent
+approvals. Prefer the persistent commands for routine operation so a missing
+startup flag cannot unexpectedly disable an interface.
+
+Studio's `--environment-preview-trust-source` switch makes the source
+explicit: `realm` uses only persistent approvals, `session` uses only the
+CLI/environment list, and `disabled` trusts no Preview image. The default
+`auto` selects a session override only when one was supplied; otherwise it
+uses the Realm. OptPilot never unions the two sets.
+
+### OS-local Studio project state
+
+For a production Studio with a Realm, the following operational files live
+below `<realm-root>/studio/projects/<opaque-project-key>/`:
+
+| Relative location | Purpose |
+| --- | --- |
+| `studio-coordination.sqlite3` | Transactional Study drafts, launch requests, candidate tries, interface-launch ownership, and related Studio coordination records. |
+| `workspace-index.json` | Index of Studio-visible Workspace references; moving this index does not move any Workspace folder. |
+| `runtime-supervisor.lock` | Process-lifetime ownership claim for this Studio start directory. It is retained between launches and must not be deleted while Studio is running. |
+
+The project key is derived deterministically from the canonical Studio start
+path, so the same project selects the same local directory without exposing its
+path as a directory name. On first use, when the local target does not yet
+exist, Studio validates and non-destructively copies a valid legacy coordination
+database and Workspace index from `.optpilot-ui/`. The copy includes committed
+SQLite WAL state and is validated before atomic publication. Existing local
+targets always win; legacy database and index files are not renamed, truncated,
+deleted, or merged. The authoritative runtime-supervisor lock is created at the
+new local location rather than adopted from a previous process. For upgrade
+safety, the same process also holds the legacy advisory lock for its lifetime;
+this excludes an older Studio that knows only the checkout-local lock.
+
+### Checkout-local Studio data and Workspace content
+
+Studio still stores the following below
+`<studio-start-directory>/.optpilot-ui/`:
 
 | Relative location | Purpose |
 | --- | --- |
@@ -198,7 +278,12 @@ Studio stores its local coordination state below `<studio-start-directory>/.optp
 | `jobs/`, `sessions/`, and `agent_sessions/` | Studio job and Assistant coordination records. |
 | `workspaces/` | Studio-owned draft and editable Catalog-copy folders. |
 | `code-server/` | Local Code Server profile and process state. |
-| `runtime-supervisor.lock` | Process-lifetime ownership claim; it is retained between launches and must not be deleted while Studio is running. |
+| `runtime-supervisor.lock` | Compatibility-only advisory lock held alongside the authoritative OS-local lock while Studio runs. |
+
+Legacy `studio-coordination.sqlite3`, `workspaces/index.json`, or
+`runtime-supervisor.lock` files may remain in this directory after an upgrade.
+Once the OS-local project state exists, those retained legacy files are not the
+production authority and should not be edited as a way to change Studio state.
 
 An interface launch receives a private directory below the Realm's
 `runtime-cache/studio-workspace-runtimes/` namespace with separate runtime,
@@ -209,8 +294,10 @@ directory durable.
 
 Configured Catalog source folders and folders opened with **Open local folder**
 remain user-owned at their original paths. Removing their Studio reference must
-not delete those folders. Container images and engine-level caches live in the
-container engine, outside both storage roots.
+not delete those folders. Realm-managed editable Workspaces remain under the
+Realm's `editable-workspaces/` area. Relocating only the Workspace index does not
+copy or relocate any of these folders. Container images and engine-level caches
+live in the container engine, outside both storage roots.
 
 ## Safe cleanup that exists today
 

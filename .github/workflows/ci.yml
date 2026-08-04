@@ -77,6 +77,14 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Validate production and AGV package
+        run: |
+          optpilot package validate catalog/production_agv_scheduling \
+            --check-imports --check-source --check-setup-files
+          python catalog/production_agv_scheduling/scripts/run_package_tests.py
+          cd catalog/production_agv_scheduling
+          sha256sum --check UNITY_BUILD.sha256
+
       - name: Compile package
         run: python -m compileall src/optpilot
 

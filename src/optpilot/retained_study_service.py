@@ -67,6 +67,27 @@ RETAINED_STUDY_SOURCE_ROLE = "study-package-source"
 RETAINED_STUDY_PREPARATION_RECEIPT_FORMAT = (
     "optpilot.retained-study-preparation-receipt.v1"
 )
+# Keep this exact tuple aligned with Studio's
+# ``CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS``.  Whole-package Studio capture
+# already omits these machine-local generated directories.  The retained CLI
+# path must select the same authored bytes so a cache created by importing or
+# testing a package cannot change its source identity.  This is intentionally a
+# basename-only directory policy: ordinary files (including ``*.pyc``) and
+# every other directory remain part of the captured package.
+RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES = (
+    ".git",
+    ".mypy_cache",
+    ".optpilot",
+    ".optpilot-ui",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".runtime",
+    ".uv-cache",
+    ".venv",
+    "__pycache__",
+    "node_modules",
+    "runs",
+)
 
 
 def _exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -1250,7 +1271,10 @@ class RetainedStudyService:
             store_id=store_id,
         )
         seal = capture.seal_tree(
-            source=AllowedTreeSource(package_root),
+            source=AllowedTreeSource(
+                package_root,
+                excluded_directory_names=RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES,
+            ),
             operation_id=_phase_operation_id(operation_id, "seal-source-capture"),
         )
         membership = OwnerMembership(
@@ -1285,6 +1309,7 @@ class RetainedStudyService:
 
 __all__ = [
     "RETAINED_STUDY_PREPARATION_RECEIPT_FORMAT",
+    "RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES",
     "RETAINED_STUDY_SOURCE_OWNER_KIND",
     "RETAINED_STUDY_SOURCE_ROLE",
     "RetainedStudyPreparationReceipt",

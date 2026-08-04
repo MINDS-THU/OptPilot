@@ -46,7 +46,10 @@ from .realm_run_execution_service import (
     RunExecutionDeferred,
 )
 from .retained_study_service import RetainedStudyPreparationReceipt
-from .run_execution_profile import RunExecutionProfile
+from .run_execution_profile import (
+    RunExecutionProfile,
+    method_exchange_timeout_seconds,
+)
 from .study_launch_ids import local_study_operation_identities
 
 
@@ -69,9 +72,21 @@ class StudyLaunchDispatchDeferred(RealmConflict):
 
 def _normalize_execution_profile(
     value: RunExecutionProfile | None,
+    *,
+    definition: StudyDefinitionReceipt | None = None,
 ) -> RunExecutionProfile:
     if value is None:
-        return RunExecutionProfile()
+        if definition is None:
+            return RunExecutionProfile()
+        method_contract = (
+            definition.manifest.run_definition.method_revision.method_contract
+        )
+        runtime_requirements = method_contract.get("runtime_requirements")
+        return RunExecutionProfile(
+            method_request_timeout_seconds=method_exchange_timeout_seconds(
+                runtime_requirements
+            )
+        )
     if not isinstance(value, RunExecutionProfile):
         raise TypeError("execution_profile must be a RunExecutionProfile or None.")
     return value
@@ -338,7 +353,12 @@ class RealmStudyLaunchService:
                 "Choose an explicit Method environment binding or a "
                 "process-lifetime binding revision, not both."
             )
-        execution_profile = _normalize_execution_profile(execution_profile)
+        # Reject a malformed explicit operational override before capturing
+        # any package content.  A missing profile is intentionally left as
+        # ``None`` until the immutable Method revision has been compiled, so
+        # its declared exchange timeout can supply the normal default.
+        if execution_profile is not None:
+            execution_profile = _normalize_execution_profile(execution_profile)
         identities = local_study_operation_identities(operation_id)
         preparation = self._runtime.retained_study_service.prepare_local_package(
             operation_id=operation_id,
@@ -401,8 +421,11 @@ class RealmStudyLaunchService:
             or len(display_name.encode("utf-8")) > 256
         ):
             raise ValueError("display_name must be bounded nonempty text or None.")
-        execution_profile = _normalize_execution_profile(execution_profile)
         definition = preparation.study_definition
+        execution_profile = _normalize_execution_profile(
+            execution_profile,
+            definition=definition,
+        )
         environment_binding = _normalize_method_environment_binding(
             definition,
             method_environment_binding,

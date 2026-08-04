@@ -19,17 +19,196 @@ ENVIRONMENT_ROOT = Path(__file__).resolve().parents[1]
 if str(ENVIRONMENT_ROOT) not in sys.path:
     sys.path.insert(0, str(ENVIRONMENT_ROOT))
 
-from evaluator import _aggregate, _policy_fallback_replans, evaluate  # noqa: E402
+from evaluator import (  # noqa: E402
+    _aggregate,
+    _assert_canonical_kpi_equal,
+    _policy_fallback_replans,
+    _validate_trace_database,
+    evaluate,
+)
 from factory_sim.config.schemas import DeviceStatus  # noqa: E402
 from factory_sim.game_logic.fault_system import FaultType  # noqa: E402
 from factory_sim.run_multi_line_simulation import MultiLineFactorySimulation  # noqa: E402
 from factory_sim.simulation.entities.agv import AGV  # noqa: E402
+from factory_sim.simulation.entities.base import Device  # noqa: E402
+from factory_sim.utils.sqlite_db import SimulationDatabaseError  # noqa: E402
 from replay import replay_candidate  # noqa: E402
-from simulation_runner import _candidate_import_scope  # noqa: E402
+from simulation_runner import (  # noqa: E402
+    _candidate_import_scope,
+    _create_policy,
+    run_policy_once,
+)
 import simpy  # noqa: E402
 
 
 class EnvironmentIntegrationTests(unittest.TestCase):
+    def test_partial_simulation_initialization_is_shut_down(self) -> None:
+        settings = json.loads(
+            (ENVIRONMENT_ROOT / "settings" / "smoke.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with (
+            patch(
+                "simulation_runner.MultiLineFactorySimulation.initialize",
+                side_effect=RuntimeError("injected initialize failure"),
+            ),
+            patch(
+                "simulation_runner.MultiLineFactorySimulation.shutdown"
+            ) as shutdown,
+            self.assertRaisesRegex(RuntimeError, "injected initialize failure"),
+        ):
+            run_policy_once(
+                candidate_dir=ENVIRONMENT_ROOT / "initial",
+                settings=settings,
+                seed=settings["seeds"][0],
+                database_path=None,
+            )
+        shutdown.assert_called_once_with()
+
+    def test_trace_write_and_close_failures_fail_the_replay(self) -> None:
+        settings = json.loads(
+            (ENVIRONMENT_ROOT / "settings" / "smoke.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            trace_path = Path(temporary_directory) / "write-failure.db"
+            with (
+                patch(
+                    "factory_sim.utils.sqlite_db.SimulationDatabase._execute_insert",
+                    side_effect=sqlite3.OperationalError("injected disk full"),
+                ),
+                self.assertRaisesRegex(
+                    SimulationDatabaseError, "injected disk full"
+                ),
+            ):
+                replay_candidate(
+                    candidate_dir=ENVIRONMENT_ROOT / "initial",
+                    settings=settings,
+                    seed=settings["seeds"][0],
+                    database_path=trace_path,
+                )
+
+            simulation = MultiLineFactorySimulation(
+                database_path=Path(temporary_directory) / "close-failure.db"
+            )
+            simulation.initialize(no_faults=True, no_mqtt=True)
+            assert simulation.database is not None
+            with (
+                patch.object(
+                    simulation.database,
+                    "_close_connection",
+                    side_effect=OSError("injected close failure"),
+                ),
+                self.assertRaisesRegex(
+                    SimulationDatabaseError, "injected close failure"
+                ),
+            ):
+                simulation.shutdown()
+            self.assertIsNone(simulation.database)
+            self.assertIsNone(simulation.mqtt_client)
+
+    def test_trace_validation_rejects_missing_empty_and_corrupt_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            missing = root / "missing.db"
+            with sqlite3.connect(missing) as connection:
+                connection.execute("CREATE TABLE kpi (value REAL)")
+                connection.execute("INSERT INTO kpi VALUES (1.0)")
+            with self.assertRaisesRegex(RuntimeError, "missing required tables"):
+                _validate_trace_database(missing)
+
+            empty = root / "empty.db"
+            with sqlite3.connect(empty) as connection:
+                connection.execute("CREATE TABLE kpi (value REAL)")
+                connection.execute('CREATE TABLE "order" (value REAL)')
+            with self.assertRaisesRegex(RuntimeError, "has no rows"):
+                _validate_trace_database(empty)
+
+            corrupt = root / "corrupt.db"
+            corrupt.write_bytes(b"not a sqlite database")
+            with self.assertRaisesRegex(RuntimeError, "unreadable or corrupt"):
+                _validate_trace_database(corrupt)
+
+    def test_candidate_source_mutation_fails_before_another_replication(self) -> None:
+        settings = json.loads(
+            (ENVIRONMENT_ROOT / "settings" / "smoke.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory) / "trial"
+            candidate = workspace / "candidate"
+            candidate.mkdir(parents=True)
+            (candidate / "param_estimator.py").write_text(
+                "VALUE = 1\n", encoding="utf-8"
+            )
+            (candidate / "scheduler.py").write_text(
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('param_estimator.py').write_text('VALUE = 2\\n')\n"
+                "class Scheduler:\n"
+                "    def run(self, snapshot):\n"
+                "        return []\n"
+                "def create_scheduler():\n"
+                "    return Scheduler()\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError, "Candidate bundle changed during evaluation"
+            ):
+                evaluate(
+                    {"workspace": str(workspace), "candidateRoot": str(candidate)},
+                    {"workspace": str(workspace), "settings": settings},
+                )
+
+    def test_policy_factory_contract_rejects_ambiguous_modules(self) -> None:
+        policy = SimplePolicy()
+        scheduler_module = types.SimpleNamespace(
+            create_scheduler=lambda: policy,
+            create_controller=lambda _simulation, _settings: policy,
+        )
+
+        with self.assertRaisesRegex(ValueError, "exactly one policy factory"):
+            _create_policy(scheduler_module, object(), {})
+
+    def test_policy_factory_contract_preserves_each_single_entrypoint(self) -> None:
+        snapshot_policy = SimplePolicy()
+        selected, drives_simulation = _create_policy(
+            types.SimpleNamespace(create_scheduler=lambda: snapshot_policy),
+            object(),
+            {},
+        )
+        self.assertIs(selected, snapshot_policy)
+        self.assertFalse(drives_simulation)
+
+        controller_policy = SimplePolicy()
+        simulation = object()
+        selected, drives_simulation = _create_policy(
+            types.SimpleNamespace(
+                create_controller=lambda received, settings: (
+                    controller_policy
+                    if received is simulation and settings == {"marker": 1}
+                    else None
+                )
+            ),
+            simulation,
+            {"marker": 1},
+        )
+        self.assertIs(selected, controller_policy)
+        self.assertTrue(drives_simulation)
+
+    def test_device_instances_do_not_share_default_interaction_points(self) -> None:
+        env = simpy.Environment()
+        first = Device(env, "first", (0, 0))
+        second = Device(env, "second", (1, 0))
+
+        first.interacting_points.append("P1")
+
+        self.assertEqual(first.interacting_points, ["P1"])
+        self.assertEqual(second.interacting_points, [])
+
     def test_charge_rechecks_battery_after_moving_to_charger(self) -> None:
         env = simpy.Environment()
         agv = AGV(
@@ -193,7 +372,37 @@ class EnvironmentIntegrationTests(unittest.TestCase):
             simulation.shutdown()
 
 
+class SimplePolicy:
+    def run(self, _input) -> list:
+        return []
+
+
 class AggregationTests(unittest.TestCase):
+    def test_full_canonical_kpi_replay_comparison(self) -> None:
+        first = {
+            "total_score": 70.0,
+            "components": {"quality": 21.0, "counts": [1, 2]},
+            "label": "complete",
+            "fallback": False,
+        }
+        replayed = json.loads(json.dumps(first))
+        replayed["components"]["quality"] += 1e-10
+        _assert_canonical_kpi_equal(first, replayed)
+
+        replayed["components"]["quality"] = 21.5
+        with self.assertRaisesRegex(RuntimeError, r"\$\.components\.quality"):
+            _assert_canonical_kpi_equal(first, replayed)
+
+        replayed = json.loads(json.dumps(first))
+        replayed["extra"] = 1
+        with self.assertRaisesRegex(RuntimeError, "keys differ"):
+            _assert_canonical_kpi_equal(first, replayed)
+
+        replayed = json.loads(json.dumps(first))
+        replayed["total_score"] = math.nan
+        with self.assertRaisesRegex(RuntimeError, "non-finite"):
+            _assert_canonical_kpi_equal(first, replayed)
+
     def test_aggregate_uses_sample_standard_deviation_and_policy_diagnostics(self) -> None:
         records = [
             {"seed": 11, "kpi": self._kpi(1.0, fallback_replans=4)},

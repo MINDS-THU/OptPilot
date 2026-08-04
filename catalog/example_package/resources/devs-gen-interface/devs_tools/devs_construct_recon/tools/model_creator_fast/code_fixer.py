@@ -52,6 +52,7 @@ ATOMIC_INSTRUCTIONS = """
         - Emit external IO only if needed.
         - *HINT*: payload should be prepared before, and the state, sigma, statistic counters, etc. should be updated in the following `deltint`.
     - Implement `exit(self)`: Cleanup and final external IO only if required.
+    - Preserve or add a pure `trace_state(self) -> dict` teaching projection with roughly 1–8 already-maintained scalar/count/identifier fields. It must be deterministic, O(1), side-effect-free, and must not return full queues, histories, objects, configuration, or random-generator state. Do not duplicate `phase` or `sigma`.
     - **Event Handling Logic**:
         - **Execution Sequence (CRITICAL)**: `lambdaf` will send outputs before `deltint` schedules the next internal event. Thus, the payload sent in `lambdaf` should be prepared in the previous `deltint`, `deltext`, or `initialize`. 
         - **Confluent Events (`deltcon(self)`)**: By default, internal events (`deltint`) take precedence over external events when they occur simultaneously. Explicitly override the `deltcon(self)` method ONLY IF you need to change this logic (e.g., to process external events first).

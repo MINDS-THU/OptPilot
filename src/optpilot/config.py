@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, Tuple
 import yaml
 
 from .realm.run_closure import InterfaceLaunchProfile
+from .run_execution_profile import MAX_RUN_EXECUTION_CONTROL_SECONDS
 from .schema_validation import require_public_config_schema, validate_public_config_schema
 
 
@@ -261,6 +262,17 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
     protocol = entrypoint.get("protocol", "batch")
     if protocol not in METHOD_PROTOCOLS:
         raise ValueError(f"{location} entrypoint.protocol must be one of {sorted(METHOD_PROTOCOLS)}.")
+    exchange_timeout = entrypoint.get("exchangeTimeoutSeconds", 10)
+    if (
+        isinstance(exchange_timeout, bool)
+        or not isinstance(exchange_timeout, int)
+        or exchange_timeout <= 0
+        or exchange_timeout > MAX_RUN_EXECUTION_CONTROL_SECONDS
+    ):
+        raise ValueError(
+            f"{location} entrypoint.exchangeTimeoutSeconds must be an integer "
+            f"between 1 and {MAX_RUN_EXECUTION_CONTROL_SECONDS:g}."
+        )
     if entrypoint.get("python"):
         _require_plain_python_import(entrypoint["python"], f"{location} entrypoint.python")
     if entrypoint.get("command"):
@@ -1150,11 +1162,22 @@ def _compile_method(method: Dict[str, Any], method_path: Path | None, candidate:
     if candidate["format"] == "parameters" and parameters.get("schema") and "searchSpace" not in settings:
         settings["searchSpace"] = _internal_parameter_schema(parameters["schema"])
 
+    runtime = _compile_method_runtime(
+        method.get("runtime", {}) or {}, method_path or Path.cwd()
+    )
+    # A Method owns the expected duration of one proposal/observation exchange.
+    # Retain it with the Method's operational requirements so every Study that
+    # selects this exact Method revision receives the same default without
+    # adding a duplicate Study-level setting.
+    runtime["exchangeTimeoutSeconds"] = int(
+        entrypoint.get("exchangeTimeoutSeconds", 10)
+    )
+
     return {
         "id": str(method["id"]),
         "configBaseDir": str(method_base_dir),
         "implementation": implementation,
-        "runtime": _compile_method_runtime(method.get("runtime", {}) or {}, method_path or Path.cwd()),
+        "runtime": runtime,
         "config": settings,
         "settings": deepcopy(method.get("settings", {})),
         "compatibility": _compile_accepts(method.get("accepts", {})),

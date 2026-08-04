@@ -1675,7 +1675,7 @@ class RealmEphemeralVolumeTest(unittest.TestCase):
 
 
 class EphemeralVolumeMigrationTest(unittest.TestCase):
-    def test_v11_database_migrates_through_v12_to_current_v33(self) -> None:
+    def test_v11_database_migrates_through_v12_to_current_v35(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "realm.sqlite3"
             migration_directory = (
@@ -1730,7 +1730,7 @@ class EphemeralVolumeMigrationTest(unittest.TestCase):
                     ).fetchone()[0]
                 finally:
                     connection.close()
-                self.assertEqual(version, 34)
+                self.assertEqual(version, 35)
                 self.assertIn("ephemeral_volume_roots", tables)
                 self.assertIn("ephemeral_volumes", tables)
                 self.assertIn(

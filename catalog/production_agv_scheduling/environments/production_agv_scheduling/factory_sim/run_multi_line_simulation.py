@@ -74,11 +74,22 @@ class MultiLineFactorySimulation:
     def shutdown(self) -> None:
         """Close local resources; safe to call more than once."""
 
-        if self.database is not None:
-            self.database.close()
-        if self.mqtt_client is not None:
-            self.mqtt_client.disconnect()
-        self.database = None
-        self.mqtt_client = None
-        self.command_handler = None
-        self.factory = None
+        failure: BaseException | None = None
+        try:
+            if self.database is not None:
+                self.database.close()
+        except BaseException as exc:
+            failure = exc
+        try:
+            if self.mqtt_client is not None:
+                self.mqtt_client.disconnect()
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        finally:
+            self.database = None
+            self.mqtt_client = None
+            self.command_handler = None
+            self.factory = None
+        if failure is not None:
+            raise failure

@@ -1101,6 +1101,22 @@ class LocalContentStoreTest(unittest.TestCase):
         )
         self.assertEqual(sealed.manifest.entries[-1].path, "payload.txt")
 
+    @unittest.skipUnless(sys.platform == "darwin", "Darwin xattr policy")
+    def test_darwin_transparent_compression_marker_is_noncontent(self) -> None:
+        with mock.patch.object(
+            content_module,
+            "_fd_xattrs",
+            return_value=("com.apple.decmpfs",),
+        ):
+            self.assertEqual(
+                content_module._unsupported_xattrs(
+                    -1,
+                    "compressed.txt",
+                    ignored=content_module.DARWIN_IGNORED_NONCONTENT_XATTRS,
+                ),
+                set(),
+            )
+
     def test_sparse_files_are_rejected(self) -> None:
         sparse = self.source / "sparse.bin"
         with sparse.open("wb") as stream:

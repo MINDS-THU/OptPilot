@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -29,6 +30,8 @@ from interface_server import create_server  # noqa: E402
 from interface_worker import TelemetryRecorder  # noqa: E402
 from mqtt_bridge import (  # noqa: E402
     LocalMQTTBroker,
+    MQTTProtocolError,
+    _ClientSession,
     mqtt_publish_packet,
     mqtt_variable_integer,
 )
@@ -63,6 +66,89 @@ class MQTTPacketTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(broker.client_count, 0)
 
+    def test_failed_publish_removes_a_stale_viewer_session(self) -> None:
+        broker = LocalMQTTBroker()
+        websocket = _FailingWebSocket()
+        session = _ClientSession(
+            websocket=websocket,
+            protocol_level=5,
+            subscriptions={"optpilot_offline/#"},
+        )
+        with broker._lock:
+            broker._clients.add(session)
+
+        delivered = broker.publish(
+            "optpilot_offline/kpi/status",
+            "{}",
+        )
+
+        self.assertEqual(delivered, 0)
+        self.assertEqual(broker.client_count, 0)
+        self.assertEqual(websocket.close_count, 1)
+
+    def test_reset_viewer_generation_rotates_identity_and_closes_old_sessions(
+        self,
+    ) -> None:
+        broker = LocalMQTTBroker()
+        previous_client_id = broker.viewer_client_id
+        websocket = _RecordingWebSocket()
+        session = _ClientSession(
+            websocket=websocket,
+            protocol_level=5,
+            subscriptions={"optpilot_offline/#"},
+        )
+        broker.publish("optpilot_offline/kpi/status", "old", retain=True)
+        with broker._lock:
+            broker._clients.add(session)
+
+        current_client_id = broker.reset_viewer_generation("visual-0002")
+
+        self.assertEqual(broker.viewer_generation, "visual-0002")
+        self.assertEqual(broker.viewer_client_id, current_client_id)
+        self.assertNotEqual(current_client_id, previous_client_id)
+        self.assertEqual(broker.client_count, 0)
+        self.assertEqual(websocket.close_count, 1)
+        with broker._lock:
+            self.assertEqual(broker._retained, {})
+        broker.publish("optpilot_offline/kpi/status", "new", retain=True)
+        with broker._lock:
+            self.assertEqual(
+                broker._retained["optpilot_offline/kpi/status"],
+                b"new",
+            )
+
+    def test_connect_rejects_the_previous_viewer_identity(self) -> None:
+        broker = LocalMQTTBroker()
+        previous_client_id = broker.viewer_client_id
+        broker.reset_viewer_generation("visual-0002")
+
+        stale_socket = _RecordingWebSocket()
+        stale_session = _ClientSession(websocket=stale_socket)
+        with broker._lock:
+            broker._clients.add(stale_session)
+        with self.assertRaisesRegex(MQTTProtocolError, "current viewer"):
+            broker._handle_packet(
+                stale_session,
+                _mqtt_connect_packet(previous_client_id),
+            )
+        self.assertEqual(stale_socket.sent, [])
+
+        with broker._lock:
+            broker._clients.discard(stale_session)
+        current_socket = _RecordingWebSocket()
+        current_session = _ClientSession(websocket=current_socket)
+        with broker._lock:
+            broker._clients.add(current_session)
+        broker._handle_packet(
+            current_session,
+            _mqtt_connect_packet(
+                broker.viewer_client_id + "-8/4/2026 6:30:43 PM"
+            ),
+        )
+
+        self.assertEqual(current_session.protocol_level, 5)
+        self.assertEqual(current_socket.sent, [b"\x20\x03\x00\x00\x00"])
+
 
 class InterfaceServerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -90,7 +176,7 @@ class InterfaceServerTests(unittest.TestCase):
         ready = _get_json(self.base_url + "/ready")
         candidate = _get_json(self.base_url + "/api/candidate")
         request = Request(
-            self.base_url + "/unity/StreamingAssets/MQTTBroker.json",
+            self.base_url + "/unity/StreamingAssets/bootstrap/MQTTBroker.json",
             headers={
                 "Host": "studio.example:9443",
                 "Origin": "https://studio.example:9443",
@@ -112,6 +198,26 @@ class InterfaceServerTests(unittest.TestCase):
         self.assertNotIn("hivemq", serialized)
         self.assertNotIn("emqx", serialized)
 
+    def test_mqtt_config_is_scoped_to_the_current_viewer_generation(self) -> None:
+        broker = self.server.application.broker
+        previous_client_id = broker.viewer_client_id
+
+        broker.reset_viewer_generation("visual-0001")
+
+        with self.assertRaises(HTTPError) as stale:
+            urlopen(
+                self.base_url
+                + "/unity/StreamingAssets/bootstrap/MQTTBroker.json",
+                timeout=5,
+            )
+        self.assertEqual(stale.exception.code, 409)
+        current = _get_json(
+            self.base_url
+            + "/unity/StreamingAssets/visual-0001/MQTTBroker.json"
+        )
+        self.assertNotEqual(current["ws"]["client_id"], previous_client_id)
+        self.assertEqual(current["ws"]["client_id"], broker.viewer_client_id)
+
     def test_unity_brotli_assets_have_browser_decompression_headers(self) -> None:
         request = Request(
             self.base_url + "/unity/Build/SimPy.wasm.unityweb",
@@ -122,7 +228,33 @@ class InterfaceServerTests(unittest.TestCase):
             self.assertEqual(response.headers.get_content_type(), "application/wasm")
             self.assertGreater(int(response.headers["Content-Length"]), 1_000_000)
 
+    def test_interface_waits_for_viewer_and_warns_about_short_horizons(self) -> None:
+        with urlopen(self.base_url + "/", timeout=5) as response:
+            page = response.read().decode("utf-8")
+        with urlopen(self.base_url + "/assets/app.js", timeout=5) as response:
+            script = response.read().decode("utf-8")
+
+        self.assertIn('id="viewer-connection"', page)
+        self.assertIn('id="horizon-hint"', page)
+        self.assertIn('id="run-button" class="primary" type="button" disabled', page)
+        self.assertIn("state.viewer_ready === true", script)
+        self.assertIn("MIN_MOTION_HORIZON = 11", script)
+        self.assertIn("The animation starts after evaluation finishes.", script)
+        self.assertIn('src="/unity/?generation=bootstrap"', page)
+        self.assertIn("resetUnityViewer(state.run_id)", script)
+        self.assertIn("operationSerial", script)
+        self.assertNotIn("setInterval(", script)
+
+        unity_page = urlopen(self.base_url + "/unity/", timeout=5).read().decode(
+            "utf-8"
+        )
+        self.assertIn('streamingAssetsUrl: "StreamingAssets/" + viewerGeneration', unity_page)
+
     def test_mqtt5_websocket_connect_subscribe_and_local_publish(self) -> None:
+        config = _get_json(
+            self.base_url + "/unity/StreamingAssets/bootstrap/MQTTBroker.json"
+        )
+        client_id = config["ws"]["client_id"].encode("utf-8")
         connection = socket.create_connection(
             ("127.0.0.1", self.server.server_port),
             timeout=5,
@@ -150,7 +282,8 @@ class InterfaceServerTests(unittest.TestCase):
             b"\x02"
             b"\x00\x1e"
             b"\x00"
-            b"\x00\x0bviewer-test"
+            + struct.pack("!H", len(client_id))
+            + client_id
         )
         _send_client_binary(
             connection,
@@ -242,7 +375,7 @@ class InterfaceServerTests(unittest.TestCase):
 class CandidateReplayTests(unittest.TestCase):
     def test_initial_candidate_runs_offline_and_records_visual_telemetry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            broker = LocalMQTTBroker()
+            broker = _RecordingBroker(subscribed=True)
             manager = CandidateReplayManager(
                 environment_root=ENVIRONMENT_ROOT,
                 broker=broker,
@@ -280,8 +413,12 @@ class CandidateReplayTests(unittest.TestCase):
             self.assertEqual(state["status"], "completed", state.get("error"))
             self.assertGreater(state["result"]["event_count"], 0)
             self.assertGreater(state["events_published"], 0)
+            self.assertEqual(state["result"]["motion_event_count"], 0)
+            self.assertIsNone(state["result"]["first_motion_time"])
             self.assertIn("total_score", state["result"]["kpi"])
             self.assertFalse(state["result"]["events_truncated"])
+            self.assertIn("no AGV movement", state["message"])
+            self.assertEqual(broker.reset_generations, ["visual-0001"])
 
     def test_visual_telemetry_clears_agv_before_destination_claims_product(
         self,
@@ -343,6 +480,36 @@ class CandidateReplayTests(unittest.TestCase):
                 ["product-1"],
             )
 
+    def test_visual_telemetry_records_first_agv_motion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            events = Path(temporary) / "events.jsonl"
+            recorder = TelemetryRecorder(events)
+            topic = "optpilot_offline/line1/agv/AGV_1/status"
+            recorder.publish(
+                topic,
+                json.dumps({"timestamp": 0, "status": "idle", "payload": []}),
+                0,
+                False,
+            )
+            recorder.publish(
+                topic,
+                json.dumps(
+                    {
+                        "timestamp": 10.5,
+                        "status": "moving",
+                        "current_point": "P10",
+                        "target_point": "P0",
+                        "payload": [],
+                    }
+                ),
+                0,
+                False,
+            )
+            recorder.close()
+
+            self.assertEqual(recorder.motion_event_count, 1)
+            self.assertEqual(recorder.first_motion_time, 10.5)
+
     def test_replay_rejects_speeds_that_the_compiled_viewer_cannot_match(
         self,
     ) -> None:
@@ -388,6 +555,101 @@ class CandidateReplayTests(unittest.TestCase):
             thread.join(timeout=1)
             self.assertFalse(thread.is_alive())
             self.assertEqual(len(broker.payloads), 1)
+
+    def test_replay_resets_the_old_viewer_before_publishing_event_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            events = Path(temporary) / "events.jsonl"
+            events.write_text(
+                json.dumps(
+                    {
+                        "payload": "{}",
+                        "simulation_time": 0,
+                        "topic": "optpilot_offline/kpi/status",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            broker = _ResettingRecordingBroker()
+            manager = _replay_only_manager(broker, viewer_wait_seconds=1)
+            manager._run_sequence = 0
+            manager._last_events = events
+            manager._active_locked = lambda: False
+
+            state = manager.replay({"replay_speed": 1})
+
+            self.assertEqual(state["run_id"], "replay-0001")
+            self.assertEqual(broker.reset_generations, ["replay-0001"])
+            self.assertEqual(broker.payloads, [])
+            time.sleep(0.08)
+            self.assertEqual(broker.payloads, [])
+
+            broker.subscribed = True
+            manager._thread.join(timeout=1)
+            self.assertFalse(manager._thread.is_alive())
+            self.assertEqual(len(broker.payloads), 1)
+
+    def test_replay_retries_an_event_after_viewer_disconnects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            events = Path(temporary) / "events.jsonl"
+            events.write_text(
+                json.dumps(
+                    {
+                        "payload": "{}",
+                        "simulation_time": 0,
+                        "topic": "optpilot_offline/kpi/status",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            broker = _DropFirstDeliveryBroker()
+            manager = _replay_only_manager(broker, viewer_wait_seconds=0)
+            stop_event = threading.Event()
+            thread = threading.Thread(
+                target=manager._replay_events,
+                args=("replay-test", events, 1.0, stop_event),
+                daemon=True,
+            )
+            thread.start()
+            self.assertTrue(broker.first_attempt.wait(timeout=1))
+            self.assertEqual(broker.payloads, [])
+
+            broker.subscribed = True
+            thread.join(timeout=1)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(broker.payloads), 1)
+            self.assertEqual(manager._state["events_published"], 1)
+            self.assertEqual(manager._state["status"], "completed")
+
+    def test_replay_does_not_pause_on_an_unsubscribed_diagnostic_topic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            events = Path(temporary) / "events.jsonl"
+            events.write_text(
+                json.dumps(
+                    {
+                        "payload": "{}",
+                        "simulation_time": 0,
+                        "topic": "optpilot_offline/internal/diagnostic",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            broker = _SelectiveRecordingBroker()
+            manager = _replay_only_manager(broker, viewer_wait_seconds=0)
+
+            manager._replay_events(
+                "replay-test",
+                events,
+                1.0,
+                threading.Event(),
+            )
+
+            self.assertEqual(manager._state["status"], "completed")
+            self.assertEqual(manager._state["events_published"], 1)
+            self.assertEqual(manager._state["events_delivered"], 0)
 
     def test_stopped_replay_keeps_its_original_stop_event(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -523,6 +785,7 @@ class _RecordingBroker:
     def __init__(self, *, subscribed: bool) -> None:
         self.subscribed = subscribed
         self.payloads: list[tuple[str, str]] = []
+        self.reset_generations: list[str] = []
 
     def has_subscriber(self, _topic: str) -> bool:
         return self.subscribed
@@ -530,6 +793,72 @@ class _RecordingBroker:
     def publish(self, topic: str, payload: str, *, retain: bool) -> int:
         self.payloads.append((topic, payload))
         return 1
+
+    def clear_retained(self) -> None:
+        return
+
+    def reset_viewer_generation(self, generation: str) -> None:
+        self.reset_generations.append(generation)
+
+
+class _ResettingRecordingBroker(_RecordingBroker):
+    def __init__(self) -> None:
+        super().__init__(subscribed=True)
+
+    def reset_viewer_generation(self, generation: str) -> None:
+        super().reset_viewer_generation(generation)
+        self.subscribed = False
+
+
+class _FailingWebSocket:
+    def __init__(self) -> None:
+        self.close_count = 0
+
+    def send_binary(self, _payload: bytes) -> None:
+        raise OSError("viewer disconnected")
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+class _RecordingWebSocket:
+    def __init__(self) -> None:
+        self.close_count = 0
+        self.sent: list[bytes] = []
+
+    def send_binary(self, payload: bytes) -> None:
+        self.sent.append(payload)
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+class _DropFirstDeliveryBroker(_RecordingBroker):
+    def __init__(self) -> None:
+        super().__init__(subscribed=True)
+        self.first_attempt = threading.Event()
+        self._drop_next = True
+
+    def publish(self, topic: str, payload: str, *, retain: bool) -> int:
+        if self._drop_next:
+            self._drop_next = False
+            self.subscribed = False
+            self.first_attempt.set()
+            return 0
+        return super().publish(topic, payload, retain=retain)
+
+
+class _SelectiveRecordingBroker(_RecordingBroker):
+    def __init__(self) -> None:
+        super().__init__(subscribed=True)
+
+    def has_subscriber(self, topic: str) -> bool:
+        return topic == "optpilot_offline/kpi/status"
+
+    def publish(self, topic: str, payload: str, *, retain: bool) -> int:
+        if not self.has_subscriber(topic):
+            return 0
+        return super().publish(topic, payload, retain=retain)
 
 
 class _BlockingRecordingBroker(_RecordingBroker):
@@ -585,8 +914,10 @@ def _replay_only_manager(
     manager.broker = broker
     manager.viewer_wait_seconds = viewer_wait_seconds
     manager._lock = threading.RLock()
+    manager._last_result = None
     manager._stop_event = threading.Event()
     manager._state = {
+        "events_delivered": 0,
         "events_published": 0,
         "message": "",
         "run_id": "replay-test",
@@ -609,6 +940,20 @@ def _mqtt_body(packet: bytes) -> bytes:
     if len(packet) != offset + remaining:
         raise AssertionError("MQTT packet length mismatch")
     return packet[offset:]
+
+
+def _mqtt_connect_packet(client_id: str) -> bytes:
+    encoded_client_id = client_id.encode("utf-8")
+    body = (
+        b"\x00\x04MQTT"
+        b"\x05"
+        b"\x02"
+        b"\x00\x1e"
+        b"\x00"
+        + struct.pack("!H", len(encoded_client_id))
+        + encoded_client_id
+    )
+    return b"\x10" + mqtt_variable_integer(len(body)) + body
 
 
 def _send_client_binary(connection: socket.socket, payload: bytes) -> None:

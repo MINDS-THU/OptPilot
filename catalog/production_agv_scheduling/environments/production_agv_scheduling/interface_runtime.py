@@ -71,6 +71,7 @@ class CandidateReplayManager:
         self._last_result: dict[str, Any] | None = None
         self._run_sequence = 0
         self._state: dict[str, Any] = {
+            "events_delivered": 0,
             "events_published": 0,
             "message": "Ready to run a candidate.",
             "run_id": None,
@@ -122,6 +123,7 @@ class CandidateReplayManager:
         with self._lock:
             result = copy.deepcopy(self._state)
             result["viewer_clients"] = self.broker.client_count
+            result["viewer_ready"] = self.broker.has_subscriber(VIEWER_READY_TOPIC)
             if self._last_result is not None:
                 result["result"] = copy.deepcopy(self._last_result)
             return result
@@ -167,9 +169,10 @@ class CandidateReplayManager:
             ]
             stop_event = threading.Event()
             self._stop_event = stop_event
-            self.broker.clear_retained()
+            self.broker.reset_viewer_generation(run_id)
             self._last_result = None
             self._state = {
+                "events_delivered": 0,
                 "events_published": 0,
                 "message": "Evaluating the candidate in an offline child process.",
                 "run_id": run_id,
@@ -179,7 +182,10 @@ class CandidateReplayManager:
                 process = subprocess.Popen(
                     command,
                     cwd=self.environment_root,
-                    env=_worker_environment(self.environment_root),
+                    env=_worker_environment(
+                        self.environment_root,
+                        pycache_root=run_root / "pycache",
+                    ),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
@@ -232,8 +238,9 @@ class CandidateReplayManager:
             events = self._last_events
             stop_event = threading.Event()
             self._stop_event = stop_event
-            self.broker.clear_retained()
+            self.broker.reset_viewer_generation(run_id)
             self._state = {
+                "events_delivered": 0,
                 "events_published": 0,
                 "message": "Preparing the recorded telemetry replay.",
                 "run_id": run_id,
@@ -336,25 +343,10 @@ class CandidateReplayManager:
         speed: float,
         stop_event: threading.Event,
     ) -> None:
-        deadline = time.monotonic() + self.viewer_wait_seconds
-        while (
-            not self.broker.has_subscriber(VIEWER_READY_TOPIC)
-            and time.monotonic() < deadline
-            and not stop_event.wait(0.1)
-        ):
-            pass
-        if stop_event.is_set():
+        if not self._wait_for_viewer(run_id, speed, stop_event):
             return
-        with self._lock:
-            if self._state.get("run_id") != run_id:
-                return
-            self._state.update(
-                {
-                    "message": f"Replaying telemetry at {speed:g}× simulation speed.",
-                    "status": "replaying",
-                }
-            )
         replay_time: float | None = None
+        delivered_events = 0
         published = 0
         try:
             with events_path.open("r", encoding="utf-8") as handle:
@@ -385,25 +377,139 @@ class CandidateReplayManager:
                             if stop_event.wait(delay):
                                 return
                         replay_time = current_time
-                    self.broker.publish(topic, payload, retain=True)
-                    published += 1
-                    if published % 25 == 0:
+                    while True:
+                        if not self._wait_for_viewer(run_id, speed, stop_event):
+                            return
+                        viewer_subscribed_to_topic = self.broker.has_subscriber(topic)
+                        delivered = self.broker.publish(topic, payload, retain=True)
+                        if delivered > 0 or not viewer_subscribed_to_topic:
+                            break
                         with self._lock:
-                            if self._state.get("run_id") == run_id:
-                                self._state["events_published"] = published
+                            if self._state.get("run_id") != run_id:
+                                return
+                            self._state.update(
+                                {
+                                    "message": (
+                                        "The 3D viewer disconnected. Replay is paused "
+                                        "and will resume when it reconnects."
+                                    ),
+                                    "status": "waiting_for_viewer",
+                                }
+                            )
+                        if stop_event.wait(0.1):
+                            return
+                    published += 1
+                    if delivered > 0:
+                        delivered_events += 1
+                    with self._lock:
+                        if self._state.get("run_id") != run_id:
+                            return
+                        self._state["events_published"] = published
+                        self._state["events_delivered"] = delivered_events
+                        if replay_time is not None and math.isfinite(replay_time):
+                            self._state["simulation_time"] = replay_time
+                        self._state["message"] = self._replay_progress_message(
+                            speed,
+                            replay_time,
+                        )
         except (OSError, ValueError, json.JSONDecodeError) as error:
             self._fail_run(run_id, "Recorded telemetry could not be replayed.", str(error))
             return
         with self._lock:
             if self._state.get("run_id") != run_id or stop_event.is_set():
                 return
+            last_result = getattr(self, "_last_result", None)
+            motion_events = (
+                last_result.get("motion_event_count")
+                if isinstance(last_result, dict)
+                else None
+            )
+            if motion_events == 0:
+                message = (
+                    "Replay complete, but this run contained no AGV movement. "
+                    "Increase the horizon (30 is recommended) or inspect the candidate."
+                )
+            else:
+                message = "Replay complete. You can replay it again or edit the candidate."
             self._state.update(
                 {
                     "events_published": published,
-                    "message": "Replay complete. You can replay it again or edit the candidate.",
+                    "events_delivered": delivered_events,
+                    "message": message,
                     "status": "completed",
                 }
             )
+
+    def _wait_for_viewer(
+        self,
+        run_id: str,
+        speed: float,
+        stop_event: threading.Event,
+    ) -> bool:
+        """Pause without consuming telemetry until Unity has a live subscription."""
+
+        started = time.monotonic()
+        while not self.broker.has_subscriber(VIEWER_READY_TOPIC):
+            if stop_event.is_set():
+                return False
+            elapsed = time.monotonic() - started
+            if self.viewer_wait_seconds and elapsed >= self.viewer_wait_seconds:
+                message = (
+                    "Still loading the 3D viewer. Replay has not started, so no "
+                    "animation events will be missed."
+                )
+            else:
+                message = (
+                    "Loading the 3D viewer. Replay will start after it subscribes "
+                    "to local telemetry."
+                )
+            with self._lock:
+                if self._state.get("run_id") != run_id:
+                    return False
+                self._state.update(
+                    {
+                        "message": message,
+                        "status": "waiting_for_viewer",
+                    }
+                )
+            if stop_event.wait(0.1):
+                return False
+        with self._lock:
+            if self._state.get("run_id") != run_id or stop_event.is_set():
+                return False
+            self._state.update(
+                {
+                    "message": self._replay_progress_message(speed, None),
+                    "status": "replaying",
+                }
+            )
+        return True
+
+    def _replay_progress_message(
+        self,
+        speed: float,
+        replay_time: float | None,
+    ) -> str:
+        last_result = getattr(self, "_last_result", None)
+        first_motion = (
+            last_result.get("first_motion_time")
+            if isinstance(last_result, dict)
+            else None
+        )
+        if (
+            replay_time is not None
+            and isinstance(first_motion, (int, float))
+            and not isinstance(first_motion, bool)
+            and math.isfinite(float(first_motion))
+            and replay_time < float(first_motion)
+        ):
+            remaining = max(0.0, float(first_motion) - replay_time) / speed
+            return (
+                f"Replaying initialization at t={replay_time:g}. First AGV movement "
+                f"in about {remaining:g} seconds."
+            )
+        time_text = "" if replay_time is None else f" (t={replay_time:g})"
+        return f"Replaying telemetry at {speed:g}× simulation speed{time_text}."
 
     def _fail_run(self, run_id: str, message: str, details: str) -> None:
         safe_details = details.encode("utf-8", errors="replace")[-MAX_ERROR_BYTES:].decode(
@@ -548,7 +654,11 @@ def _stage_candidate(root: Path, destination: Path, source: dict[str, str]) -> N
         (destination / name).write_text(content, encoding="utf-8")
 
 
-def _worker_environment(environment_root: Path) -> dict[str, str]:
+def _worker_environment(
+    environment_root: Path,
+    *,
+    pycache_root: Path | None = None,
+) -> dict[str, str]:
     result = {
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
@@ -556,6 +666,8 @@ def _worker_environment(environment_root: Path) -> dict[str, str]:
         "PYTHONPATH": str(environment_root),
         "PYTHONUNBUFFERED": "1",
     }
+    if pycache_root is not None:
+        result["PYTHONPYCACHEPREFIX"] = str(pycache_root.resolve())
     temporary = os.environ.get("TMPDIR")
     if temporary:
         result["TMPDIR"] = temporary

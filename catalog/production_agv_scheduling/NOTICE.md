@@ -11,7 +11,9 @@ rights.
 
 The environment vendors SimPy 4.1.2 to keep the retained evaluator
 self-contained. SimPy's license is preserved at
-`environments/production_agv_scheduling/simpy/LICENSE.rst`.
+`environments/production_agv_scheduling/simpy/LICENSE.rst`; exact upstream
+artifact hashes and verification details are recorded in
+`SIMPY_PROVENANCE.md`.
 
 The optional factory interface contains a compiled Unity WebGL export supplied
 with the research prototype. The editable Unity project and a complete

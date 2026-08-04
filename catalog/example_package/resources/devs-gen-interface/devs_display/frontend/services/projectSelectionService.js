@@ -144,6 +144,30 @@ export const shouldFocusFilesForProjectRefresh = (
 ) => Boolean(refreshedProjectId && currentProjectId !== refreshedProjectId);
 
 /**
+ * Decide whether a mounted Run panel must re-read its runner specification.
+ *
+ * The Run panel can inspect a simulation while the generator is still writing
+ * it. During that interval the backend intentionally reports the runner as
+ * unavailable. Completion updates the same simulation record in place, so a
+ * refresh keyed only by simulation id would keep that temporary response
+ * forever. Re-read only when that same simulation leaves `updating`; changing
+ * simulations is already handled by the panel's normal scope reset.
+ *
+ * @param {{scopeKey: string, status?: string | null} | null} previous
+ * @param {{scopeKey: string, status?: string | null}} current
+ * @returns {boolean}
+ */
+export const shouldRefreshSimulationSpecAfterProjectUpdate = (
+  previous,
+  current
+) => Boolean(
+  previous
+  && previous.scopeKey === current.scopeKey
+  && previous.status === 'updating'
+  && current.status !== 'updating'
+);
+
+/**
  * Map a session-relative activity path onto the matching path in an already
  * loaded simulation tree. Before the simulation is discoverable, callers can
  * safely keep using the original session-relative path as a one-file preview.

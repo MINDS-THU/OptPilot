@@ -2,9 +2,10 @@
 
 An application container is never published to the host.  A second, trusted
 gateway container is the sole owner of loopback mappings.  Both containers are
-joined to one launch-specific internal network.  Arbitrary application egress
-is deliberately unsupported here: attaching the app to a shared bridge would
-also create an unauthenticated ingress path from other local containers.
+joined to one launch-specific internal network; only the gateway is also joined
+to a dedicated launch-specific ingress bridge.  Arbitrary application egress
+is deliberately unsupported here: attaching the app to a non-internal bridge
+would also create an unauthenticated ingress path from other local containers.
 
 The gateway credential is provider-private state.  It is absent from argv,
 environment variables, labels, durable records, public endpoints, and every
@@ -67,6 +68,8 @@ _MIN_APP_CPU_MILLIS = 100
 _MIN_APP_MEMORY_BYTES = 64 * 1024 * 1024
 _MIN_APP_PIDS = 16
 _ISOLATED_GATEWAY_OPTION = "com.docker.network.bridge.gateway_mode_ipv4"
+_INGRESS_BIND_ADDRESS_OPTION = "com.docker.network.bridge.host_binding_ipv4"
+_INGRESS_BIND_ADDRESS = "127.0.0.1"
 _TERMINAL_EVIDENCE_DIRECTORY = "terminal-evidence-v1"
 _BINDING_SEAL: Final = object()
 
@@ -589,6 +592,7 @@ class LocalContainerWebProvider:
         self._validate_resource_split(request)
         self._validate_mount_sources(request)
         network = self._ensure_internal_network(request)
+        ingress_network = self._ensure_ingress_network(request)
         secret_digest = self._prepare_control(request)
         app = self._start_or_adopt_role(
             request, role="app", command=self._app_run_arguments(request)
@@ -628,8 +632,26 @@ class LocalContainerWebProvider:
                     "container_gateway_image_incompatible",
                     "The trusted image could not run the authenticated ingress gateway.",
                 )
-            self._validate_gateway(request, gateway, network, trust)
-            routes = self._published_routes(request, gateway)
+            gateway = self._ensure_gateway_ingress_membership(
+                request,
+                gateway,
+                network,
+                ingress_network,
+            )
+            self._validate_gateway(
+                request,
+                gateway,
+                network,
+                ingress_network,
+                trust,
+            )
+            gateway, routes = self._wait_for_published_routes(
+                request,
+                gateway,
+                network,
+                ingress_network,
+                trust,
+            )
             token = self._load_gateway_token(request)
             if not self._gateway_probe(
                 routes,
@@ -643,7 +665,13 @@ class LocalContainerWebProvider:
                     "The local provider could not prove authenticated ingress and application readiness.",
                 )
             network = self._validate_internal_network(request)
+            ingress_network = self._validate_ingress_network(request)
             _validate_network_participants(request, network, app, gateway)
+            _validate_ingress_network_participants(
+                request,
+                ingress_network,
+                gateway,
+            )
         except Exception:
             # A listener that has not proved the exact authentication contract
             # is not an endpoint. Close it before returning the failure.
@@ -767,6 +795,7 @@ class LocalContainerWebProvider:
         if app is not None:
             self._remove_role(request, "app")
         self._cleanup_internal_network(request)
+        self._cleanup_ingress_network(request)
         self._cleanup_control(request)
 
     def _validate_terminal_engine_state(
@@ -809,6 +838,7 @@ class LocalContainerWebProvider:
         if trust is None:
             raise RealmConflict("Container endpoint image is no longer trusted for ingress.")
         network = self._validate_internal_network(endpoint._request)
+        ingress_network = self._validate_ingress_network(endpoint._request)
         app = self._inspect_container(endpoint._request, "app")
         gateway = self._inspect_container(endpoint._request, "gateway")
         if _container_id(app) != endpoint._app_container_id:
@@ -820,8 +850,19 @@ class LocalContainerWebProvider:
         ):
             raise RealmConflict("Container endpoint is no longer running.")
         self._validate_app(endpoint._request, app, network)
-        self._validate_gateway(endpoint._request, gateway, network, trust)
+        self._validate_gateway(
+            endpoint._request,
+            gateway,
+            network,
+            ingress_network,
+            trust,
+        )
         _validate_network_participants(endpoint._request, network, app, gateway)
+        _validate_ingress_network_participants(
+            endpoint._request,
+            ingress_network,
+            gateway,
+        )
         routes = self._published_routes(endpoint._request, gateway)
         if routes != dict(endpoint._routes):
             raise RealmConflict("Container endpoint port ownership has changed.")
@@ -1027,6 +1068,145 @@ class LocalContainerWebProvider:
                 "The local container provider could not retire the isolated network.",
             )
 
+    def _ensure_ingress_network(
+        self, request: ContainerWebLaunchRequest
+    ) -> Mapping[str, Any]:
+        try:
+            return self._validate_ingress_network(request)
+        except RealmNotFound:
+            pass
+        command = [
+            self._executable,
+            "network",
+            "create",
+            "--driver",
+            "bridge",
+            "--opt",
+            f"{_INGRESS_BIND_ADDRESS_OPTION}={_INGRESS_BIND_ADDRESS}",
+        ]
+        for key, value in sorted(_labels(request, "ingress-network").items()):
+            command.extend(["--label", f"{key}={value}"])
+        command.append(_ingress_network_name(request))
+        completed = self._invoke(command, timeout=30.0)
+        if completed.returncode != 0:
+            try:
+                return self._validate_ingress_network(request)
+            except RealmNotFound as error:
+                raise LocalContainerWebProviderError(
+                    "container_gateway_ingress_unsupported",
+                    "The local container engine cannot provide authenticated loopback ingress.",
+                ) from error
+        return self._validate_ingress_network(request)
+
+    def _validate_ingress_network(
+        self, request: ContainerWebLaunchRequest
+    ) -> Mapping[str, Any]:
+        completed = self._invoke(
+            [
+                self._executable,
+                "network",
+                "inspect",
+                _ingress_network_name(request),
+            ],
+            timeout=15.0,
+        )
+        if completed.returncode != 0:
+            if _engine_reports_missing(completed):
+                raise RealmNotFound("The exact local interface ingress network is absent.")
+            raise LocalContainerWebProviderError(
+                "container_provider_unavailable",
+                "The local container provider is unavailable.",
+            )
+        payload = _single_inspect_record(completed.stdout, "container ingress network")
+        labels = payload.get("Labels", {})
+        options = payload.get("Options", {})
+        if (
+            payload.get("Internal") is not False
+            or payload.get("Driver") != "bridge"
+            or payload.get("EnableIPv6") is not False
+            or not isinstance(options, Mapping)
+            or options.get(_INGRESS_BIND_ADDRESS_OPTION) != _INGRESS_BIND_ADDRESS
+            or not isinstance(labels, Mapping)
+            or any(
+                labels.get(key) != value
+                for key, value in _labels(request, "ingress-network").items()
+            )
+        ):
+            raise RealmIntegrityError(
+                "Container ingress network with the stable name has different authority."
+            )
+        _container_id(payload)
+        return payload
+
+    def _cleanup_ingress_network(self, request: ContainerWebLaunchRequest) -> None:
+        try:
+            self._validate_ingress_network(request)
+        except RealmNotFound:
+            return
+        completed = self._invoke(
+            [
+                self._executable,
+                "network",
+                "rm",
+                _ingress_network_name(request),
+            ],
+            timeout=30.0,
+        )
+        if completed.returncode != 0:
+            try:
+                self._validate_ingress_network(request)
+            except RealmNotFound:
+                return
+            raise LocalContainerWebProviderError(
+                "container_network_cleanup_failed",
+                "The local container provider could not retire the ingress network.",
+            )
+
+    def _ensure_gateway_ingress_membership(
+        self,
+        request: ContainerWebLaunchRequest,
+        inspected: Mapping[str, Any],
+        network: Mapping[str, Any],
+        ingress_network: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        expected_id = _container_id(inspected)
+        if _gateway_has_exact_ingress_membership(
+            request,
+            inspected,
+            network,
+            ingress_network,
+        ):
+            return inspected
+        completed = self._invoke(
+            [
+                self._executable,
+                "network",
+                "connect",
+                _ingress_network_name(request),
+                _container_name(request, "gateway"),
+            ],
+            timeout=30.0,
+        )
+        current = self._inspect_container(request, "gateway")
+        if _container_id(current) != expected_id:
+            raise RealmIntegrityError(
+                "Gateway container generation changed during ingress attachment."
+            )
+        if not _gateway_has_exact_ingress_membership(
+            request,
+            current,
+            network,
+            ingress_network,
+        ):
+            raise LocalContainerWebProviderError(
+                "container_gateway_ingress_unavailable",
+                "The local container engine could not attach authenticated loopback ingress.",
+            )
+        # A nonzero result may be a concurrent exact-launch winner. Exact
+        # reinspection above, rather than engine wording, is the authority.
+        _ = completed
+        return current
+
     def _validate_app(
         self,
         request: ContainerWebLaunchRequest,
@@ -1035,9 +1215,7 @@ class LocalContainerWebProvider:
     ) -> None:
         _validate_network_membership(
             inspected,
-            private_name=_network_name(request),
-            private_id=_container_id(network),
-            allowed_egress=False,
+            expected={_network_name(request): _container_id(network)},
         )
         _assert_no_published_ports(inspected)
         config = inspected.get("Config")
@@ -1067,13 +1245,15 @@ class LocalContainerWebProvider:
         request: ContainerWebLaunchRequest,
         inspected: Mapping[str, Any],
         network: Mapping[str, Any],
+        ingress_network: Mapping[str, Any],
         trust: ContainerGatewayImageTrust,
     ) -> None:
         _validate_network_membership(
             inspected,
-            private_name=_network_name(request),
-            private_id=_container_id(network),
-            allowed_egress=False,
+            expected={
+                _network_name(request): _container_id(network),
+                _ingress_network_name(request): _container_id(ingress_network),
+            },
         )
         config = inspected.get("Config")
         if not isinstance(config, Mapping):
@@ -1195,9 +1375,70 @@ class LocalContainerWebProvider:
             command.extend(["--label", f"{key}={value}"])
         return command
 
+    def _wait_for_published_routes(
+        self,
+        request: ContainerWebLaunchRequest,
+        gateway: Mapping[str, Any],
+        network: Mapping[str, Any],
+        ingress_network: Mapping[str, Any],
+        trust: ContainerGatewayImageTrust,
+    ) -> tuple[Mapping[str, Any], dict[int, str]]:
+        """Wait for Docker to expose exact loopback port ownership.
+
+        Docker Desktop can report a newly started container as running before
+        its ephemeral host-port assignment appears in ``docker inspect``.
+        Treat only that missing assignment as transient; container identity,
+        network isolation, mount ownership, and loopback binding continue to
+        fail closed on every observation.
+        """
+
+        current = gateway
+        expected_id = _container_id(gateway)
+        deadline = time.monotonic() + min(
+            5.0, float(request.ready_timeout_seconds)
+        )
+        while True:
+            routes = self._published_routes_if_ready(request, current)
+            if routes is not None:
+                return current, routes
+            if time.monotonic() >= deadline:
+                raise LocalContainerWebProviderError(
+                    "container_gateway_publication_unavailable",
+                    "The local container engine did not publish the authenticated "
+                    "interface gateway in time.",
+                )
+            time.sleep(0.05)
+            current = self._inspect_container(request, "gateway")
+            if _container_id(current) != expected_id:
+                raise RealmIntegrityError(
+                    "Gateway container generation changed during publication."
+                )
+            if not bool(_state(current).get("Running")):
+                raise LocalContainerWebProviderError(
+                    "container_gateway_image_incompatible",
+                    "The trusted image stopped before publishing authenticated ingress.",
+                )
+            self._validate_gateway(
+                request,
+                current,
+                network,
+                ingress_network,
+                trust,
+            )
+
     def _published_routes(
         self, request: ContainerWebLaunchRequest, inspected: Mapping[str, Any]
     ) -> dict[int, str]:
+        routes = self._published_routes_if_ready(request, inspected)
+        if routes is None:
+            raise RealmIntegrityError(
+                "Gateway does not own one exact mapping for every interface port."
+            )
+        return routes
+
+    def _published_routes_if_ready(
+        self, request: ContainerWebLaunchRequest, inspected: Mapping[str, Any]
+    ) -> dict[int, str] | None:
         network = inspected.get("NetworkSettings", {})
         published = network.get("Ports", {}) if isinstance(network, Mapping) else {}
         if not isinstance(published, Mapping):
@@ -1209,6 +1450,8 @@ class LocalContainerWebProvider:
         routes: dict[int, str] = {}
         for port in request.ports:
             bindings = published.get(f"{port}/tcp")
+            if bindings in (None, []):
+                return None
             if not isinstance(bindings, list) or len(bindings) != 1:
                 raise RealmIntegrityError(
                     "Gateway does not own one exact mapping for every interface port."
@@ -1216,8 +1459,11 @@ class LocalContainerWebProvider:
             binding = bindings[0]
             if not isinstance(binding, Mapping) or binding.get("HostIp") != "127.0.0.1":
                 raise RealmIntegrityError("Gateway interface port is not restricted to loopback.")
+            raw_host_port = binding.get("HostPort")
+            if raw_host_port in (None, "", 0, "0"):
+                return None
             try:
-                host_port = int(binding.get("HostPort"))
+                host_port = int(raw_host_port)
             except (TypeError, ValueError) as error:
                 raise RealmIntegrityError("Gateway interface host port is invalid.") from error
             if host_port < 1 or host_port > 65_535:
@@ -1618,7 +1864,8 @@ class LocalContainerWebProvider:
 
 
 def _labels(
-    request: ContainerWebLaunchRequest, role: Literal["app", "gateway", "network"]
+    request: ContainerWebLaunchRequest,
+    role: Literal["app", "gateway", "network", "ingress-network"],
 ) -> dict[str, str]:
     return {
         _LABEL_BINDING_ID: request.binding_id,
@@ -1645,6 +1892,13 @@ def _network_name(request: ContainerWebLaunchRequest) -> str:
         f"network\0{request.job_id}\0{request.launch_token}".encode("utf-8")
     ).hexdigest()
     return f"optpilot-op-net-{digest[:44]}"
+
+
+def _ingress_network_name(request: ContainerWebLaunchRequest) -> str:
+    digest = hashlib.sha256(
+        f"ingress-network\0{request.job_id}\0{request.launch_token}".encode("utf-8")
+    ).hexdigest()
+    return f"optpilot-op-in-{digest[:44]}"
 
 
 def _control_directory(root: Path, request: ContainerWebLaunchRequest) -> Path:
@@ -1746,17 +2000,48 @@ def _container_networks(inspected: Mapping[str, Any]) -> Mapping[str, Any]:
 def _validate_network_membership(
     inspected: Mapping[str, Any],
     *,
-    private_name: str,
-    private_id: str,
-    allowed_egress: bool,
+    expected: Mapping[str, str],
 ) -> None:
     networks = _container_networks(inspected)
-    expected = {private_name, "bridge"} if allowed_egress else {private_name}
-    if set(networks) != expected:
+    if set(networks) != set(expected):
         raise RealmIntegrityError("Container network membership changed outside its grant.")
+    for name, network_id in expected.items():
+        membership = networks.get(name)
+        if (
+            not isinstance(membership, Mapping)
+            or membership.get("NetworkID") != network_id
+        ):
+            raise RealmIntegrityError("Container network identity is invalid.")
+
+
+def _gateway_has_exact_ingress_membership(
+    request: ContainerWebLaunchRequest,
+    inspected: Mapping[str, Any],
+    network: Mapping[str, Any],
+    ingress_network: Mapping[str, Any],
+) -> bool:
+    networks = _container_networks(inspected)
+    private_name = _network_name(request)
+    ingress_name = _ingress_network_name(request)
+    if set(networks) not in ({private_name}, {private_name, ingress_name}):
+        raise RealmIntegrityError(
+            "Gateway network membership changed outside its grant."
+        )
     private = networks.get(private_name)
-    if not isinstance(private, Mapping) or private.get("NetworkID") != private_id:
-        raise RealmIntegrityError("Container internal network identity is invalid.")
+    if (
+        not isinstance(private, Mapping)
+        or private.get("NetworkID") != _container_id(network)
+    ):
+        raise RealmIntegrityError("Gateway private network identity is invalid.")
+    ingress = networks.get(ingress_name)
+    if ingress is None:
+        return False
+    if (
+        not isinstance(ingress, Mapping)
+        or ingress.get("NetworkID") != _container_id(ingress_network)
+    ):
+        raise RealmIntegrityError("Gateway ingress network identity is invalid.")
+    return True
 
 
 def _validate_network_participants(
@@ -1780,6 +2065,25 @@ def _validate_network_participants(
         participant = participants.get(container_id)
         if not isinstance(participant, Mapping) or participant.get("Name") != expected_name:
             raise RealmIntegrityError("Private container network identity is invalid.")
+
+
+def _validate_ingress_network_participants(
+    request: ContainerWebLaunchRequest,
+    ingress_network: Mapping[str, Any],
+    gateway: Mapping[str, Any],
+) -> None:
+    participants = ingress_network.get("Containers")
+    gateway_id = _container_id(gateway)
+    if not isinstance(participants, Mapping) or set(participants) != {gateway_id}:
+        raise RealmIntegrityError(
+            "Ingress container network has an unauthorized participant."
+        )
+    participant = participants.get(gateway_id)
+    if (
+        not isinstance(participant, Mapping)
+        or participant.get("Name") != _container_name(request, "gateway")
+    ):
+        raise RealmIntegrityError("Ingress container network identity is invalid.")
 
 
 def _assert_no_published_ports(inspected: Mapping[str, Any]) -> None:

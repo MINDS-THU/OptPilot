@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import Optional, Literal
 import json
 import re
@@ -49,7 +50,7 @@ def _build_prompt(
 - Keep only essential passive configuration in root model_init_args.
 - Do not create a separate output collector unless the requirements explicitly describe a module with that role.
 - If the system reads from standard input (`stdin`), explicitly designate exactly ONE child module for this task. Multiple modules listening to `stdin` simultaneously will cause read conflicts and must be avoided.
-- Root init args are passive configuration. Identify at least one child model responsible for the first active behavior when the simulation must start autonomously. Mark an output port `initial_signal` as active only when the business protocol actually requires a startup message; autonomous work does not need an invented startup port message.
+- Root init args are passive configuration. Identify at least one child model responsible for the first active behavior when the simulation must start autonomously. A child described as autonomous MUST schedule a finite first internal event from its own initialization and must not wait indefinitely for an external `start` message. Require a root startup input only when the user requirements explicitly make that input part of the scenario; the generated demonstration runner will then provide one deterministic, schema-valid startup event. The default demonstration must produce meaningful behavior after simulation time 0. Mark an output port `initial_signal` as active only when the business protocol actually requires a startup message; autonomous work does not need an invented startup port message.
 - Follow the shared FieldContract for external_io, ports, and init args.
 </InheritanceRules>
 """
@@ -124,6 +125,62 @@ class PlanGenResult:
     def __init__(self, detailed_plan: DetailedPlan, children_plans: list[SimpleDetailedPlan]):
         self.detailed_plan = detailed_plan
         self.children_plans = children_plans
+
+
+class ApprovedHierarchyMismatch(ValueError):
+    """A detailed response changed the already approved component hierarchy."""
+
+
+def _validate_and_order_approved_children(
+    *,
+    children_plans: list[SimpleDetailedPlan],
+    children_names: list[str],
+    global_plan: list[GlobalPlanNode],
+) -> list[SimpleDetailedPlan]:
+    """Validate one coupled response against the exact approved direct children.
+
+    The interactive review approves component identity, containment, and model
+    kind.  Detailed planning may add ports, protocols, init args, and coupling
+    semantics, but it must not add another child type to represent runtime
+    multiplicity or otherwise reshape that hierarchy.
+    """
+
+    expected_names = list(children_names)
+    returned_names = [child.class_name for child in children_plans]
+    counts = Counter(returned_names)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    missing = sorted(set(expected_names) - set(returned_names))
+    unexpected = sorted(set(returned_names) - set(expected_names))
+
+    expected_types = {
+        node.name: "coupled" if node.children_names else "atomic"
+        for node in global_plan
+    }
+    wrong_types = sorted(
+        f"{child.class_name} (expected {expected_types.get(child.class_name, 'approved type')}, got {child.model_type})"
+        for child in children_plans
+        if child.class_name in expected_types
+        and child.class_name in set(expected_names)
+        and child.model_type != expected_types[child.class_name]
+    )
+
+    problems: list[str] = []
+    if missing:
+        problems.append(f"missing {missing}")
+    if unexpected:
+        problems.append(f"unexpected {unexpected}")
+    if duplicates:
+        problems.append(f"duplicate {duplicates}")
+    if wrong_types:
+        problems.append(f"wrong type {wrong_types}")
+    if problems:
+        raise ApprovedHierarchyMismatch(
+            "Detailed response must preserve direct children "
+            f"{expected_names} exactly; " + "; ".join(problems)
+        )
+
+    by_name = {child.class_name: child for child in children_plans}
+    return [by_name[name] for name in expected_names]
 
 
 def _validate_model_init_args(owner: str, args: list[TypedEntity]) -> None:
@@ -260,6 +317,8 @@ class DetailedPlanGenerator:
         # 注意：Atomic 模式下直接使用 _RawAtomicDetailed，不再包额外的一层 response wrapper
         ResponseModel = _RawCoupledResponse if is_coupled else _RawAtomicDetailed
 
+        last_error: Optional[Exception] = None
+        retry_correction = ""
         for attempt in range(retry):
             try:
                 prompt = _build_prompt(
@@ -272,6 +331,8 @@ class DetailedPlanGenerator:
                     is_root=is_root,
                     is_coupled=is_coupled, # 将类型传入，用于隔离 Prompt
                 )
+                if retry_correction:
+                    prompt = f"{prompt}\n\n{retry_correction}"
                 
                 resp = completion_with_logging(
                     model=model,
@@ -291,6 +352,11 @@ class DetailedPlanGenerator:
                     assert isinstance(parsed, _RawCoupledResponse)
                     det = _make_detailed_coupled(parsed.detailed_plan, parsed.coupling_specification)
                     chs = [_make_simple(c) for c in getattr(parsed, "children_plans", [])]
+                    chs = _validate_and_order_approved_children(
+                        children_plans=chs,
+                        children_names=children_names,
+                        global_plan=global_plan,
+                    )
                 else:
                     # 对于 Atomic, 解析出来的 parsed 直接就是 detailed_plan 的主体
                     assert isinstance(parsed, _RawAtomicDetailed)
@@ -300,16 +366,27 @@ class DetailedPlanGenerator:
                 if det.class_name != target_name:
                     raise ValueError(f"Expected '{target_name}', got '{det.class_name}'")
                 
-                if is_coupled and children_names:
-                    got = {c.class_name for c in chs}
-                    for cn in children_names:
-                        if cn not in got:
-                            raise ValueError(f"Child '{cn}' missing")
-
                 print(f"[DetailedPlan] {target_name}: type={det.model_type}, children={len(chs)}")
                 return PlanGenResult(detailed_plan=det, children_plans=chs)
 
             except Exception as e:
+                last_error = e
+                if isinstance(e, ApprovedHierarchyMismatch):
+                    expected_types = {
+                        node.name: "coupled" if node.children_names else "atomic"
+                        for node in global_plan
+                    }
+                    exact_children = ", ".join(
+                        f"{name} ({expected_types.get(name, 'approved type')})"
+                        for name in children_names
+                    ) or "none"
+                    retry_correction = f"""
+<RetryCorrection>
+The previous response changed the approved hierarchy and was rejected.
+Return exactly one children_plans entry for each of these direct child types, and no others: {exact_children}.
+Do not duplicate a child entry to represent multiple runtime instances. Express multiplicity through init arguments and coupling semantics on the single approved child type.
+</RetryCorrection>
+""".strip()
                 es = str(e)
                 if "rate" in es.lower() or "429" in es:
                     wait = 10 * (attempt + 1)
@@ -319,4 +396,8 @@ class DetailedPlanGenerator:
                 if attempt < retry - 1:
                     time.sleep(2)
 
-        raise Exception(f"Failed to generate plan for '{target_name}' after {retry} attempts")
+        final_reason = str(last_error) if last_error is not None else "unknown error"
+        raise Exception(
+            f"Failed to generate plan for '{target_name}' after {retry} attempts. "
+            f"Last error: {final_reason}"
+        ) from last_error

@@ -14,6 +14,8 @@ from typing import Any, Mapping
 
 RUN_EXECUTION_PROFILE_SCHEMA = "optpilot.run-execution-profile.v1"
 MAX_RUN_EXECUTION_CONTROL_SECONDS = 86_400.0
+DEFAULT_METHOD_EXCHANGE_TIMEOUT_SECONDS = 10.0
+METHOD_EXCHANGE_TIMEOUT_RUNTIME_KEY = "exchangeTimeoutSeconds"
 
 
 def _positive_seconds(value: float, name: str) -> float:
@@ -27,6 +29,32 @@ def _positive_seconds(value: float, name: str) -> float:
             f"{name} must not exceed {MAX_RUN_EXECUTION_CONTROL_SECONDS:g} seconds."
         )
     return normalized
+
+
+def method_exchange_timeout_seconds(
+    runtime_requirements: Mapping[str, Any],
+    *,
+    override: float | None = None,
+) -> float:
+    """Return the timeout for one retained Method request/response exchange.
+
+    A Method revision owns this default because its implementation best knows
+    how long one ``propose`` or ``observe`` exchange can reasonably take.  An
+    explicit launch-API override remains possible, while old/undeclared
+    Methods retain the historical ten-second default.
+    """
+
+    if not isinstance(runtime_requirements, Mapping):
+        raise TypeError("method runtime requirements must be a mapping.")
+    value = (
+        override
+        if override is not None
+        else runtime_requirements.get(
+            METHOD_EXCHANGE_TIMEOUT_RUNTIME_KEY,
+            DEFAULT_METHOD_EXCHANGE_TIMEOUT_SECONDS,
+        )
+    )
+    return _positive_seconds(value, "method exchange timeout")
 
 
 @dataclass(frozen=True)
@@ -141,7 +169,10 @@ class RunExecutionProfile:
 
 
 __all__ = [
+    "DEFAULT_METHOD_EXCHANGE_TIMEOUT_SECONDS",
     "MAX_RUN_EXECUTION_CONTROL_SECONDS",
+    "METHOD_EXCHANGE_TIMEOUT_RUNTIME_KEY",
     "RUN_EXECUTION_PROFILE_SCHEMA",
     "RunExecutionProfile",
+    "method_exchange_timeout_seconds",
 ]

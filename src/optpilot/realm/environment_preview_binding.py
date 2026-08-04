@@ -82,6 +82,22 @@ ENVIRONMENT_PREVIEW_VOLUME_QUOTA = FilesystemQuota(
     max_total_bytes=1024**3,
 )
 
+
+class EnvironmentPreviewProviderPlanError(RealmConflict):
+    """Stable provider-capability rejection for one portable Preview plan."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = required_text(
+            code, "environment preview provider plan error code", max_bytes=128
+        )
+        super().__init__(
+            required_text(
+                message,
+                "environment preview provider plan error message",
+                max_bytes=4096,
+            )
+        )
+
 _PREVIEW_JOB_KIND = "environment-preview"
 _PREVIEW_TARGET_KIND = "environment-interface"
 _PREVIEW_INPUT_SCHEMA = "optpilot.environment-preview-input.v1"
@@ -2402,23 +2418,27 @@ def _validate_provider_plan(
         plan.runtime.engine is not None
         and plan.runtime.engine != "docker"
     ):
-        raise RealmConflict(
-            "Environment Preview container engine differs from the approved profile."
+        raise EnvironmentPreviewProviderPlanError(
+            "container_engine_unsupported",
+            "Environment Preview container engine differs from the approved profile.",
         )
     if plan.resources.gpu_count != 0:
-        raise RealmConflict(
-            "The local Environment Preview provider cannot enforce GPU claims."
+        raise EnvironmentPreviewProviderPlanError(
+            "gpu_claim_unsupported",
+            "The local Environment Preview provider cannot enforce GPU claims.",
         )
     if (
         plan.resources.cpu_millis < _MIN_CONTAINER_CPU_MILLIS
         or plan.resources.memory_bytes < _MIN_CONTAINER_MEMORY_BYTES
     ):
-        raise RealmConflict(
-            "Environment Preview resources are below the authenticated container minimum."
+        raise EnvironmentPreviewProviderPlanError(
+            "resources_below_minimum",
+            "Environment Preview resources are below the authenticated container minimum.",
         )
     if not provider.is_gateway_image_trusted(plan.runtime.image_ref):
-        raise RealmConflict(
-            "Environment Preview image is not trusted for authenticated ingress."
+        raise EnvironmentPreviewProviderPlanError(
+            "container_gateway_image_untrusted",
+            "Environment Preview image is not trusted for authenticated ingress.",
         )
 
 
@@ -3184,6 +3204,7 @@ __all__ = [
     "ENVIRONMENT_PREVIEW_VOLUME_QUOTA",
     "EnvironmentPreviewBindingEvidence",
     "EnvironmentPreviewOutputCaptureDescriptor",
+    "EnvironmentPreviewProviderPlanError",
     "ManagedEnvironmentPreviewBinding",
     "RealmEnvironmentPreviewBinder",
 ]

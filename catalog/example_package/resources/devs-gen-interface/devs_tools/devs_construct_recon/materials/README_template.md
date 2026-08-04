@@ -40,12 +40,20 @@ directory remains supported and does not write this file.
 ## Event Trace
 
 Managed runs also write `event_trace.jsonl` in the supplied result directory.
-Each event record contains its simulation time, atomic component path, output
-port, and JSON-safe value. The file has a fixed size limit and ends with a
-summary record containing `recorded_events`, `dropped_events`, and `truncated`.
-An empty trace still receives a summary, so it is clear that tracing ran but no
-output-port events occurred. The generated runner uses the bundled
-`attach_event_trace` helper; no OptPilot import is required.
+Trace v2 preserves portable output-event rows (simulation time, canonical and
+display component paths, output port, and JSON-safe value) and adds bounded
+post-transition control-state rows. Generated atomic models expose a small,
+JSON-safe teaching projection with `trace_state()` (for example queue length,
+inventory, busy status, or completed count); the recorder never searches
+arbitrary model attributes. Replay compares each projection with the previous
+recorded projection and shows only evidenced before/after changes. Routes to
+recipient input ports come from the implemented couplings and are labelled as
+structural routing evidence rather than recorded input events. State rows use a
+separate capped allowance so they cannot consume the output-event budget. The
+final summary reports recorded and dropped event/state counts separately. An
+empty trace still receives a summary, and older v1 event traces remain readable.
+The generated runner uses the bundled `attach_event_trace` helper; no OptPilot
+import is required.
 
 ## Model Info
 

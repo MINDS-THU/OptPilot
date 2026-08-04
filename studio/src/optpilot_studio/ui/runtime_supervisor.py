@@ -36,32 +36,58 @@ class StudioRuntimeSupervisorClaim:
         descriptor: int,
         device: int,
         inode: int,
+        compatibility_claim: Optional["StudioRuntimeSupervisorClaim"] = None,
     ) -> None:
         self.studio_root = studio_root
         self.path = path
         self._descriptor: Optional[int] = descriptor
         self._device = int(device)
         self._inode = int(inode)
+        self._compatibility_claim = compatibility_claim
 
     @classmethod
-    def acquire(cls, studio_root: Path) -> "StudioRuntimeSupervisorClaim":
+    def acquire(
+        cls,
+        studio_root: Path,
+        *,
+        control_root: Optional[Path] = None,
+    ) -> "StudioRuntimeSupervisorClaim":
         if fcntl is None:
             raise RuntimeError(
                 "OptPilot Studio runtime supervision requires POSIX file locks."
             )
         root = Path(os.path.abspath(studio_root.expanduser())).resolve()
-        control_root = root / ".optpilot-ui"
-        control_root.mkdir(parents=True, mode=0o700, exist_ok=True)
-        control_status = control_root.lstat()
-        if control_root.is_symlink() or not stat.S_ISDIR(control_status.st_mode):
-            raise RuntimeError(
-                "OptPilot Studio control storage must be a real directory."
-            )
-        path = control_root / "runtime-supervisor.lock"
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags, 0o600)
+        legacy_control_root = root / ".optpilot-ui"
+        control_root = (
+            legacy_control_root
+            if control_root is None
+            else Path(os.path.abspath(control_root.expanduser()))
+        )
+        # During the transition from checkout-local to OS-local control state,
+        # also hold the legacy claim.  This prevents a pre-upgrade Studio from
+        # remaining live while a new process migrates the coordination store
+        # and starts serving from a separate authority.
+        compatibility_claim = (
+            cls.acquire(root)
+            if control_root != legacy_control_root
+            else None
+        )
+        try:
+            control_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+            control_status = control_root.lstat()
+            if control_root.is_symlink() or not stat.S_ISDIR(control_status.st_mode):
+                raise RuntimeError(
+                    "OptPilot Studio control storage must be a real directory."
+                )
+            path = control_root / "runtime-supervisor.lock"
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(path, flags, 0o600)
+        except BaseException:
+            if compatibility_claim is not None:
+                compatibility_claim.close()
+            raise
         try:
             os.set_inheritable(descriptor, False)
             opened = os.fstat(descriptor)
@@ -137,9 +163,12 @@ class StudioRuntimeSupervisorClaim:
                 descriptor=descriptor,
                 device=opened.st_dev,
                 inode=opened.st_ino,
+                compatibility_claim=compatibility_claim,
             )
         except BaseException:
             os.close(descriptor)
+            if compatibility_claim is not None:
+                compatibility_claim.close()
             raise
 
     def assert_active_for(self, studio_root: Path) -> None:
@@ -162,6 +191,9 @@ class StudioRuntimeSupervisorClaim:
             raise RuntimeError(
                 "The Studio runtime-supervisor claim is no longer attached."
             )
+        compatibility_claim = self._compatibility_claim
+        if compatibility_claim is not None:
+            compatibility_claim.assert_active_for(root)
 
     def retain_until_process_exit(self) -> None:
         """Keep this live claim strongly reachable until explicit close or exit."""
@@ -177,8 +209,14 @@ class StudioRuntimeSupervisorClaim:
             if descriptor is None:
                 return
             self._descriptor = None
+            compatibility_claim = self._compatibility_claim
+            self._compatibility_claim = None
         try:
             if fcntl is not None:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            finally:
+                if compatibility_claim is not None:
+                    compatibility_claim.close()
