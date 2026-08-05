@@ -834,6 +834,9 @@ profile; omit it for a view-only interface. This flag declares the capability,
 not a list of paths. For each opted-in launch, Studio creates a different private
 output area and control file and injects their locations as
 `OPTPILOT_INTERFACE_OUTPUT_ROOT` and `OPTPILOT_INTERFACE_OUTPUTS_FILE`.
+These launch-owned runtime paths are chosen and set by Studio. A Catalog author
+does not configure them, and they are not relative paths inside the Environment,
+Method, or Resource source tree.
 
 To report a result, the interface writes the complete file or folder below
 `OPTPILOT_INTERFACE_OUTPUT_ROOT`, stops modifying it, and appends one

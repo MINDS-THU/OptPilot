@@ -37,8 +37,8 @@ class StudioRegistrationCurationStaticTest(unittest.TestCase):
         )
 
         self.assertIn("assistantSessionLabel()", resource_panel)
-        self.assertIn("Ask in ${escapeHtml(assistantLabel)}", resource_panel)
-        self.assertIn("configure and publish without Assistant", resource_panel)
+        self.assertIn("Get help in ${escapeHtml(assistantLabel)}", resource_panel)
+        self.assertIn("configure and publish without using the Conversation", resource_panel)
         self.assertIn("makes the Workspace available to", resource_panel)
         self.assertIn("What should this Workspace publish?", resource_panel)
         self.assertIn('value="environment"', resource_panel)

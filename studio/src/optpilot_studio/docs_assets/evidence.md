@@ -125,7 +125,7 @@ runtime semantics that evaluate it. OptPilot represents that pair as a no-copy
 inspection target and compiles its `EvaluationSpec` with the same pure compiler
 used for canonical attempts.
 
-Studio presents this as **Try Candidate**. **Run headless** is available when the
+Studio presents this as **Try Candidate**. **Try once** is available when the
 retained evaluation compiles to the supported noninteractive local process.
 **Open interactive interface** additionally requires a compatible retained web profile
 and provider. Both modes are inspection-only: they never consume Study budget
@@ -168,9 +168,9 @@ not assessed and guarantees that remain unverified. Matching digests are not a
 reproducibility claim, and automatic cross-run ranking stays disabled until the
 missing evidence and terminal seal exist.
 
-The same exact selection also drives **Inspect** and **View files**. Inspect
-shows semantic inputs without launching. View files opens a file Candidate or
-project artifact in a bounded relative-path browser, or a retained file
+The same exact selection drives the automatically loaded Candidate details and
+**View files**. Details show semantic inputs without launching. View files opens
+a file Candidate or project artifact in a bounded relative-path browser, or a retained file
 artifact in a bounded byte-range preview. This is a short-lived view, not a
 disposable Workspace: it creates no editable ownership and does not copy or
 recapture content. **Edit in Workspace** is offered only when the selection is
@@ -191,7 +191,7 @@ Shortlist lets you edit its name, notes, membership, and order as one draft;
 saved version renders it read-only, export follows the version being viewed,
 and returning to current does not discard unsaved current edits.
 
-After a **Run headless** or **Open interactive interface** result reaches a terminal state,
+After a **Try once** or **Open interactive interface** result reaches a terminal state,
 use **Save inspection to Shortlist** when its Candidate is already present, or
 **Save Candidate and inspection** to save both. This records bounded terminal
 facts, metrics, constraints, output metadata, logs, and execution policy. It
@@ -200,8 +200,8 @@ coordinates.
 
 ### Under the hood: decision retention
 
-Core implements the Run-local Shortlist with the existing Realm-owned Review
-Collection aggregate. The default `decision` policy reuses already-sealed
+Core implements the Run-local Shortlist with an internal Realm-owned review-
+collection aggregate. The default `decision` policy reuses already-sealed
 Candidate and artifact content by adding memberships to the same content refs;
 it does not copy bytes. Each **Save changes** operation creates an immutable
 revision under a stale-edit fence. The dedicated decision owner continues

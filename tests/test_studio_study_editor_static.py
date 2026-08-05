@@ -1,4 +1,4 @@
-"""Focused contracts for the essential Study setup experience."""
+"""Focused contracts for the essential Study configuration experience."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class StudioStudyEditorStaticTest(unittest.TestCase):
         advanced = editor[advanced_at:]
 
         self.assertIn("study-primary-settings", primary)
-        self.assertIn("Study setup", primary)
+        self.assertIn("Study configuration", primary)
         for label, field in (
             ("Environment", "environmentUid"),
             ("Method", "methodUid"),
@@ -116,6 +116,66 @@ class StudioStudyEditorStaticTest(unittest.TestCase):
         self.assertIn("Launch unavailable:", detail)
         self.assertIn('role="status"', detail)
 
+    def test_unavailable_saved_draft_has_a_clear_recovery_path(self) -> None:
+        detail = _function_source(
+            self.source,
+            "renderPlanDetail",
+            "studyConfigEditor",
+        )
+
+        self.assertIn("study-browse-current-catalog", detail)
+        self.assertIn("Browse current Catalog", detail)
+        self.assertIn('openContentSurface("catalog", { history: "push" })', detail)
+
+    def test_incomplete_component_pair_stays_repairable(self) -> None:
+        detail = _function_source(
+            self.source,
+            "renderPlanDetail",
+            "studyConfigEditor",
+        )
+        editor = _function_source(
+            self.source,
+            "studyConfigEditor",
+            "studyAdvancedGroup",
+        )
+        choices = _function_source(
+            self.source,
+            "catalogSelectField",
+            "catalogChoices",
+        )
+        readiness = _function_source(
+            self.source,
+            "studyComponentPairReady",
+            "catalogChoicesForPlan",
+        )
+        presentation = _function_source(
+            self.source,
+            "studyLaunchPresentation",
+            "labeledStatusPill",
+        )
+
+        self.assertIn("const componentPairReady = studyComponentPairReady(plan);", detail)
+        self.assertIn("const locked = draftUnavailable;", detail)
+        self.assertIn("const saveDisabled = !componentPairReady", detail)
+        self.assertIn("const launchEnabled = componentPairReady", detail)
+        self.assertIn("studyConfigEditor(plan, locked)", detail)
+        self.assertIn(
+            'catalogSelectField("Environment", "environmentUid"',
+            editor,
+        )
+        self.assertIn(
+            'catalogSelectField("Method", "methodUid"',
+            editor,
+        )
+        self.assertIn("locked || !(state.catalog.environments", editor)
+        self.assertIn("locked || !(state.catalog.methods", editor)
+        self.assertIn(
+            '<option value="" selected disabled>Choose ${escapeHtml(label)}</option>',
+            choices,
+        )
+        self.assertIn("pair.compatible === true", readiness)
+        self.assertIn("!studyComponentPairReady(plan)", presentation)
+
     def test_saved_state_and_launch_readiness_are_separate_facts(self) -> None:
         status = _function_source(
             self.source,
@@ -128,7 +188,7 @@ class StudioStudyEditorStaticTest(unittest.TestCase):
             "studyValidationPanel",
         )
 
-        self.assertIn('"Saved"', status)
+        self.assertIn('"Saved draft"', status)
         self.assertIn('"Ready to launch"', status)
         self.assertIn('"Setup needed"', status)
         self.assertIn("studyRuntimeSetupReason(plan)", status)
@@ -153,8 +213,10 @@ class StudioStudyEditorStaticTest(unittest.TestCase):
             "studyAdvancedGroup",
         )
 
-        self.assertIn("Use in new Study", detail)
-        self.assertIn("createPlanFromPair(pairs[0])", detail)
+        self.assertIn("Choose ${escapeHtml(counterpartLabel)}", detail)
+        self.assertIn("component-compatible-options", detail)
+        self.assertIn("first.focus({ preventScroll: true })", detail)
+        self.assertNotIn("createPlanFromPair(pairs[0])", detail)
         self.assertIn("No compatible", detail)
         self.assertIn('catalogChoicesForPlan("environment", plan)', editor)
         self.assertIn('catalogChoicesForPlan("method", plan)', editor)

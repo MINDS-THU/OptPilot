@@ -48,7 +48,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         self.assertIn("if (capability.eligible !== true) return;", launch)
         self.assertIn("did not preserve the source workspace boundary", launch)
         self.assertIn("previousLaunch && !retryingFailedLaunch", launch)
-        self.assertIn("Another interface", launch)
+        self.assertIn("openLaunchInterfaceSession(previousLaunch)", launch)
         self.assertIn("renderWorkspace()", launch)
 
     def test_active_interface_coordinate_is_isolated_to_one_browser_tab(self) -> None:
@@ -152,7 +152,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
             "async function pollComponentInterfaceLaunch(",
         )
 
-        self.assertIn('session.catalogLaunchId = String(launch.launch_id || "")', open_interface)
+        self.assertIn("openLaunchInterfaceSession(launch)", open_interface)
         self.assertIn("catalogSourceSessionByKey(launchKey)", launch_interface)
         self.assertIn("sourceSession.catalogLaunchId = String(state.interfaceLaunch.launch_id)", launch_interface)
 
@@ -210,6 +210,38 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         self.assertIn("New window blocked", preview)
         self.assertIn("setWorkspaceActionNotice", opener)
 
+    def test_full_stage_interface_new_window_reports_popup_failures(self) -> None:
+        events = _source_between(
+            self.source,
+            "function bindEvents(",
+            "function nextCoreRequest(",
+        )
+        opener = _source_between(
+            self.source,
+            "function openCurrentInterfaceSessionExternal(",
+            "function interfaceSessionOutputLaunch(",
+        )
+        renderer = _source_between(
+            self.source,
+            "function renderInterfaceSession(",
+            "function setInterfaceSessionActionError(",
+        )
+
+        self.assertIn("interfaceSessionOpenButton", events)
+        self.assertIn("openCurrentInterfaceSessionExternal", events)
+        self.assertIn("reserveExternalWindow()", opener)
+        self.assertIn("browser blocked the new window", opener)
+        self.assertIn("navigateExternalWindow(externalWindow, model.openUrl)", opener)
+        self.assertIn("closeReservedExternalWindow(externalWindow)", opener)
+        self.assertIn("setInterfaceSessionActionError", opener)
+        self.assertIn("state.interfaceSessionActionError", renderer)
+        self.assertIn('role",', renderer)
+        self.assertIn(
+            'id="interfaceSessionOpenButton" class="ghost-button" type="button"',
+            self.html,
+        )
+        self.assertNotIn('id="interfaceSessionOpenButton" class="ghost-button" target="_blank"', self.html)
+
     def test_workspace_interface_uses_server_launch_capability(self) -> None:
         renderer = _source_between(
             self.source,
@@ -256,7 +288,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         self.assertNotIn('buttonMode !== "code"', modes)
         self.assertIn('options.workbenchMode === "preview"', opener)
         self.assertIn('setView("workspace", { allowSupportView: mode !== "edit" })', opener)
-        self.assertIn('workbenchMode: "preview"', interface_opener)
+        self.assertIn("openLaunchInterfaceSession(launch)", interface_opener)
         self.assertIn("launchComponentInterface(component)", interface_opener)
         self.assertIn("isCatalogSourceView()", dispatcher)
         self.assertIn("launchComponentInterface(component)", dispatcher)
@@ -281,7 +313,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
             "async function loadInterfaceOutputTreeChoices(",
         )
 
-        self.assertIn('workbenchMode: "preview"', opener)
+        self.assertIn("openLaunchInterfaceSession(launch)", opener)
         self.assertNotIn("openCodeServerEmbedded", opener)
         self.assertIn("workspacePreviewFrame", workbench)
         self.assertIn("catalogInterfacePreviewUrl(session)", workbench)

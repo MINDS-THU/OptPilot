@@ -55,7 +55,7 @@ files first:
 optpilot package setup-check path/to/package
 ```
 
-Run setup only when you explicitly want OptPilot to execute those declarations:
+Execute setup only when you explicitly want OptPilot to run those declarations:
 
 ```bash
 optpilot package setup-check path/to/package --run-setup
@@ -78,8 +78,8 @@ uv run optpilot ui --open-browser
 Packages are the bridge between the core CLI and Studio:
 
 - With the core CLI, users validate and run package study files directly.
-- With Studio, users browse exact package entries, inspect read-only
-  projections, keep Realm packages as editable workspaces, launch interfaces,
+- With Studio, users browse exact package entries, inspect read-only published
+  versions, edit eligible work in Workspaces, open interfaces,
   draft studies, and launch studies.
 
 The bundled job-shop tutorial is just one package:
@@ -108,7 +108,7 @@ private per-user Realm       package revisions, workspace revisions,
 Filesystem packages should stay reviewable source. They are mutable imports,
 not immutable catalog revisions. `optpilot run` captures an explicit package
 root into the private Realm; it does not write a run folder back into the
-catalog or project. In Studio, a configured source uses **Open local folder**;
+catalog or project. In Studio, a configured source uses **Link local folder**;
 other editable projects use **Edit in Workspace** or **Save as Workspace**.
 Their shared **Workspace Setup** flow performs **Check files to register**,
 **Run optional test** or **Run required test** when applicable, and **Register
@@ -210,7 +210,7 @@ uv run optpilot ui --catalog catalog/example_package --catalog catalog/my_packag
 11. Choose **Check files to register**, choose **Run optional test** or **Run
     required test** when offered, then choose **Register checked version**.
     After registration, open the stable Catalog item to view source, edit it in
-    a Workspace, use it in a Study, or launch its declared interface.
+    a Workspace, use it in a Study, or open its declared interface.
 
 Schema-only package validation proves that recognized config files are
 structurally valid. The deeper package checks catch missing public source
@@ -368,7 +368,7 @@ The `path` shown in the browser is a logical `catalog://...` label. It is not a
 host path and is not accepted as immutable action authority. Packages supplied
 with `--catalog` remain configured filesystem imports: Studio can browse them,
 but they have no immutable revision/digest guarantee before publication.
-Choose **Open local folder** and complete Workspace Setup to register the
+Choose **Link local folder** and complete Workspace Setup to register the
 complete folder, or use **Configure** when its contents need curation.
 Exact-version features such as Catalog **Edit in Workspace** and Study Builder
 use the registered revision, not the mutable source card.

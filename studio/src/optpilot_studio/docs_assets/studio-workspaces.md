@@ -1,6 +1,6 @@
 ---
 title: Workspace Management
-description: How OptPilot Studio creates editable copies, launches interfaces, and manages local workspace containers.
+description: How OptPilot Studio manages editable work, opens interfaces, and runs local workspace containers.
 ---
 
 # Workspace Management
@@ -11,7 +11,7 @@ user can edit. Viewing registered Catalog source, opening a Run, viewing
 Candidate files, or launching an interface does not create a Workspace.
 
 A durable Workspace appears only after an explicit editing or preservation
-action: **Open local folder**, **Edit in Workspace**, or **Save as Workspace**.
+action: **Link local folder**, **Edit in Workspace**, or **Save as Workspace**.
 When that project is already linked, the corresponding action becomes **Open
 Workspace**.
 
@@ -19,15 +19,15 @@ Workspace**.
 
 | Workspace type | How it is created | Typical use |
 | --- | --- | --- |
-| Connected local project | Open local folder | Work directly in a server-authorized existing folder without copying it. Removing the Studio reference does not delete the folder. |
+| Connected local project | Link local folder | Work directly in a server-authorized existing folder without copying it. Removing the Studio reference does not delete the folder. |
 | Catalog-derived project | Edit in Workspace | Modify a registered Catalog version without editing that version in place. |
 | Candidate-derived project | Edit in Workspace | Continue working with an eligible complete project retained by a Run. |
 | Saved generated output | Save as Workspace | Preserve temporary generator/interface output before its launch ends. |
 
-Read-only Catalog source may reuse Code Server behind a **Registered version ·
-Read-only** presentation, but its support record is hidden from Workspaces.
-Runs open directly as recorded evidence. Interfaces use temporary launch
-storage until a generated output is explicitly saved.
+The read-only Catalog source viewer may reuse Code Server internally, but it
+still shows the exact published version and is not a Workspace. It never appears
+in Workspaces. Runs open directly as recorded evidence. Interfaces use temporary
+launch storage until a generated output is explicitly saved.
 
 Studio-owned metadata is stored under `.optpilot-ui/`. Realm-managed editable
 projects live in provider-private Realm storage and are addressed by Workspace

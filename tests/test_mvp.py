@@ -29,7 +29,13 @@ import yaml
 
 from optpilot.candidate_materialization import BoundsCandidateValidator, FileCandidateManifestValidator, WorkspaceBundleMaterializer
 from optpilot.adapters import ReadOnlySQLiteQuery
-from optpilot_studio.agent import OPTPILOT_AGENT_TOOL_SPECS, OpenHandsAdapter, OpenHandsRuntimeConfig, load_assistant_system_prompt
+from optpilot_studio.agent import (
+    FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT,
+    OPTPILOT_AGENT_TOOL_SPECS,
+    OpenHandsAdapter,
+    OpenHandsRuntimeConfig,
+    load_assistant_system_prompt,
+)
 from optpilot.cli import build_parser, main as cli_main
 from optpilot.candidate_staging import CandidateBundleStager, stage_candidate_file
 from optpilot.config import compile_authoring_config
@@ -2452,14 +2458,14 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(capability["code"], "catalog_source_unpublished")
         self.assertEqual(
             capability["reason"],
-            "Open this local source folder as a Workspace, then Check and register "
-            "it before creating an editable copy.",
+            "Open this local source folder as a Workspace, then check and register "
+            "the version you want to reuse.",
         )
         self.assertEqual(raised.exception.code, "catalog_source_unpublished")
         self.assertEqual(
             str(raised.exception),
-            "Open this local source folder as a Workspace, then Check and register "
-            "it before creating an editable copy.",
+            "Open this local source folder as a Workspace, then check and register "
+            "the version you want to reuse.",
         )
         self.assertEqual(realm_workspaces, ())
         self.assertEqual(checkout_entries, [])
@@ -4660,7 +4666,10 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(attached["selected_workspace_id"], workspace["id"])
         self.assertEqual(message_result["session"]["status"], "waiting_for_agent")
-        self.assertIsNone(message_result["message"]["context"]["selected_workspace"])
+        self.assertEqual(
+            message_result["message"]["context"]["selected_workspace"]["id"],
+            workspace["id"],
+        )
         self.assertEqual(message_result["message"]["context"]["current_page"], "catalog")
         self.assertEqual(message_result["message"]["context"]["selected_catalog_entry"]["id"], "toy-factory")
         self.assertIsNone(message_result["message"]["context"]["selected_study_plan"])
@@ -4929,6 +4938,57 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(persisted["attached_workspace_ids"], [first["id"], second["id"]])
         self.assertEqual(context["selected_workspace"]["id"], first["id"])
         self.assertEqual([item["id"] for item in context["attached_workspaces"]], [first["id"], second["id"]])
+
+    def test_ui_agent_context_uses_conversation_default_workspace_off_editor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            first = _create_ui_workspace(state, {"title": "Default project"})
+            second = _create_ui_workspace(state, {"title": "Other project"})
+            session = _create_agent_session(state, {"title": "Default context"})
+            _attach_agent_workspace(state, session["id"], first["id"], select=True)
+            session = _attach_agent_workspace(
+                state, session["id"], second["id"], select=False
+            )
+
+            context = _agent_context_packet(
+                state,
+                session,
+                {
+                    "current_page": "catalog",
+                    "selected_catalog_entry": {
+                        "kind": "resource",
+                        "id": "viewer",
+                    },
+                },
+            )
+
+        self.assertEqual(context["current_page"], "catalog")
+        self.assertEqual(context["selected_workspace"]["id"], first["id"])
+        self.assertEqual(context["selected_catalog_entry"]["id"], "viewer")
+
+    def test_ui_agent_context_prefers_visible_attached_editor_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            default = _create_ui_workspace(state, {"title": "Default project"})
+            visible = _create_ui_workspace(state, {"title": "Visible project"})
+            session = _create_agent_session(state, {"title": "Editor context"})
+            _attach_agent_workspace(state, session["id"], default["id"], select=True)
+            session = _attach_agent_workspace(
+                state, session["id"], visible["id"], select=False
+            )
+
+            context = _agent_context_packet(
+                state,
+                session,
+                {
+                    "current_page": "workspace",
+                    "selected_workspace": {"id": visible["id"]},
+                },
+            )
+
+        self.assertEqual(context["selected_workspace"]["id"], visible["id"])
 
     def test_ui_new_agent_session_starts_detached_in_browser_client(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -6921,6 +6981,19 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("OptPilot Assistant", prompt)
         self.assertIn("evaluator.settings", prompt)
         self.assertIn("methodContext.references", prompt)
+        self.assertIn("Catalog list and search results as evidence", prompt)
+        self.assertIn("Conversation's default Workspace", prompt)
+        self.assertRegex(prompt, r"bounded recent Conversation\s+context")
+        self.assertIn("Studio-backed workspace tools", prompt)
+        self.assertIn("emit UI cards only", FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT)
+        self.assertRegex(
+            FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT,
+            r"Conversation's default\s+Workspace",
+        )
+        self.assertRegex(
+            FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT,
+            r"bounded recent\s+Conversation context",
+        )
 
     def test_packaged_release_assets_mirror_source_docs_and_agent_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

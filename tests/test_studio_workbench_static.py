@@ -285,7 +285,10 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "runMatchesStatusFilter",
         )
 
-        self.assertIn('getJson("/api/runs")', loading)
+        self.assertIn(
+            'getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS })',
+            loading,
+        )
         self.assertNotIn("/api/jobs", loading)
         self.assertIn("head: run.head ?? catalogEntry.head", loading)
         self.assertIn("const rows = state.runs;", render)
@@ -421,6 +424,129 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("runProjectionNotice(state.runUnavailable)", rendering)
         self.assertIn(".run-projection-notice", self.styles)
 
+    def test_failed_run_guidance_prefers_attempt_evidence(self) -> None:
+        loading = _async_function_source(
+            self.source,
+            "loadRunDetail",
+            "loadSelectedRunOperatorJobs",
+        )
+        target = _function_source(
+            self.source,
+            "failedRunEvidenceTarget",
+            "initialRunDetailTab",
+        )
+        initial_tab = _function_source(
+            self.source,
+            "initialRunDetailTab",
+            "runProgressGuidance",
+        )
+        guidance = _function_source(
+            self.source,
+            "runProgressGuidance",
+            "renderRunDetail",
+        )
+
+        self.assertIn('workbenchPage(detail, "attempt").items.length', target)
+        self.assertIn(
+            'return { tab: "attempt", label: "Review trial attempts" }',
+            target,
+        )
+        self.assertIn(
+            "state.activeRunTab = initialRunDetailTab(detail)",
+            loading,
+        )
+        self.assertIn('runStatus(summary) !== "failed"', initial_tab)
+        self.assertIn("failedRunEvidenceTarget(detail, runCounts(summary)).tab", initial_tab)
+        self.assertIn("failedRunEvidenceTarget(detail, counts)", guidance)
+        self.assertIn('data-run-tab="${escapeHtml(evidence.tab)}"', guidance)
+        self.assertIn('data-run-tab="timeline"', guidance)
+
+    def test_run_list_poll_failure_marks_selected_detail_as_stale(self) -> None:
+        loading_start = self.source.index("async function loadRunsAndJobs(")
+        loading_end = self.source.index(
+            "function shouldRefreshSelectedRunDetail(", loading_start
+        )
+        loading = self.source[loading_start:loading_end]
+        detail = _function_source(
+            self.source,
+            "renderRunDetail",
+            "selectRunActionContext",
+        )
+        refresh = _function_source(
+            self.source,
+            "runDetailRefreshNoticeHtml",
+            "bindRunDetailRefreshButton",
+        )
+        in_place = _function_source(
+            self.source,
+            "updateRunDetailRefreshNoticeInPlace",
+            "renderRunDetail",
+        )
+
+        self.assertIn('if (state.view === "runs") {', loading)
+        self.assertIn(
+            "if (shortlistEditingInProgress()) updateRunDetailRefreshNoticeInPlace();",
+            loading,
+        )
+        self.assertIn("else renderRunDetail();", loading)
+        self.assertIn("const recoveredFromRunsError", loading)
+        self.assertIn(
+            "if (recoveredFromRunsError && !refreshDetail)",
+            loading,
+        )
+        self.assertIn("const refreshErrorSource = state.runsError", refresh)
+        self.assertIn('? "detail"', refresh)
+        self.assertIn('? "list"', refresh)
+        self.assertIn(
+            'data-refresh-run-detail="${escapeHtml(refreshErrorSource)}"',
+            refresh,
+        )
+        self.assertIn("updateRunDetailRefreshNoticeInPlace()", loading)
+        self.assertIn('insertAdjacentHTML("afterend", noticeHtml)', in_place)
+        self.assertIn("runDetailRefreshNoticeHtml(run, summary)", detail)
+
+    def test_stale_run_detail_distinguishes_recorded_update_from_refresh_time(
+        self,
+    ) -> None:
+        notice = _function_source(
+            self.source,
+            "runDetailRefreshNoticeHtml",
+            "bindRunDetailRefreshButton",
+        )
+
+        self.assertIn("const recordedUpdateValue", notice)
+        self.assertIn("const lastRecordedRunUpdate", notice)
+        self.assertIn("const lastSuccessfulRefresh", notice)
+        self.assertIn("Last successful refresh:", notice)
+        self.assertIn("Last recorded Run update:", notice)
+        self.assertNotIn("Showing the last loaded Run details", notice)
+
+    def test_zero_active_trial_guidance_waits_then_offers_recovery_actions(
+        self,
+    ) -> None:
+        scheduling = _function_source(
+            self.source,
+            "scheduleRunHandoffGuidance",
+            "failedRunEvidenceTarget",
+        )
+        guidance = _function_source(
+            self.source,
+            "runProgressGuidance",
+            "renderRunDetail",
+        )
+
+        self.assertIn("RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS = 12_000", self.source)
+        self.assertIn("window.setTimeout", scheduling)
+        self.assertIn("state.selectedRunId === runId", scheduling)
+        self.assertIn(
+            "idleMilliseconds < RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS", guidance
+        )
+        self.assertIn("scheduleRunHandoffGuidance", guidance)
+        self.assertIn('data-refresh-run-detail="detail"', guidance)
+        self.assertIn('data-run-tab="timeline"', guidance)
+        self.assertIn("Waiting for the next trial", guidance)
+        self.assertIn(".run-progress-guidance > .action-row", self.styles)
+
     def test_shortlist_is_one_atomic_run_local_decision_workflow(self) -> None:
         tabs = _function_source(self.source, "runWorkbenchTabs", "workbenchPage")
         candidate = _function_source(
@@ -531,6 +657,8 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("preserving your pending Shortlist notes and order", job_action)
         self.assertIn("Save Candidate and try result", job_action)
         self.assertIn("finished result together in the Shortlist", job_action)
+        self.assertIn('!["succeeded", "failed"].includes(job.state)', job_action)
+        self.assertIn("!job || !result", job_action)
         self.assertIn("state.reviewOperatorJobErrors[job.job_id]", job_action)
         self.assertIn("Saved try results", inspection)
         self.assertIn("optpilot.review-inspection-outcome.v1", inspection)
@@ -1026,14 +1154,14 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "retryOperatorJobOutput",
         )
 
-        self.assertIn('if (action === "debug_run") return "Run headless";', labels)
+        self.assertIn('if (action === "debug_run") return "Try once";', labels)
         self.assertIn(
             'if (action === "environment_preview") return "Open interactive interface";',
             labels,
         )
         self.assertIn("<h3>Candidate tries</h3>", panel)
         self.assertIn("not use the Run's trial budget", panel)
-        self.assertIn('return "Run headless";', try_label)
+        self.assertIn('return "Try once";', try_label)
         self.assertIn('return "Open interactive interface";', try_label)
         self.assertIn("This try does not use the Run's trial budget", summary)
         self.assertIn(
@@ -1168,11 +1296,11 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("Ways to try it", sheet)
         self.assertIn('class="candidate-try-mode unavailable"', sheet)
         self.assertIn("!selectedMode.eligible", sheet)
-        self.assertIn("Run headless", self.source)
+        self.assertIn("Try once", self.source)
         self.assertIn("Open interactive interface", self.source)
         self.assertIn("candidateTrySubmitLabel(selectedMode.action)", sheet)
         self.assertIn(
-            'id="candidateTrySubmitButton" class="primary-button" type="button">Run headless</button>',
+            'id="candidateTrySubmitButton" class="primary-button" type="button">Try once</button>',
             self.html,
         )
         self.assertNotIn("Start try", self.source)
@@ -1308,6 +1436,34 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             perform,
         )
 
+    def test_candidate_try_refreshes_stale_run_context_without_leaving_candidate(
+        self,
+    ) -> None:
+        confirm = _function_source(
+            self.source,
+            "confirmCandidateTry",
+            "restoreFocusedCandidateTryFocus",
+        )
+
+        self.assertIn("if (!contextMatches)", confirm)
+        self.assertIn("state.candidateTryNotice", confirm)
+        self.assertIn("closeCandidateTrySheet({ restoreFocus: false })", confirm)
+        self.assertIn("renderRunDetail()", confirm)
+        self.assertIn(
+            "loadRunDetail(refreshRunId, { keepTab: true, skipListRender: true })",
+            confirm,
+        )
+        self.assertGreaterEqual(
+            confirm.count("selectedCanonicalRunId() !== refreshRunId"),
+            2,
+        )
+        self.assertIn("review them, then try again", confirm)
+        self.assertIn(
+            'restoreFocusedCandidateTryFocus(refreshSelectionId, "notice")',
+            confirm,
+        )
+        self.assertIn("Reload this Candidate, then try again", confirm)
+
     def test_candidate_try_rows_keep_their_native_button_role(self) -> None:
         panel = _function_source(
             self.source,
@@ -1344,7 +1500,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("state.workbenchActionErrors[key]", ensure)
         self.assertIn('<summary>More actions and details</summary>', more)
         self.assertIn("Re-evaluate in a new Run", more)
-        self.assertIn("Ask in ${escapeHtml(assistantSessionLabel())}", more)
+        self.assertIn("Discuss in ${escapeHtml(assistantSessionLabel())}", more)
         self.assertIn("renderSelectionTechnicalDetails(selection, item)", more)
 
     def test_environment_preview_reuses_generic_output_cards_and_callbacks(
@@ -1641,9 +1797,9 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn(".interface-output-curate", binding)
         self.assertIn("callbacks.curate || openWorkspaceForCuration", binding)
         self.assertIn("curateWorkspace(button.dataset.workspaceId)", binding)
-        self.assertIn(">Publish</button>", self.source)
+        self.assertIn(">Publish</button>", self.html)
         self.assertIn(
-            "Publish can configure and check this same Workspace for Catalog",
+            "Set up for Catalog opens this Workspace's publishing steps",
             self.source,
         )
         self.assertIn("await selectSession(workspaceId);", binding)
@@ -1665,12 +1821,18 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "mergeInterfaceLaunchPayload",
             "updateInterfaceOutput",
         )
+        recovery = _function_source(
+            self.source,
+            "fetchInterfaceLaunchStatusWithRecovery",
+            "handleInterfaceLaunchPollingError",
+        )
 
         self.assertIn("activeInterfaceLaunch", self.source)
         self.assertIn(
-            "/api/interface-launches/${encodeURIComponent(launchId)}",
+            "fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId)",
             resume,
         )
+        self.assertIn("/api/interface-launches/${encodeURIComponent(launchId)}", recovery)
         self.assertIn("pollComponentInterfaceLaunch(launchKey, launchId)", resume)
         self.assertIn("pollWorkspaceInterfaceLaunch(launchKey, launchId)", resume)
         self.assertIn("await loadUiWorkspaces()", resume)
@@ -1734,10 +1896,34 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn(
             "componentInterfaceLaunchCapability(component, profile)", launch
         )
-        self.assertIn("if (capability.eligible !== true) return;", launch)
+        self.assertIn("if (capability.eligible !== true) {", launch)
+        self.assertIn("error: String(capability.reason", launch)
         self.assertNotIn("config:", launch)
         self.assertNotIn("Save Editable Workspace", self.source)
         self.assertNotIn("componentConfigDraft", self.source)
+
+    def test_assistant_catalog_interface_action_returns_to_the_active_interface(self) -> None:
+        current = _function_source(
+            self.source,
+            "assistantUiCardCurrentActionState",
+            "assistantUiCardLatestEventIndexes",
+        )
+        html = _function_source(
+            self.source,
+            "assistantUiCardsHtml",
+            "bindAssistantUiCards",
+        )
+        execute = _async_function_source(
+            self.source,
+            "executeAssistantUiCardAction",
+            "resolveAssistantUiCardWorkspace",
+        )
+
+        self.assertIn("isActiveInterfaceLaunch(state.interfaceLaunch)", current)
+        self.assertIn("`Return to ${String(state.interfaceLaunch.label", current)
+        self.assertIn("currentAction.label || action.label", html)
+        self.assertIn("openActiveInterfaceLocation()", execute)
+        self.assertNotIn("Open it from Open work or stop it", execute)
 
     def test_catalog_interface_poll_keeps_live_output_status_fresh(self) -> None:
         poll = _async_function_source(
@@ -1813,7 +1999,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("Complete Candidates", detail)
         self.assertIn("activeTechnicalTab", detail)
         self.assertIn('activeTechnicalTab ? "open" : ""', detail)
-        self.assertIn("Run details${activeTechnicalTab", detail)
+        self.assertIn("Technical evidence${activeTechnicalTab", detail)
         self.assertIn("const onlyCompleteCandidate", overview)
         self.assertIn("Open only complete Candidate", overview)
         self.assertIn("best.candidateId || headlineResult.candidateId", overview)
@@ -1967,7 +2153,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("candidateRankingContext(page)", page)
         self.assertIn("Candidate results", page)
         self.assertIn(
-            "Candidate summaries are temporarily unavailable. Recorded trial results are still available under Run details.",
+            "Candidate summaries are temporarily unavailable. Recorded trial results are still available under Technical evidence.",
             page,
         )
         self.assertIn("Waiting for the Method to submit its first Candidate.", page)

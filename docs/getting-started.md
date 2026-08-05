@@ -30,6 +30,36 @@ The environment owns the job-shop cases, candidate schema, evaluator, and
 metrics. The method owns how it proposes parameter values. The study binds them
 and chooses the objective and budget.
 
+## Run It In Studio
+
+Start Studio from the source checkout:
+
+```bash
+uv run optpilot ui --open-browser
+```
+
+The opening **Conversation** explains the available kinds of work. Ask to run
+the fixed job-shop baseline, or open **Catalog** and find the registered
+job-shop Environment and fixed-parameter Method yourself. Catalog, Studies,
+Runs, and Workspaces remain direct destinations; none depends on an Assistant
+recommendation.
+
+Studio presents the binding as a **Study**. Review the Environment, Method,
+`normalized_makespan` objective, `minimize` direction, and one-trial budget,
+then choose **Launch run** explicitly. Internally, the setup remains the Study
+configuration listed above.
+
+While active, the new Run appears in **Open work** and in the originating Conversation. Open
+it to inspect progress and evidence. A simulator or other interactive component
+opens in the full main area; **Ask from this page** reveals the same Conversation as
+an overlay without recreating the interface. Returning to Conversation does not
+stop the Run or interface.
+
+When the Run finishes, find it under **Runs**. Saved Studies remain under
+**Studies**, and editable projects remain under **Workspaces**. Existing
+refresh-safe links to Studies, Runs, Candidates, Workspaces, and interfaces
+remain valid.
+
 ## Validate And Run
 
 Validate the study:
@@ -109,8 +139,9 @@ PY
 echo "$RUN_ID"
 ```
 
-Start Studio and select that id on **Runs** to inspect its Overview,
-Candidates, trials, attempts, observations, artifacts, and exact-head timeline:
+Start Studio and find that id under **Runs**, or ask the Assistant to open the
+Run by id, to inspect its Overview, Candidates, trials, attempts, observations,
+artifacts, and exact-head timeline:
 
 ```bash
 uv run optpilot ui --open-browser

@@ -84,10 +84,16 @@ class StudioInlineActionFailuresStaticTest(unittest.TestCase):
             "async function performInterfaceStop(",
             "async function stopWorkspaceInterface(",
         )
+        failure = _between(
+            self.source,
+            "function handleInterfaceLaunchPollingError(",
+            "function resumeInterfaceLaunchPolling(",
+        )
 
         self.assertIn("retryingFailedLaunch", launch)
-        self.assertIn('status: "failed"', launch)
-        self.assertIn("boundedPublicActionError", launch)
+        self.assertIn("handleInterfaceLaunchPollingError", launch)
+        self.assertIn('status: "failed"', failure)
+        self.assertIn("boundedPublicActionError", failure)
         self.assertNotIn("pushAssistantMessage", launch)
         self.assertIn("launchState.error", status)
         self.assertIn("launchState.error_detail", status)

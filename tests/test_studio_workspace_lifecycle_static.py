@@ -39,7 +39,9 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
             self.source, "uiWorkspaceSession", "mergeUiWorkspace"
         )
         attach = _function_source(
-            self.source, "attachWorkspaceToCurrent", "reopenManagedWorkspace"
+            self.source,
+            "attachWorkspaceToAgentSession",
+            "attachWorkspaceToCurrent",
         )
         reopen = _function_source(
             self.source, "reopenManagedWorkspace", "keepWorkspaceSelected"
@@ -54,7 +56,7 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("expected_workspace_revision: workspace.workspaceRevision", reopen)
         self.assertIn('class="session-card-more"', card)
         self.assertIn("assistantSessionLabel(assistantSession)", card)
-        self.assertIn("Ask in ${escapeHtml(assistantLabel)}", card)
+        self.assertIn("Make available to ${escapeHtml(assistantLabel)}", card)
         self.assertIn("Remove from ${escapeHtml(assistantLabel)}", card)
         self.assertNotIn("session.reopenRequired", card)
 
@@ -77,16 +79,61 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertNotIn("attachedIds", rebuild)
         self.assertIn("state.sessions[0]", rebuild)
         self.assertIn("attached_sessions: []", create)
-        self.assertNotIn("attachWorkspaceToCurrent(session.id)", create)
+        self.assertIn("const attachToConversation", create)
+        self.assertIn(
+            "await attachWorkspaceToAgentSession(session.id, originatingConversationId)",
+            create,
+        )
+        self.assertIn('openConversationSurface({ history: "replace" })', create)
         self.assertNotIn("attachedWorkspaceIds", current)
         self.assertIn("state.selectedSessionId", current)
         self.assertIn("No Workspace selected", self.source)
         self.assertIn("Workspace ready", self.source)
-        self.assertNotIn(
-            'class="nav-button" data-view="workspace"', self.html
+        self.assertIn(
+            'class="nav-button shell-primary-destination" data-view="workspace"',
+            self.html,
         )
         self.assertIn('class="sidebar-workspaces"', self.html)
         self.assertIn('id="sessionList"', self.html)
+        self.assertIn(
+            "body.shell-v2.shell-content.view-workspace:not(.catalog-source-view) .sidebar-workspaces",
+            self.styles,
+        )
+
+    def test_conversation_workspace_creation_grants_access_only_when_requested(
+        self,
+    ) -> None:
+        create = _function_source(
+            self.source, "createBlankSession", "openLocalFolderDialog"
+        )
+        open_folder = _function_source(
+            self.source, "openLocalFolderDialog", "closeLocalFolderDialog"
+        )
+        connect = _function_source(
+            self.source, "connectLocalFolder", "nextDraftWorkspaceTitle"
+        )
+        actions = _function_source(
+            self.source,
+            "handleConversationWorkspaceAction",
+            "renderAssistant",
+        )
+
+        self.assertIn("attached_sessions: []", create)
+        self.assertIn("Boolean(options && options.attachToConversation)", create)
+        self.assertIn(
+            "await attachWorkspaceToAgentSession(session.id, originatingConversationId)",
+            create,
+        )
+        self.assertIn('openConversationSurface({ history: "replace" })', create)
+        self.assertIn("state.localFolderAttachToConversation", open_folder)
+        self.assertIn("const attachToConversation", connect)
+        self.assertIn(
+            "await attachWorkspaceToAgentSession(session.id, originatingConversationId)",
+            connect,
+        )
+        self.assertIn('openConversationSurface({ history: "replace" })', connect)
+        self.assertIn('createBlankSession({ attachToConversation: true })', actions)
+        self.assertIn('openLocalFolderDialog({ attachToConversation: true })', actions)
 
     def test_workspace_card_separates_storage_catalog_and_named_assistant_access(
         self,
@@ -119,7 +166,7 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn('["Storage", workspaceStorageLabel(session)]', rendering)
         self.assertIn('["Catalog", workspaceCatalogStatus(session)]', rendering)
         self.assertIn(
-            '["Assistant", workspaceAssistantAccessLabel(session)]', rendering
+            '["Conversation access", workspaceAssistantAccessLabel(session)]', rendering
         )
         self.assertIn("Catalog · ${escapeHtml(", badges)
         self.assertNotIn("saved Workspace", badges)
@@ -131,7 +178,7 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn('return "Based on a Catalog version"', catalog)
         self.assertIn('return "Not published to Catalog"', catalog)
         self.assertIn("assistantSessionLabel(assistantSession)", card)
-        self.assertIn("Ask in ${escapeHtml(assistantLabel)}", card)
+        self.assertIn("Make available to ${escapeHtml(assistantLabel)}", card)
         self.assertIn("Remove from ${escapeHtml(assistantLabel)}", card)
         self.assertIn("Available to ${assistantSessionLabel(agentSession)}", assistant)
         self.assertIn(
@@ -169,8 +216,11 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
             "const agentSession = await attachWorkspaceToCurrent(workspaceId)",
             attach,
         )
-        self.assertIn("agentSession.id === state.selectedAgentSessionId", attach)
-        self.assertIn("assistantSessionId: agentSession.id", attach)
+        self.assertNotIn("setSelectedWorkspace", attach)
+        self.assertNotIn("workspaceNotice", attach)
+        self.assertNotIn("openContentSurface", attach)
+        self.assertIn("renderWorkspace()", attach)
+        self.assertIn("renderAssistant()", attach)
         self.assertIn("workspaceNoticeForCurrentContext(session)", render)
         self.assertIn(
             "notice.assistantSessionId !== state.selectedAgentSessionId", notice
@@ -178,14 +228,15 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("state.workspaceNotice = null", selection)
         self.assertIn("setSelectedAgentSessionState(sessionId)", select)
         self.assertIn("setSelectedAgentSessionState(payload.session.id)", create)
-        self.assertIn("setSelectedAgentSessionState(id)", create)
+        self.assertNotIn("const id = `agent-session-", create)
+        self.assertIn("return null", create)
         self.assertIn(
             "options.announce && agentSession.id === state.selectedAgentSessionId",
             detach,
         )
         self.assertIn("assistantSessionId: agentSession.id", detach)
 
-    def test_read_only_catalog_source_is_a_hidden_support_view(self) -> None:
+    def test_catalog_source_and_workspace_have_distinct_workbench_language(self) -> None:
         mapping = _function_source(
             self.source, "uiWorkspaceSession", "mergeUiWorkspace"
         )
@@ -200,14 +251,37 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "visibleInWorkspaces: workspace.visible_in_workspaces !== false",
+            "visibleInWorkspaces: workspaceRecordVisibleInWorkspaces(workspace)",
             mapping,
         )
+        visibility = _function_source(
+            self.source, "workspaceRecordVisibleInWorkspaces", "uiWorkspaceSession"
+        )
+        self.assertIn('workspace.purpose === "user-project"', visibility)
+        self.assertIn('typeof workspace.visible_in_workspaces === "boolean"', visibility)
         self.assertIn("session.visibleInWorkspaces !== false", ordering)
+        toolbar = _function_source(
+            self.source,
+            "renderWorkspaceWorkbenchToolbar",
+            "handleWorkspaceTitleKeydown",
+        )
+        placeholder = _function_source(
+            self.source,
+            "renderCodeWorkspacePlaceholder",
+            "renderPreviewWorkbench",
+        )
+
         self.assertIn("Read-only Catalog item", rendering)
         self.assertIn("not editable or listed in Workspaces", rendering)
         self.assertIn("Back to item", rendering)
         self.assertIn("Edit in Workspace", rendering)
+        self.assertIn('catalogSourceView ? "Source" : "Code"', workbench)
+        self.assertIn('"Read-only Catalog item"', toolbar)
+        self.assertIn('"Workspace · Editable"', toolbar)
+        self.assertIn("els.workspaceTitleInput.hidden = catalogSourceView", toolbar)
+        self.assertIn('"Open source in new window"', toolbar)
+        self.assertIn('"Open Workspace editor"', toolbar)
+        self.assertIn("This does not create a Workspace", placeholder)
         self.assertIn('buttonMode === "setup"', workbench)
         self.assertIn('buttonMode === "preview"', workbench)
 
@@ -287,6 +361,62 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("Removed from ${assistantSessionLabel(agentSession)}", detach)
         self.assertNotIn("pushAssistantMessage", detach)
         self.assertNotIn("deleteWorkspaceDraft", detach)
+
+    def test_detach_waits_for_persistence_and_restores_state_on_failure(self) -> None:
+        detach = _function_source(
+            self.source,
+            "detachWorkspaceFromSession",
+            "renderWorkspaceCleanupModal",
+        )
+
+        self.assertIn("const previousAttachments", detach)
+        self.assertIn("const previousSelectedWorkspaceId", detach)
+        self.assertIn("persistedWorkspaceId", detach)
+        self.assertIn("if (!payload.session) throw new Error", detach)
+        self.assertIn(
+            "state.agentWorkspaceAttachments[agentSession.id] = previousAttachments",
+            detach,
+        )
+        self.assertIn(
+            "state.selectedWorkspaceByAgentSession[agentSession.id] = previousSelectedWorkspaceId",
+            detach,
+        )
+        self.assertIn("state.conversationWorkspaceError = boundedPublicActionError", detach)
+        self.assertIn("return false", detach)
+        self.assertNotIn("/api/workspaces/${encodeURIComponent", detach)
+
+    def test_duplicate_workspace_names_get_path_hints_only_for_collisions(self) -> None:
+        duplicate_titles = _function_source(
+            self.source,
+            "duplicateWorkspaceTitleKeys",
+            "workspacePathHint",
+        )
+        disambiguator = _function_source(
+            self.source,
+            "workspaceDisambiguatorHtml",
+            "isCatalogSourceView",
+        )
+        render = _function_source(
+            self.source,
+            "renderWorkspace",
+            "workspaceNoticeForCurrentContext",
+        )
+        card = _function_source(self.source, "sessionCard", "workspaceSubtitle")
+        conversation = _function_source(
+            self.source,
+            "renderConversationWorkspaceAccess",
+            "handleConversationWorkspaceAction",
+        )
+
+        self.assertIn("count > 1", duplicate_titles)
+        self.assertIn("duplicateTitles.has(workspaceTitleKey(workspace))", disambiguator)
+        self.assertIn('class="workspace-path-hint"', disambiguator)
+        self.assertIn("duplicateWorkspaceTitleKeys(allWorkspaces)", render)
+        self.assertIn("sessionCard(workspace, duplicateTitles)", render)
+        self.assertIn("workspaceDisambiguatorHtml(session, duplicateTitles)", card)
+        self.assertIn("duplicateWorkspaceTitleKeys(editable)", conversation)
+        self.assertIn("conversationWorkspaceCard(workspace, selectedWorkspaceId, duplicateTitles)", conversation)
+        self.assertIn(">Remove access</button>", self.source)
 
     def test_sidebar_workspace_controls_stay_inside_the_clipped_rail(self) -> None:
         panel = _css_rule(self.styles, ".sidebar-workspaces")

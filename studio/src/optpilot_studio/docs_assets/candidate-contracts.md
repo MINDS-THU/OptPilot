@@ -143,11 +143,11 @@ disposable workspace or make a second candidate-tree copy. Native-process
 filesystem enforcement is advisory, so this first slice is for trusted local
 method, evaluator, and candidate code.
 
-After admission, Studio can browse the same retained tree through **Open Read
-Only**, execute it through **Debug Run**, or explicitly derive an editable tree
-through **Keep as Workspace**. These are three capabilities over one immutable
-selection: browsing creates no workspace, Debug Run gets a fresh attempt upper,
-and Keep alone creates an independent persistent owner.
+After admission, Studio can browse the same retained tree through **View files**,
+execute an eligible Candidate once through **Try Candidate**, or create durable
+editable work through **Edit in Workspace**. These are three capabilities over
+one immutable selection: viewing creates no Workspace, trying gets a fresh
+attempt runtime, and editing alone creates an independent persistent Workspace.
 
 ## Method Compatibility
 

@@ -5222,6 +5222,10 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=self.root,
             ),
             mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "realm-open-failure-root",
+            ),
+            mock.patch(
                 "optpilot_studio.ui.server.StudioRuntimeSupervisorClaim.acquire",
                 return_value=fake_claim,
             ),
@@ -5257,6 +5261,10 @@ class StudioRealmRunsTest(unittest.TestCase):
             mock.patch(
                 "optpilot_studio.ui.server.Path.cwd",
                 return_value=self.root,
+            ),
+            mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "state-construction-failure-root",
             ),
             mock.patch(
                 "optpilot_studio.ui.server.StudioRuntimeSupervisorClaim.acquire",
@@ -5315,6 +5323,10 @@ class StudioRealmRunsTest(unittest.TestCase):
         fake_claim.close.side_effect = lambda: events.append("claim-close")
 
         with (
+            mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "shutdown-order-root",
+            ),
             mock.patch(
                 "optpilot_studio.ui.server.LocalRealmRuntime.open",
                 return_value=fake_runtime,
@@ -5379,6 +5391,10 @@ class StudioRealmRunsTest(unittest.TestCase):
 
         with (
             mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "unquiesced-root",
+            ),
+            mock.patch(
                 "optpilot_studio.ui.server.LocalRealmRuntime.open",
                 return_value=fake_runtime,
             ),
@@ -5438,6 +5454,10 @@ class StudioRealmRunsTest(unittest.TestCase):
 
         with (
             mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "unquiesced-interface-root",
+            ),
+            mock.patch(
                 "optpilot_studio.ui.server.LocalRealmRuntime.open",
                 return_value=fake_runtime,
             ),
@@ -5490,6 +5510,10 @@ class StudioRealmRunsTest(unittest.TestCase):
         fake_claim = mock.Mock()
 
         with (
+            mock.patch(
+                "optpilot_studio.ui.server.default_realm_root",
+                return_value=self.root / "unquiesced-presentation-root",
+            ),
             mock.patch(
                 "optpilot_studio.ui.server.LocalRealmRuntime.open",
                 return_value=fake_runtime,

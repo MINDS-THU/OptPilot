@@ -37,7 +37,7 @@ class StudioRunAssistantSelectionStaticTest(unittest.TestCase):
         )
 
         self.assertIn("data-workbench-ask-assistant", render_item)
-        self.assertIn("Send this exact Run selection", render_item)
+        self.assertIn("Open this exact Run selection in the named Conversation", render_item)
         self.assertIn("askAssistantAboutWorkbenchSelection", binding)
 
     def test_assistant_receives_exact_selection_without_automatic_execution(self) -> None:

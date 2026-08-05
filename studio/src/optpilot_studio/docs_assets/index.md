@@ -61,7 +61,7 @@ flowchart TB
   Core["Core CLI/SDK\nPyPI package"]
   Studio["Full Studio\nsource checkout"]
   Runs["OptPilot Realm\ncanonical Run evidence"]
-  Workspaces[".optpilot-ui/workspaces/\neditable copies"]
+  Workspaces["Workspaces\ndurable editable projects"]
 
   Configs --> Core
   Configs --> Studio

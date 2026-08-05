@@ -203,7 +203,7 @@ package root
   -> canonical Realm run
   -> candidates -> logical trials -> attempts -> observations/artifacts
   -> summary, bounded Workbench pages, exact-head timeline
-  -> optional immutable Review Collection revisions over exact selections
+  -> optional immutable Shortlist revisions over exact selections
 ```
 
 Important runtime concepts:
@@ -215,7 +215,7 @@ Important runtime concepts:
 | Projection | Leased realization of exact immutable inputs for a reader or process. |
 | Writable volume | Fresh provider-owned attempt/control/state space with explicit lifetime. |
 | Workbench projection | Read-only bounded summary/pages/timeline and complete-plan candidate results derived from one exact Realm head. |
-| Review Collection | Realm-owned immutable decision revisions containing an ordered shortlist, notes, frozen bounded run and terminal inspection evidence, bounded history navigation, and no-copy memberships to retained candidate/artifact content that survive source-run retirement. It is not a workspace or runtime. |
+| Shortlist | Realm-owned immutable decision revisions containing ordered Candidates, notes, frozen bounded Run and terminal inspection evidence, bounded history navigation, and no-copy memberships to retained Candidate and saved-file content that survive retirement of the source Run. It is not a Workspace or runtime. Core implements this user-facing object with an internal review-collection aggregate. |
 
 `trialWorkspace` expresses environment-owned input mappings into each attempt's
 logical workspace. It does not select a copy strategy or grant broad project/
@@ -267,7 +267,7 @@ The split is intentional:
 | Surface | What it should be used for |
 | --- | --- |
 | Core CLI/SDK | Validate configs, run studies, and integrate packages in your own project or CI. |
-| Studio | Browse packages, create editable copies, launch studies through forms, inspect runs, and manage local workspace/assistant workflows. |
+| Studio | Browse packages, create and manage editable Workspaces, launch studies through forms, inspect Runs, and use the optional Assistant. |
 
 ## What To Read Next
 

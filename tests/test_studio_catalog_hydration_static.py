@@ -66,8 +66,8 @@ class StudioCatalogHydrationStaticTest(unittest.TestCase):
             "const compatibilityResult = await compatibilityResultPromise",
             loader,
         )
-        self.assertIn('getJson("/api/catalog")', loader)
-        self.assertIn('getJson("/api/compatibility")', loader)
+        self.assertIn('getJson("/api/catalog", { timeoutMs: CORE_REQUEST_TIMEOUT_MS })', loader)
+        self.assertIn('getJson("/api/compatibility", { timeoutMs: CORE_REQUEST_TIMEOUT_MS })', loader)
         self.assertIn('catalogResult.status === "fulfilled"', loader)
         self.assertIn("state.catalog = catalogResult.value", loader)
         self.assertIn(
@@ -134,6 +134,81 @@ class StudioCatalogHydrationStaticTest(unittest.TestCase):
         self.assertIn("void loadCatalogAndCompatibility({ strict: false })", renderer)
         self.assertIn(".catalog-load-notice", self.styles)
         self.assertIn(".catalog-load-notice.error", self.styles)
+
+    def test_workspace_refresh_failure_preserves_the_last_loaded_records(self) -> None:
+        loader = _between(
+            self.source,
+            "async function loadUiWorkspaces()",
+            "async function loadStudyDrafts()",
+        )
+        success, failure = loader.split("} catch (error) {", 1)
+
+        self.assertIn(
+            'const workspaces = requireArrayField(payload, "workspaces", "Workspace list")',
+            success,
+        )
+        self.assertIn("state.uiWorkspaces = workspaces", success)
+        self.assertIn("state.uiWorkspacesLoaded = true", success)
+        self.assertIn('state.uiWorkspacesError = ""', success)
+        self.assertIn("state.uiWorkspacesError = boundedPublicActionError", failure)
+        self.assertNotIn("state.uiWorkspaces =", failure)
+        self.assertNotIn("state.uiWorkspacesLoaded =", failure)
+
+    def test_workspace_refresh_failure_is_retryable_on_both_surfaces(self) -> None:
+        conversation = _between(
+            self.source,
+            "function renderConversationWorkspaceAccess()",
+            "async function handleConversationWorkspaceAction(event)",
+        )
+        workspace_page = _between(
+            self.source,
+            "function renderWorkspace()",
+            "function workspaceNoticeForCurrentContext(session)",
+        )
+
+        for renderer, notice_class in (
+            (conversation, "conversation-workspace-refresh-notice"),
+            (workspace_page, "workspace-list-refresh-notice"),
+        ):
+            self.assertIn("state.uiWorkspacesError", renderer)
+            self.assertIn(notice_class, renderer)
+            self.assertIn('role="alert"', renderer)
+            self.assertIn("Showing the last loaded Workspace list.", renderer)
+            self.assertIn("Try again", renderer)
+
+    def test_successful_workspace_retry_rebuilds_cards_and_clears_the_notice(self) -> None:
+        conversation_action = _between(
+            self.source,
+            "async function handleConversationWorkspaceAction(event)",
+            "function renderAssistant()",
+        )
+        workspace_page = _between(
+            self.source,
+            "function renderWorkspace()",
+            "function workspaceNoticeForCurrentContext(session)",
+        )
+        loader = _between(
+            self.source,
+            "async function loadUiWorkspaces()",
+            "async function loadStudyDrafts()",
+        )
+
+        self.assertIn('state.uiWorkspacesError = ""', loader)
+        retries = (
+            conversation_action[conversation_action.index('if (action === "refresh")') :],
+            workspace_page[workspace_page.index("const retryWorkspaces") :],
+        )
+        for retry in retries:
+            self.assertIn("await loadUiWorkspaces()", retry)
+            self.assertIn("rebuildDerivedState()", retry)
+            self.assertLess(
+                retry.index("await loadUiWorkspaces()"),
+                retry.index("rebuildDerivedState()"),
+            )
+            self.assertLess(
+                retry.index("rebuildDerivedState()"),
+                retry.index("renderWorkspace()"),
+            )
 
 
 if __name__ == "__main__":

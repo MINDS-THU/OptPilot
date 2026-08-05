@@ -292,7 +292,7 @@ there only for that launch. **Save as Workspace** gives the selected sealed tree
 durable editable Workspace ownership; it does not make the whole launch
 directory durable.
 
-Configured Catalog source folders and folders opened with **Open local folder**
+Configured Catalog source folders and folders linked with **Link local folder**
 remain user-owned at their original paths. Removing their Studio reference must
 not delete those folders. Realm-managed editable Workspaces remain under the
 Realm's `editable-workspaces/` area. Relocating only the Workspace index does not

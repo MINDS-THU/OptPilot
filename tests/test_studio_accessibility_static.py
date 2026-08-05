@@ -42,6 +42,26 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         self.assertIn('role="tabpanel"', panel)
         self.assertIn("aria-labelledby", panel)
 
+    def test_conversation_workspace_access_has_named_controls(self) -> None:
+        card = _function(
+            self.source,
+            "conversationWorkspaceCard",
+            "conversationWorkspaceChoice",
+        )
+        choice = _function(
+            self.source,
+            "conversationWorkspaceChoice",
+            "renderConversationWorkspaceAccess",
+        )
+
+        self.assertIn('aria-labelledby="conversationWorkspaceTitle"', self.html)
+        self.assertIn('role="heading" aria-level="3"', self.html)
+        self.assertIn('aria-label="Open ${escapeHtml(workspace.title)} Workspace"', card)
+        self.assertIn('aria-label="Make ${escapeHtml(workspace.title)} the default Workspace for this Conversation"', card)
+        self.assertIn('aria-label="Remove ${escapeHtml(workspace.title)} access from', card)
+        self.assertIn(">Remove access</button>", card)
+        self.assertIn('aria-label="Add ${escapeHtml(workspace.title)} to this Conversation"', choice)
+
     def test_run_tabs_wrap_with_arrow_keys_and_support_home_and_end(self) -> None:
         handler = _function(
             self.source,
@@ -165,10 +185,123 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         self.assertIn('event.key === "Escape"', keyboard)
         self.assertIn("trapModalFocus(", keyboard)
         self.assertIn("const activeIsFocusable", focus_trap)
+        self.assertIn("element.getClientRects().length > 0", focus_trap)
         self.assertIn("last.focus()", focus_trap)
         self.assertIn("first.focus()", focus_trap)
         self.assertIn(
             'on(els.openLocalFolderModal, "keydown", handleLocalFolderDialogKeydown);',
+            self.source,
+        )
+
+    def test_settings_opens_before_loading_and_has_retryable_modal_focus(self) -> None:
+        open_dialog = _function(
+            self.source,
+            "openSettings",
+            "loadSettingsForModal",
+        )
+        load = _function(
+            self.source,
+            "loadSettingsForModal",
+            "retrySettingsLoad",
+        )
+        close_dialog = _function(
+            self.source,
+            "closeSettings",
+            "handleSettingsModalKeydown",
+        )
+        keyboard = _function(
+            self.source,
+            "handleSettingsModalKeydown",
+            "renderSettingsModal",
+        )
+        render = _function(
+            self.source,
+            "renderSettingsModal",
+            "fillSettingsForm",
+        )
+
+        self.assertIn('id="settingsDialog"', self.html)
+        self.assertIn('role="dialog"', self.html)
+        self.assertIn('aria-modal="true"', self.html)
+        self.assertIn('tabindex="-1"', self.html)
+        self.assertIn('id="settingsLoadStatus"', self.html)
+        self.assertIn('aria-live="polite"', self.html)
+        self.assertIn('id="settingsRetryButton"', self.html)
+        self.assertLess(
+            open_dialog.index("renderSettingsModal()"),
+            open_dialog.index("await loadSettingsForModal()"),
+        )
+        self.assertIn("document.activeElement", open_dialog)
+        self.assertIn("state.settingsReturnFocus", open_dialog)
+        self.assertIn("state.settingsLoading = true", load)
+        self.assertIn("state.settingsError", load)
+        self.assertIn("settingsRetryButton.hidden", render)
+        self.assertIn("settingsSaveButton.disabled", render)
+        self.assertIn("returnFocus.isConnected", close_dialog)
+        self.assertIn("target.focus()", close_dialog)
+        self.assertIn('event.key === "Escape"', keyboard)
+        self.assertIn("trapModalFocus(event, els.settingsModal, els.settingsDialog)", keyboard)
+        self.assertIn(
+            'on(els.settingsModal, "keydown", handleSettingsModalKeydown);',
+            self.source,
+        )
+        self.assertIn(
+            'on(els.settingsRetryButton, "click", retrySettingsLoad);',
+            self.source,
+        )
+        self.assertIn(".settings-load-status", self.styles)
+        self.assertIn(".settings-modal button:focus-visible", self.styles)
+
+    def test_workspace_delete_dialog_traps_focus_and_restores_context(self) -> None:
+        render = _function(
+            self.source,
+            "renderWorkspaceCleanupModal",
+            "restoreWorkspaceCleanupFocus",
+        )
+        close_dialog = _function(
+            self.source,
+            "closeWorkspaceCleanupModal",
+            "cancelPendingWorkspaceDelete",
+        )
+        restore_focus = _function(
+            self.source,
+            "restoreWorkspaceCleanupFocus",
+            "closeWorkspaceCleanupModal",
+        )
+        keyboard = _function(
+            self.source,
+            "handleWorkspaceCleanupModalKeydown",
+            "deletePendingWorkspaceDraft",
+        )
+        open_dialog = _function(
+            self.source,
+            "requestWorkspaceDelete",
+            "deleteWorkspaceDraft",
+        )
+        inert = _function(
+            self.source,
+            "syncManagedModalBackgroundInert",
+            "openSettings",
+        )
+
+        self.assertIn('id="workspaceCleanupDialog"', self.html)
+        self.assertIn('aria-describedby="workspaceCleanupBody"', self.html)
+        self.assertIn('tabindex="-1"', self.html)
+        self.assertIn("syncManagedModalBackgroundInert()", render)
+        self.assertIn("document.activeElement", open_dialog)
+        self.assertIn("state.workspaceCleanupReturnFocus", open_dialog)
+        self.assertIn("target.focus()", open_dialog)
+        self.assertIn("restoreWorkspaceCleanupFocus(returnFocus)", close_dialog)
+        self.assertIn("returnFocus.isConnected", restore_focus)
+        self.assertIn('event.key === "Escape"', keyboard)
+        self.assertIn(
+            "trapModalFocus(event, els.workspaceCleanupModal, els.workspaceCleanupDialog)",
+            keyboard,
+        )
+        self.assertIn('document.querySelector(".app-shell")', inert)
+        self.assertIn('appShell.toggleAttribute(', inert)
+        self.assertIn(
+            'on(els.workspaceCleanupModal, "keydown", handleWorkspaceCleanupModalKeydown);',
             self.source,
         )
 
@@ -272,6 +405,25 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         self.assertIn(".child-run-confirmation-modal button:focus-visible", self.styles)
         self.assertIn(".cleanup-modal input:focus-visible", self.styles)
         self.assertIn("outline-offset", self.styles)
+
+    def test_assistant_composer_and_timeline_have_bounded_live_semantics(self) -> None:
+        render = _function(self.source, "renderAssistant", "queueAssistantStepAutoScroll")
+
+        self.assertIn(
+            'id="agentInput" spellcheck="false" aria-label="Message OptPilot"',
+            self.html,
+        )
+        timeline_start = self.html.index('id="agentTimeline"')
+        timeline_end = self.html.index("</div>", timeline_start)
+        timeline = self.html[timeline_start:timeline_end]
+        self.assertIn('role="log"', timeline)
+        self.assertIn('aria-label="Conversation history"', timeline)
+        self.assertIn('aria-live="polite"', timeline)
+        self.assertIn('aria-relevant="additions"', timeline)
+        self.assertIn('aria-atomic="false"', timeline)
+        self.assertIn("timelineSessionChanged", render)
+        self.assertIn('setAttribute("aria-live", "off")', render)
+        self.assertIn('setAttribute("aria-live", "polite")', render)
 
     def test_local_environment_settings_do_not_imply_a_secret_vault(self) -> None:
         self.assertIn("Local environment variables", self.html)

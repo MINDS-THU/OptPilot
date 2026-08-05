@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260804d" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260805k" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -38,7 +38,7 @@
       running server.
     </div>
     <div class="app-shell">
-      <aside class="sidebar">
+      <aside id="studioRail" class="sidebar">
         <div class="brand">
           <div class="brand-mark">
             <img src="/static/minds-thu.png" alt="MINDS-THU logo" />
@@ -52,7 +52,12 @@
           </button>
         </div>
 
-        <nav class="nav" aria-label="Main navigation">
+        <button id="newSessionButton" class="rail-new-conversation primary-button" type="button">
+          <span aria-hidden="true">＋</span>
+          <span>New conversation</span>
+        </button>
+
+        <nav class="nav shell-primary-navigation" aria-label="Main navigation">
           <button class="nav-button" data-view="catalog" type="button">
             <span class="nav-icon nav-icon-catalog" aria-hidden="true"></span>
             <span class="nav-label">
@@ -60,6 +65,30 @@
               <small aria-hidden="true">Environments, Methods, Resources</small>
             </span>
           </button>
+          <button class="nav-button shell-primary-destination" data-view="experiments" type="button">
+            <span class="nav-icon nav-icon-studies" aria-hidden="true"></span>
+            <span class="nav-label">
+              <strong>Studies</strong>
+              <small aria-hidden="true">Configure Studies</small>
+            </span>
+          </button>
+          <button class="nav-button shell-primary-destination" data-view="runs" type="button">
+            <span class="nav-icon nav-icon-runs" aria-hidden="true"></span>
+            <span class="nav-label">
+              <strong>Runs</strong>
+              <small aria-hidden="true">Progress and results</small>
+            </span>
+          </button>
+          <button class="nav-button shell-primary-destination" data-view="workspace" type="button">
+            <span class="nav-icon nav-icon-workspaces" aria-hidden="true"></span>
+            <span class="nav-label">
+              <strong>Workspaces</strong>
+              <small aria-hidden="true">Editable projects</small>
+            </span>
+          </button>
+        </nav>
+
+        <nav class="nav legacy-navigation" aria-label="Legacy navigation">
           <button class="nav-button" data-view="experiments" type="button">
             <span class="nav-icon nav-icon-studies" aria-hidden="true"></span>
             <span class="nav-label">
@@ -76,7 +105,7 @@
           </button>
         </nav>
 
-        <section id="activeInterfaceBar" class="active-interface-bar" aria-label="Running interface" hidden>
+        <section id="activeInterfaceBar" class="active-interface-bar legacy-only" aria-label="Running interface" hidden>
           <button id="activeInterfaceOpenButton" class="active-interface-open" type="button">
             <span class="active-interface-dot" aria-hidden="true"></span>
             <span class="active-interface-copy">
@@ -87,13 +116,20 @@
           <button id="activeInterfaceStopButton" class="active-interface-stop" type="button">Stop</button>
         </section>
 
-          <button id="assistantToggleButton" class="assistant-launcher" type="button">
+          <button id="assistantToggleButton" class="assistant-launcher legacy-only" type="button">
             <span class="nav-icon nav-icon-assistant" aria-hidden="true"></span>
             <span class="assistant-launcher-label">
-              <strong>Assistant</strong>
-              <small id="assistantLauncherSubtitle">Context-aware assistant</small>
+              <strong>OptPilot</strong>
+              <small id="assistantLauncherSubtitle">Conversation help</small>
             </span>
           </button>
+
+        <section class="conversation-rail" aria-labelledby="conversationRailTitle">
+          <div class="conversation-rail-header">
+            <h2 id="conversationRailTitle">Conversations</h2>
+          </div>
+          <div id="assistantSessionCards" class="assistant-session-cards rail-conversation-cards"></div>
+        </section>
 
         <section class="sidebar-workspaces">
           <div class="sidebar-workspaces-header">
@@ -103,7 +139,7 @@
             </div>
             <div class="header-actions">
               <button id="refreshButton" class="ghost-button rail-action-button" type="button" aria-label="Refresh Workspaces" title="Refresh Workspaces">&#8635;</button>
-              <button id="openLocalFolderButton" class="ghost-button rail-text-button" type="button" title="Add an existing local folder to Workspaces">Add folder</button>
+              <button id="openLocalFolderButton" class="ghost-button rail-text-button" type="button" title="Link an existing local folder as a Workspace">Link local folder</button>
               <button id="newWorkspaceButton" class="ghost-button rail-text-button" type="button" aria-label="Create Workspace" title="Create a new Workspace">New</button>
             </div>
           </div>
@@ -118,12 +154,50 @@
             </div>
           </div>
           <div id="sidebarServiceStatus" class="sidebar-service-list">
-            <div id="sidebarCodeServer" class="sidebar-status">Code Server unavailable</div>
+            <div id="sidebarCodeServer" class="sidebar-status">Code editor unavailable</div>
           </div>
         </div>
       </aside>
 
+      <button id="railScrim" class="rail-scrim" type="button" aria-label="Close navigation" hidden></button>
+
       <main class="main">
+        <header id="shellToolbar" class="shell-toolbar">
+          <div class="shell-toolbar-leading">
+            <button id="railToggleButton" class="ghost-button rail-toggle-button" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="studioRail">☰</button>
+            <button id="backToConversationButton" class="ghost-button back-to-conversation" type="button" aria-label="Back to conversation">
+              <span aria-hidden="true">←</span>
+              <span>Back to conversation</span>
+            </button>
+            <div class="shell-surface-copy">
+              <strong id="shellSurfaceTitle" role="heading" aria-level="1" tabindex="-1">Conversation</strong>
+              <span id="shellSurfaceSubtitle">Describe what you want OptPilot to do.</span>
+            </div>
+          </div>
+          <div class="shell-toolbar-actions">
+            <button id="openWorkButton" class="ghost-button open-work-button" type="button" aria-label="Open work" aria-expanded="false" aria-controls="openWorkShelf">
+              <span class="open-work-dot" aria-hidden="true"></span>
+              <span>Open work</span>
+              <strong id="openWorkCount">0</strong>
+            </button>
+            <button id="askOptPilotButton" class="primary-button ask-optpilot-button" type="button" aria-label="Ask from this page" aria-expanded="false" aria-controls="assistantPanel">
+              <span class="nav-icon nav-icon-assistant" aria-hidden="true"></span>
+              <span>Ask from this page</span>
+            </button>
+          </div>
+        </header>
+
+        <section id="openWorkShelf" class="open-work-shelf" aria-label="Open work" hidden>
+          <div class="open-work-shelf-heading">
+            <div>
+              <strong>Open work</strong>
+              <span>Running interfaces and Runs stay here when you leave their page. Problems that need attention stay here too.</span>
+            </div>
+            <button id="closeOpenWorkButton" class="ghost-button compact-action" type="button" aria-label="Collapse open work">Collapse</button>
+          </div>
+          <div id="openWorkItems" class="open-work-items"></div>
+        </section>
+
         <header class="topbar">
           <div>
             <div class="eyebrow">OptPilot Studio</div>
@@ -132,27 +206,52 @@
           </div>
         </header>
 
-        <aside class="panel agent-panel">
-          <div id="assistantResizeHandle" class="assistant-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize assistant"></div>
+        <aside class="panel agent-panel" id="assistantPanel" aria-label="OptPilot Conversation">
+          <div id="assistantResizeHandle" class="assistant-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize Conversation panel"></div>
           <div class="panel-header">
             <button id="assistantBackButton" class="ghost-button assistant-back-button" type="button" aria-label="Back to conversations">&larr;</button>
 	            <div class="assistant-heading">
-	              <h2 id="assistantTitle">OptPilot Assistant</h2>
-	              <span id="assistantSubtitle" class="path-text">Context-aware assistant</span>
+	              <h2 id="assistantTitle">Conversation</h2>
+	              <span id="assistantSubtitle" class="path-text">Same Conversation, with this page included</span>
 	            </div>
 	            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
 	          </div>
           <div id="assistantSessionList" class="assistant-session-list">
             <div class="assistant-session-actions">
-              <button id="newSessionButton" class="primary-button" type="button">New conversation</button>
+              <button id="legacyNewSessionButton" class="primary-button" type="button">New conversation</button>
             </div>
-            <div id="assistantSessionCards" class="assistant-session-cards"></div>
+            <div id="legacyAssistantSessionCards" class="assistant-session-cards"></div>
           </div>
-          <div id="agentTimeline" class="agent-timeline"></div>
+          <section id="conversationOnboarding" class="conversation-onboarding" aria-label="What OptPilot can do" hidden></section>
+          <div id="agentTimeline" class="agent-timeline" role="log" aria-label="Conversation history" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
+          <aside id="conversationWorkspacePanel" class="conversation-workspace-panel" aria-labelledby="conversationWorkspaceTitle" hidden>
+            <details id="conversationWorkspaceDisclosure">
+              <summary class="conversation-workspace-summary">
+                <span id="conversationWorkspaceTitle" class="conversation-workspace-title" role="heading" aria-level="3">Workspaces in this conversation</span>
+                <span id="conversationWorkspaceCount" class="conversation-workspace-count">0</span>
+              </summary>
+              <div class="conversation-workspace-body">
+                <p class="conversation-workspace-help">Every Workspace listed here is available to OptPilot. The default is used when your request does not name one.</p>
+                <div id="conversationWorkspaceList" class="conversation-workspace-list"></div>
+                <details id="conversationWorkspaceAdd" class="conversation-workspace-add">
+                  <summary class="primary-button">Add Workspace</summary>
+                  <div class="conversation-workspace-picker">
+                    <p>Choose an editable project to use in this Conversation. No files are copied.</p>
+                    <div id="conversationWorkspaceChoices" class="conversation-workspace-choices"></div>
+                    <div class="conversation-workspace-create-actions">
+                      <button class="ghost-button compact-action" data-conversation-workspace-action="new" type="button">New Workspace</button>
+                      <button class="ghost-button compact-action" data-conversation-workspace-action="folder" type="button">Link local folder</button>
+                      <button class="ghost-button compact-action" data-conversation-workspace-action="manage" type="button">Manage Workspaces</button>
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </details>
+          </aside>
           <div class="composer">
-            <textarea id="agentInput" spellcheck="false"></textarea>
+            <textarea id="agentInput" spellcheck="false" aria-label="Message OptPilot"></textarea>
             <div class="composer-footer">
-              <div id="assistantContextHint" class="assistant-context-hint" aria-label="Assistant context"></div>
+              <div id="assistantContextHint" class="assistant-context-hint" aria-label="Conversation context"></div>
               <button id="sendAgentButton" class="primary-button agent-action-button" type="button" aria-label="Send message" title="Send message">
                 <span aria-hidden="true">&uarr;</span>
               </button>
@@ -209,6 +308,8 @@
                       <button id="workspacePublishTab" class="workbench-mode" data-workbench-mode="setup" type="button" role="tab" aria-controls="setupWorkbench">Publish</button>
                     </div>
                     <div class="workbench-title-control">
+                      <span id="workbenchContextBadge" class="workbench-context-badge" hidden></span>
+                      <span id="catalogSourceTitle" class="catalog-source-title" hidden></span>
                       <input id="workspaceTitleInput" class="workspace-title-input" type="text" value="" aria-label="Workspace name" />
                     </div>
                     <div class="workbench-toolbar-actions">
@@ -330,18 +431,29 @@
           </div>
         </section>
 
-        <section id="interfaceView" class="view interface-session-view" aria-label="Interface Session">
+        <section id="interfaceView" class="view interface-session-view" aria-label="Interface">
           <article class="interface-session-shell">
             <header class="interface-session-header">
               <button id="interfaceSessionBackButton" class="ghost-button interface-session-back" type="button">Back</button>
               <div class="interface-session-identity">
-                <span id="interfaceSessionEyebrow" class="eyebrow">Interface Session</span>
+                <span id="interfaceSessionEyebrow" class="eyebrow">Interface</span>
                 <h2 id="interfaceSessionTitle">Interactive interface</h2>
-                <p id="interfaceSessionSource" class="path-text">Preparing the exact interface session.</p>
+                <p id="interfaceSessionSource" class="path-text">Preparing the exact interface.</p>
               </div>
               <div class="interface-session-actions">
                 <span id="interfaceSessionStatus" class="status-pill">Preparing</span>
-                <a id="interfaceSessionOpenButton" class="ghost-button" href="#" target="_blank" rel="noopener noreferrer" hidden>Open in new window</a>
+                <button
+                  id="interfaceSessionOutputsButton"
+                  class="ghost-button interface-session-outputs-button"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="interfaceSessionOutputsDrawer"
+                  hidden
+                >
+                  <span>Outputs</span>
+                  <span id="interfaceSessionOutputsCount" class="interface-session-outputs-count" aria-label="0 outputs">0</span>
+                </button>
+                <button id="interfaceSessionOpenButton" class="ghost-button" type="button" hidden>Open in new window</button>
                 <button id="interfaceSessionStopButton" class="danger-button" type="button" hidden>Stop</button>
               </div>
             </header>
@@ -355,6 +467,33 @@
                   <button id="interfaceSessionRetryButton" class="ghost-button" type="button">Check again</button>
                 </div>
               </div>
+              <button
+                id="interfaceSessionOutputsScrim"
+                class="interface-session-outputs-scrim"
+                type="button"
+                tabindex="-1"
+                aria-label="Close Outputs"
+                hidden
+              ></button>
+              <aside
+                id="interfaceSessionOutputsDrawer"
+                class="interface-session-outputs-drawer"
+                role="complementary"
+                aria-labelledby="interfaceSessionOutputsTitle"
+                tabindex="-1"
+                hidden
+              >
+                <header class="interface-session-outputs-header">
+                  <div>
+                    <h3 id="interfaceSessionOutputsTitle">Outputs</h3>
+                    <p>Results from this interface are temporary. Choose <strong>Save as Workspace</strong> to keep editable work.</p>
+                  </div>
+                  <button id="interfaceSessionOutputsCloseButton" class="ghost-button compact-action" type="button" aria-label="Close Outputs">Close</button>
+                </header>
+                <div id="interfaceSessionOutputsBody" class="interface-session-outputs-body" aria-live="polite">
+                  <p id="interfaceSessionOutputsEmpty" class="interface-output-empty">No outputs have been reported yet.</p>
+                </div>
+              </aside>
             </div>
           </article>
         </section>
@@ -362,7 +501,7 @@
     </div>
 
 	    <div id="settingsModal" class="modal-backdrop" hidden>
-	      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+	      <section id="settingsDialog" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
 	        <header class="modal-header">
 	          <div>
 		            <h2 id="settingsTitle">Studio Settings</h2>
@@ -370,8 +509,15 @@
 	          </div>
           <button id="settingsCloseButton" class="ghost-button" type="button" aria-label="Close settings">Close</button>
         </header>
+        <div id="settingsLoadStatus" class="settings-load-status" aria-live="polite" hidden>
+          <div>
+            <strong id="settingsLoadStatusTitle">Loading Studio settings…</strong>
+            <span id="settingsLoadStatusBody">Reading the saved local configuration.</span>
+          </div>
+          <button id="settingsRetryButton" class="ghost-button" type="button" hidden>Try again</button>
+        </div>
         <div class="settings-tabs" role="tablist" aria-label="Studio settings sections">
-          <button class="settings-tab active" data-settings-tab="assistant" type="button" role="tab" aria-selected="true" aria-controls="settingsAssistantPanel">Assistant</button>
+          <button class="settings-tab active" data-settings-tab="assistant" type="button" role="tab" aria-selected="true" aria-controls="settingsAssistantPanel">OptPilot</button>
           <button class="settings-tab" data-settings-tab="environment" type="button" role="tab" aria-selected="false" aria-controls="settingsEnvironmentPanel">Local environment variables</button>
         </div>
         <div class="settings-body">
@@ -379,8 +525,8 @@
             <section class="settings-section">
               <div class="settings-section-heading">
                 <div>
-                  <h3>OpenHands Assistant</h3>
-                  <p>Connect OptPilot Assistant to an OpenHands runtime and choose the model it should use.</p>
+                  <h3>OpenHands runtime</h3>
+                  <p>Connect OptPilot to an OpenHands runtime and choose the model used in Conversations.</p>
                 </div>
                 <label class="switch-row">
                   <input id="openHandsEnabled" type="checkbox" />
@@ -398,7 +544,7 @@
                   <input id="openHandsSessionEndpoint" type="text" placeholder="/api/conversations" autocomplete="off" />
                 </label>
                 <label class="control-field">
-                  <span>Assistant model id</span>
+                  <span>Conversation model id</span>
                   <input id="openHandsModel" type="text" placeholder="gpt-4.1 or provider/model-id" autocomplete="off" />
                 </label>
                 <label class="control-field">
@@ -526,7 +672,7 @@
 	    </div>
 
 	    <div id="workspaceCleanupModal" class="modal-backdrop" hidden>
-	      <section class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="workspaceCleanupTitle">
+	      <section id="workspaceCleanupDialog" class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="workspaceCleanupTitle" aria-describedby="workspaceCleanupBody" tabindex="-1">
 	        <header class="modal-header">
 	          <div>
 	            <h2 id="workspaceCleanupTitle">Delete Workspace</h2>
@@ -544,8 +690,8 @@
         <section id="openLocalFolderDialog" class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="openLocalFolderTitle" aria-describedby="openLocalFolderIntro" tabindex="-1">
           <header class="modal-header">
             <div>
-              <h2 id="openLocalFolderTitle">Open local folder</h2>
-              <p id="openLocalFolderIntro">Add an existing folder as editable work. OptPilot will not copy it, and removing the Workspace will not delete the folder.</p>
+              <h2 id="openLocalFolderTitle">Link local folder</h2>
+              <p id="openLocalFolderIntro">Link an existing folder as editable work. OptPilot will not copy it, and removing the Workspace will not delete the folder.</p>
             </div>
           </header>
           <div class="compact-modal-body">
@@ -561,7 +707,7 @@
           </div>
           <footer class="modal-actions">
             <button id="openLocalFolderCancelButton" class="ghost-button" type="button">Cancel</button>
-            <button id="openLocalFolderSubmitButton" class="primary-button" type="button">Open folder</button>
+            <button id="openLocalFolderSubmitButton" class="primary-button" type="button">Link local folder</button>
           </footer>
         </section>
       </div>
@@ -598,7 +744,7 @@
           <div id="candidateTryBody" class="child-run-confirmation-body"></div>
           <footer id="candidateTryActions" class="modal-actions">
             <button id="candidateTryCancelButton" class="ghost-button" type="button">Cancel</button>
-            <button id="candidateTrySubmitButton" class="primary-button" type="button">Run headless</button>
+            <button id="candidateTrySubmitButton" class="primary-button" type="button">Try once</button>
           </footer>
         </section>
       </div>
@@ -660,6 +806,6 @@
       </div>
 
     <div id="selectionContentDrawerHost"></div>
-    <script src="/static/app.js?v=studio-20260804d"></script>
+    <script src="/static/app.js?v=studio-20260805k"></script>
   </body>
 </html>

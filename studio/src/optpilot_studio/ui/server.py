@@ -172,8 +172,11 @@ from optpilot.study_launch_service import (
 
 from ..agent import (
     OpenHandsAdapter,
+    OpenHandsConversationNotFound,
     OpenHandsRuntimeConfig,
+    STUDIO_UI_CARD_SCHEMA,
     sanitize_openhands_native_tools,
+    sanitize_studio_ui_cards,
 )
 from .coordination_store import (
     ActionState,
@@ -2981,6 +2984,7 @@ class UiState:
         )
         self.agent_sessions_dir = self.cwd / ".optpilot-ui" / "agent_sessions"
         self.agent_sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._agent_session_index_lock = threading.RLock()
         self.code_server_dir = self.cwd / ".optpilot-ui" / "code-server"
         self.code_server_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self.cwd / ".optpilot-ui" / "settings.json"
@@ -4411,7 +4415,20 @@ def _handler_factory(state: UiState):
                     self._handle_workspace_get(path)
                     return
                 if path == "/api/agent-sessions":
-                    self._send_json({"sessions": _list_agent_sessions(state)})
+                    summaries_only = str((query.get("summary") or [""])[0]).lower() in {
+                        "1",
+                        "true",
+                        "yes",
+                    }
+                    self._send_json(
+                        {
+                            "sessions": (
+                                _list_agent_session_summaries(state)
+                                if summaries_only
+                                else _list_agent_sessions(state)
+                            )
+                        }
+                    )
                     return
                 if path == "/api/agent/settings":
                     self._send_json(_agent_settings_payload(state))
@@ -4588,6 +4605,11 @@ def _handler_factory(state: UiState):
                         self._send_json(_interface_output_tree_choices(state, parts[3]))
                         return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (BrokenPipeError, ConnectionResetError):
+                # The browser can supersede an in-flight Conversation request
+                # while navigating.  A closed client is not a Studio failure,
+                # and attempting a second JSON response only raises again.
+                return
             except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
                 self._send_storage_unavailable(exc, path=path)
             except RealmNotFound as exc:
@@ -4865,6 +4887,8 @@ def _handler_factory(state: UiState):
                     self._send_json({"job": state.stop_job(job_id)})
                     return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (BrokenPipeError, ConnectionResetError):
+                return
             except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
                 self._send_storage_unavailable(exc, path=parsed.path)
             except RealmNotFound as exc:
@@ -4906,6 +4930,10 @@ def _handler_factory(state: UiState):
                         )
                         return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except (BrokenPipeError, ConnectionResetError):
+                # The requested mutation may already have completed, but the
+                # navigating browser can no longer receive its response.
+                return
             except (CoordinationStorageUnavailable, sqlite3.Error) as exc:
                 self._send_storage_unavailable(exc, path=parsed.path)
             except KeyError as exc:
@@ -6569,8 +6597,8 @@ def _public_catalog_entry(entry: JsonDict) -> JsonDict:
             "reason": (
                 "Create an editable workspace from this exact catalog revision."
                 if realm_backed
-                else "Open this local source folder as a Workspace, then Check "
-                "and register it before creating an editable copy."
+                else "Open this local source folder as a Workspace, then check "
+                "and register the version you want to reuse."
             ),
         },
     }
@@ -16113,27 +16141,31 @@ def _agent_events_path(state: UiState, session_id: str) -> Path:
 
 
 def _read_agent_session_index(state: UiState) -> List[JsonDict]:
-    path = _agent_session_index_path(state)
-    if not path.exists():
-        return []
-    raw = _read_json(path)
-    sessions = raw.get("sessions", []) if isinstance(raw, dict) else []
-    if not isinstance(sessions, list):
-        return []
-    return [item for item in sessions if isinstance(item, dict) and item.get("id")]
+    with state._agent_session_index_lock:
+        path = _agent_session_index_path(state)
+        if not path.exists():
+            return []
+        raw = _read_json(path)
+        sessions = raw.get("sessions", []) if isinstance(raw, dict) else []
+        if not isinstance(sessions, list):
+            return []
+        return [
+            item for item in sessions if isinstance(item, dict) and item.get("id")
+        ]
 
 
 def _write_agent_session_index(state: UiState, sessions: List[JsonDict]) -> None:
-    path = _agent_session_index_path(state)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "sessions": sorted(
-            sessions, key=lambda item: item.get("updated_at", ""), reverse=True
+    with state._agent_session_index_lock:
+        path = _agent_session_index_path(state)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessions": sorted(
+                sessions, key=lambda item: item.get("updated_at", ""), reverse=True
+            )
+        }
+        path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-    }
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
 
 
 def _default_agent_message() -> JsonDict:
@@ -16353,6 +16385,15 @@ def _sanitize_agent_event(event: JsonDict) -> JsonDict:
         payload["result_preview"] = _sanitize_agent_result_preview(
             payload["result_preview"]
         )
+    if "ui_cards" in payload:
+        payload["ui_cards"] = sanitize_studio_ui_cards(
+            _strip_internal_agent_state(payload.get("ui_cards"))
+        )
+    result = payload.get("result")
+    if isinstance(result, dict) and "ui_cards" in result:
+        result["ui_cards"] = sanitize_studio_ui_cards(
+            _strip_internal_agent_state(result.get("ui_cards"))
+        )
     return sanitized
 
 
@@ -16477,6 +16518,390 @@ def _upsert_agent_approval(
     return approval
 
 
+def _assistant_ui_card_id(kind: str, coordinate: Mapping[str, Any]) -> str:
+    digest = request_digest(
+        {
+            "schema": STUDIO_UI_CARD_SCHEMA,
+            "kind": kind,
+            "coordinate": dict(coordinate),
+        }
+    )[:24]
+    return f"{kind.replace('-', '_')}_{digest}"
+
+
+def _assistant_ui_card_action(
+    card_id: str,
+    operation: str,
+    label: str,
+    *,
+    eligible: bool = True,
+    reason: str = "",
+    approval_required: bool = False,
+) -> JsonDict:
+    return {
+        "id": f"{card_id}:{operation}",
+        "label": label,
+        "operation": operation,
+        "eligible": bool(eligible),
+        "reason": str(reason or ""),
+        "approval_required": bool(approval_required),
+    }
+
+
+def _assistant_ui_card_facts(*facts: tuple[str, Any]) -> List[JsonDict]:
+    return [
+        {"label": label, "value": value}
+        for label, value in facts
+        if value not in (None, "", [], {})
+        and isinstance(value, (str, int, float, bool))
+    ]
+
+
+def _assistant_study_launch_readiness(validation: Any) -> tuple[bool, str]:
+    if not isinstance(validation, Mapping):
+        return False, "Run setup validation is unavailable."
+    if validation.get("valid") is not True:
+        errors = [
+            str(item)
+            for item in validation.get("errors", []) or []
+            if str(item)
+        ]
+        return False, errors[0] if errors else "Run setup validation failed."
+    launch = validation.get("launch")
+    if not isinstance(launch, Mapping):
+        capabilities = validation.get("capabilities")
+        launch = (
+            capabilities.get("retained_execution")
+            if isinstance(capabilities, Mapping)
+            and isinstance(capabilities.get("retained_execution"), Mapping)
+            else {}
+        )
+    if launch.get("eligible") is True:
+        return True, ""
+    return False, str(
+        launch.get("reason")
+        or "This Run setup is not currently eligible to start."
+    )
+
+
+def _assistant_catalog_ui_card(
+    entry: Any, *, validation: Any = None
+) -> Optional[JsonDict]:
+    if not isinstance(entry, Mapping):
+        return None
+    config_kind = str(entry.get("config") or entry.get("kind") or "")
+    uid = str(entry.get("uid") or "")
+    title = str(entry.get("label") or entry.get("id") or "")
+    if config_kind not in {"environment", "method", "resource", "study"}:
+        return None
+    if not uid or not title:
+        return None
+    coordinate = {
+        "kind": "catalog-entry",
+        "config_kind": config_kind,
+        "uid": uid,
+    }
+    card_kind = "run-setup" if config_kind == "study" else "catalog-use"
+    card_id = _assistant_ui_card_id(card_kind, coordinate)
+    actions = [
+        _assistant_ui_card_action(
+            card_id,
+            "open-catalog",
+            "Open in Catalog",
+        )
+    ]
+    interface = entry.get("interface")
+    if isinstance(interface, Mapping) and interface.get("profiles"):
+        launch = (
+            interface.get("actions", {}).get("launch", {})
+            if isinstance(interface.get("actions"), Mapping)
+            else {}
+        )
+        launch_eligible = launch.get("eligible") is True
+        actions.append(
+            _assistant_ui_card_action(
+                card_id,
+                "open-interface",
+                "Open interface",
+                eligible=launch_eligible,
+                reason=str(launch.get("reason") or "")
+                if not launch_eligible
+                else "",
+            )
+        )
+    status = "available"
+    validation_value = validation if isinstance(validation, Mapping) else entry.get(
+        "validation"
+    )
+    if isinstance(validation_value, Mapping) and validation_value.get("valid") is False:
+        status = "needs-review"
+    if config_kind == "study":
+        eligible, reason = _assistant_study_launch_readiness(validation_value)
+        actions.extend(
+            [
+                _assistant_ui_card_action(
+                    card_id,
+                    "configure-run",
+                    "Review Run setup",
+                ),
+                _assistant_ui_card_action(
+                    card_id,
+                    "start-run",
+                    "Start run",
+                    eligible=eligible,
+                    reason=reason,
+                    approval_required=True,
+                ),
+            ]
+        )
+        status = "ready" if eligible else "needs-review"
+    package = str(entry.get("package_id") or entry.get("package") or "")
+    profile_count = (
+        interface.get("profileCount")
+        if isinstance(interface, Mapping)
+        else None
+    )
+    return {
+        "schema": STUDIO_UI_CARD_SCHEMA,
+        "id": card_id,
+        "kind": card_kind,
+        "coordinate": coordinate,
+        "title": title,
+        "description": str(entry.get("description") or ""),
+        "status": status,
+        "facts": _assistant_ui_card_facts(
+            ("Type", "Run setup" if config_kind == "study" else config_kind.title()),
+            ("Package", package),
+            ("Interface profiles", profile_count),
+        ),
+        "actions": actions,
+    }
+
+
+def _assistant_run_setup_ui_card(
+    data: Mapping[str, Any], *, saved_result: bool = False
+) -> Optional[JsonDict]:
+    workspace = data.get("workspace") if isinstance(data.get("workspace"), Mapping) else {}
+    workspace_id = str(data.get("workspace_id") or workspace.get("id") or "")
+    workspace_revision = data.get("workspace_revision") or workspace.get(
+        "realm_workspace_revision"
+    )
+    study_relative_path = str(data.get("study_relative_path") or data.get("path") or "")
+    exact_setup = (
+        bool(workspace_id)
+        and isinstance(workspace_revision, int)
+        and not isinstance(workspace_revision, bool)
+        and workspace_revision > 0
+        and bool(study_relative_path)
+    )
+    compatibility = (
+        data.get("compatibility")
+        if isinstance(data.get("compatibility"), Mapping)
+        else {}
+    )
+    environment = (
+        compatibility.get("environment")
+        if isinstance(compatibility.get("environment"), Mapping)
+        else {}
+    )
+    method = (
+        compatibility.get("method")
+        if isinstance(compatibility.get("method"), Mapping)
+        else {}
+    )
+    if exact_setup:
+        coordinate: JsonDict = {
+            "kind": "study-workspace",
+            "workspace_id": workspace_id,
+            "workspace_revision": workspace_revision,
+            "study_relative_path": study_relative_path,
+        }
+        if environment.get("uid"):
+            coordinate["environment_uid"] = str(environment["uid"])
+        if method.get("uid"):
+            coordinate["method_uid"] = str(method["uid"])
+        if data.get("draft_id"):
+            coordinate["draft_id"] = str(data["draft_id"])
+        if data.get("draft_revision"):
+            coordinate["draft_revision"] = data["draft_revision"]
+    elif workspace_id:
+        coordinate = {"kind": "workspace", "workspace_id": workspace_id}
+    else:
+        return None
+    draft = data.get("draft") if isinstance(data.get("draft"), Mapping) else {}
+    validation = data.get("validation")
+    launch_eligible, launch_reason = _assistant_study_launch_readiness(validation)
+    launch_eligible = bool(exact_setup and launch_eligible)
+    if not exact_setup and not launch_reason:
+        launch_reason = "Start from an exact Realm-managed Run setup revision."
+    title = str(
+        draft.get("name")
+        or workspace.get("title")
+        or Path(study_relative_path).stem
+        or "Run setup"
+    )
+    objective = draft.get("objective") if isinstance(draft.get("objective"), Mapping) else {}
+    budget = draft.get("budget") if isinstance(draft.get("budget"), Mapping) else {}
+    compatibility_status = (
+        "Compatible"
+        if compatibility.get("compatible") is True
+        else "Incompatible"
+        if compatibility.get("compatible") is False
+        else "Not checked"
+    )
+    validation_status = (
+        "Valid"
+        if isinstance(validation, Mapping) and validation.get("valid") is True
+        else "Needs review"
+    )
+    card_id = _assistant_ui_card_id("run-setup", coordinate)
+    actions = [
+        _assistant_ui_card_action(
+            card_id, "open-workspace", "Open Workspace", eligible=bool(workspace_id)
+        )
+    ]
+    if exact_setup:
+        actions.insert(
+            0,
+            _assistant_ui_card_action(
+                card_id, "configure-run", "Review Run setup"
+            ),
+        )
+    actions.append(
+        _assistant_ui_card_action(
+            card_id,
+            "start-run",
+            "Start run",
+            eligible=launch_eligible,
+            reason=launch_reason,
+            approval_required=True,
+        )
+    )
+    return {
+        "schema": STUDIO_UI_CARD_SCHEMA,
+        "id": card_id,
+        "kind": "run-setup",
+        "coordinate": coordinate,
+        "title": title,
+        "description": str(
+            draft.get("description")
+            or ("Saved Run setup." if saved_result else "Run setup prepared for review.")
+        ),
+        "status": "ready" if launch_eligible else "needs-review",
+        "facts": _assistant_ui_card_facts(
+            ("Environment", environment.get("label") or environment.get("id")),
+            ("Method", method.get("label") or method.get("id")),
+            ("Metric", objective.get("metric")),
+            ("Direction", objective.get("direction")),
+            ("Max trials", budget.get("maxTrials")),
+            ("Compatibility", compatibility_status),
+            ("Validation", validation_status),
+            ("Workspace revision", workspace_revision),
+        ),
+        "actions": actions,
+    }
+
+
+def _assistant_study_launch_ui_card(data: Mapping[str, Any]) -> Optional[JsonDict]:
+    job = data.get("job") if isinstance(data.get("job"), Mapping) else {}
+    launch_id = str(job.get("launch_id") or job.get("job_id") or "")
+    if not launch_id:
+        return None
+    coordinate: JsonDict = {"kind": "study-launch", "launch_id": launch_id}
+    run_id = str(job.get("run_id") or "")
+    if run_id:
+        coordinate["run_id"] = run_id
+    card_id = _assistant_ui_card_id("run", coordinate)
+    actions = [
+        _assistant_ui_card_action(card_id, "open-launch", "Open launch")
+    ]
+    if run_id:
+        actions.append(
+            _assistant_ui_card_action(card_id, "open-run", "Open run")
+        )
+    return {
+        "schema": STUDIO_UI_CARD_SCHEMA,
+        "id": card_id,
+        "kind": "run",
+        "coordinate": coordinate,
+        "title": str(job.get("study_name") or "Run launch"),
+        "description": "The Run setup was accepted and its current launch state is shown here.",
+        "status": str(job.get("status") or "queued"),
+        "facts": _assistant_ui_card_facts(
+            ("Environment", job.get("environment_id")),
+            ("Method", job.get("method_id")),
+            ("Run", run_id),
+        ),
+        "actions": actions,
+    }
+
+
+def _assistant_run_ui_card(run: Any) -> Optional[JsonDict]:
+    if not isinstance(run, Mapping):
+        return None
+    run_id = str(run.get("run_id") or run.get("id") or "")
+    if not run_id:
+        return None
+    coordinate = {"kind": "run", "run_id": run_id}
+    card_id = _assistant_ui_card_id("run", coordinate)
+    objective = run.get("objective") if isinstance(run.get("objective"), Mapping) else {}
+    primary_metric = (
+        objective.get("metric")
+        or objective.get("name")
+        or (
+            objective.get("primaryMetric", {}).get("name")
+            if isinstance(objective.get("primaryMetric"), Mapping)
+            else None
+        )
+    )
+    best = run.get("best_comparable_candidate")
+    best_value = None
+    if isinstance(best, Mapping):
+        best_value = best.get("primary_metric_value") or best.get("metric_value")
+    return {
+        "schema": STUDIO_UI_CARD_SCHEMA,
+        "id": card_id,
+        "kind": "run",
+        "coordinate": coordinate,
+        "title": str(run.get("name") or run_id),
+        "description": "Open the recorded Run for current progress, results, and evidence.",
+        "status": str(run.get("status") or run.get("run_status") or "unknown"),
+        "facts": _assistant_ui_card_facts(
+            ("Completed trials", run.get("completed_trials")),
+            ("Accepted trials", run.get("accepted_trials")),
+            ("Failures", run.get("failure_count")),
+            ("Objective", primary_metric),
+            ("Best", best_value),
+        ),
+        "actions": [
+            _assistant_ui_card_action(card_id, "open-run", "Open run")
+        ],
+    }
+
+
+def _assistant_tool_ui_cards(tool: str, data: Mapping[str, Any]) -> List[JsonDict]:
+    cards: List[Optional[JsonDict]] = []
+    if tool == "optpilot_catalog_detail":
+        cards.append(
+            _assistant_catalog_ui_card(
+                data.get("entry"), validation=data.get("validation")
+            )
+        )
+    elif tool == "optpilot_study_draft":
+        cards.append(_assistant_run_setup_ui_card(data))
+    elif tool == "optpilot_study_save":
+        cards.append(_assistant_run_setup_ui_card(data, saved_result=True))
+    elif tool == "optpilot_study_launch":
+        cards.append(_assistant_study_launch_ui_card(data))
+    elif tool == "optpilot_run_list":
+        runs = data.get("runs")
+        if isinstance(runs, list):
+            cards.extend(_assistant_run_ui_card(item) for item in runs)
+    elif tool == "optpilot_run_detail":
+        cards.append(_assistant_run_ui_card(data.get("run")))
+    return [card for card in cards if card is not None]
+
+
 def _tool_result(
     tool: str,
     ok: bool,
@@ -16485,14 +16910,22 @@ def _tool_result(
     data: Optional[JsonDict] = None,
     artifacts: Optional[List[JsonDict]] = None,
     events: Optional[List[JsonDict]] = None,
+    ui_cards: Optional[List[JsonDict]] = None,
 ) -> JsonDict:
+    result_data = data or {}
+    projected_cards = (
+        _assistant_tool_ui_cards(tool, result_data)
+        if ui_cards is None
+        else ui_cards
+    )
     return {
         "ok": ok,
         "tool": tool,
         "summary": summary,
-        "data": data or {},
+        "data": result_data,
         "artifacts": artifacts or [],
         "events": events or [],
+        "ui_cards": sanitize_studio_ui_cards(projected_cards),
     }
 
 
@@ -17396,6 +17829,10 @@ def _execute_agent_tool(
     execution_context: Optional[ToolExecutionContext] = None,
 ) -> JsonDict:
     arguments = arguments or {}
+    if tool == "optpilot_conversation_title":
+        return _set_agent_conversation_title(
+            state, session_id, arguments.get("title")
+        )
     if tool == "optpilot_workspace_list":
         sessions = _read_agent_session_index(state)
         session = _require_agent_session(state, session_id)
@@ -19063,42 +19500,263 @@ def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
     return _decorate_agent_session_status(state, payload)
 
 
-def _list_agent_sessions(state: UiState) -> List[JsonDict]:
-    sessions = _read_agent_session_index(state)
-    if not sessions:
-        sessions = [
-            _create_agent_session(
-                state, {"title": "Main Session", "description": "General OptPilot work"}
-            )
-        ]
-    known_workspaces = {
-        str(workspace["id"]) for workspace in _read_workspace_index(state)
+_AGENT_TITLE_ORIGINS = frozenset({"default", "fallback", "assistant", "user"})
+_AGENT_GENERIC_TITLES = frozenset(
+    {
+        "",
+        "conversation",
+        "main conversation",
+        "main session",
+        "new conversation",
+        "new session",
+        "session",
+        "untitled",
+        "untitled conversation",
     }
-    changed = False
-    normalized = []
-    for session in sessions:
-        session = dict(session)
-        attached = [
-            item
-            for item in session.get("attached_workspace_ids", [])
-            if item in known_workspaces
-        ]
-        if attached != session.get("attached_workspace_ids", []):
-            session["attached_workspace_ids"] = attached
-            if session.get("selected_workspace_id") not in attached:
-                session["selected_workspace_id"] = ""
-            session["updated_at"] = _now_iso()
-            changed = True
-        normalized.append(session)
-    if changed:
-        _write_agent_session_index(state, normalized)
+)
+_AGENT_TRIVIAL_REQUESTS = frozenset(
+    {
+        "continue",
+        "go ahead",
+        "hello",
+        "hello there",
+        "hi",
+        "hey",
+        "no",
+        "ok",
+        "okay",
+        "please continue",
+        "sounds good",
+        "thank you",
+        "thanks",
+        "yes",
+    }
+)
+
+
+def _agent_title_is_generic(value: Any) -> bool:
+    title = " ".join(str(value or "").split()).casefold()
+    return title in _AGENT_GENERIC_TITLES or bool(
+        re.fullmatch(r"(?:conversation|session)\s+\d+", title)
+    )
+
+
+def _agent_title_origin(session: Mapping[str, Any]) -> str:
+    stored = str(session.get("title_origin") or "")
+    if stored in _AGENT_TITLE_ORIGINS:
+        return stored
+    return "default" if _agent_title_is_generic(session.get("title")) else "user"
+
+
+def _agent_request_is_substantive(value: Any) -> bool:
+    text = " ".join(str(value or "").split()).strip(" .,!?:;-_").casefold()
+    if not text or text in _AGENT_TRIVIAL_REQUESTS:
+        return False
+    return bool(re.search(r"[a-z0-9]", text))
+
+
+def _sanitize_agent_conversation_title(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = re.sub(r"<[^>\n]{0,256}>", " ", value)
+    text = "".join(char if ord(char) >= 32 else " " for char in text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"(?i)^title\s*[:\-]\s*", "", text)
+    text = text.strip(" \t\"'`#*_~|:;,.!?-–—")
+    words = text.split()
+    if len(words) > 8:
+        text = " ".join(words[:8]).rstrip(" \t\"'`#*_~|:;,.!?-–—")
+    if len(text) > 64:
+        text = text[:64].rsplit(" ", 1)[0].rstrip(" \t\"'`#*_~|:;,.!?-–—")
+    if not text or _agent_title_is_generic(text) or not re.search(r"[A-Za-z0-9]", text):
+        return ""
+    return text
+
+
+def _agent_title_from_request(value: Any) -> str:
+    if not _agent_request_is_substantive(value):
+        return ""
+    text = str(value or "")
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = next(
+        (line.strip() for line in text.splitlines() if line.strip()),
+        text.strip(),
+    )
+    text = re.sub(r"^(?:[-*+]\s+|#{1,6}\s*)", "", text)
+    prefixes = (
+        r"please\s+",
+        r"(?:can|could|would)\s+you\s+",
+        r"help\s+me\s+(?:to\s+)?",
+        r"i(?:'d|\s+would)?\s+like\s+(?:you\s+)?to\s+",
+        r"i\s+(?:want|need)\s+(?:you\s+)?to\s+",
+        r"i\s+asked\s+(?:another|an)\s+agent\s+to\s+(?:help\s+me\s+)?",
+        r"go\s+ahead\s+(?:and\s+)?",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            updated = re.sub(rf"(?i)^{prefix}", "", text, count=1).strip()
+            if updated != text:
+                text = updated
+                changed = True
+                break
+    sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+    title = _sanitize_agent_conversation_title(sentence)
+    if title:
+        title = title[0].upper() + title[1:]
+    return title
+
+
+def _agent_user_turn_count(state: UiState, session_id: str) -> int:
+    return sum(
+        1
+        for message in _read_agent_messages(state, session_id)
+        if message.get("role") == "user"
+    )
+
+
+def _maybe_apply_agent_title_fallback(
+    state: UiState,
+    session: JsonDict,
+    content: Any,
+    *,
+    pending_user_message: bool = False,
+) -> bool:
+    if _agent_title_origin(session) != "default":
+        return False
+    title = _agent_title_from_request(content)
+    if not title:
+        return False
+    session["title"] = title
+    session["title_origin"] = "fallback"
+    session["title_updated_turn"] = _agent_user_turn_count(
+        state, str(session.get("id") or "")
+    ) + (1 if pending_user_message else 0)
+    return True
+
+
+def _set_agent_conversation_title(
+    state: UiState, session_id: str, value: Any
+) -> JsonDict:
+    session = _require_agent_session(state, session_id)
+    if _agent_title_origin(session) == "user":
+        return _tool_result(
+            "optpilot_conversation_title",
+            True,
+            "Kept the user-defined Conversation title.",
+            data={"title": str(session.get("title") or "")},
+        )
+    title = _sanitize_agent_conversation_title(value)
+    if not title:
+        return _tool_result(
+            "optpilot_conversation_title",
+            False,
+            "Use a specific, single-line Conversation title of at most 64 characters.",
+        )
+    turn = _agent_user_turn_count(state, session_id)
+    if turn <= 0:
+        return _tool_result(
+            "optpilot_conversation_title",
+            False,
+            "A substantive user request is required before automatic naming.",
+        )
+    try:
+        assistant_title_updated_turn = int(
+            session.get("assistant_title_updated_turn") or -1
+        )
+    except (TypeError, ValueError):
+        assistant_title_updated_turn = -1
+    if assistant_title_updated_turn == turn:
+        return _tool_result(
+            "optpilot_conversation_title",
+            True,
+            "The Conversation title was already updated for this turn.",
+            data={"title": str(session.get("title") or "")},
+        )
+    session["title"] = title
+    session["title_origin"] = "assistant"
+    session["title_updated_turn"] = turn
+    session["assistant_title_updated_turn"] = turn
+    _upsert_agent_session(state, session)
+    return _tool_result(
+        "optpilot_conversation_title",
+        True,
+        "Conversation title updated.",
+        data={"title": title},
+    )
+
+
+def _normalized_agent_sessions(state: UiState) -> List[JsonDict]:
+    with state._agent_session_index_lock:
+        sessions = _read_agent_session_index(state)
+        if not sessions:
+            _create_agent_session(
+                state,
+                {"title": "Main Session", "description": "General OptPilot work"},
+            )
+            sessions = _read_agent_session_index(state)
+        known_workspaces = {
+            str(workspace["id"]) for workspace in _read_workspace_index(state)
+        }
+        changed = False
+        normalized = []
+        for session in sessions:
+            session = dict(session)
+            attached = [
+                item
+                for item in session.get("attached_workspace_ids", [])
+                if item in known_workspaces
+            ]
+            if attached != session.get("attached_workspace_ids", []):
+                session["attached_workspace_ids"] = attached
+                if session.get("selected_workspace_id") not in attached:
+                    session["selected_workspace_id"] = ""
+                session["updated_at"] = _now_iso()
+                changed = True
+            if str(session.get("title_origin") or "") not in _AGENT_TITLE_ORIGINS:
+                session["title_origin"] = _agent_title_origin(session)
+                changed = True
+            if _agent_title_origin(session) in {"assistant", "fallback"}:
+                cleaned_title = _sanitize_agent_conversation_title(
+                    session.get("title")
+                )
+                if cleaned_title and cleaned_title != session.get("title"):
+                    session["title"] = cleaned_title
+                    changed = True
+            if _agent_title_origin(session) == "default":
+                for message in _read_agent_messages(
+                    state, str(session.get("id") or "")
+                ):
+                    if message.get("role") != "user":
+                        continue
+                    if _maybe_apply_agent_title_fallback(
+                        state, session, message.get("content")
+                    ):
+                        changed = True
+                        break
+            normalized.append(session)
+        if changed:
+            _write_agent_session_index(state, normalized)
+        return normalized
+
+
+def _list_agent_session_summaries(state: UiState) -> List[JsonDict]:
+    return [
+        _decorate_agent_session_status(state, dict(session))
+        for session in _normalized_agent_sessions(state)
+    ]
+
+
+def _list_agent_sessions(state: UiState) -> List[JsonDict]:
+    normalized = _normalized_agent_sessions(state)
     return [_agent_session_payload(state, session) for session in normalized]
 
 
 def _agent_session_by_id(state: UiState, session_id: str) -> Optional[JsonDict]:
-    for session in _list_agent_sessions(state):
+    for session in _normalized_agent_sessions(state):
         if session.get("id") == session_id:
-            return session
+            return _agent_session_payload(state, session)
     return None
 
 
@@ -19110,15 +19768,16 @@ def _require_agent_session(state: UiState, session_id: str) -> JsonDict:
 
 
 def _upsert_agent_session(state: UiState, session: JsonDict) -> JsonDict:
-    sessions = [
-        item
-        for item in _read_agent_session_index(state)
-        if item.get("id") != session.get("id")
-    ]
-    session = dict(session)
-    session["updated_at"] = _now_iso()
-    sessions.append(session)
-    _write_agent_session_index(state, sessions)
+    with state._agent_session_index_lock:
+        sessions = [
+            item
+            for item in _read_agent_session_index(state)
+            if item.get("id") != session.get("id")
+        ]
+        session = dict(session)
+        session["updated_at"] = _now_iso()
+        sessions.append(session)
+        _write_agent_session_index(state, sessions)
     return _agent_session_payload(state, session)
 
 
@@ -19129,9 +19788,11 @@ def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:
     )
     now = _now_iso()
     attached = [str(item) for item in payload.get("attached_workspace_ids", []) or []]
+    title = str(payload.get("title") or "Untitled conversation")
     session = {
         "id": session_id,
-        "title": str(payload.get("title") or "New Session"),
+        "title": title,
+        "title_origin": "default" if _agent_title_is_generic(title) else "user",
         "description": str(payload.get("description") or "New conversation"),
         "status": "idle",
         "created_at": now,
@@ -19427,6 +20088,91 @@ def _agent_assistant_message_origin(dispatch: Optional[JsonDict]) -> tuple[str, 
     return "assistant", "ui_history"
 
 
+def _agent_recent_message_context(
+    state: UiState,
+    session_id: str,
+    *,
+    limit: int = 8,
+    character_limit: int = 6000,
+    exclude_message_id: str = "",
+) -> List[JsonDict]:
+    """Return bounded user-visible history when a runtime must be recreated."""
+
+    history: List[JsonDict] = []
+    used = 0
+    for message in reversed(_read_agent_messages(state, session_id)):
+        if exclude_message_id and str(message.get("id") or "") == exclude_message_id:
+            continue
+        role = str(message.get("role") or "")
+        source = str(message.get("source") or "")
+        if role not in {"user", "assistant", "agent"}:
+            continue
+        if source == "studio_system":
+            continue
+        content = _cap_text(message.get("content"), 1200).strip()
+        if not content:
+            continue
+        remaining = character_limit - used
+        if remaining <= 0:
+            break
+        content = content[:remaining]
+        history.append(
+            {
+                "role": "assistant" if role in {"assistant", "agent"} else "user",
+                "content": content,
+            }
+        )
+        used += len(content)
+        if len(history) >= max(1, limit):
+            break
+    history.reverse()
+    return history
+
+
+def _record_missing_openhands_conversation(
+    state: UiState,
+    session_id: str,
+    conversation_id: str,
+    *,
+    notify_user: bool,
+) -> None:
+    """Record one missing runtime binding without changing Studio history."""
+
+    _append_agent_event_record(
+        state,
+        session_id,
+        {
+            "id": f"evt_{uuid.uuid4().hex[:10]}",
+            "type": "openhands_conversation_missing",
+            "created_at": _now_iso(),
+            "payload": {
+                "conversation_id": conversation_id,
+                "recovery": "create_on_next_message",
+            },
+        },
+    )
+    if notify_user:
+        _append_agent_assistant_message_if_new(
+            state,
+            session_id,
+            title="Assistant restarted",
+            content=(
+                "The Assistant service restarted before it could finish this request. "
+                "Your Conversation history is still here; send the request again to continue."
+            ),
+            dispatch={"status": "failed", "transport": "openhands_http"},
+        )
+
+
+def _clear_openhands_runtime_binding(session: JsonDict) -> None:
+    """Clear only ephemeral OpenHands state; retained Studio messages stay intact."""
+
+    session["openhands_conversation_id"] = ""
+    session.pop("openhands_workspace_id", None)
+    session.pop("openhands_pending_sync", None)
+    session.pop("cancelled_openhands_conversation_id", None)
+
+
 def _append_agent_message(
     state: UiState, session_id: str, payload: JsonDict
 ) -> JsonDict:
@@ -19448,6 +20194,10 @@ def _append_agent_message(
     )
     if not content:
         raise ValueError("Message content is required.")
+    if role == "user":
+        _maybe_apply_agent_title_fallback(
+            state, session, content, pending_user_message=True
+        )
     context = _agent_context_packet(state, session, ui_context)
     message = {
         "id": f"msg_{uuid.uuid4().hex[:10]}",
@@ -19472,6 +20222,55 @@ def _append_agent_message(
     if role == "user":
         turn_id = f"turn_{uuid.uuid4().hex[:10]}"
         turn_started_at = str(message["created_at"])
+        selected_workspace = (
+            context.get("selected_workspace")
+            if isinstance(context.get("selected_workspace"), dict)
+            else {}
+        )
+        target_workspace_id = str(selected_workspace.get("id") or "")
+        target_workspace_title = str(
+            selected_workspace.get("title") or "No default Workspace"
+        )
+        existing_conversation_id = str(
+            session.get("openhands_conversation_id") or ""
+        )
+        runtime_workspace_id = str(session.get("openhands_workspace_id") or "")
+        workspace_changed = bool(
+            existing_conversation_id and runtime_workspace_id != target_workspace_id
+        )
+        dispatch_conversation_id = existing_conversation_id
+        if workspace_changed:
+            dispatch_conversation_id = ""
+            session["openhands_conversation_id"] = ""
+            session.pop("openhands_pending_sync", None)
+            context.setdefault("conversation", {})["recent_messages"] = (
+                _agent_recent_message_context(
+                    state,
+                    session_id,
+                    exclude_message_id=str(message.get("id") or ""),
+                )
+            )
+            _append_agent_event_record(
+                state,
+                session_id,
+                {
+                    "id": f"evt_{uuid.uuid4().hex[:10]}",
+                    "type": "assistant_workspace_changed",
+                    "created_at": _now_iso(),
+                    "payload": {
+                        "workspace_id": target_workspace_id,
+                        "workspace_title": target_workspace_title,
+                    },
+                },
+            )
+        elif not existing_conversation_id:
+            context.setdefault("conversation", {})["recent_messages"] = (
+                _agent_recent_message_context(
+                    state,
+                    session_id,
+                    exclude_message_id=str(message.get("id") or ""),
+                )
+            )
         session["status"] = "running"
         session["active_turn_id"] = turn_id
         session["active_turn_started_at"] = turn_started_at
@@ -19486,9 +20285,7 @@ def _append_agent_message(
                 "created_at": _now_iso(),
                 "payload": {
                     "dispatch": state.agent_adapter.status().get("dispatch"),
-                    "conversation_id": str(
-                        session.get("openhands_conversation_id") or ""
-                    ),
+                    "conversation_id": dispatch_conversation_id,
                     "turn_id": turn_id,
                 },
             },
@@ -19496,15 +20293,62 @@ def _append_agent_message(
         dispatch = state.agent_adapter.dispatch_message(
             message=content,
             context=context,
-            conversation_id=str(session.get("openhands_conversation_id") or "") or None,
+            conversation_id=dispatch_conversation_id or None,
             tool_executor=lambda tool_name, arguments: _execute_agent_tool(
                 state, session_id, tool_name, arguments
             ),
             ignored_response_texts=_assistant_response_texts(state, session_id),
         )
+        recovered_conversation_id = ""
+        if (
+            dispatch_conversation_id
+            and str(dispatch.get("status") or "") == "conversation_missing"
+        ):
+            missing_conversation_id = str(
+                dispatch.get("conversation_id") or dispatch_conversation_id
+            )
+            _clear_openhands_runtime_binding(session)
+            context.setdefault("conversation", {})["recent_messages"] = (
+                _agent_recent_message_context(
+                    state,
+                    session_id,
+                    exclude_message_id=str(message.get("id") or ""),
+                )
+            )
+            _record_missing_openhands_conversation(
+                state,
+                session_id,
+                missing_conversation_id,
+                notify_user=False,
+            )
+            dispatch = state.agent_adapter.dispatch_message(
+                message=content,
+                context=context,
+                conversation_id=None,
+                tool_executor=lambda tool_name, arguments: _execute_agent_tool(
+                    state, session_id, tool_name, arguments
+                ),
+                ignored_response_texts=_assistant_response_texts(state, session_id),
+            )
+            recovered_conversation_id = str(dispatch.get("conversation_id") or "")
+            if recovered_conversation_id:
+                _append_agent_event_record(
+                    state,
+                    session_id,
+                    {
+                        "id": f"evt_{uuid.uuid4().hex[:10]}",
+                        "type": "openhands_conversation_recreated",
+                        "created_at": _now_iso(),
+                        "payload": {
+                            "previous_conversation_id": missing_conversation_id,
+                            "conversation_id": recovered_conversation_id,
+                        },
+                    },
+                )
         conversation_id = str(dispatch.get("conversation_id") or "")
         if conversation_id:
             session["openhands_conversation_id"] = conversation_id
+            session["openhands_workspace_id"] = target_workspace_id
         cancelled_session = _cancelled_agent_turn_session(
             state,
             session_id,
@@ -19563,6 +20407,21 @@ def _append_agent_message(
             session["status"] = "waiting_for_agent"
     else:
         session["status"] = session.get("status", "idle")
+    if role == "user":
+        latest = _require_agent_session(state, session_id)
+        for key in (
+            "status",
+            "openhands_conversation_id",
+            "openhands_workspace_id",
+            "active_turn_id",
+            "active_turn_started_at",
+            "openhands_pending_sync",
+        ):
+            if key in session:
+                latest[key] = session[key]
+            else:
+                latest.pop(key, None)
+        session = latest
     updated = _upsert_agent_session(state, session)
     return {"session": updated, "message": message}
 
@@ -19606,6 +20465,18 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
                 ignored_response_texts=ignored_response_texts,
                 poll_seconds=3.0,
             )
+        except OpenHandsConversationNotFound:
+            _clear_openhands_runtime_binding(session)
+            session["status"] = "idle"
+            session.pop("active_turn_id", None)
+            session.pop("active_turn_started_at", None)
+            _record_missing_openhands_conversation(
+                state,
+                session_id,
+                conversation_id,
+                notify_user=True,
+            )
+            return _upsert_agent_session(state, session)
         except Exception as exc:
             if not _is_timeout_like(exc):
                 raise
@@ -20474,7 +21345,7 @@ def _resolve_assistant_selected_run(
         if record.run_id != ref.run_id:
             raise ValueError(
                 "Assistant run selection handle belongs to a different run. "
-                "Choose Ask Assistant on the run item again."
+                "Choose Discuss in Conversation on the Run again."
             )
         try:
             summary, row = runtime.run_views.resolve_workbench_selection(
@@ -20484,8 +21355,8 @@ def _resolve_assistant_selected_run(
         except (RealmConflict, RealmNotFound, ValueError) as error:
             _discard_assistant_run_selection(state, record=record)
             raise RealmConflict(
-                "The Assistant run selection is stale or unavailable. Choose "
-                "Ask Assistant on the run item again."
+                "The Conversation's Run selection is stale or unavailable. "
+                "Choose Discuss in Conversation on the Run again."
             ) from error
         selected = _bounded_assistant_run_selection(row)
     else:
@@ -20534,6 +21405,12 @@ def _agent_context_packet(
         selected_workspace = next(
             (item for item in attached if item["id"] == ui_selected_workspace_id), None
         )
+    if selected_workspace is None:
+        default_workspace_id = str(session.get("selected_workspace_id") or "")
+        if default_workspace_id:
+            selected_workspace = next(
+                (item for item in attached if item["id"] == default_workspace_id), None
+            )
     selected_catalog_entry = (
         ui_context.get("selected_catalog_entry")
         if current_page == "catalog"
@@ -20579,6 +21456,11 @@ def _agent_context_packet(
     )
     return state.agent_adapter.context_packet(
         session_id=str(session.get("id") or ""),
+        conversation={
+            "title": str(session.get("title") or ""),
+            "title_origin": _agent_title_origin(session),
+            "automatic_title_allowed": _agent_title_origin(session) != "user",
+        },
         selected_workspace=selected_workspace,
         attached_workspaces=attached,
         catalog_counts={
@@ -20831,11 +21713,18 @@ def _list_ui_workspaces(
     include_support: bool = False,
     preserve_workspace_ids: Iterable[str] = (),
 ) -> List[JsonDict]:
+    # Conversations normalize their Workspace attachments while holding the
+    # agent-session index lock and then reading the Workspace index.  Take the
+    # same agent -> Workspace lock order here.  Acquiring the Workspace lock
+    # first would deadlock the parallel Conversation and Workspace requests
+    # issued during initial page hydration.
+    attachment_map = _workspace_attachment_map(state)
     with state._workspace_index_lock:
         return _list_ui_workspaces_unlocked(
             state,
             include_support=include_support,
             preserve_workspace_ids=preserve_workspace_ids,
+            attachment_map=attachment_map,
         )
 
 
@@ -20844,12 +21733,13 @@ def _list_ui_workspaces_unlocked(
     *,
     include_support: bool = False,
     preserve_workspace_ids: Iterable[str] = (),
+    attachment_map: Optional[Mapping[str, List[str]]] = None,
 ) -> List[JsonDict]:
     workspaces = []
     returned = []
     changed = False
     preserved = {str(item) for item in preserve_workspace_ids if str(item)}
-    attachment_map = _workspace_attachment_map(state)
+    attachment_map = dict(attachment_map or {})
     managed = _managed_workspace_summaries(state)
     visible_managed: set[str] = set()
     for workspace in _read_workspace_index(state):
@@ -22492,8 +23382,8 @@ def _open_catalog_workspace(
         )
     if editable:
         raise CatalogWorkspaceCreationUnsupported(
-            "Open this local source folder as a Workspace, then Check and register "
-            "it before creating an editable copy."
+            "Open this local source folder as a Workspace, then check and register "
+            "the version you want to reuse."
         )
     uid = _encode_id(resolved_source)
     if kind == "resource":

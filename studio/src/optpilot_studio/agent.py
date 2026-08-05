@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,16 @@ from urllib.request import Request, urlopen
 JsonDict = Dict[str, Any]
 ToolExecutor = Callable[[str, JsonDict], JsonDict]
 
+
+class OpenHandsConversationNotFound(RuntimeError):
+    """The OpenHands process no longer knows a retained conversation id."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = str(conversation_id or "")
+        super().__init__(
+            f"OpenHands conversation {self.conversation_id or '<unknown>'} was not found."
+        )
+
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENHANDS_SESSION_ENDPOINT = "/api/conversations"
 DEFAULT_OPENHANDS_NATIVE_TOOLS = ("grep", "glob", "task_tracker")
@@ -26,13 +37,26 @@ OptPilot explanations centered on environment-owned evaluator.settings and
 method-visible methodContext.references. On the Runs page, use
 optpilot_run_detail for status, metrics, failures, candidates, and evidence
 instead of reading raw run files or creating a Workspace for a recorded Run.
+Catalog list and search results are evidence: inspect a small relevant
+shortlist, and emit UI cards only for objects the user is likely to act on.
+For file and command work, use Studio-backed workspace tools in the context
+packet's selected Workspace, which is normally the Conversation's default
+Workspace, or in another attached Workspace the user explicitly names.
+Changing the default Workspace may recreate the runtime with bounded recent
+Conversation context; continue the same goal, but do not assume ephemeral
+process or terminal state survived.
 Do not claim you modified files, launched studies, or registered catalog
 entries unless the runtime confirms it. For frontend services, start
 them in the attached workspace runtime on 0.0.0.0 and use
-optpilot_workspace_preview_open with the service port to open Studio Preview."""
+optpilot_workspace_preview_open with the service port to open Studio Preview.
+When available, use optpilot_conversation_title after the first substantive
+request to give the Conversation a short, specific title. Use it again only when the primary goal
+changes materially; do not rename greetings, thanks, confirmations, or minor
+follow-ups, and do not mention title updates in your reply."""
 
 
 OPTPILOT_AGENT_TOOLS = [
+    "optpilot_conversation_title",
     "optpilot_workspace_list",
     "optpilot_workspace_create",
     "optpilot_workspace_attach",
@@ -68,6 +92,312 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_capability_detail",
 ]
 SUPPORTED_CLIENT_TOOL_NAMES = {*OPTPILOT_AGENT_TOOLS, *OPENHANDS_COMPAT_AGENT_TOOLS}
+
+STUDIO_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1"
+STUDIO_UI_CARD_KINDS = frozenset({"catalog-use", "run-setup", "run"})
+STUDIO_UI_CARD_OPERATIONS = frozenset(
+    {
+        "configure-run",
+        "open-catalog",
+        "open-interface",
+        "open-launch",
+        "open-run",
+        "open-workspace",
+        "start-run",
+    }
+)
+STUDIO_UI_CARD_MAX_COUNT = 12
+STUDIO_UI_CARD_MAX_BYTES = 16 * 1024
+STUDIO_UI_CARDS_MAX_BYTES = 64 * 1024
+
+
+def _studio_ui_card_text(
+    value: Any,
+    *,
+    maximum: int,
+    required: bool = False,
+    normalize: bool = False,
+) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split()) if normalize else value.strip()
+    if (required and not text) or len(text.encode("utf-8")) > maximum:
+        return None
+    if any(ord(char) < 32 for char in text):
+        return None
+    return text
+
+
+def _studio_ui_card_positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _studio_ui_card_portable_path(value: Any) -> Optional[str]:
+    text = _studio_ui_card_text(value, maximum=2048, required=True)
+    if text is None or "\\" in text or text.startswith("/"):
+        return None
+    parts = text.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    return text
+
+
+def _sanitize_studio_ui_card_coordinate(value: Any) -> Optional[JsonDict]:
+    if not isinstance(value, dict):
+        return None
+    kind = _studio_ui_card_text(
+        value.get("kind"), maximum=40, required=True
+    )
+    opaque = lambda item: _studio_ui_card_text(  # noqa: E731
+        item, maximum=12_000, required=True
+    )
+    if kind == "catalog-entry":
+        config_kind = _studio_ui_card_text(
+            value.get("config_kind"), maximum=32, required=True
+        )
+        uid = opaque(value.get("uid"))
+        if config_kind not in {"environment", "method", "resource", "study"} or uid is None:
+            return None
+        return {"kind": kind, "config_kind": config_kind, "uid": uid}
+    if kind == "workspace":
+        workspace_id = opaque(value.get("workspace_id"))
+        if workspace_id is None:
+            return None
+        return {"kind": kind, "workspace_id": workspace_id}
+    if kind == "study-workspace":
+        workspace_id = opaque(value.get("workspace_id"))
+        workspace_revision = _studio_ui_card_positive_int(
+            value.get("workspace_revision")
+        )
+        study_relative_path = _studio_ui_card_portable_path(
+            value.get("study_relative_path")
+        )
+        if (
+            workspace_id is None
+            or workspace_revision is None
+            or study_relative_path is None
+        ):
+            return None
+        result: JsonDict = {
+            "kind": kind,
+            "workspace_id": workspace_id,
+            "workspace_revision": workspace_revision,
+            "study_relative_path": study_relative_path,
+        }
+        for key in ("environment_uid", "method_uid"):
+            item = opaque(value.get(key)) if value.get(key) else None
+            if item is not None:
+                result[key] = item
+        draft_id = opaque(value.get("draft_id")) if value.get("draft_id") else None
+        if draft_id is not None:
+            result["draft_id"] = draft_id
+        draft_revision = (
+            _studio_ui_card_positive_int(value.get("draft_revision"))
+            if value.get("draft_revision") is not None
+            else None
+        )
+        if draft_revision is not None:
+            result["draft_revision"] = draft_revision
+        return result
+    if kind == "study-launch":
+        launch_id = opaque(value.get("launch_id"))
+        if launch_id is None:
+            return None
+        result = {"kind": kind, "launch_id": launch_id}
+        run_id = opaque(value.get("run_id")) if value.get("run_id") else None
+        if run_id is not None:
+            result["run_id"] = run_id
+        return result
+    if kind == "run":
+        run_id = opaque(value.get("run_id"))
+        if run_id is None:
+            return None
+        return {"kind": kind, "run_id": run_id}
+    return None
+
+
+def _sanitize_studio_ui_card_facts(value: Any) -> List[JsonDict]:
+    result: List[JsonDict] = []
+    for raw in value[:8] if isinstance(value, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        label = _studio_ui_card_text(
+            raw.get("label"), maximum=120, required=True, normalize=True
+        )
+        fact_value = raw.get("value")
+        if label is None or not isinstance(
+            fact_value, (str, int, float, bool, type(None))
+        ):
+            continue
+        if isinstance(fact_value, str):
+            fact_value = _studio_ui_card_text(
+                fact_value, maximum=1000, normalize=True
+            )
+            if fact_value is None:
+                continue
+        if isinstance(fact_value, float) and not math.isfinite(fact_value):
+            continue
+        result.append({"label": label, "value": fact_value})
+    return result
+
+
+def _sanitize_studio_ui_card_actions(value: Any) -> List[JsonDict]:
+    result: List[JsonDict] = []
+    seen: set[str] = set()
+    for raw in value[:6] if isinstance(value, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        operation = _studio_ui_card_text(
+            raw.get("operation"), maximum=64, required=True
+        )
+        action_id = _studio_ui_card_text(
+            raw.get("id"), maximum=160, required=True
+        )
+        label = _studio_ui_card_text(
+            raw.get("label"), maximum=120, required=True, normalize=True
+        )
+        eligible = raw.get("eligible")
+        approval_required = raw.get("approval_required", False)
+        if (
+            operation not in STUDIO_UI_CARD_OPERATIONS
+            or action_id is None
+            or action_id in seen
+            or label is None
+            or not isinstance(eligible, bool)
+            or not isinstance(approval_required, bool)
+        ):
+            continue
+        reason = _studio_ui_card_text(
+            raw.get("reason", ""), maximum=600, normalize=True
+        )
+        if reason is None:
+            continue
+        seen.add(action_id)
+        result.append(
+            {
+                "id": action_id,
+                "label": label,
+                "operation": operation,
+                "eligible": eligible,
+                "reason": reason,
+                "approval_required": (
+                    True if operation == "start-run" else approval_required
+                ),
+            }
+        )
+    return result
+
+
+def _studio_ui_card_coordinate_operations(coordinate: JsonDict) -> frozenset[str]:
+    kind = coordinate.get("kind")
+    if kind == "catalog-entry":
+        common = {"open-catalog", "open-interface"}
+        if coordinate.get("config_kind") == "study":
+            common.update({"configure-run", "start-run"})
+        return frozenset(common)
+    if kind == "study-workspace":
+        return frozenset({"configure-run", "open-workspace", "start-run"})
+    if kind == "workspace":
+        return frozenset({"open-workspace", "start-run"})
+    if kind == "study-launch":
+        return frozenset({"open-launch", "open-run"})
+    if kind == "run":
+        return frozenset({"open-run"})
+    return frozenset()
+
+
+def sanitize_studio_ui_cards(raw_cards: Any) -> List[JsonDict]:
+    """Return the bounded, non-executable card projection safe for Studio UI.
+
+    Cards contain opaque coordinates and allowlisted operation names only. The
+    browser must re-read the referenced object's current capability before an
+    operation is offered or executed; cards never carry URLs or request bodies.
+    """
+
+    if not isinstance(raw_cards, list):
+        return []
+    cards: List[JsonDict] = []
+    total_bytes = 2
+    for raw in raw_cards[:STUDIO_UI_CARD_MAX_COUNT]:
+        if not isinstance(raw, dict) or raw.get("schema") != STUDIO_UI_CARD_SCHEMA:
+            continue
+        card_id = _studio_ui_card_text(
+            raw.get("id"), maximum=160, required=True
+        )
+        kind = _studio_ui_card_text(
+            raw.get("kind"), maximum=40, required=True
+        )
+        coordinate = _sanitize_studio_ui_card_coordinate(raw.get("coordinate"))
+        title = _studio_ui_card_text(
+            raw.get("title"), maximum=300, required=True, normalize=True
+        )
+        if (
+            card_id is None
+            or kind not in STUDIO_UI_CARD_KINDS
+            or coordinate is None
+            or title is None
+        ):
+            continue
+        coordinate_kind = coordinate.get("kind")
+        if (
+            (
+                kind == "catalog-use"
+                and (
+                    coordinate_kind != "catalog-entry"
+                    or coordinate.get("config_kind") == "study"
+                )
+            )
+            or (
+                kind == "run-setup"
+                and (
+                    coordinate_kind
+                    not in {"catalog-entry", "study-workspace", "workspace"}
+                    or (
+                        coordinate_kind == "catalog-entry"
+                        and coordinate.get("config_kind") != "study"
+                    )
+                )
+            )
+            or (kind == "run" and coordinate_kind not in {"study-launch", "run"})
+        ):
+            continue
+        description = _studio_ui_card_text(
+            raw.get("description", ""), maximum=1000, normalize=True
+        )
+        status = _studio_ui_card_text(
+            raw.get("status", ""), maximum=80, normalize=True
+        )
+        if description is None or status is None:
+            continue
+        allowed_operations = _studio_ui_card_coordinate_operations(coordinate)
+        actions = [
+            action
+            for action in _sanitize_studio_ui_card_actions(raw.get("actions"))
+            if action["operation"] in allowed_operations
+        ]
+        card: JsonDict = {
+            "schema": STUDIO_UI_CARD_SCHEMA,
+            "id": card_id,
+            "kind": kind,
+            "coordinate": coordinate,
+            "title": title,
+            "description": description,
+            "status": status,
+            "facts": _sanitize_studio_ui_card_facts(raw.get("facts")),
+            "actions": actions,
+        }
+        encoded_size = len(
+            json.dumps(card, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        if encoded_size > STUDIO_UI_CARD_MAX_BYTES:
+            continue
+        if total_bytes + encoded_size > STUDIO_UI_CARDS_MAX_BYTES:
+            break
+        cards.append(card)
+        total_bytes += encoded_size
+    return cards
 
 
 def sanitize_openhands_native_tools(raw_tools: Any) -> tuple[str, ...]:
@@ -121,6 +451,25 @@ CATALOG_ENTRY_REF_SCHEMA = {
 
 
 OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
+    {
+        "name": "optpilot_conversation_title",
+        "description": (
+            "Give the current Conversation a short, specific title that reflects "
+            "its primary goal. Call this after the first substantive request and "
+            "later only when the primary goal changes materially. Do not call it "
+            "for greetings, thanks, confirmations, continuations, or minor follow-ups, "
+            "and do not mention the title update to the user."
+        ),
+        "parameters": _tool_schema(
+            {
+                "title": {
+                    "type": "string",
+                    "description": "A concise 2-7 word Conversation title.",
+                }
+            },
+            ["title"],
+        ),
+    },
     {
         "name": "optpilot_workspace_list",
         "description": "List OptPilot assistant workspaces and attachment state for the current assistant session.",
@@ -509,6 +858,26 @@ class OpenHandsAdapter:
                     return self._dispatch_chat_completion(prompt, context, conversation_id)
                 return self._dispatch_openhands_agent_server(prompt, context, conversation_id, tool_executor, ignored_response_texts)
             return self._dispatch_openrouter_chat(prompt, context)
+        except OpenHandsConversationNotFound as exc:
+            return {
+                "status": "conversation_missing",
+                "mode": status.get("mode"),
+                "dispatch": status.get("dispatch"),
+                "conversation_id": exc.conversation_id or conversation_id,
+                "assistant_message": {
+                    "role": "assistant",
+                    "title": "OpenHands",
+                    "content": "",
+                },
+                "events": [
+                    {
+                        "type": "openhands_conversation_missing",
+                        "payload": {
+                            "conversation_id": exc.conversation_id or conversation_id,
+                        },
+                    }
+                ],
+            }
         except Exception as exc:
             if self._is_client_tool_schema_conflict(exc):
                 return {
@@ -575,9 +944,11 @@ class OpenHandsAdapter:
         workspace_preview: Optional[JsonDict] = None,
         visible_state: Optional[JsonDict] = None,
         assistant_capabilities: Optional[JsonDict] = None,
+        conversation: Optional[JsonDict] = None,
     ) -> JsonDict:
         return {
             "session_id": session_id,
+            "conversation": conversation or {},
             "current_page": current_page,
             "selected_workspace": selected_workspace,
             "attached_workspaces": attached_workspaces,
@@ -962,7 +1333,9 @@ class OpenHandsAdapter:
         while time.monotonic() < deadline:
             try:
                 data, _headers = self._request_json("GET", search_url, payload=None, timeout=15.0)
-            except Exception:
+            except Exception as exc:
+                if self._is_missing_conversation_error(exc, conversation_id):
+                    raise OpenHandsConversationNotFound(conversation_id) from exc
                 data = {}
             events = data.get("items", []) if isinstance(data, dict) else []
             tool_events.extend(self._trace_openhands_events(events, seen_openhands_events))
@@ -1132,10 +1505,18 @@ class OpenHandsAdapter:
         search_url = f"{conversations_url}/{conversation_id}/events/search?limit=100&sort_order=TIMESTAMP_DESC"
         try:
             data, _headers = self._request_json("GET", search_url, payload=None, timeout=15.0)
-        except Exception:
+        except Exception as exc:
+            if self._is_missing_conversation_error(exc, conversation_id):
+                raise OpenHandsConversationNotFound(conversation_id) from exc
             return []
         events = data.get("items", []) if isinstance(data, dict) else []
         return [event for event in events if isinstance(event, dict)]
+
+    @staticmethod
+    def _is_missing_conversation_error(error: Exception, conversation_id: str) -> bool:
+        """Recognize only a 404 for an already-bound OpenHands conversation."""
+
+        return bool(conversation_id and "HTTP 404 from" in str(error))
 
     def _existing_tool_call_ids(self, conversations_url: str, conversation_id: str) -> set[str]:
         events = self._existing_openhands_events(conversations_url, conversation_id)
@@ -1221,6 +1602,9 @@ class OpenHandsAdapter:
                 "delivery_status": delivery_status,
                 "delivery_error": delivery_error,
             }
+            ui_cards = sanitize_studio_ui_cards(result.get("ui_cards"))
+            if ui_cards:
+                payload["ui_cards"] = ui_cards
             if delivery_status in {"timeout", "failed"}:
                 payload["result"] = result
             tool_events.append(

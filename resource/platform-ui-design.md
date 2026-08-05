@@ -1,9 +1,21 @@
 ---
-title: Platform UI Design
-description: Target product design for a full OptPilot workbench that creates, adapts, runs, and inspects environments, methods, and studies.
+title: Platform UI Design (Historical)
+description: Historical design exploration retained for context; it is not the current OptPilot Studio product contract.
 ---
 
-# Platform UI Design
+# Platform UI Design (Historical)
+
+> **Historical design note**
+>
+> This document records an earlier workbench proposal. Its session model,
+> attached-workspace sidebar, registration workflow, and information
+> architecture do not describe the current Studio shell. For current behavior
+> and terminology, use [OptPilot Studio](../docs/ui.md) and
+> [OptPilot Assistant](../docs/assistant.md): a Conversation is the durable
+> thread, OptPilot Assistant is a participant in it, Workspaces are independent
+> editable projects made available to Conversations, publishing creates Catalog
+> versions, and Open work contains only running or attention-required
+> interfaces and Runs.
 
 This page sketches a target design for a more complete OptPilot GUI. It is based
 on the current OptPilot model:

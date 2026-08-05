@@ -203,13 +203,13 @@ editable Workspaces and require no intermediate “Open as Workspace” step.
 OptPilot resolves a selected Candidate together with the exact retained
 evaluation closure and compiles the same `EvaluationSpec` used by canonical
 attempts. Studio presents the available modes under **Try Candidate**:
-**Run headless** executes a noninteractive inspection, while **Open interactive
+**Try once** executes a noninteractive inspection, while **Open interactive
 interface** opens the Environment's live interface when the retained profile and provider
 support it. Under the hood, both execute as durable, noncanonical Operator
 Jobs.
 
 Content inspection uses the same immutable selection but a smaller operation.
-**Inspect** reads semantic inputs without launching. **View files**
+Studio loads semantic Candidate details without launching. **View files**
 reauthorizes the exact Run head, then serves a bounded project page or file/blob
 byte range through a short-lived opaque handle. Neither derives an owner,
 starts a runtime, exposes a provider path, or materializes a Workspace.

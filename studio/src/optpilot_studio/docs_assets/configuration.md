@@ -553,6 +553,9 @@ entrypoint:
   python: method:MyMethod
   protocol: batch        # enum: batch | session
   pythonPath: [.]
+  # Maximum duration of one propose/observe exchange. Defaults to 10 seconds.
+  # This is not a whole-Run or internal HTTP-client timeout.
+  exchangeTimeoutSeconds: 60
 
   # Alternative command entrypoint. Batch-shaped in the schema but not yet
   # executable by the retained runner.
@@ -831,6 +834,9 @@ profile; omit it for a view-only interface. This flag declares the capability,
 not a list of paths. For each opted-in launch, Studio creates a different private
 output area and control file and injects their locations as
 `OPTPILOT_INTERFACE_OUTPUT_ROOT` and `OPTPILOT_INTERFACE_OUTPUTS_FILE`.
+These launch-owned runtime paths are chosen and set by Studio. A Catalog author
+does not configure them, and they are not relative paths inside the Environment,
+Method, or Resource source tree.
 
 To report a result, the interface writes the complete file or folder below
 `OPTPILOT_INTERFACE_OUTPUT_ROOT`, stops modifying it, and appends one
@@ -873,12 +879,14 @@ interface:
         timeoutSeconds: 120
         acceptsArguments: true
         runtime: originating-interface
+        showInOutputCard: false
   # command, presentation, runtime, grants, and other profile fields follow
 ```
 
-The command belongs to the exact registered Catalog profile; an output record
-or browser request may select its `id` but cannot supply another command,
-image, environment, mount, or network policy. Studio snapshots the selected
+The command belongs to the exact registered Catalog profile. A launch-local
+broker request—or an output-card browser request when the action is shown—may
+select its `id`, but cannot supply another command, image, environment, mount,
+or network policy. Studio snapshots the selected
 folder and starts a fresh network-disabled sibling container from the same
 immutable image and read-only prepared runtime as the originating interface.
 It does not execute generated code inside the live interface container and
@@ -888,6 +896,12 @@ extra arguments are accepted only when `acceptsArguments` is true.
 A request may omit `timeout_seconds` to use the authored maximum, or supply a
 positive value no greater than that maximum to finish sooner; it can never
 extend the registered action's lifetime.
+
+By default, Studio also shows each registered action on every compatible
+output card. Set `showInOutputCard: false` when the launched interface already
+provides the student-facing controls and uses the action only through its
+launch-local broker. The action remains available to that interface, while the
+generic output card stays focused on viewing and saving the result.
 
 An interface that needs the same action for its own verification UI also
 receives `OPTPILOT_INTERFACE_OUTPUT_ACTION_ROOT`. Its language-neutral request,

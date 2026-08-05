@@ -4,15 +4,46 @@ const STORAGE_KEYS = {
   durableShortlistIntents: "optpilot.studio.durableShortlistIntents.v1",
   activeInterfaceLaunch: "optpilot.studio.activeInterfaceLaunch.v1",
   activeStudyLaunch: "optpilot.studio.activeStudyLaunch.v1",
+  assistantDrafts: "optpilot.studio.assistantDrafts.v1",
 };
 
 const SELECTION_CONTENT_TREE_PAGE_LIMIT = 100;
 const SELECTION_CONTENT_TREE_ENTRY_LIMIT = 1000;
 const SELECTION_CONTENT_PREVIEW_CHUNK_LIMIT = 32 * 1024;
 const SELECTION_CONTENT_PREVIEW_LIMIT = 128 * 1024;
+const ASSISTANT_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1";
+const ASSISTANT_UI_CARD_KINDS = new Set(["catalog-use", "run-setup", "run"]);
+const ASSISTANT_UI_CARD_OPERATIONS = new Set([
+  "configure-run",
+  "open-catalog",
+  "open-interface",
+  "open-launch",
+  "open-run",
+  "open-workspace",
+  "start-run",
+]);
+const ASSISTANT_UI_CARD_MAX_COUNT = 12;
+const RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS = 12_000;
+const CORE_REQUEST_TIMEOUT_MS = 20_000;
+const PLATFORM_STATUS_TIMEOUT_MS = 12_000;
+const RUNS_REQUEST_TIMEOUT_MS = 15_000;
+const RUN_DETAIL_REQUEST_TIMEOUT_MS = 20_000;
+const STUDY_LAUNCH_RECONNECT_LIMIT = 8;
+const ASSISTANT_MUTATION_TIMEOUT_MS = 15_000;
+const INTERFACE_LAUNCH_RECONNECT_LIMIT = 5;
+const INTERFACE_LAUNCH_POLL_TIMEOUT_MS = 10_000;
 
 const state = {
   view: "workspace",
+  shell: {
+    enabled: shellModeFromLocation() === "conversation",
+    mode: shellModeFromLocation(),
+    surface: shellModeFromLocation() === "conversation" ? "conversation" : "content",
+    assistantOverlayOpen: false,
+    mobileRailOpen: false,
+    openWorkExpanded: false,
+    returnConversationId: null,
+  },
   workspace: null,
   runtime: null,
   codeServer: null,
@@ -22,6 +53,38 @@ const state = {
   catalogLoading: true,
   catalogError: "",
   catalogRequestSeq: 0,
+  loadAllGeneration: 0,
+  coreRequestSeq: {
+    workspace: 0,
+    runtime: 0,
+    codeServer: 0,
+    agentSettings: 0,
+    uiWorkspaces: 0,
+    studyDrafts: 0,
+  },
+  platformStatusLoaded: {
+    workspace: false,
+    runtime: false,
+    codeServer: false,
+    agentSettings: false,
+  },
+  platformRefreshErrors: {
+    workspace: "",
+    runtime: "",
+    codeServer: "",
+    agentSettings: "",
+  },
+  uiWorkspacesLoaded: false,
+  uiWorkspacesError: "",
+  studyDraftsLoaded: false,
+  studyDraftsError: "",
+  agentSessionsLoaded: false,
+  agentSessionsError: "",
+  runsLoaded: false,
+  runsError: "",
+  runsLastSuccessAt: 0,
+  runRouteResolutionPendingId: null,
+  routeCollectionsReady: false,
   compatibility: { pairs: [] },
   compatibilityError: "",
   runs: [],
@@ -33,12 +96,29 @@ const state = {
   agentWorkspaceAttachments: {},
   selectedWorkspaceByAgentSession: {},
   assistantMessagesBySession: {},
+  assistantDraftsBySession: loadSessionStoredJson(STORAGE_KEYS.assistantDrafts),
+  assistantScrollBySession: {},
+  assistantTimelineSignatures: {},
+  renderedAssistantSessionId: null,
+  agentSessionCreatePromise: null,
+  agentSessionCreateError: "",
+  conversationWorkspaceError: "",
+  conversationWorkspaceExpandedBySession: {},
   agentApprovalsBySession: {},
   assistantApprovalKeysBySession: {},
   agentEventsBySession: {},
   handledPreviewEventIds: new Set(),
   cancellingAgentSessionIds: new Set(),
   syncingAgentSessionIds: new Set(),
+  hydratedAgentSessionIds: new Set(),
+  agentSessionHydrationRequests: new Map(),
+  agentSessionHydrationPromises: new Map(),
+  agentSessionHydrationErrors: {},
+  agentSessionHydrationSeq: 0,
+  agentSessionSummaryRequestSeq: 0,
+  agentSessionTranscriptVersions: new Map(),
+  agentSessionRefreshInFlight: false,
+  openWorkErrors: {},
   agentSessionSeq: 1,
   plans: [],
   studyDrafts: [],
@@ -85,6 +165,8 @@ const state = {
   environmentPreviewProfileSelections: {},
   interfaceSessionRoute: null,
   interfaceSessionLaunchSnapshot: null,
+  interfaceSessionActionError: null,
+  interfaceSessionOutputsOpen: false,
   semanticInspections: {},
   candidateComparisonRunId: null,
   candidateComparisonHead: null,
@@ -111,16 +193,25 @@ const state = {
   selectionContentLoading: false,
   selectionContentError: "",
   selectionContentRequestSeq: 0,
+  selectionContentReturnFocus: null,
+  selectionContentFocusPending: false,
   expandedWorkbenchSelections: new Set(),
   runsRefreshInFlight: false,
   runDetailRequestSeq: 0,
+  runDetailLoadingRunId: null,
+  runDetailLoadingVisible: false,
+  runDetailError: "",
+  runDetailRefreshError: "",
+  runDetailLastSuccessAt: 0,
+  runHandoffGuidanceTimer: null,
+  runHandoffGuidanceKey: "",
   runPageRequestSeq: 0,
   runPageLoadingKind: null,
   runStatusFilter: "all",
   activeRunTab: "overview",
   sessionTab: "terminal",
   workbenchMode: "code",
-  assistantOpen: false,
+  assistantOpen: shellModeFromLocation() === "conversation",
   assistantMode: "chat",
   assistantPanelWidth: 320,
   registrationDraft: null,
@@ -147,8 +238,12 @@ const state = {
   agentRuntimeStatus: null,
   settingsOpen: false,
   settingsTab: "assistant",
+  settingsLoading: false,
+  settingsError: "",
+  settingsReturnFocus: null,
   environmentVariableDrafts: [],
   pendingWorkspaceCleanup: null,
+  workspaceCleanupReturnFocus: null,
   pendingRegistrationConfirmation: null,
   pendingCandidateTry: null,
   candidateTryNotice: "",
@@ -160,9 +255,19 @@ const state = {
   pendingInterfaceStop: null,
   interfaceStopReturnFocus: null,
   localFolderReturnFocus: null,
+  localFolderAttachToConversation: false,
 };
 
 const els = {};
+
+function shellModeFromLocation() {
+  try {
+    const requested = new URLSearchParams(window.location.search).get("shell");
+    return requested === "legacy" ? "legacy" : "conversation";
+  } catch (error) {
+    return "conversation";
+  }
+}
 
 function loadStoredValue(key) {
   try {
@@ -249,7 +354,22 @@ function cacheElements() {
     "pageSubtitle",
     "refreshButton",
     "newSessionButton",
+    "legacyNewSessionButton",
     "assistantToggleButton",
+    "assistantPanel",
+    "legacyAssistantSessionCards",
+    "shellToolbar",
+    "shellSurfaceTitle",
+    "shellSurfaceSubtitle",
+    "railToggleButton",
+    "railScrim",
+    "backToConversationButton",
+    "openWorkButton",
+    "openWorkCount",
+    "closeOpenWorkButton",
+    "openWorkShelf",
+    "openWorkItems",
+    "askOptPilotButton",
     "activeInterfaceBar",
     "activeInterfaceOpenButton",
     "activeInterfaceLabel",
@@ -263,6 +383,16 @@ function cacheElements() {
     "assistantContextHint",
     "assistantResizeHandle",
     "closeAssistantButton",
+    "conversationWorkspacePanel",
+    "conversationWorkspaceDisclosure",
+    "conversationWorkspaceTitle",
+    "conversationWorkspaceCount",
+    "conversationWorkspaceList",
+    "conversationWorkspaceAdd",
+    "conversationWorkspaceChoices",
+    "workspaceCodeTab",
+    "workbenchContextBadge",
+    "catalogSourceTitle",
     "workspaceTitleInput",
     "workspaceCommitButton",
     "openWorkspaceExternalButton",
@@ -305,6 +435,7 @@ function cacheElements() {
     "openWorkspacePreviewButton",
     "reloadWorkspacePreviewButton",
     "agentTimeline",
+    "conversationOnboarding",
     "agentInput",
     "sendAgentButton",
     "sessionBottom",
@@ -328,6 +459,14 @@ function cacheElements() {
     "interfaceSessionTitle",
     "interfaceSessionSource",
     "interfaceSessionStatus",
+    "interfaceSessionOutputsButton",
+    "interfaceSessionOutputsCount",
+    "interfaceSessionOutputsScrim",
+    "interfaceSessionOutputsDrawer",
+    "interfaceSessionOutputsCloseButton",
+    "interfaceSessionOutputsBody",
+    "interfaceSessionOutputsEmpty",
+    "interfaceSessionOutputsTitle",
     "interfaceSessionOpenButton",
     "interfaceSessionStopButton",
     "interfaceSessionNotice",
@@ -339,9 +478,14 @@ function cacheElements() {
     "selectionContentDrawerHost",
     "assistantLauncherSubtitle",
     "settingsModal",
+    "settingsDialog",
     "settingsCloseButton",
     "settingsCancelButton",
     "settingsSaveButton",
+    "settingsLoadStatus",
+    "settingsLoadStatusTitle",
+    "settingsLoadStatusBody",
+    "settingsRetryButton",
     "openHandsEnabled",
     "openHandsBaseUrl",
     "openHandsSessionEndpoint",
@@ -363,6 +507,7 @@ function cacheElements() {
     "assistantPermissionStudyLaunch",
     "assistantPermissionJobStop",
     "workspaceCleanupModal",
+    "workspaceCleanupDialog",
     "workspaceCleanupTitle",
     "workspaceCleanupBody",
     "workspaceCleanupKeepButton",
@@ -464,6 +609,7 @@ function bindEvents() {
   on(els.settingsCloseButton, "click", closeSettings);
   on(els.settingsCancelButton, "click", closeSettings);
   on(els.settingsSaveButton, "click", saveSettings);
+  on(els.settingsRetryButton, "click", retrySettingsLoad);
   on(els.environmentVariableAddButton, "click", addEnvironmentVariableDraft);
   on(els.environmentVariablesList, "click", (event) => {
     const removeButton = event.target && event.target.closest && event.target.closest("[data-env-draft-remove]");
@@ -480,11 +626,13 @@ function bindEvents() {
   on(els.settingsModal, "click", (event) => {
     if (event.target === els.settingsModal) closeSettings();
   });
+  on(els.settingsModal, "keydown", handleSettingsModalKeydown);
   on(els.workspaceCleanupKeepButton, "click", cancelPendingWorkspaceDelete);
   on(els.workspaceCleanupDeleteButton, "click", deletePendingWorkspaceDraft);
   on(els.workspaceCleanupModal, "click", (event) => {
     if (event.target === els.workspaceCleanupModal) cancelPendingWorkspaceDelete();
   });
+  on(els.workspaceCleanupModal, "keydown", handleWorkspaceCleanupModalKeydown);
   on(els.candidateTryCloseButton, "click", () => closeCandidateTrySheet());
   on(els.candidateTryCancelButton, "click", () => closeCandidateTrySheet());
   on(els.candidateTrySubmitButton, "click", confirmCandidateTry);
@@ -515,8 +663,17 @@ function bindEvents() {
   });
   on(els.interfaceStopModal, "keydown", handleInterfaceStopConfirmationKeydown);
   on(els.newSessionButton, "click", createAgentSession);
-  on(els.newWorkspaceButton, "click", createBlankSession);
-  on(els.openLocalFolderButton, "click", openLocalFolderDialog);
+  on(els.legacyNewSessionButton, "click", createAgentSession);
+  on(els.backToConversationButton, "click", () => openConversationSurface({ history: "push" }));
+  on(els.askOptPilotButton, "click", () => setAssistantOverlayOpen(!state.shell.assistantOverlayOpen));
+  on(els.openWorkButton, "click", () => setOpenWorkExpanded(!state.shell.openWorkExpanded));
+  on(els.closeOpenWorkButton, "click", () => setOpenWorkExpanded(false));
+  on(els.railToggleButton, "click", () => setMobileRailOpen(!state.shell.mobileRailOpen));
+  on(els.railScrim, "click", () => setMobileRailOpen(false));
+  on(els.newWorkspaceButton, "click", () => createBlankSession());
+  on(els.openLocalFolderButton, "click", () => openLocalFolderDialog());
+  on(els.conversationWorkspacePanel, "click", handleConversationWorkspaceAction);
+  on(els.conversationWorkspaceDisclosure, "toggle", rememberConversationWorkspaceDisclosure);
   on(els.openLocalFolderCancelButton, "click", closeLocalFolderDialog);
   on(els.openLocalFolderSubmitButton, "click", connectLocalFolder);
   on(els.openLocalFolderPath, "keydown", (event) => {
@@ -540,6 +697,11 @@ function bindEvents() {
   on(els.activeInterfaceOpenButton, "click", openActiveInterfaceLocation);
   on(els.activeInterfaceStopButton, "click", stopActiveInterfaceFromGlobalControl);
   on(els.interfaceSessionBackButton, "click", leaveInterfaceSession);
+  on(els.interfaceSessionOutputsButton, "click", () => setInterfaceSessionOutputsOpen(true));
+  on(els.interfaceSessionOutputsCloseButton, "click", () => setInterfaceSessionOutputsOpen(false));
+  on(els.interfaceSessionOutputsScrim, "click", () => setInterfaceSessionOutputsOpen(false));
+  on(els.interfaceSessionOutputsDrawer, "keydown", handleInterfaceSessionOutputsKeydown);
+  on(els.interfaceSessionOpenButton, "click", openCurrentInterfaceSessionExternal);
   on(els.interfaceSessionStopButton, "click", stopCurrentInterfaceSession);
   on(els.interfaceSessionRetryButton, "click", refreshCurrentInterfaceSession);
   on(els.returnToActiveInterfaceButton, "click", openActiveInterfaceLocation);
@@ -547,12 +709,17 @@ function bindEvents() {
   on(els.assistantResizeHandle, "pointerdown", startAssistantResize);
   on(els.assistantResizeHandle, "mousedown", startAssistantResize);
   on(els.assistantBackButton, "click", () => {
+    if (state.shell.enabled) {
+      openConversationSurface({ history: "push" });
+      return;
+    }
     state.assistantMode = "sessions";
     renderAssistant();
   });
   on(els.closeAssistantButton, "click", () => {
     state.assistantMode = "chat";
-    setAssistantOpen(false);
+    if (state.shell.enabled) setAssistantOverlayOpen(false);
+    else setAssistantOpen(false);
   });
   on(els.workspaceTitleInput, "keydown", handleWorkspaceTitleKeydown);
   on(els.workspaceTitleInput, "blur", saveWorkspaceTitleFromInput);
@@ -569,6 +736,7 @@ function bindEvents() {
   on(els.agentInput, "keydown", handleAgentInputKeydown);
   on(els.agentInput, "input", () => {
     els.agentInput.dataset.touched = els.agentInput.value ? "true" : "";
+    rememberAssistantDraft();
   });
   on(els.runFilter, "input", renderRuns);
   on(els.componentSearch, "input", () => {
@@ -584,14 +752,88 @@ function bindEvents() {
     renderExperiments();
   });
   window.addEventListener("keydown", handleSelectionContentKeydown);
-  window.addEventListener("beforeunload", releaseSelectionContentViewOnUnload);
+  window.addEventListener("keydown", handleConversationShellKeydown);
+  window.addEventListener("resize", renderShell);
+  window.addEventListener("beforeunload", () => {
+    captureAssistantContinuity();
+    releaseSelectionContentViewOnUnload();
+  });
   window.addEventListener("hashchange", () => applyStudioRoute({ loadRun: true }));
 }
 
+function nextCoreRequest(key) {
+  const next = Number(state.coreRequestSeq[key] || 0) + 1;
+  state.coreRequestSeq[key] = next;
+  return next;
+}
+
+function coreRequestIsCurrent(key, requestSeq) {
+  return Number(state.coreRequestSeq[key] || 0) === requestSeq;
+}
+
+function requireObjectPayload(payload, label) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`Studio returned an incomplete ${label} response.`);
+  }
+  return payload;
+}
+
+function requireArrayField(payload, field, label) {
+  requireObjectPayload(payload, label);
+  if (!Array.isArray(payload[field])) {
+    throw new Error(`Studio returned an incomplete ${label} response.`);
+  }
+  return payload[field];
+}
+
+function validateCatalogPayload(payload) {
+  requireObjectPayload(payload, "Catalog");
+  ["environments", "methods", "studies", "resources", "sources"].forEach((field) => {
+    requireArrayField(payload, field, "Catalog");
+  });
+  return payload;
+}
+
+function validateCompatibilityPayload(payload) {
+  requireArrayField(payload, "pairs", "compatibility");
+  return payload;
+}
+
+function markPlatformStatusSuccess(key) {
+  state.platformStatusLoaded[key] = true;
+  state.platformRefreshErrors[key] = "";
+}
+
+function markPlatformStatusFailure(key, error) {
+  if (!state.platformStatusLoaded[key]) return false;
+  state.platformRefreshErrors[key] = boundedPublicActionError(
+    error,
+    "The latest status check failed.",
+  );
+  return true;
+}
+
 async function loadAll() {
-  await Promise.all([loadWorkspace(), loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings(), loadCatalogAndCompatibility({ strict: false }), loadUiWorkspaces(), loadStudyDrafts(), loadAgentSessions(), loadRunsAndJobs()]);
+  const generation = ++state.loadAllGeneration;
+  await Promise.allSettled([
+    loadWorkspace(),
+    loadRuntimeHealth(),
+    loadCodeServerStatus(),
+    loadAgentSettings(),
+    loadCatalogAndCompatibility({ strict: false }),
+    loadUiWorkspaces(),
+    loadStudyDrafts(),
+    loadAgentSessions(),
+    loadRunsAndJobs(),
+  ]);
+  if (generation !== state.loadAllGeneration) return;
   rebuildDerivedState();
+  state.routeCollectionsReady = true;
   const routedRunId = applyStudioRoute({ loadRun: false, render: false });
+  await hydrateAgentSessionById(state.selectedAgentSessionId, {
+    force: false,
+    render: false,
+  });
   renderAll();
   if (routedRunId) {
     await loadRunDetail(routedRunId, { keepTab: true, skipListRender: true, fromRoute: true }).catch(() => {});
@@ -601,46 +843,108 @@ async function loadAll() {
 }
 
 async function refreshPlatformStatus() {
-  await Promise.all([loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings()]);
+  await Promise.allSettled([loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings()]);
   renderPlatformStatus();
   renderOpenHandsStatus();
 }
 
 async function loadAgentSettings() {
+  const requestSeq = nextCoreRequest("agentSettings");
   try {
-    const payload = await getJson("/api/agent/settings");
+    const payload = requireObjectPayload(
+      await getJson("/api/agent/settings", { timeoutMs: PLATFORM_STATUS_TIMEOUT_MS }),
+      "Studio settings",
+    );
+    if (!coreRequestIsCurrent("agentSettings", requestSeq)) return { ok: false, stale: true };
     state.agentSettings = payload.settings || null;
     state.agentRuntimeStatus = payload.status || null;
+    markPlatformStatusSuccess("agentSettings");
+    return { ok: true };
   } catch (error) {
-    state.agentSettings = null;
-    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "unavailable", error: String(error.message || error) };
+    if (!coreRequestIsCurrent("agentSettings", requestSeq)) return { ok: false, stale: true };
+    const message = String(error.message || error);
+    if (!markPlatformStatusFailure("agentSettings", error)) {
+      state.agentSettings = null;
+      state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "unavailable", error: message };
+    }
+    return { ok: false, error: message };
   }
 }
 
 async function loadWorkspace() {
+  const requestSeq = nextCoreRequest("workspace");
   try {
-    state.workspace = await getJson("/api/workspace");
-    if (state.workspace.code_server) state.codeServer = state.workspace.code_server;
+    const workspace = requireObjectPayload(
+      await getJson("/api/workspace", { timeoutMs: CORE_REQUEST_TIMEOUT_MS }),
+      "Workspace",
+    );
+    if (!coreRequestIsCurrent("workspace", requestSeq)) return;
+    state.workspace = workspace;
+    if (
+      !state.platformStatusLoaded.codeServer
+      && workspace.code_server
+      && !workspace.code_server.error
+    ) {
+      const directStatusError = state.codeServer && state.codeServer.error;
+      state.codeServer = workspace.code_server;
+      if (directStatusError) {
+        state.platformRefreshErrors.codeServer = boundedPublicActionError(
+          directStatusError,
+          "The latest Code editor status check failed.",
+        );
+      }
+    }
     state.platformReady = true;
+    markPlatformStatusSuccess("workspace");
   } catch (error) {
-    state.workspace = null;
-    state.platformReady = false;
+    if (!coreRequestIsCurrent("workspace", requestSeq)) return;
+    if (!markPlatformStatusFailure("workspace", error)) {
+      state.workspace = null;
+      state.platformReady = false;
+    }
   }
 }
 
 async function loadRuntimeHealth() {
+  const requestSeq = nextCoreRequest("runtime");
   try {
-    state.runtime = await getJson("/api/runtime/health");
+    const runtime = requireObjectPayload(
+      await getJson("/api/runtime/health", { timeoutMs: PLATFORM_STATUS_TIMEOUT_MS }),
+      "runtime status",
+    );
+    if (!coreRequestIsCurrent("runtime", requestSeq)) return;
+    state.runtime = runtime;
+    markPlatformStatusSuccess("runtime");
   } catch (error) {
-    state.runtime = { error: String(error.message || error) };
+    if (!coreRequestIsCurrent("runtime", requestSeq)) return;
+    if (!markPlatformStatusFailure("runtime", error)) {
+      state.runtime = { error: String(error.message || error) };
+    }
   }
 }
 
 async function loadCodeServerStatus() {
+  const requestSeq = nextCoreRequest("codeServer");
   try {
-    state.codeServer = await getJson("/api/code-server/status");
+    const codeServer = requireObjectPayload(
+      await getJson("/api/code-server/status", { timeoutMs: PLATFORM_STATUS_TIMEOUT_MS }),
+      "Code editor status",
+    );
+    if (!coreRequestIsCurrent("codeServer", requestSeq)) return;
+    state.codeServer = codeServer;
+    markPlatformStatusSuccess("codeServer");
   } catch (error) {
-    state.codeServer = { available: false, installed: false, running: false, error: String(error.message || error) };
+    if (!coreRequestIsCurrent("codeServer", requestSeq)) return;
+    if (!markPlatformStatusFailure("codeServer", error)) {
+      if (state.codeServer && !state.codeServer.error) {
+        state.platformRefreshErrors.codeServer = boundedPublicActionError(
+          error,
+          "The latest Code editor status check failed.",
+        );
+      } else {
+        state.codeServer = { available: false, installed: false, running: false, error: String(error.message || error) };
+      }
+    }
   }
   updateSidebarCodeServerStatus();
 }
@@ -656,8 +960,12 @@ async function loadCatalogAndCompatibility(options = {}) {
     (value) => ({ status: "fulfilled", value }),
     (reason) => ({ status: "rejected", reason }),
   );
-  const catalogResultPromise = settle(getJson("/api/catalog"));
-  const compatibilityResultPromise = settle(getJson("/api/compatibility"));
+  const catalogResultPromise = settle(
+    getJson("/api/catalog", { timeoutMs: CORE_REQUEST_TIMEOUT_MS }).then(validateCatalogPayload),
+  );
+  const compatibilityResultPromise = settle(
+    getJson("/api/compatibility", { timeoutMs: CORE_REQUEST_TIMEOUT_MS }).then(validateCompatibilityPayload),
+  );
   const catalogResult = await catalogResultPromise;
 
   if (requestSeq === state.catalogRequestSeq) {
@@ -703,57 +1011,193 @@ async function loadCatalogAndCompatibility(options = {}) {
 }
 
 async function loadUiWorkspaces() {
+  const requestSeq = nextCoreRequest("uiWorkspaces");
   try {
-    const payload = await getJson("/api/workspaces");
-    state.uiWorkspaces = payload.workspaces || [];
+    const payload = await getJson("/api/workspaces", { timeoutMs: CORE_REQUEST_TIMEOUT_MS });
+    const workspaces = requireArrayField(payload, "workspaces", "Workspace list");
+    if (!coreRequestIsCurrent("uiWorkspaces", requestSeq)) return;
+    state.uiWorkspaces = workspaces;
+    state.uiWorkspacesLoaded = true;
+    state.uiWorkspacesError = "";
   } catch (error) {
-    state.uiWorkspaces = [];
+    if (!coreRequestIsCurrent("uiWorkspaces", requestSeq)) return;
+    state.uiWorkspacesError = boundedPublicActionError(
+      error,
+      "Workspaces could not be refreshed.",
+    );
   }
 }
 
 async function loadStudyDrafts() {
+  const requestSeq = nextCoreRequest("studyDrafts");
   try {
-    const payload = await getJson("/api/studies/drafts");
-    state.studyDrafts = payload.drafts || [];
+    const payload = await getJson("/api/studies/drafts", { timeoutMs: CORE_REQUEST_TIMEOUT_MS });
+    const drafts = requireArrayField(payload, "drafts", "Study draft list");
+    if (!coreRequestIsCurrent("studyDrafts", requestSeq)) return;
+    state.studyDrafts = drafts;
+    state.studyDraftsLoaded = true;
+    state.studyDraftsError = "";
   } catch (error) {
-    state.studyDrafts = [];
+    if (!coreRequestIsCurrent("studyDrafts", requestSeq)) return;
+    state.studyDraftsError = boundedPublicActionError(
+      error,
+      "Saved Study drafts could not be refreshed.",
+    );
   }
 }
 
 async function loadAgentSessions() {
-  try {
-    const payload = await getJson("/api/agent-sessions");
-    const sessions = payload.sessions || [];
-    state.agentSessions = sessions.map((session) => ({
-      id: session.id,
-      title: session.title,
-      description: session.description,
-      status: session.status || "idle",
-      effective_status: session.effective_status || session.status || "idle",
-      pending_approval_count: Number(session.pending_approval_count || 0),
-      active_approval_ids: session.active_approval_ids || [],
-      queued_approval_count: Number(session.queued_approval_count || 0),
-      createdAt: session.created_at || session.createdAt || "",
-    }));
-    state.agentWorkspaceAttachments = {};
-    state.selectedWorkspaceByAgentSession = {};
-    state.assistantMessagesBySession = {};
-    state.agentApprovalsBySession = {};
-    state.agentEventsBySession = {};
-    sessions.forEach((session) => {
-      state.agentWorkspaceAttachments[session.id] = session.attached_workspace_ids || [];
-      state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || null;
-      state.assistantMessagesBySession[session.id] = (session.messages || []).map(agentMessageFromPayload);
-      state.agentApprovalsBySession[session.id] = session.approvals || [];
-      state.agentEventsBySession[session.id] = session.events || [];
-    });
+  const refreshed = await refreshAgentSessionSummaries();
+  if (!refreshed.loaded) {
     ensureSelectedAgentSession();
-  } catch (error) {
-    state.agentSessions = [];
-    state.agentApprovalsBySession = {};
-    state.agentEventsBySession = {};
-    ensureSelectedAgentSession();
+    return;
   }
+  await hydrateAgentSessionById(state.selectedAgentSessionId, {
+    force: true,
+    render: false,
+  });
+}
+
+async function refreshAgentSessionSummaries() {
+  const requestSeq = ++state.agentSessionSummaryRequestSeq;
+  const sessionIdsAtRequestStart = new Set(state.agentSessions.map((session) => session.id));
+  try {
+    const payload = await getJson("/api/agent-sessions?summary=1", { timeoutMs: 12000 });
+    if (requestSeq !== state.agentSessionSummaryRequestSeq) {
+      return { loaded: false, stale: true, workspacesChanged: false };
+    }
+    const summaries = requireArrayField(payload, "sessions", "Conversation list");
+    let workspacesChanged = false;
+    summaries.forEach((summary) => {
+      workspacesChanged = mergeAgentSessionPayload(summary) || workspacesChanged;
+    });
+    const mergedById = new Map(state.agentSessions.map((session) => [session.id, session]));
+    const incomingIds = new Set(summaries.map((session) => session.id));
+    const concurrentlyAdded = state.agentSessions.filter((session) => (
+      !sessionIdsAtRequestStart.has(session.id)
+      && !incomingIds.has(session.id)
+    ));
+    const removedIds = [...sessionIdsAtRequestStart].filter((sessionId) => !incomingIds.has(sessionId));
+    state.agentSessions = [
+      ...summaries.map((session) => mergedById.get(session.id)).filter(Boolean),
+      ...concurrentlyAdded,
+    ];
+    removedIds.forEach(forgetAgentSessionLocalState);
+    if (removedIds.length) workspacesChanged = true;
+    state.agentSessionsLoaded = true;
+    state.agentSessionsError = "";
+    ensureSelectedAgentSession();
+    return { loaded: true, stale: false, workspacesChanged };
+  } catch (error) {
+    if (requestSeq !== state.agentSessionSummaryRequestSeq) {
+      return { loaded: false, stale: true, workspacesChanged: false };
+    }
+    if (!state.agentSessions.length) state.agentSessionsLoaded = false;
+    state.agentSessionsError = boundedPublicActionError(
+      error,
+      "Conversations could not be refreshed.",
+    );
+    ensureSelectedAgentSession();
+    return { loaded: false, stale: false, workspacesChanged: false };
+  }
+}
+
+async function hydrateAgentSessionById(sessionId, options = {}) {
+  const session = state.agentSessions.find((item) => item.id === sessionId);
+  if (!session || !sessionId || sessionId.startsWith("agent-session-")) return session || null;
+  if (options.force !== true && state.hydratedAgentSessionIds.has(sessionId)) return session;
+  const existingHydration = state.agentSessionHydrationPromises.get(sessionId);
+  if (existingHydration) return existingHydration;
+  const requestToken = ++state.agentSessionHydrationSeq;
+  const transcriptVersion = state.agentSessionTranscriptVersions.get(sessionId) || 0;
+  delete state.agentSessionHydrationErrors[sessionId];
+  state.agentSessionHydrationRequests.set(sessionId, requestToken);
+  let hydrationPromise;
+  hydrationPromise = Promise.resolve().then(async () => {
+    try {
+      const payload = await getJson(
+        `/api/agent-sessions/${encodeURIComponent(sessionId)}`,
+        { timeoutMs: 15000 },
+      );
+      if (state.agentSessionHydrationRequests.get(sessionId) !== requestToken) return null;
+      if ((state.agentSessionTranscriptVersions.get(sessionId) || 0) !== transcriptVersion) {
+        return state.agentSessions.find((item) => item.id === sessionId) || null;
+      }
+      if (!payload.session || payload.session.id !== sessionId) {
+        throw new Error("Studio returned an incomplete Conversation response.");
+      }
+      const shouldRender = options.render !== false && state.selectedAgentSessionId === sessionId;
+      if (shouldRender) await updateAgentSessionFromPayload(payload.session);
+      else mergeAgentSessionPayload(payload.session);
+      return state.agentSessions.find((item) => item.id === sessionId) || null;
+    } catch (error) {
+      if (state.agentSessionHydrationRequests.get(sessionId) === requestToken) {
+        if ([404, 410].includes(Number(error && error.status || 0))) {
+          const wasSelected = state.selectedAgentSessionId === sessionId;
+          state.agentSessions = state.agentSessions.filter((item) => item.id !== sessionId);
+          forgetAgentSessionLocalState(sessionId);
+          ensureSelectedAgentSession();
+          if (wasSelected) {
+            restoreAssistantContinuity(state.selectedAgentSessionId);
+            syncStudioRoute();
+            if (options.render !== false) renderAssistant();
+          }
+        } else {
+          state.agentSessionHydrationErrors[sessionId] = boundedPublicActionError(
+            error,
+            "This Conversation could not be loaded.",
+          );
+        }
+      }
+      return null;
+    } finally {
+      const requestWasCurrent = state.agentSessionHydrationRequests.get(sessionId) === requestToken;
+      if (requestWasCurrent) {
+        state.agentSessionHydrationRequests.delete(sessionId);
+      }
+      if (state.agentSessionHydrationPromises.get(sessionId) === hydrationPromise) {
+        state.agentSessionHydrationPromises.delete(sessionId);
+      }
+      if (
+        requestWasCurrent
+        && options.render !== false
+        && state.selectedAgentSessionId === sessionId
+      ) {
+        renderAssistant();
+      }
+    }
+  });
+  state.agentSessionHydrationPromises.set(sessionId, hydrationPromise);
+  return hydrationPromise;
+}
+
+function forgetAgentSessionLocalState(sessionId) {
+  if (!sessionId) return;
+  delete state.agentWorkspaceAttachments[sessionId];
+  delete state.selectedWorkspaceByAgentSession[sessionId];
+  delete state.assistantMessagesBySession[sessionId];
+  delete state.assistantDraftsBySession[sessionId];
+  delete state.assistantScrollBySession[sessionId];
+  delete state.assistantTimelineSignatures[sessionId];
+  delete state.agentApprovalsBySession[sessionId];
+  delete state.assistantApprovalKeysBySession[sessionId];
+  delete state.agentEventsBySession[sessionId];
+  delete state.agentSessionHydrationErrors[sessionId];
+  delete state.conversationWorkspaceExpandedBySession[sessionId];
+  state.cancellingAgentSessionIds.delete(sessionId);
+  state.syncingAgentSessionIds.delete(sessionId);
+  state.hydratedAgentSessionIds.delete(sessionId);
+  state.agentSessionHydrationRequests.delete(sessionId);
+  state.agentSessionTranscriptVersions.delete(sessionId);
+  if (state.workspaceNotice && state.workspaceNotice.assistantSessionId === sessionId) {
+    state.workspaceNotice = null;
+  }
+  if (state.shell.returnConversationId === sessionId) state.shell.returnConversationId = null;
+  if (state.assistantRunSelection && state.assistantRunSelection.session_id === sessionId) {
+    state.assistantRunSelection = null;
+  }
+  if (state.selectedAgentSessionId === sessionId) setSelectedAgentSessionState(null);
+  storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
 }
 
 async function loadRunsAndJobs() {
@@ -761,18 +1205,41 @@ async function loadRunsAndJobs() {
   state.runsRefreshInFlight = true;
   let runsPayload;
   try {
-    runsPayload = await getJson("/api/runs");
+    runsPayload = await getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS });
+    requireArrayField(runsPayload, "runs", "Run list");
+    if (
+      !runsPayload.catalog
+      || typeof runsPayload.catalog !== "object"
+      || Array.isArray(runsPayload.catalog)
+      || !Array.isArray(runsPayload.catalog.items)
+    ) {
+      throw new Error("Studio returned an incomplete Run list response.");
+    }
   } catch (error) {
+    state.runsError = boundedPublicActionError(
+      error,
+      "Runs could not be refreshed.",
+    );
     state.runsRefreshInFlight = false;
+    if (state.view === "runs") {
+      renderRuns();
+      if (shortlistEditingInProgress()) updateRunDetailRefreshNoticeInPlace();
+      else renderRunDetail();
+    }
+    renderOpenWork();
     return;
   }
   try {
+    const recoveredFromRunsError = Boolean(state.runsError);
     state.runCatalog = runsPayload.catalog || null;
     state.runUnavailable = runsPayload.unavailable || null;
+    state.runsLoaded = true;
+    state.runsError = "";
+    state.runsLastSuccessAt = Date.now();
     const catalogByRunId = new Map(
       (state.runCatalog && state.runCatalog.items || []).map((item) => [item.run_id, item]),
     );
-    state.runs = (runsPayload.runs || []).map((run) => {
+    state.runs = runsPayload.runs.map((run) => {
       const runId = canonicalRunId(run);
       const catalogEntry = catalogByRunId.get(runId);
       return catalogEntry
@@ -784,9 +1251,16 @@ async function loadRunsAndJobs() {
           }
         : run;
     });
+    state.runs = preserveSelectedRunSummary(state.runs);
     if (!state.selectedRunId && state.runs[0]) state.selectedRunId = canonicalRunId(state.runs[0]);
     const refreshDetail = shouldRefreshSelectedRunDetail();
-    if (state.view === "runs") renderRuns();
+    if (state.view === "runs") {
+      renderRuns();
+      if (recoveredFromRunsError && !refreshDetail) {
+        if (shortlistEditingInProgress()) updateRunDetailRefreshNoticeInPlace();
+        else renderRunDetail();
+      }
+    }
     if (refreshDetail) {
       try {
         await loadRunDetail(state.selectedRunId, {
@@ -794,11 +1268,16 @@ async function loadRunsAndJobs() {
           skipListRender: true,
         });
       } catch (error) {
-        // A live head may advance during refresh; the next poll will retry coherently.
+        state.runDetailRefreshError = boundedPublicActionError(
+          error,
+          "Live Run updates could not be refreshed.",
+        );
+        if (state.view === "runs") renderRunDetail();
       }
     }
   } finally {
     state.runsRefreshInFlight = false;
+    renderOpenWork();
   }
 }
 
@@ -813,6 +1292,32 @@ function shouldRefreshSelectedRunDetail() {
   const summary = state.runs.find((run) => canonicalRunId(run) === state.selectedRunId);
   if (!summary) return false;
   return runSummaryChanged(summary, state.selectedRun.run, state.selectedRun);
+}
+
+function preserveSelectedRunSummary(runs) {
+  const rows = Array.isArray(runs) ? runs : [];
+  const detailRun = state.selectedRun && state.selectedRun.run;
+  const detailRunId = canonicalRunId(detailRun);
+  if (
+    !detailRunId
+    || detailRunId !== state.selectedRunId
+    || rows.some((run) => canonicalRunId(run) === detailRunId)
+  ) {
+    return rows;
+  }
+  return [detailRun, ...rows];
+}
+
+function mergeExactRunSummary(detailRun) {
+  const runId = canonicalRunId(detailRun);
+  if (!runId) return false;
+  const index = state.runs.findIndex((run) => canonicalRunId(run) === runId);
+  if (index >= 0) {
+    state.runs[index] = { ...state.runs[index], ...detailRun };
+    return false;
+  }
+  state.runs = [detailRun, ...state.runs];
+  return true;
 }
 
 function shortlistEditingInProgress() {
@@ -921,7 +1426,7 @@ function ensureSelectedAgentSession() {
 }
 
 function defaultAssistantMessages() {
-  return [["assistant", "Ready", "I can use the current page, Catalog, Studies, Runs, and the files in Workspaces you explicitly make available to this conversation.", {
+  return [["assistant", "Ready", "Tell me the outcome you need. I can find suitable Catalog items, prepare a Study, launch work with your approval, and use Workspace files you explicitly make available to this Conversation.", {
     id: "default-ready",
     createdAt: new Date().toISOString(),
     source: "studio_system",
@@ -1032,15 +1537,48 @@ function currentAssistantEvents() {
 }
 
 async function syncActiveAgentSession() {
-  if (!state.assistantOpen) return;
-  const session = currentAgentSession();
-  if (!session || session.id.startsWith("agent-session-")) return;
-  if (!["waiting_for_agent", "running"].includes(assistantSessionStatus(session))) return;
-  if (state.syncingAgentSessionIds.has(session.id)) return;
+  if (!state.assistantOpen && !conversationShellEnabled()) return;
+  if (state.agentSessionRefreshInFlight) return;
+  state.agentSessionRefreshInFlight = true;
+  try {
+    const refreshed = await refreshAgentSessionSummaries();
+    if (refreshed.workspacesChanged) await refreshAgentWorkspaceState();
+    else renderAssistant();
+    const busyStatuses = new Set(["waiting_for_agent", "running", "resuming_after_approval"]);
+    const busySessions = (state.agentSessions || [])
+      .filter((session) => session && !session.id.startsWith("agent-session-") && busyStatuses.has(assistantSessionStatus(session)))
+      .sort((left, right) => left.id === state.selectedAgentSessionId ? -1 : right.id === state.selectedAgentSessionId ? 1 : 0)
+      .slice(0, 4);
+    const busyIds = new Set(busySessions.map((session) => session.id));
+    const selectedSession = currentAgentSession();
+    const selectedHydrationFailed = Boolean(
+      selectedSession && state.agentSessionHydrationErrors[selectedSession.id],
+    );
+    const exactSelected = selectedSession && !busyIds.has(selectedSession.id) && !selectedHydrationFailed
+      ? hydrateAgentSessionById(selectedSession.id, { force: true })
+      : Promise.resolve(null);
+    await Promise.allSettled([
+      exactSelected,
+      ...busySessions.map(syncAgentSessionById),
+    ]);
+  } finally {
+    state.agentSessionRefreshInFlight = false;
+  }
+}
+
+async function syncAgentSessionById(session) {
+  if (!session || state.syncingAgentSessionIds.has(session.id)) return;
   state.syncingAgentSessionIds.add(session.id);
   try {
-    const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/sync`, {});
-    if (payload.session) {
+    const payload = await postJson(
+      `/api/agent-sessions/${encodeURIComponent(session.id)}/sync`,
+      {},
+      { timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS },
+    );
+    if (
+      payload.session
+      && state.agentSessions.some((item) => item.id === session.id)
+    ) {
       await updateAgentSessionFromPayload(payload.session);
     }
   } catch (error) {
@@ -1052,12 +1590,47 @@ async function syncActiveAgentSession() {
 
 function pushAssistantMessage(message, options = {}) {
   const session = currentAgentSession();
-  if (!session) return;
+  if (!session) return null;
   if (!state.assistantMessagesBySession[session.id]) state.assistantMessagesBySession[session.id] = defaultAssistantMessages();
   const localMessage = localAssistantMessage(message);
   state.assistantMessagesBySession[session.id].push(localMessage);
+  state.agentSessionTranscriptVersions.set(
+    session.id,
+    (state.agentSessionTranscriptVersions.get(session.id) || 0) + 1,
+  );
   if (options.persist !== false && shouldPersistLocalAssistantMessage(localMessage, session)) {
     persistAssistantMessage(localMessage, { keepalive: true, refreshSession: false, sessionId: session.id });
+  }
+  return localMessage;
+}
+
+function removeLocalAssistantMessage(sessionId, message) {
+  if (!sessionId || !message) return;
+  const messageId = String(message[3] && message[3].id || "");
+  const messages = state.assistantMessagesBySession[sessionId] || [];
+  state.assistantMessagesBySession[sessionId] = messages.filter((item) => {
+    if (item === message) return false;
+    return !messageId || String(item && item[3] && item[3].id || "") !== messageId;
+  });
+  state.agentSessionTranscriptVersions.set(
+    sessionId,
+    (state.agentSessionTranscriptVersions.get(sessionId) || 0) + 1,
+  );
+}
+
+function restoreUnsentAssistantDraft(sessionId, unsentText) {
+  if (!sessionId || !unsentText) return;
+  const liveDraft = currentAgentSession() && currentAgentSession().id === sessionId && els.agentInput
+    ? els.agentInput.value
+    : state.assistantDraftsBySession[sessionId] || "";
+  const restored = liveDraft && liveDraft !== unsentText
+    ? `${unsentText}\n\n${liveDraft}`
+    : unsentText;
+  state.assistantDraftsBySession[sessionId] = restored;
+  storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
+  if (currentAgentSession() && currentAgentSession().id === sessionId && els.agentInput) {
+    els.agentInput.value = restored;
+    els.agentInput.dataset.touched = "true";
   }
 }
 
@@ -1097,12 +1670,13 @@ function shouldPersistLocalAssistantMessage(message, session) {
 }
 
 function assistantVisibleContext() {
+  const contentVisible = !conversationShellEnabled() || state.shell.surface === "content";
   const workspace = currentSession();
   const workspacePreview = workspace ? currentWorkspacePreview(workspace) : null;
-  const isCatalogPage = state.view === "catalog";
-  const isStudiesPage = state.view === "experiments";
-  const isRunsPage = state.view === "runs";
-  const isEditorPage = state.view === "workspace";
+  const isCatalogPage = contentVisible && state.view === "catalog";
+  const isStudiesPage = contentVisible && state.view === "experiments";
+  const isRunsPage = contentVisible && state.view === "runs";
+  const isEditorPage = contentVisible && state.view === "workspace";
   const isRegistrationMode = state.assistantMode === "registration";
   const component = componentByKey(state.selectedComponentKey);
   const plan = currentPlan();
@@ -1110,7 +1684,7 @@ function assistantVisibleContext() {
     ? state.selectedRun.run
     : state.runs.find((run) => canonicalRunId(run) === state.selectedRunId);
   return {
-    current_page: state.view,
+    current_page: contentVisible ? state.view : "conversation",
     assistant_mode: state.assistantMode,
     selected_workspace: isEditorPage && workspace ? {
       id: workspace.backendWorkspaceId || workspace.id,
@@ -1200,7 +1774,10 @@ async function persistAssistantMessage(message, options = {}) {
       source: metadata.source || defaultMessageSource(role),
       memory_scope: metadata.memoryScope || metadata.memory_scope || defaultMessageMemoryScope(role, metadata.source || ""),
       ui_context: assistantVisibleContext(),
-    }, { keepalive: Boolean(options.keepalive) });
+    }, {
+      keepalive: Boolean(options.keepalive),
+      timeoutMs: options.timeoutMs || ASSISTANT_MUTATION_TIMEOUT_MS,
+    });
     if (payload.session && options.refreshSession !== false) await updateAgentSessionFromPayload(payload.session);
     return payload;
   } catch (error) {
@@ -1214,28 +1791,50 @@ function mergeAgentSessionPayload(session) {
   if (!session || !session.id) return false;
   const existing = state.agentSessions.find((item) => item.id === session.id);
   const previousAttachments = state.agentWorkspaceAttachments[session.id] || [];
-  const nextAttachments = session.attached_workspace_ids || [];
+  const nextAttachments = Array.isArray(session.attached_workspace_ids)
+    ? session.attached_workspace_ids
+    : previousAttachments;
   const workspacesChanged = !sameStringList(previousAttachments, nextAttachments);
   const summary = {
     id: session.id,
-    title: session.title,
-    description: session.description,
-    status: session.status || "idle",
-    effective_status: session.effective_status || session.status || "idle",
-    pending_approval_count: Number(session.pending_approval_count || 0),
-    active_approval_ids: session.active_approval_ids || [],
-    queued_approval_count: Number(session.queued_approval_count || 0),
-    createdAt: session.created_at || "",
+    title: session.title ?? (existing && existing.title) ?? "",
+    description: session.description ?? (existing && existing.description) ?? "",
+    status: session.status || existing && existing.status || "idle",
+    effective_status: session.effective_status || session.status || existing && existing.effective_status || "idle",
+    pending_approval_count: Number(session.pending_approval_count ?? (existing && existing.pending_approval_count) ?? 0),
+    active_approval_ids: Array.isArray(session.active_approval_ids)
+      ? session.active_approval_ids
+      : existing && existing.active_approval_ids || [],
+    queued_approval_count: Number(session.queued_approval_count ?? (existing && existing.queued_approval_count) ?? 0),
+    createdAt: session.created_at || session.createdAt || existing && existing.createdAt || "",
   };
   state.agentSessions = existing
     ? state.agentSessions.map((item) => item.id === session.id ? { ...item, ...summary } : item)
     : [summary, ...state.agentSessions];
   state.agentWorkspaceAttachments[session.id] = nextAttachments;
-  state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || null;
-  state.agentApprovalsBySession[session.id] = session.approvals || state.agentApprovalsBySession[session.id] || [];
-  state.agentEventsBySession[session.id] = session.events || state.agentEventsBySession[session.id] || [];
-  if (session.messages) {
+  if (Object.prototype.hasOwnProperty.call(session, "selected_workspace_id")) {
+    state.selectedWorkspaceByAgentSession[session.id] = session.selected_workspace_id || null;
+  } else if (!Object.prototype.hasOwnProperty.call(state.selectedWorkspaceByAgentSession, session.id)) {
+    state.selectedWorkspaceByAgentSession[session.id] = null;
+  }
+  const hasMessages = Array.isArray(session.messages);
+  const hasEvents = Array.isArray(session.events);
+  const hasApprovals = Array.isArray(session.approvals);
+  if (hasApprovals) state.agentApprovalsBySession[session.id] = session.approvals;
+  else if (!state.agentApprovalsBySession[session.id]) state.agentApprovalsBySession[session.id] = [];
+  if (hasEvents) state.agentEventsBySession[session.id] = session.events;
+  else if (!state.agentEventsBySession[session.id]) state.agentEventsBySession[session.id] = [];
+  if (hasMessages) {
     state.assistantMessagesBySession[session.id] = session.messages.map(agentMessageFromPayload);
+  }
+  if (hasMessages || hasEvents || hasApprovals) {
+    state.agentSessionTranscriptVersions.set(
+      session.id,
+      (state.agentSessionTranscriptVersions.get(session.id) || 0) + 1,
+    );
+  }
+  if (hasMessages && hasEvents && hasApprovals) {
+    state.hydratedAgentSessionIds.add(session.id);
   }
   return workspacesChanged;
 }
@@ -1296,11 +1895,18 @@ async function updateAgentSessionFromPayload(session) {
     activate: ["waiting_for_agent", "running"].includes(assistantSessionStatus(session)),
   });
   if (previewActivated) {
-    if (state.view !== "workspace") {
+    if (!conversationShellEnabled() || contentSurfaceIsVisible()) {
+      if (state.view !== "workspace") {
+        state.view = "workspace";
+        renderNavigation();
+      }
+    }
+    if (!conversationShellEnabled() && state.view !== "workspace") {
       state.view = "workspace";
       renderNavigation();
     }
     renderWorkspace();
+    renderOpenWork();
     renderAssistant();
     return;
   }
@@ -1338,6 +1944,36 @@ function orderedWorkspaceSessions() {
     .filter((session) => session.visibleInWorkspaces !== false)
     .map((session) => ({ ...session, attachedToCurrent: attached.has(session.id) }))
     .sort((left, right) => workspaceSortMs(right.updatedAt || right.createdAt) - workspaceSortMs(left.updatedAt || left.createdAt));
+}
+
+function workspaceTitleKey(workspace) {
+  return String(workspace && workspace.title || "Workspace").trim().toLocaleLowerCase();
+}
+
+function duplicateWorkspaceTitleKeys(workspaces) {
+  const counts = new Map();
+  (workspaces || []).forEach((workspace) => {
+    const key = workspaceTitleKey(workspace);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([key]) => key));
+}
+
+function workspacePathHint(workspace) {
+  const fullPath = String(workspace && (workspace.codeFolder || workspace.path) || "").replace(/\\/g, "/");
+  if (!fullPath) return { label: "Different Workspace", fullPath: "" };
+  const parts = fullPath.split("/").filter(Boolean);
+  const suffix = parts.slice(-3).join("/");
+  return {
+    label: parts.length > 3 ? `…/${suffix}` : suffix || fullPath,
+    fullPath,
+  };
+}
+
+function workspaceDisambiguatorHtml(workspace, duplicateTitles) {
+  if (!duplicateTitles || !duplicateTitles.has(workspaceTitleKey(workspace))) return "";
+  const hint = workspacePathHint(workspace);
+  return `<span class="workspace-path-hint" title="${escapeHtml(hint.fullPath || hint.label)}">${escapeHtml(hint.label)}</span>`;
 }
 
 function isCatalogSourceView(session = currentSession()) {
@@ -1427,6 +2063,7 @@ function isActiveInterfaceLaunch(launch = state.interfaceLaunch) {
 }
 
 function isViewingActiveInterface(launch = state.interfaceLaunch, session = currentSession()) {
+  if (!contentSurfaceIsVisible()) return false;
   const routedLaunch = state.view === "interface" && state.interfaceSessionRoute;
   if (
     isActiveInterfaceLaunch(launch)
@@ -1476,6 +2113,7 @@ function renderActiveInterfaceIndicator() {
   els.activeInterfaceBar.hidden = !active;
   if (!active) {
     els.activeInterfaceBar.classList.remove("is-current");
+    renderOpenWork();
     return;
   }
   const viewing = isViewingActiveInterface(launch);
@@ -1525,6 +2163,381 @@ function renderActiveInterfaceIndicator() {
       ? "Retry cleanup"
       : "Stop";
     els.activeInterfaceStopButton.title = `Stop ${label}`;
+  }
+  renderOpenWork();
+}
+
+function buildOpenWorkItems() {
+  const items = [];
+  const launch = state.interfaceLaunch;
+  const interfaceLaunchStatus = String(launch && launch.status || "");
+  const interfaceLaunchFailed = interfaceLaunchStatus === "failed";
+  if (isActiveInterfaceLaunch(launch) || interfaceLaunchFailed) {
+    const launchStatus = String(launch.status || "running");
+    items.push({
+      key: `interface:${launch.launch_id || launch.key || "active"}`,
+      kind: "interface",
+      launch_id: String(launch.launch_id || ""),
+      launch_key: String(launch.key || ""),
+      launch_scope: String(launch.launch_scope || ""),
+      source_workspace_id: String(launch.source_workspace_id || ""),
+      typeLabel: "Interface",
+      section: ["cleanup_pending", "failed"].includes(launchStatus) ? "Needs attention" : "Running",
+      title: String(launch.label || "Interactive interface"),
+      subtitle: interfaceLaunchFailed
+        ? String(launch.error || "Interface launch failed · Click to inspect")
+        : activeInterfaceStatusText(launch, isViewingActiveInterface(launch)),
+      status: launchStatus,
+      active: !interfaceLaunchFailed,
+      dismissible: interfaceLaunchFailed,
+      actionable: Boolean(launch.launch_id || launch.key || launch.source_workspace_id),
+    });
+  }
+
+  const studyLaunch = state.studyLaunch;
+  if (studyLaunch) {
+    const failed = studyLaunchIsTerminal(studyLaunch);
+    items.push({
+      key: `study-launch:${studyLaunch.requestId || studyLaunch.planId || studyLaunch.launchId || "active"}`,
+      kind: "study-launch",
+      plan_id: String(studyLaunch.planId || ""),
+      launch_id: String(studyLaunch.launchId || studyLaunch.launch && studyLaunch.launch.launch_id || ""),
+      run_id: String(studyLaunch.launch && studyLaunch.launch.run_id || ""),
+      typeLabel: "Run preparation",
+      section: failed ? "Needs attention" : "Running",
+      title: String(studyLaunch.planTitle || "Study"),
+      subtitle: String(studyLaunch.stage || studyLaunch.message || (failed ? "Run preparation needs review" : "Preparing Run")),
+      status: failed ? "failed" : String(studyLaunch.status || "preparing"),
+      active: !failed,
+      dismissible: failed,
+      actionable: Boolean(
+        studyLaunch.planId
+        || studyLaunch.launchId
+        || studyLaunch.launch && (studyLaunch.launch.launch_id || studyLaunch.launch.run_id)
+      ),
+    });
+  }
+
+  const activeRunStatuses = new Set(["queued", "preparing", "pending", "running", "stopping"]);
+  const orderedRuns = [...(state.runs || [])].sort((left, right) => openWorkTimestamp(right.updated_at || right.created_at) - openWorkTimestamp(left.updated_at || left.created_at));
+  orderedRuns.filter((run) => activeRunStatuses.has(runStatus(run))).forEach((run) => {
+    const runId = canonicalRunId(run);
+    items.push({
+      key: `run:${runId}`,
+      kind: "run",
+      run_id: runId,
+      typeLabel: "Run",
+      section: "Running",
+      title: String(run.name || runId || "Run"),
+      subtitle: runPlannedWork(run),
+      status: runStatus(run),
+      active: true,
+    });
+  });
+  const projectedItems = items.map((item) => {
+    const error = String(state.openWorkErrors[item.key] || "");
+    if (!error) return item;
+    return {
+      ...item,
+      section: "Needs attention",
+      subtitle: error,
+      status: "failed",
+      active: false,
+    };
+  });
+  const sectionOrder = { "Needs attention": 0, Running: 1 };
+  return projectedItems.sort((left, right) => (sectionOrder[left.section] ?? 9) - (sectionOrder[right.section] ?? 9));
+}
+
+function openWorkTimestamp(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function renderOpenWork() {
+  if (!els.openWorkItems || !els.openWorkButton || !els.openWorkShelf) return;
+  const items = buildOpenWorkItems();
+  state.openWorkItemsByKey = new Map(items.map((item) => [item.key, item]));
+  const activeCount = items.filter((item) => item.active).length;
+  const attentionCount = items.filter((item) => item.section === "Needs attention").length;
+  const visibleCount = activeCount + attentionCount;
+  if (els.openWorkCount) {
+    els.openWorkCount.textContent = String(visibleCount);
+    els.openWorkCount.setAttribute(
+      "aria-label",
+      [
+        `${activeCount} active item${activeCount === 1 ? "" : "s"}`,
+        `${attentionCount} item${attentionCount === 1 ? "" : "s"} needing attention`,
+      ].join(", "),
+    );
+  }
+  els.openWorkButton.setAttribute("aria-expanded", String(Boolean(state.shell.openWorkExpanded)));
+  els.openWorkButton.classList.toggle("has-active-work", activeCount > 0);
+  els.openWorkButton.classList.toggle("has-attention-work", attentionCount > 0);
+  els.openWorkButton.title = activeCount
+    ? `${activeCount} active item${activeCount === 1 ? "" : "s"}${attentionCount ? `; ${attentionCount} need${attentionCount === 1 ? "s" : ""} attention` : ""}`
+    : attentionCount
+    ? `${attentionCount} item${attentionCount === 1 ? " needs" : "s need"} attention`
+    : "No open work";
+  els.openWorkShelf.hidden = !conversationShellEnabled() || !state.shell.openWorkExpanded;
+  const signature = stableJsonStringify(items);
+  if (els.openWorkItems.dataset.openWorkSignature === signature) return;
+  const focusedCard = els.openWorkItems.contains(document.activeElement)
+    ? document.activeElement.closest("[data-open-work-key]")
+    : null;
+  const focusedKey = String(focusedCard && focusedCard.dataset.openWorkKey || "");
+  els.openWorkItems.dataset.openWorkSignature = signature;
+  els.openWorkItems.innerHTML = items.length ? items.map((item) => {
+    const actionable = item.actionable !== false;
+    if (item.dismissible) {
+      return `
+        <article class="open-work-card open-work-${escapeHtml(item.kind)} open-work-card-with-actions" aria-label="${escapeHtml(`${item.typeLabel || "Open work"}: ${item.title}. ${item.status}. ${item.subtitle}`)}">
+          <span class="open-work-card-topline">
+            <small>${escapeHtml(item.typeLabel || "Open work")}</small>
+            <span class="status-pill ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
+          </span>
+          <strong>${escapeHtml(item.title)}</strong>
+          <span class="open-work-card-subtitle">${escapeHtml(item.subtitle)}</span>
+          <span class="open-work-card-actions">
+            ${actionable ? `<button class="ghost-button compact-action" data-open-work-key="${escapeHtml(item.key)}" type="button">Return to source</button>` : ""}
+            <button class="ghost-button compact-action" data-dismiss-open-work-key="${escapeHtml(item.key)}" type="button">Dismiss</button>
+          </span>
+        </article>
+      `;
+    }
+    const tag = actionable ? "button" : "div";
+    return `
+    <${tag} class="open-work-card open-work-${escapeHtml(item.kind)}" aria-label="${escapeHtml(`${item.typeLabel || "Open work"}: ${item.title}. ${item.status}. ${item.subtitle}`)}" ${actionable ? `data-open-work-key="${escapeHtml(item.key)}" type="button"` : `role="status" aria-live="polite"`}>
+      <span class="open-work-card-topline">
+        <small>${escapeHtml(item.typeLabel || "Open work")}</small>
+        <span class="status-pill ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
+      </span>
+      <strong>${escapeHtml(item.title)}</strong>
+      <span>${escapeHtml(item.subtitle)}</span>
+    </${tag}>
+  `;
+  }).join("") : `<div class="open-work-empty"><strong>No open work</strong><span>Running interfaces and Runs will appear here. Saved work remains in Studies, Runs, and Workspaces.</span></div>`;
+  els.openWorkItems.querySelectorAll("[data-open-work-key]").forEach((button) => {
+    button.addEventListener("click", () => openOpenWorkItem(state.openWorkItemsByKey.get(button.dataset.openWorkKey)));
+  });
+  els.openWorkItems.querySelectorAll("[data-dismiss-open-work-key]").forEach((button) => {
+    button.addEventListener("click", () => dismissOpenWorkItem(state.openWorkItemsByKey.get(button.dataset.dismissOpenWorkKey)));
+  });
+  if (focusedKey) {
+    window.requestAnimationFrame(() => {
+      if (
+        !state.shell.openWorkExpanded
+        || els.openWorkItems.dataset.openWorkSignature !== signature
+      ) return;
+      const activeElement = document.activeElement;
+      if (
+        activeElement
+        && activeElement !== document.body
+        && activeElement !== document.documentElement
+        && !els.openWorkItems.contains(activeElement)
+      ) return;
+      const replacement = [...els.openWorkItems.querySelectorAll("[data-open-work-key]")]
+        .find((button) => button.dataset.openWorkKey === focusedKey);
+      if (replacement) replacement.focus({ preventScroll: true });
+    });
+  }
+}
+
+function openOpenWorkItem(item) {
+  if (!item) return;
+  if (item.kind === "interface") {
+    void openExactOpenWorkInterface(item);
+    return;
+  }
+  if (item.kind === "study-launch") {
+    void openExactOpenWorkStudyLaunch(item).catch(() => renderOpenWork());
+    return;
+  }
+  if (item.kind === "run") {
+    state.selectedRunId = item.run_id;
+    state.selectedRun = null;
+    openContentSurface("runs", { history: "push" });
+    loadRunDetail(item.run_id, { keepTab: true, skipListRender: true }).catch(() => renderRunDetail());
+    return;
+  }
+}
+
+function dismissOpenWorkItem(item) {
+  if (!item || item.status !== "failed") return;
+  if (item.kind === "study-launch") {
+    const current = state.studyLaunch;
+    const currentKey = current
+      ? `study-launch:${current.requestId || current.planId || current.launchId || "active"}`
+      : "";
+    if (currentKey === item.key && studyLaunchIsTerminal(current)) {
+      dismissActiveStudyLaunch();
+    }
+    delete state.openWorkErrors[item.key];
+    renderOpenWork();
+    return;
+  }
+  if (item.kind !== "interface") return;
+  const current = state.interfaceLaunch;
+  const currentKey = current
+    ? `interface:${current.launch_id || current.key || "active"}`
+    : "";
+  if (currentKey === item.key) {
+    state.interfaceLaunch = null;
+    resetActiveInterfaceReturnState();
+    persistActiveInterfaceLaunch(null);
+  }
+  delete state.openWorkErrors[item.key];
+  renderActiveInterfaceIndicator();
+}
+
+async function openExactOpenWorkInterface(item) {
+  const launchId = String(item && item.launch_id || "");
+  const current = state.interfaceLaunch;
+  if (String(item && item.status || "") === "failed") {
+    const itemKey = String(item && item.key || "");
+    if (itemKey) delete state.openWorkErrors[itemKey];
+    try {
+      await openFailedInterfaceSource(item, current);
+    } catch (error) {
+      if (itemKey) {
+        state.openWorkErrors[itemKey] = boundedPublicActionError(
+          error,
+          "The source of this failed Interface launch could not be reopened.",
+        );
+      }
+      renderOpenWork();
+    }
+    return;
+  }
+  if (
+    launchId
+    && current
+    && String(current.launch_id || "") === launchId
+  ) {
+    openLaunchInterfaceSession(current);
+    return;
+  }
+  if (!launchId) {
+    const itemKey = String(item && item.key || "");
+    if (itemKey) delete state.openWorkErrors[itemKey];
+    try {
+      await openFailedInterfaceSource(item, current);
+    } catch (error) {
+      if (itemKey) {
+        state.openWorkErrors[itemKey] = boundedPublicActionError(
+          error,
+          "The source of this failed Interface launch could not be reopened.",
+        );
+      }
+      renderOpenWork();
+    }
+    return;
+  }
+  try {
+    const payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
+    const launch = payload && payload.launch;
+    if (!launch || String(launch.launch_id || "") !== launchId) {
+      throw new Error("This interface launch is no longer available.");
+    }
+    const exactLaunch = {
+      ...launch,
+      key: String(launch.key || item.launch_key || ""),
+      launch_scope: String(launch.launch_scope || item.launch_scope || ""),
+      source_workspace_id: String(launch.source_workspace_id || item.source_workspace_id || ""),
+    };
+    if (!openLaunchInterfaceSession(exactLaunch)) {
+      throw new Error("The exact interface source is unavailable.");
+    }
+  } catch (error) {
+    const failedSnapshot = {
+      launch_id: launchId,
+      key: String(item.launch_key || ""),
+      launch_scope: String(item.launch_scope || ""),
+      source_workspace_id: String(item.source_workspace_id || ""),
+      label: String(item.title || "Interactive interface"),
+      status: "failed",
+      error: boundedPublicActionError(error, "This interface launch could not be reopened."),
+    };
+    openLaunchInterfaceSession(failedSnapshot);
+  }
+}
+
+async function openFailedInterfaceSource(item, launch = state.interfaceLaunch) {
+  const launchKey = String(item && item.launch_key || launch && launch.key || "");
+  const launchScope = String(item && item.launch_scope || launch && launch.launch_scope || "");
+  const sourceWorkspaceId = String(
+    item && item.source_workspace_id || launch && launch.source_workspace_id || "",
+  );
+  if (launchScope === "workspace-transient" || sourceWorkspaceId) {
+    let session = workspaceSessionByBackendId(sourceWorkspaceId);
+    if (!session && sourceWorkspaceId) {
+      const payload = await getJson(`/api/workspaces/${encodeURIComponent(sourceWorkspaceId)}`);
+      if (payload && payload.workspace) session = mergeUiWorkspace(payload.workspace);
+    }
+    if (!session) throw new Error("The source Workspace is no longer available.");
+    await selectSession(session.id);
+    state.workbenchMode = "preview";
+    renderWorkspace();
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    return;
+  }
+  const component = catalogSourceComponentByKey(launchKey);
+  if (!component) throw new Error("The exact Catalog source is no longer available.");
+  const session = catalogSourceSessionByKey(launchKey)
+    || await openComponentSession(component, "inspect", { workbenchMode: "preview" });
+  if (!session) throw new Error("The exact Catalog source could not be reopened.");
+  showCatalogSourceSession(session, "preview");
+}
+
+async function openExactOpenWorkStudyLaunch(item) {
+  const itemKey = String(item && item.key || "");
+  if (itemKey) delete state.openWorkErrors[itemKey];
+  try {
+    const launchId = String(item && item.launch_id || "");
+    let active = state.studyLaunch;
+    const activeLaunchId = String(
+      active && (active.launchId || active.launch && active.launch.launch_id) || "",
+    );
+    let launch = launchId && activeLaunchId === launchId ? active && active.launch : null;
+    if (launchId && (!launch || String(launch.launch_id || "") !== launchId)) {
+      const payload = await getJson(`/api/studies/launches/${encodeURIComponent(launchId)}`);
+      launch = payload && payload.launch;
+      if (!launch || String(launch.launch_id || "") !== launchId) {
+        throw new Error("This Run preparation is no longer available.");
+      }
+    }
+    const runId = String(launch && launch.run_id || item && item.run_id || "");
+    if (runId) {
+      state.selectedRunId = runId;
+      state.selectedRun = null;
+      openContentSurface("runs", { history: "push" });
+      await loadRunDetail(runId, { keepTab: true, skipListRender: true }).catch(() => renderRunDetail());
+      return;
+    }
+    const planId = String(item && item.plan_id || "");
+    const plan = state.plans.find((candidate) => String(candidate.id || "") === planId);
+    if (!planId) {
+      throw new Error("This Run preparation no longer identifies its Study.");
+    }
+    if (!plan) {
+      throw new Error("The Study used for this Run preparation is no longer available.");
+    }
+    if (active && launchId && activeLaunchId === launchId && launch) {
+      active.launch = launch;
+      active.stage = launch.stage || active.stage;
+      active.status = launch.status || active.status;
+    }
+    revealStudyPlan(plan);
+    state.selectedPlanId = planId;
+    openContentSurface("experiments", { history: "push" });
+  } catch (error) {
+    if (itemKey) {
+      state.openWorkErrors[itemKey] = boundedPublicActionError(
+        error,
+        "This Run preparation could not be reopened.",
+      );
+      renderOpenWork();
+    }
   }
 }
 
@@ -1681,27 +2694,49 @@ function workspaceSortMs(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function attachWorkspaceToCurrent(workspaceId) {
-  const agentSession = currentAgentSession();
+async function attachWorkspaceToAgentSession(workspaceId, agentSessionId) {
+  const agentSession = state.agentSessions.find((item) => item.id === agentSessionId);
   if (!agentSession || !workspaceId) return false;
+  state.conversationWorkspaceError = "";
   let workspace = state.sessions.find((item) => item.id === workspaceId);
   if (workspace && workspace.realmManaged && workspace.reopenRequired) {
     workspace = await reopenManagedWorkspace(workspace);
     if (!workspace) return false;
   }
-  const attached = state.agentWorkspaceAttachments[agentSession.id] || [];
-  if (!attached.includes(workspaceId)) attached.push(workspaceId);
-  state.agentWorkspaceAttachments[agentSession.id] = attached;
-  setSelectedWorkspace(workspaceId);
-  if (workspace && workspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
+  const persistedConversation = Boolean(
+    workspace && workspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-"),
+  );
+  if (persistedConversation) {
     try {
-      const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`, { workspace_id: workspace.backendWorkspaceId });
+      const payload = await postJson(
+        `/api/agent-sessions/${encodeURIComponent(agentSession.id)}/attach-workspace`,
+        { workspace_id: workspace.backendWorkspaceId },
+        { timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS },
+      );
       if (payload.session) mergeAgentSessionPayload(payload.session);
     } catch (error) {
-      // Keep the optimistic attachment; refresh can reconcile if needed.
+      state.conversationWorkspaceError = boundedPublicActionError(
+        error,
+        `Studio could not make ${workspace.title || "this Workspace"} available to ${assistantSessionLabel(agentSession)}.`,
+      );
+      throw error;
     }
   }
+  const attached = [...(state.agentWorkspaceAttachments[agentSession.id] || [])];
+  if (!attached.includes(workspaceId)) attached.push(workspaceId);
+  state.agentWorkspaceAttachments[agentSession.id] = attached;
+  if (!persistedConversation && !state.selectedWorkspaceByAgentSession[agentSession.id]) {
+    // A transient Conversation has no server record to initialize its first
+    // default. Later attachments remain merely available until the user
+    // explicitly chooses Make default.
+    state.selectedWorkspaceByAgentSession[agentSession.id] = workspaceId;
+  }
   return agentSession;
+}
+
+async function attachWorkspaceToCurrent(workspaceId) {
+  const agentSession = currentAgentSession();
+  return attachWorkspaceToAgentSession(workspaceId, agentSession && agentSession.id);
 }
 
 async function reopenManagedWorkspace(workspace) {
@@ -1731,21 +2766,49 @@ async function reopenManagedWorkspace(workspace) {
 function keepWorkspaceSelected(workspaceId) {
   if (!workspaceId) return;
   state.selectedSessionId = workspaceId;
+}
+
+async function syncSelectedWorkspaceToBackend(workspaceId, options = {}) {
   const agentSession = currentAgentSession();
-  if (agentSession) {
-    state.selectedWorkspaceByAgentSession[agentSession.id] = workspaceId;
+  if (!agentSession || agentSession.id.startsWith("agent-session-")) return true;
+  const workspace = state.sessions.find((item) => item.id === workspaceId);
+  const persistedWorkspaceId = workspace
+    ? workspace.backendWorkspaceId || workspace.id
+    : workspaceId || "";
+  const previousWorkspaceId = options.previousWorkspaceId || null;
+  state.conversationWorkspaceError = "";
+  try {
+    const payload = await postJson(
+      `/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`,
+      { workspace_id: persistedWorkspaceId },
+      { timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS },
+    );
+    if (!payload.session) throw new Error("Studio did not return the updated Conversation.");
+    await updateAgentSessionFromPayload(payload.session);
+    return true;
+  } catch (error) {
+    state.selectedWorkspaceByAgentSession[agentSession.id] = previousWorkspaceId;
+    const label = workspace && workspace.title || "this Workspace";
+    state.conversationWorkspaceError = boundedPublicActionError(
+      error,
+      `Studio could not make ${label} the default Workspace for ${assistantSessionLabel(agentSession)}.`,
+    );
+    if (workspace) {
+      state.workspaceNotice = {
+        workspaceId: workspace.id,
+        assistantSessionId: agentSession.id,
+        title: "Default Workspace was not changed",
+        body: `${state.conversationWorkspaceError} The Workspace is still open and its files are unchanged.`,
+        error: true,
+      };
+    }
+    renderWorkspace();
+    renderAssistant();
+    return false;
   }
 }
 
-function syncSelectedWorkspaceToBackend(workspaceId) {
-  const agentSession = currentAgentSession();
-  if (!agentSession || agentSession.id.startsWith("agent-session-")) return;
-  postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`, { workspace_id: workspaceId || "" })
-    .then((payload) => updateAgentSessionFromPayload(payload.session))
-    .catch(() => {});
-}
-
-function setSelectedWorkspace(workspaceId, options = {}) {
+function setSelectedWorkspace(workspaceId) {
   if (
     state.workspaceNotice
     && state.workspaceNotice.workspaceId !== (workspaceId || null)
@@ -1753,13 +2816,6 @@ function setSelectedWorkspace(workspaceId, options = {}) {
     state.workspaceNotice = null;
   }
   state.selectedSessionId = workspaceId || null;
-  const attachedToCurrentAssistant = Boolean(
-    workspaceId && state.selectedAgentSessionId && attachedWorkspaceIds().includes(workspaceId),
-  );
-  if (attachedToCurrentAssistant) {
-    state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = workspaceId || null;
-  }
-  if (options.sync && attachedToCurrentAssistant) syncSelectedWorkspaceToBackend(workspaceId || "");
   if (state.registrationDraft && state.registrationDraft.workspaceId !== workspaceId) {
     state.registrationDraft = null;
     if (state.assistantMode === "registration") {
@@ -1771,10 +2827,6 @@ function setSelectedWorkspace(workspaceId, options = {}) {
 function clearSelectedWorkspaceForPage() {
   if (!state.selectedSessionId) return;
   state.selectedSessionId = null;
-  if (state.selectedAgentSessionId) {
-    state.selectedWorkspaceByAgentSession[state.selectedAgentSessionId] = null;
-  }
-  syncSelectedWorkspaceToBackend("");
 }
 
 function renderAll() {
@@ -1795,25 +2847,109 @@ function renderAll() {
   }
 }
 
+function syncManagedModalBackgroundInert() {
+  const appShell = document.querySelector(".app-shell");
+  if (!appShell) return;
+  appShell.toggleAttribute(
+    "inert",
+    Boolean(state.settingsOpen || state.pendingWorkspaceCleanup),
+  );
+}
+
 async function openSettings(options = {}) {
   if (options && options.tab) state.settingsTab = options.tab;
+  const activeElement = document.activeElement;
+  state.settingsReturnFocus = activeElement && activeElement !== document.body
+    ? activeElement
+    : null;
   state.settingsOpen = true;
+  state.settingsLoading = true;
+  state.settingsError = "";
   state.environmentVariableDrafts = [];
-  await loadAgentSettings();
-  fillSettingsForm();
+  renderSettingsModal();
+  window.requestAnimationFrame(() => {
+    if (els.settingsCloseButton) els.settingsCloseButton.focus();
+  });
+  await loadSettingsForModal();
+}
+
+async function loadSettingsForModal() {
+  state.settingsLoading = true;
+  state.settingsError = "";
+  renderSettingsModal();
+  let result = await loadAgentSettings();
+  if (result && result.stale) result = await loadAgentSettings();
+  if (!state.settingsOpen) return;
+  state.settingsLoading = false;
+  if (result && result.ok) {
+    fillSettingsForm();
+  } else {
+    state.settingsError = boundedPublicActionError(
+      result && result.error,
+      "Studio settings are unavailable.",
+    );
+  }
   renderSettingsModal();
 }
 
-function closeSettings() {
+function retrySettingsLoad() {
+  void loadSettingsForModal();
+}
+
+function closeSettings(options = {}) {
+  const returnFocus = state.settingsReturnFocus;
   state.settingsOpen = false;
+  state.settingsLoading = false;
+  state.settingsError = "";
+  state.settingsReturnFocus = null;
   state.environmentVariableDrafts = [];
   renderSettingsModal();
+  if (options.restoreFocus !== false) {
+    window.requestAnimationFrame(() => {
+      const target = returnFocus && returnFocus.isConnected
+        ? returnFocus
+        : els.studioSettingsButton;
+      if (target && typeof target.focus === "function") target.focus();
+    });
+  }
+}
+
+function handleSettingsModalKeydown(event) {
+  if (!state.settingsOpen || !els.settingsModal) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSettings();
+    return;
+  }
+  trapModalFocus(event, els.settingsModal, els.settingsDialog);
 }
 
 function renderSettingsModal() {
   if (!els.settingsModal) return;
   els.settingsModal.hidden = !state.settingsOpen;
   document.body.classList.toggle("settings-open", state.settingsOpen);
+  syncManagedModalBackgroundInert();
+  if (els.settingsLoadStatus) {
+    const error = String(state.settingsError || "");
+    els.settingsLoadStatus.hidden = !state.settingsLoading && !error;
+    els.settingsLoadStatus.classList.toggle("error", Boolean(error));
+    if (els.settingsLoadStatusTitle) {
+      els.settingsLoadStatusTitle.textContent = state.settingsLoading
+        ? "Loading Studio settings…"
+        : "Studio settings could not be loaded";
+    }
+    if (els.settingsLoadStatusBody) {
+      els.settingsLoadStatusBody.textContent = state.settingsLoading
+        ? "Reading the saved local configuration."
+        : `The form was not changed. ${error} Check Studio status, then try again.`;
+    }
+    if (els.settingsRetryButton) els.settingsRetryButton.hidden = state.settingsLoading || !error;
+  }
+  if (els.settingsSaveButton) {
+    els.settingsSaveButton.disabled = state.settingsLoading || Boolean(state.settingsError);
+  }
+  const settingsBody = els.settingsModal.querySelector(".settings-body");
+  if (settingsBody) settingsBody.setAttribute("aria-busy", state.settingsLoading ? "true" : "false");
   document.querySelectorAll("[data-settings-tab]").forEach((button) => {
     const active = (button.dataset.settingsTab || "assistant") === state.settingsTab;
     button.classList.toggle("active", active);
@@ -2030,7 +3166,7 @@ function assistantPublicRuntimeLabel(status) {
 }
 
 function assistantRuntimeLabel(status) {
-  if (!status || status.error) return "Assistant settings unavailable";
+  if (!status || status.error) return "OptPilot settings unavailable";
   if (!status.enabled) return "OpenHands disabled";
   if (status.mode === "configured") return status.connected ? "OpenHands ready" : "OpenHands not reachable";
   if (status.mode) return `OpenHands ${status.mode}`;
@@ -2112,6 +3248,9 @@ function parseStudioRoute(hash = window.location.hash) {
     }
   });
   const page = parts[0];
+  if (page === "conversations") {
+    return { surface: "conversation", conversationId: parts[1] || "" };
+  }
   if (page === "workspaces") return { view: "workspace", workspaceId: parts[1] || "" };
   if (page === "catalog") return { view: "catalog", componentKey: parts[1] || "" };
   if (page === "studies") return { view: "experiments", planId: parts[1] || "" };
@@ -2150,6 +3289,11 @@ function parseStudioRoute(hash = window.location.hash) {
 
 function studioRouteHash() {
   const segment = (value) => encodeURIComponent(String(value || ""));
+  if (state.shell.enabled && state.shell.surface === "conversation") {
+    return state.selectedAgentSessionId
+      ? `#/conversations/${segment(state.selectedAgentSessionId)}`
+      : "#/conversations";
+  }
   if (state.view === "workspace") {
     if (isCatalogSourceView() && state.selectedComponentKey) {
       return `#/catalog/${segment(state.selectedComponentKey)}`;
@@ -2179,31 +3323,110 @@ function studioRouteHash() {
   return "#/workspaces";
 }
 
-function syncStudioRoute() {
+function syncStudioRoute(options = {}) {
   const hash = studioRouteHash();
   if (window.location.hash === hash) return;
-  window.history.replaceState(null, "", hash);
+  if (options.history === "push") window.history.pushState(null, "", hash);
+  else window.history.replaceState(null, "", hash);
 }
 
 function applyStudioRoute(options = {}) {
   const route = parseStudioRoute();
   if (!route) {
+    if (state.shell.enabled) {
+      state.shell.surface = "conversation";
+      state.shell.assistantOverlayOpen = false;
+      state.assistantOpen = true;
+    }
     if (options.render !== false) renderAll();
     return "";
   }
+  if (route.surface === "conversation") {
+    let missingConversation = false;
+    let conversationHydration = null;
+    if (state.shell.enabled) {
+      state.shell.surface = "conversation";
+      state.shell.assistantOverlayOpen = false;
+      state.assistantOpen = true;
+      if (state.agentSessions.some((session) => session.id === route.conversationId)) {
+        const conversationChanged = state.selectedAgentSessionId !== route.conversationId;
+        setSelectedAgentSessionState(route.conversationId);
+        if (conversationChanged) {
+          conversationHydration = hydrateAgentSessionById(route.conversationId, { force: true });
+        }
+      } else if (
+        route.conversationId
+        && state.routeCollectionsReady
+        && state.agentSessionsLoaded
+      ) {
+        setSelectedAgentSessionState(null);
+        missingConversation = true;
+      }
+    }
+    if (missingConversation) syncStudioRoute();
+    if (options.render !== false) renderAll();
+    if (conversationHydration) {
+      void conversationHydration.then(() => {
+        if (state.selectedAgentSessionId === route.conversationId) renderAssistant();
+      });
+    }
+    return "";
+  }
+  if (state.shell.enabled) {
+    state.shell.surface = "content";
+    state.shell.assistantOverlayOpen = false;
+    state.assistantOpen = false;
+  }
   state.view = route.view;
   state.interfaceSessionRoute = route.view === "interface" ? { ...route } : null;
+  const exactRunRoute = Boolean(
+    route.runId
+    && (route.view === "runs" || route.view === "interface" && route.kind === "candidate"),
+  );
+  if (!exactRunRoute) state.runRouteResolutionPendingId = null;
   if (route.view !== "interface" || route.kind === "candidate") {
     state.interfaceSessionLaunchSnapshot = null;
   }
-  if (route.view === "workspace" && state.sessions.some((item) => item.id === route.workspaceId)) {
-    state.selectedSessionId = route.workspaceId;
-  } else if (route.view === "catalog" && allComponents().some((item) => item.key === route.componentKey)) {
-    state.selectedComponentKey = route.componentKey;
-  } else if (route.view === "experiments" && state.plans.some((item) => item.id === route.planId)) {
-    state.selectedPlanId = route.planId;
+  let missingEntity = false;
+  if (route.view === "workspace") {
+    if (state.sessions.some((item) => item.id === route.workspaceId)) {
+      state.selectedSessionId = route.workspaceId;
+    } else if (route.workspaceId && state.routeCollectionsReady && state.uiWorkspacesLoaded) {
+      state.selectedSessionId = null;
+      state.selectedFileKey = null;
+      missingEntity = true;
+    }
+  } else if (route.view === "catalog") {
+    const component = allComponents().find((item) => item.key === route.componentKey);
+    if (component) {
+      revealCatalogComponent(component);
+      state.selectedComponentKey = component.key;
+    } else if (route.componentKey && state.routeCollectionsReady && state.catalogLoaded) {
+      state.selectedComponentKey = null;
+      missingEntity = true;
+    }
+  } else if (route.view === "experiments") {
+    const plan = state.plans.find((item) => item.id === route.planId);
+    if (plan) {
+      revealStudyPlan(plan);
+      state.selectedPlanId = route.planId;
+    } else if (
+      route.planId
+      && state.routeCollectionsReady
+      && state.catalogLoaded
+      && state.studyDraftsLoaded
+    ) {
+      state.selectedPlanId = null;
+      missingEntity = true;
+    }
   } else if (route.view === "runs") {
+    if (route.runId && route.runId !== state.selectedRunId) state.selectedRun = null;
     state.selectedRunId = route.runId || state.selectedRunId;
+    if (route.runId && canonicalRunId(state.selectedRun && state.selectedRun.run) !== route.runId) {
+      state.runRouteResolutionPendingId = route.runId;
+    } else if (state.runRouteResolutionPendingId === route.runId) {
+      state.runRouteResolutionPendingId = null;
+    }
     const candidateId = route.candidateId || null;
     if (candidateId !== state.routedCandidateId) {
       state.routedCandidateResolution = null;
@@ -2212,22 +3435,30 @@ function applyStudioRoute(options = {}) {
     state.routedCandidateId = candidateId;
     if (candidateId) state.activeRunTab = "candidate";
   } else if (route.view === "interface" && route.kind === "candidate") {
+    if (route.runId && route.runId !== state.selectedRunId) state.selectedRun = null;
     state.selectedRunId = route.runId || state.selectedRunId;
-    state.routedCandidateId = route.candidateId || null;
-    if (route.runId) {
-      selectOperatorJobsRun(route.runId);
-      state.selectedOperatorJobId = route.jobId || null;
-      if (!state.selectedOperatorJob || state.selectedOperatorJob.job_id !== route.jobId) {
-        state.selectedOperatorJob = null;
-      }
-      if (route.jobId) loadOperatorJobDetail(route.jobId, { silent: true });
+    if (route.runId && canonicalRunId(state.selectedRun && state.selectedRun.run) !== route.runId) {
+      state.runRouteResolutionPendingId = route.runId;
+    } else if (state.runRouteResolutionPendingId === route.runId) {
+      state.runRouteResolutionPendingId = null;
     }
+    state.routedCandidateId = route.candidateId || null;
+    selectOperatorJobsRun(route.runId);
+    state.selectedOperatorJobId = route.jobId || null;
+    if (!state.selectedOperatorJob || state.selectedOperatorJob.job_id !== route.jobId) {
+      state.selectedOperatorJob = null;
+    }
+    if (route.jobId) loadOperatorJobDetail(route.jobId, { silent: true });
   }
-  if (options.render !== false) renderAll();
-  if (options.loadRun && ["runs", "interface"].includes(route.view) && route.runId) {
+  if (missingEntity) syncStudioRoute();
+  if (options.render !== false) {
+    renderAll();
+    focusVisibleContentSurface(state.view);
+  }
+  if (!missingEntity && options.loadRun && ["runs", "interface"].includes(route.view) && route.runId) {
     loadRunDetail(route.runId, { keepTab: true, skipListRender: true, fromRoute: true }).catch(() => {});
   }
-  return ["runs", "interface"].includes(route.view) ? route.runId || "" : "";
+  return !missingEntity && ["runs", "interface"].includes(route.view) ? route.runId || "" : "";
 }
 
 function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
@@ -2261,7 +3492,7 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
       ...base,
       status: "failed",
       statusLabel: "Unavailable",
-      message: "This Interface Session URL is incomplete.",
+      message: "This interface link is incomplete.",
       emptyTitle: "Interface unavailable",
       emptyBody: "Return to the Candidate and open its interface again.",
     };
@@ -2293,7 +3524,7 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
       ...base,
       status: "failed",
       statusLabel: "Mismatch",
-      message: "This try does not match the Run and Candidate in the Interface Session URL.",
+      message: "This try does not match the Run and Candidate in this interface link.",
       emptyTitle: "Interface identity mismatch",
       emptyBody: "For safety, Studio did not open this interface. Return to the Candidate and try again.",
     };
@@ -2377,7 +3608,7 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
     source: workspace ? "Editable Workspace" : "Exact published Catalog version",
     status: "preparing",
     statusLabel: "Restoring",
-    message: "Restoring the running Interface Session.",
+    message: "Restoring the running interface.",
     emptyTitle: "Restoring the interactive view",
     emptyBody: "The interface will reappear after Studio confirms the launch.",
     openUrl: "",
@@ -2395,7 +3626,7 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
       ...base,
       status: "failed",
       statusLabel: "Unavailable",
-      message: "This Interface Session URL is incomplete.",
+      message: "This interface link is incomplete.",
       emptyTitle: "Interface unavailable",
       emptyBody: "Return to the source and launch its interface again.",
     };
@@ -2408,8 +3639,8 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
           ...base,
           status: "failed",
           statusLabel: "Unavailable",
-          message: "This temporary Interface Session is not active in this browser tab.",
-          emptyTitle: "Interface Session unavailable",
+          message: "This temporary interface is no longer running.",
+          emptyTitle: "Interface unavailable",
           emptyBody: "Return to the source and launch its interface again.",
         };
   }
@@ -2424,12 +3655,15 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
       ...base,
       status: "failed",
       statusLabel: "Mismatch",
-      message: "The active interface does not match this Interface Session URL.",
+      message: "The active interface does not match this interface link.",
       emptyTitle: "Interface identity mismatch",
       emptyBody: "For safety, Studio did not open a different running interface.",
     };
   }
   const status = String(launch.status || "queued");
+  const connectionStatus = String(launch.connection_status || "");
+  const reconnecting = connectionStatus === "reconnecting";
+  const connectionUnavailable = connectionStatus === "unavailable";
   const preview = launch.result && launch.result.preview && typeof launch.result.preview === "object"
     ? launch.result.preview
     : {};
@@ -2440,7 +3674,11 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
     ...base,
     title: String(launch.label || "Interactive interface"),
     status,
-    statusLabel: status === "ready"
+    statusLabel: reconnecting
+      ? "Reconnecting"
+      : connectionUnavailable
+        ? "Connection needs attention"
+        : status === "ready"
       ? "Running"
       : stopping
         ? "Stopping"
@@ -2451,7 +3689,11 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
             : status === "stopped"
               ? "Stopped"
               : "Starting",
-    message: String(launch.stop_error || launch.error || (openUrl
+    message: reconnecting
+      ? "Studio temporarily lost contact with this same interface. It is retrying; no new interface is being started."
+      : connectionUnavailable
+        ? String(launch.connection_error || "Studio could not confirm the current status. Reconnect to this same interface before starting another one.")
+        : String(launch.stop_error || launch.error || (openUrl
       ? workspace
         ? "This interface is running from the selected Workspace."
         : "This interface is running from the exact published Catalog version."
@@ -2460,7 +3702,11 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
         : terminal
           ? "The interface is no longer available."
           : "Studio is preparing the temporary interface runtime.")),
-    emptyTitle: status === "failed"
+    emptyTitle: reconnecting
+      ? "Reconnecting to the interface"
+      : connectionUnavailable
+        ? "Interface connection needs attention"
+        : status === "failed"
       ? "Interface could not start"
       : status === "stopped"
         ? "Interface stopped"
@@ -2469,13 +3715,18 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
           : stopping
             ? "Stopping the interface"
             : "Starting the interface",
-    emptyBody: String(launch.error || (terminal
+    emptyBody: reconnecting
+      ? "Studio is retrying the same launch."
+      : connectionUnavailable
+        ? "Choose Reconnect to check the same launch again."
+        : String(launch.error || (terminal
       ? "Return to the source to launch it again."
       : "The interactive view will appear automatically when it is ready.")),
     openUrl,
     canStop: !["failed", "stopped", "stopping"].includes(status),
     stopPending: stopping,
     stop: () => stopInterfaceLaunch(launch.key),
+    retry: connectionUnavailable ? () => resumeInterfaceLaunchPolling(launch) : null,
   };
 }
 
@@ -2488,13 +3739,13 @@ function interfaceSessionModel() {
   return {
     kind: "unknown",
     key: "unknown",
-    eyebrow: "Interface Session",
+    eyebrow: "Interface",
     title: "Interactive interface",
     source: "No interface selected",
     status: "failed",
     statusLabel: "Unavailable",
     message: "Choose an interface from Catalog, a Workspace, or a saved Candidate.",
-    emptyTitle: "No Interface Session selected",
+    emptyTitle: "No interface selected",
     emptyBody: "Return to Studio and open an interface.",
     openUrl: "",
     backHash: "#/catalog",
@@ -2525,18 +3776,30 @@ function renderInterfaceSession() {
     els.interfaceSessionStatus.className = `status-pill ${statusClass(model.status)}`;
   }
   if (els.interfaceSessionNotice) {
-    els.interfaceSessionNotice.textContent = model.message;
-    els.interfaceSessionNotice.classList.toggle("error", ["failed", "mismatch"].includes(model.status));
+    const actionError = state.interfaceSessionActionError
+      && state.interfaceSessionActionError.key === model.key
+      ? state.interfaceSessionActionError.message
+      : "";
+    if (state.interfaceSessionActionError && state.interfaceSessionActionError.key !== model.key) {
+      state.interfaceSessionActionError = null;
+    }
+    els.interfaceSessionNotice.textContent = actionError || model.message;
+    els.interfaceSessionNotice.classList.toggle("error", Boolean(actionError) || ["failed", "mismatch"].includes(model.status));
     els.interfaceSessionNotice.setAttribute(
       "role",
-      ["failed", "mismatch"].includes(model.status) ? "alert" : "status",
+      actionError || ["failed", "mismatch"].includes(model.status) ? "alert" : "status",
     );
   }
-  if (els.interfaceSessionBackButton) els.interfaceSessionBackButton.textContent = model.backLabel;
+  if (els.interfaceSessionBackButton) {
+    const route = state.interfaceSessionRoute || {};
+    const origin = state.agentSessions.find((session) => session.id === route.originConversationId);
+    els.interfaceSessionBackButton.textContent = origin
+      ? `Back to ${assistantSessionLabel(origin)}`
+      : model.backLabel;
+  }
   if (els.interfaceSessionOpenButton) {
     els.interfaceSessionOpenButton.hidden = !model.openUrl;
-    if (model.openUrl) els.interfaceSessionOpenButton.setAttribute("href", model.openUrl);
-    else els.interfaceSessionOpenButton.removeAttribute("href");
+    els.interfaceSessionOpenButton.disabled = !model.openUrl;
   }
   if (els.interfaceSessionStopButton) {
     els.interfaceSessionStopButton.hidden = !model.canStop && !model.stopPending;
@@ -2583,10 +3846,155 @@ function renderInterfaceSession() {
   const frameMounted = Boolean(els.interfaceSessionFrame.getAttribute("src"));
   els.interfaceSessionFrame.hidden = !frameMounted;
   if (els.interfaceSessionEmpty) els.interfaceSessionEmpty.hidden = frameMounted;
+  renderInterfaceSessionOutputs(model);
+}
+
+function setInterfaceSessionActionError(message, model = interfaceSessionModel()) {
+  state.interfaceSessionActionError = {
+    key: model.key,
+    message,
+  };
+  renderInterfaceSession();
+}
+
+function openCurrentInterfaceSessionExternal(event) {
+  if (event) event.preventDefault();
+  const model = interfaceSessionModel();
+  if (!model.openUrl) {
+    setInterfaceSessionActionError(
+      "The interface is not ready to open yet. Wait for it to finish starting, then try again.",
+      model,
+    );
+    return;
+  }
+  const externalWindow = reserveExternalWindow();
+  if (!externalWindow) {
+    setInterfaceSessionActionError(
+      "The browser blocked the new window. Allow pop-ups for OptPilot, then choose Open in new window again.",
+      model,
+    );
+    return;
+  }
+  if (!navigateExternalWindow(externalWindow, model.openUrl)) {
+    closeReservedExternalWindow(externalWindow);
+    setInterfaceSessionActionError(
+      "The browser did not allow OptPilot to open this interface URL. Check pop-up permissions and try again.",
+      model,
+    );
+    return;
+  }
+  state.interfaceSessionActionError = null;
+  renderInterfaceSession();
+}
+
+function interfaceSessionOutputLaunch() {
+  const route = state.interfaceSessionRoute;
+  if (!route || !["catalog", "workspace"].includes(route.kind)) return null;
+  if (
+    state.interfaceLaunch
+    && String(state.interfaceLaunch.launch_id || "") === String(route.launchId || "")
+  ) return state.interfaceLaunch;
+  return state.interfaceSessionLaunchSnapshot;
+}
+
+function renderInterfaceSessionOutputs(model = interfaceSessionModel()) {
+  if (!els.interfaceSessionOutputsButton || !els.interfaceSessionOutputsBody) return;
+  const launch = interfaceSessionOutputLaunch();
+  const outputs = launch && launch.result && Array.isArray(launch.result.outputs)
+    ? launch.result.outputs
+    : [];
+  const recovery = Boolean(
+    launch
+    && launch.outputs_enabled
+    && interfaceOutputRecoveryState(launch) === "available",
+  );
+  const available = Boolean(launch && (outputs.length || recovery));
+  els.interfaceSessionOutputsButton.hidden = !available;
+  if (els.interfaceSessionOutputsCount) {
+    els.interfaceSessionOutputsCount.textContent = String(outputs.length);
+    els.interfaceSessionOutputsCount.setAttribute(
+      "aria-label",
+      `${outputs.length} output${outputs.length === 1 ? "" : "s"}`,
+    );
+  }
+  const signature = launch ? interfaceOutputRenderSignature(launch) : "";
+  if (els.interfaceSessionOutputsBody.dataset.outputSignature !== signature) {
+    els.interfaceSessionOutputsBody.dataset.outputSignature = signature;
+    els.interfaceSessionOutputsBody.innerHTML = available
+      ? `<section class="interface-output-section" aria-label="Outputs">
+          <div class="interface-output-list">${renderInterfaceOutputList(outputs)}</div>
+          ${renderInterfaceOutputRecovery(launch)}
+        </section>`
+      : `<p id="interfaceSessionOutputsEmpty" class="interface-output-empty">No outputs have been reported yet.</p>`;
+    bindInterfaceOutputControls(els.interfaceSessionOutputsBody);
+  }
+  const needsAttention = outputs.some((output) => {
+    const status = String(output && output.status || "").toLowerCase();
+    return status === "failed" || (status === "ready"
+      && output.actions && output.actions.keep_as_workspace
+      && output.actions.keep_as_workspace.eligible
+      && !output.kept_workspace_id);
+  });
+  const attentionSignature = needsAttention
+    ? outputs.map((output) => [output && output.id, output && output.status, output && output.kept_workspace_id || ""]).join("|")
+    : "";
+  if (els.interfaceSessionOutputsDrawer) {
+    els.interfaceSessionOutputsDrawer.dataset.attentionSignature = attentionSignature;
+  }
+  els.interfaceSessionOutputsButton.classList.toggle("needs-attention", needsAttention);
+  els.interfaceSessionOutputsButton.title = needsAttention
+    ? "One or more outputs need to be saved or reviewed"
+    : `${outputs.length} interface output${outputs.length === 1 ? "" : "s"}`;
+  els.interfaceSessionOutputsButton.setAttribute(
+    "aria-label",
+    needsAttention
+      ? `Outputs, ${outputs.length}, action needed`
+      : `Outputs, ${outputs.length}`,
+  );
+  if (attentionSignature && !state.interfaceSessionOutputsOpen) {
+    els.interfaceSessionNotice.textContent = `${model.message} An interface output needs your attention; open Outputs to review it.`;
+  }
+  if (!available && state.interfaceSessionOutputsOpen) {
+    setInterfaceSessionOutputsOpen(false, { restoreFocus: false });
+  } else {
+    setInterfaceSessionOutputsOpen(state.interfaceSessionOutputsOpen, { focus: false, restoreFocus: false });
+  }
+}
+
+function setInterfaceSessionOutputsOpen(open, options = {}) {
+  const available = Boolean(els.interfaceSessionOutputsButton && !els.interfaceSessionOutputsButton.hidden);
+  const next = Boolean(open && available);
+  state.interfaceSessionOutputsOpen = next;
+  if (els.interfaceSessionOutputsDrawer) els.interfaceSessionOutputsDrawer.hidden = !next;
+  if (els.interfaceSessionOutputsScrim) els.interfaceSessionOutputsScrim.hidden = true;
+  if (els.interfaceSessionOutputsButton) {
+    els.interfaceSessionOutputsButton.setAttribute("aria-expanded", String(next));
+  }
+  if (next && options.focus !== false) {
+    window.requestAnimationFrame(() => {
+      const target = els.interfaceSessionOutputsCloseButton || els.interfaceSessionOutputsDrawer;
+      if (target && typeof target.focus === "function") target.focus({ preventScroll: true });
+    });
+  } else if (!next && options.restoreFocus !== false && els.interfaceSessionOutputsButton) {
+    window.requestAnimationFrame(() => els.interfaceSessionOutputsButton.focus({ preventScroll: true }));
+  }
+}
+
+function handleInterfaceSessionOutputsKeydown(event) {
+  if (!state.interfaceSessionOutputsOpen) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setInterfaceSessionOutputsOpen(false);
+    return;
+  }
 }
 
 function openCandidateInterfaceSession(runId, candidateId, jobId) {
   if (!runId || !candidateId || !jobId) return;
+  const shouldFocus = !contentSurfaceIsVisible("interface")
+    || !state.interfaceSessionRoute
+    || state.interfaceSessionRoute.kind !== "candidate"
+    || String(state.interfaceSessionRoute.jobId || "") !== String(jobId);
   state.interfaceSessionRoute = {
     view: "interface",
     kind: "candidate",
@@ -2598,17 +4006,26 @@ function openCandidateInterfaceSession(runId, candidateId, jobId) {
   state.view = "interface";
   state.selectedRunId = String(runId);
   state.routedCandidateId = String(candidateId);
+  if (state.shell.enabled) {
+    state.shell.surface = "content";
+    state.shell.assistantOverlayOpen = false;
+    state.assistantOpen = false;
+  }
   selectOperatorJobsRun(runId);
   state.selectedOperatorJobId = String(jobId);
-  syncStudioRoute();
+  syncStudioRoute({ history: state.shell.enabled ? "push" : "replace" });
   renderNavigation();
   renderInterfaceSession();
+  if (shouldFocus) focusVisibleContentSurface("interface");
   loadOperatorJobDetail(jobId, { silent: true });
 }
 
 function openLaunchInterfaceSession(launch = state.interfaceLaunch) {
   const launchId = String(launch && launch.launch_id || "");
   if (!launchId) return false;
+  const shouldFocus = !contentSurfaceIsVisible("interface")
+    || !state.interfaceSessionRoute
+    || String(state.interfaceSessionRoute.launchId || "") !== launchId;
   const workspace = launch.launch_scope === "workspace-transient";
   const sourceId = workspace
     ? String(launch.source_workspace_id || "")
@@ -2619,16 +4036,34 @@ function openLaunchInterfaceSession(launch = state.interfaceLaunch) {
     kind: workspace ? "workspace" : "catalog",
     sourceId,
     launchId,
+    originConversationId: String(launch.origin_conversation_id || ""),
   };
+  state.interfaceSessionOutputsOpen = false;
+  if (els.interfaceSessionOutputsDrawer) delete els.interfaceSessionOutputsDrawer.dataset.attentionSignature;
+  state.interfaceLaunch = { ...launch };
+  persistActiveInterfaceLaunch(state.interfaceLaunch);
   state.interfaceSessionLaunchSnapshot = { ...launch };
   state.view = "interface";
-  syncStudioRoute();
+  if (state.shell.enabled) {
+    state.shell.surface = "content";
+    state.shell.assistantOverlayOpen = false;
+    state.assistantOpen = false;
+  }
+  syncStudioRoute({ history: state.shell.enabled ? "push" : "replace" });
   renderNavigation();
   renderInterfaceSession();
+  if (shouldFocus) focusVisibleContentSurface("interface");
   return true;
 }
 
 function leaveInterfaceSession() {
+  const route = state.interfaceSessionRoute || {};
+  const origin = state.agentSessions.find((session) => session.id === route.originConversationId);
+  if (origin) {
+    setSelectedAgentSessionState(origin.id);
+    openConversationSurface({ history: "push" });
+    return;
+  }
   const model = interfaceSessionModel();
   if (model.backHash) window.location.hash = model.backHash;
 }
@@ -2643,7 +4078,205 @@ function refreshCurrentInterfaceSession() {
   if (typeof model.retry === "function") model.retry();
 }
 
+function conversationShellEnabled() {
+  return Boolean(state.shell && state.shell.enabled);
+}
+
+function contentSurfaceIsVisible(view = "") {
+  if (conversationShellEnabled() && state.shell.surface !== "content") return false;
+  return !view || state.view === view;
+}
+
+function focusVisibleContentSurface(view = state.view) {
+  if (!conversationShellEnabled() || state.shell.surface !== "content" || state.view !== view) return;
+  window.requestAnimationFrame(() => {
+    const target = els.shellSurfaceTitle;
+    if (
+      !target
+      || state.shell.surface !== "content"
+      || state.view !== view
+      || target.getClientRects().length === 0
+    ) return;
+    target.focus({ preventScroll: true });
+  });
+}
+
+function openConversationSurface(options = {}) {
+  if (!conversationShellEnabled()) {
+    setAssistantOpen(true);
+    return;
+  }
+  captureAssistantContinuity();
+  state.shell.surface = "conversation";
+  state.shell.assistantOverlayOpen = false;
+  state.shell.mobileRailOpen = false;
+  state.assistantOpen = true;
+  if (state.assistantMode === "sessions") state.assistantMode = "chat";
+  syncStudioRoute({ history: options.history || "replace" });
+  renderNavigation();
+  renderAssistant();
+  if (options.focus !== false) {
+    window.requestAnimationFrame(() => els.agentInput && els.agentInput.focus());
+  }
+}
+
+function openContentSurface(view, options = {}) {
+  setView(view, { ...options, history: options.history || "push" });
+  if (options.focus !== false) focusVisibleContentSurface(view);
+}
+
+function setAssistantOverlayOpen(open) {
+  if (!conversationShellEnabled()) {
+    setAssistantOpen(open);
+    return;
+  }
+  if (state.shell.surface === "conversation") {
+    state.assistantOpen = true;
+    renderAssistant();
+    return;
+  }
+  const restoreTriggerFocus = state.shell.assistantOverlayOpen && !open;
+  if (!open) captureAssistantContinuity();
+  state.shell.assistantOverlayOpen = Boolean(open);
+  state.assistantOpen = Boolean(open);
+  renderShell();
+  renderAssistant();
+  if (open) window.requestAnimationFrame(() => els.agentInput && els.agentInput.focus());
+  else if (restoreTriggerFocus) {
+    window.requestAnimationFrame(() => els.askOptPilotButton && els.askOptPilotButton.focus());
+  }
+}
+
+function setOpenWorkExpanded(expanded) {
+  const restoreFocus = !expanded && els.openWorkShelf && els.openWorkShelf.contains(document.activeElement);
+  state.shell.openWorkExpanded = Boolean(expanded);
+  renderOpenWork();
+  if (restoreFocus) window.requestAnimationFrame(() => els.openWorkButton && els.openWorkButton.focus());
+}
+
+function setMobileRailOpen(open) {
+  state.shell.mobileRailOpen = Boolean(open);
+  renderShell();
+  window.requestAnimationFrame(() => {
+    if (state.shell.mobileRailOpen) {
+      const first = document.querySelector("#studioRail button:not([disabled]), #studioRail a[href]");
+      if (first) first.focus();
+    } else if (els.railToggleButton) {
+      els.railToggleButton.focus();
+    }
+  });
+}
+
+function handleConversationShellKeydown(event) {
+  if (!conversationShellEnabled() || event.defaultPrevented) return;
+  const nestedModal = event.target && event.target.closest && event.target.closest("[aria-modal='true']");
+  if (nestedModal && nestedModal !== els.assistantPanel) return;
+  if (event.key === "Tab" && state.shell.mobileRailOpen) {
+    trapModalFocus(event, document.getElementById("studioRail"), document.getElementById("studioRail"));
+    return;
+  }
+  if (event.key === "Tab" && state.shell.assistantOverlayOpen) {
+    trapModalFocus(event, els.assistantPanel, els.assistantPanel);
+    return;
+  }
+  if (event.key !== "Escape") return;
+  if (state.shell.mobileRailOpen) {
+    setMobileRailOpen(false);
+    return;
+  }
+  if (state.shell.assistantOverlayOpen) {
+    setAssistantOverlayOpen(false);
+    return;
+  }
+  if (state.shell.openWorkExpanded) setOpenWorkExpanded(false);
+}
+
+function renderShell() {
+  const enabled = conversationShellEnabled();
+  const conversation = enabled && state.shell.surface === "conversation";
+  const overlay = enabled && state.shell.surface === "content" && state.shell.assistantOverlayOpen;
+  const narrow = enabled && window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
+  document.body.classList.toggle("shell-v2", enabled);
+  document.body.classList.toggle("shell-legacy", !enabled);
+  document.body.classList.toggle("shell-conversation", conversation);
+  document.body.classList.toggle("shell-content", enabled && !conversation);
+  document.body.classList.toggle("assistant-overlay-open", overlay);
+  document.body.classList.toggle("mobile-rail-open", enabled && state.shell.mobileRailOpen);
+  if (els.railToggleButton) {
+    els.railToggleButton.setAttribute("aria-expanded", String(Boolean(state.shell.mobileRailOpen)));
+    els.railToggleButton.setAttribute("aria-label", state.shell.mobileRailOpen ? "Close navigation" : "Open navigation");
+  }
+  if (els.railScrim) els.railScrim.hidden = !enabled || !state.shell.mobileRailOpen;
+  const studioRail = document.getElementById("studioRail");
+  if (studioRail) {
+    studioRail.toggleAttribute("inert", Boolean(overlay));
+    studioRail.setAttribute("aria-hidden", String(Boolean(overlay || narrow && !state.shell.mobileRailOpen)));
+  }
+  const main = document.querySelector(".main");
+  if (main) main.toggleAttribute("inert", Boolean(narrow && state.shell.mobileRailOpen));
+  document.querySelectorAll(".main > *").forEach((element) => {
+    if (element === els.assistantPanel) return;
+    element.toggleAttribute("inert", Boolean(overlay));
+  });
+  if (els.assistantPanel) {
+    if (overlay) {
+      els.assistantPanel.setAttribute("role", "dialog");
+      els.assistantPanel.setAttribute("aria-modal", "true");
+      els.assistantPanel.setAttribute("aria-labelledby", "assistantTitle");
+    } else if (conversation) {
+      els.assistantPanel.setAttribute("role", "region");
+      els.assistantPanel.removeAttribute("aria-modal");
+      els.assistantPanel.setAttribute("aria-labelledby", "assistantTitle");
+    } else {
+      els.assistantPanel.removeAttribute("role");
+      els.assistantPanel.removeAttribute("aria-modal");
+      els.assistantPanel.removeAttribute("aria-labelledby");
+    }
+  }
+  const session = currentAgentSession();
+  if (els.backToConversationButton) {
+    els.backToConversationButton.hidden = !enabled || conversation;
+    const label = session ? "Open Conversation" : "Start Conversation";
+    const copy = els.backToConversationButton.querySelector("span:last-child");
+    if (copy) copy.textContent = label;
+    els.backToConversationButton.setAttribute("aria-label", label);
+  }
+  if (els.askOptPilotButton) {
+    els.askOptPilotButton.hidden = !enabled || conversation;
+    els.askOptPilotButton.setAttribute("aria-expanded", String(overlay));
+    els.askOptPilotButton.classList.toggle("active", overlay);
+    const label = session ? "Ask from this page" : "Start Conversation";
+    const copy = els.askOptPilotButton.querySelector("span:last-child");
+    if (copy) copy.textContent = label;
+    els.askOptPilotButton.setAttribute("aria-label", label);
+  }
+  const workspace = currentSession();
+  const catalogSourceView = state.view === "workspace" && isCatalogSourceView(workspace);
+  if (els.shellSurfaceTitle) {
+    els.shellSurfaceTitle.textContent = conversation
+      ? session ? assistantSessionLabel(session) : "New conversation"
+      : catalogSourceView
+      ? "Catalog item"
+      : state.view === "workspace"
+      ? "Workspace"
+      : currentViewLabel();
+  }
+  if (els.shellSurfaceSubtitle) {
+    els.shellSurfaceSubtitle.textContent = conversation
+      ? "Describe the outcome you need. OptPilot can find and launch the appropriate work."
+      : catalogSourceView
+      ? `${catalogSourceDisplayLabel(workspace)} · Published version · Read-only`
+      : state.view === "workspace"
+      ? workspace
+        ? `${workspace.title} · Editable project`
+        : "Select or create an editable project."
+      : assistantContextSummary();
+  }
+  renderOpenWork();
+}
+
 function setView(view, options = {}) {
+  if (conversationShellEnabled()) captureAssistantContinuity();
   if (view !== "runs" && state.pendingCandidateTry) {
     closeCandidateTrySheet({ restoreFocus: false });
   }
@@ -2664,6 +4297,12 @@ function setView(view, options = {}) {
     state.interfaceSessionLaunchSnapshot = null;
   }
   state.view = view;
+  if (conversationShellEnabled()) {
+    state.shell.surface = "content";
+    state.shell.assistantOverlayOpen = Boolean(options.keepAssistantOpen);
+    state.shell.mobileRailOpen = false;
+    state.assistantOpen = state.shell.assistantOverlayOpen;
+  }
   renderNavigation();
   if (view === "workspace") renderWorkspace();
   if (view !== "workspace") renderWorkspace();
@@ -2677,7 +4316,9 @@ function setView(view, options = {}) {
   }
   if (view === "interface") renderInterfaceSession();
   renderAssistant();
-  if (!options.fromRoute) syncStudioRoute();
+  if (!options.fromRoute) {
+    syncStudioRoute({ history: options.history || (conversationShellEnabled() ? "push" : "replace") });
+  }
 }
 
 function setWorkbenchMode(mode) {
@@ -2688,34 +4329,469 @@ function setWorkbenchMode(mode) {
 }
 
 function toggleAssistant() {
+  if (conversationShellEnabled()) {
+    if (state.shell.surface === "conversation") openConversationSurface();
+    else setAssistantOverlayOpen(!state.shell.assistantOverlayOpen);
+    return;
+  }
   setAssistantOpen(!state.assistantOpen);
 }
 
 function setAssistantOpen(open) {
+  if (conversationShellEnabled() && state.shell.surface === "content") {
+    setAssistantOverlayOpen(open);
+    return;
+  }
   state.assistantOpen = Boolean(open);
   if (state.assistantOpen && !state.assistantMode) state.assistantMode = "chat";
   renderAssistant();
 }
 
+function rememberAssistantDraft(sessionId = state.selectedAgentSessionId) {
+  if (!sessionId || !els.agentInput) return;
+  state.assistantDraftsBySession[sessionId] = els.agentInput.value || "";
+  storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
+}
+
+function captureAssistantContinuity(sessionId = state.renderedAssistantSessionId || state.selectedAgentSessionId) {
+  if (!sessionId || state.renderedAssistantSessionId !== sessionId) return;
+  if (els.agentInput) {
+    state.assistantDraftsBySession[sessionId] = els.agentInput.value || "";
+    storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
+  }
+  if (els.agentTimeline) {
+    const distanceFromBottom = els.agentTimeline.scrollHeight - els.agentTimeline.clientHeight - els.agentTimeline.scrollTop;
+    state.assistantScrollBySession[sessionId] = {
+      top: els.agentTimeline.scrollTop,
+      nearBottom: distanceFromBottom < 72,
+    };
+  }
+}
+
+function restoreAssistantContinuity(sessionId, options = {}) {
+  if (!sessionId) return;
+  const sessionChanged = state.renderedAssistantSessionId !== sessionId;
+  if (els.agentInput && sessionChanged) {
+    els.agentInput.value = String(state.assistantDraftsBySession[sessionId] || "");
+    els.agentInput.dataset.touched = els.agentInput.value ? "true" : "";
+  }
+  state.renderedAssistantSessionId = sessionId;
+  if (!els.agentTimeline || options.timelineChanged !== true) return;
+  const saved = state.assistantScrollBySession[sessionId];
+  window.requestAnimationFrame(() => {
+    if (!els.agentTimeline || state.renderedAssistantSessionId !== sessionId) return;
+    if (!saved || saved.nearBottom) els.agentTimeline.scrollTop = els.agentTimeline.scrollHeight;
+    else els.agentTimeline.scrollTop = Math.min(saved.top || 0, els.agentTimeline.scrollHeight);
+  });
+}
+
+function assistantTimelineSignature(session, isRegistration = false) {
+  const sessionId = session && session.id || "none";
+  if (isRegistration) {
+    return stableJsonStringify({
+      sessionId,
+      mode: "registration",
+      workspace: state.selectedSessionId || "",
+      draft: state.registrationDraft || null,
+      notice: state.registrationNotice || null,
+    });
+  }
+  return stableJsonStringify({
+    sessionId,
+    hydration: agentSessionHydrationState(session),
+    status: assistantSessionStatus(session),
+    messages: currentAssistantMessages().map((message) => ({
+      id: message && message[3] && message[3].id || "",
+      role: message && message[0] || "",
+      title: message && message[1] || "",
+      content: message && message[2] || "",
+    })),
+    events: currentAssistantEvents().map((event) => ({
+      id: event && event.id || "",
+      type: event && event.type || "",
+      created_at: event && event.created_at || "",
+      payload: event && event.payload || null,
+    })),
+    approvals: currentAssistantApprovals().map((approval) => ({
+      id: approval && approval.id || "",
+      status: approval && approval.status || "",
+      key: approvalDisplayKey(approval),
+    })),
+  });
+}
+
+function agentSessionHydrationState(session = currentAgentSession()) {
+  const sessionId = String(session && session.id || "");
+  if (!sessionId || sessionId.startsWith("agent-session-")) return { status: "ready", error: "" };
+  if (state.agentSessionHydrationRequests.has(sessionId)) return { status: "loading", error: "" };
+  const error = String(state.agentSessionHydrationErrors[sessionId] || "");
+  return error ? { status: "error", error } : { status: "ready", error: "" };
+}
+
+function agentSessionHydrationHtml(session, hydration = agentSessionHydrationState(session)) {
+  const sessionId = String(session && session.id || "");
+  if (hydration.status === "loading") {
+    return `
+      <section class="conversation-load-state" role="status" aria-live="polite">
+        <span class="conversation-load-indicator" aria-hidden="true"></span>
+        <strong>Loading Conversation…</strong>
+        <span>Fetching its messages and Workspace access.</span>
+      </section>
+    `;
+  }
+  return `
+    <section class="conversation-load-state error" role="alert">
+      <strong>Conversation could not be loaded</strong>
+      <span>${escapeHtml(hydration.error || "Studio could not retrieve this Conversation.")}</span>
+      <span>Cached messages are hidden so they are not mistaken for the current Conversation.</span>
+      <button class="ghost-button conversation-load-retry" data-conversation-load-retry="${escapeHtml(sessionId)}" type="button">Retry</button>
+    </section>
+  `;
+}
+
+async function retryAgentSessionHydration(sessionId) {
+  if (!sessionId || sessionId !== state.selectedAgentSessionId) return;
+  const hydration = hydrateAgentSessionById(sessionId, { force: true });
+  renderAssistant();
+  await hydration;
+  if (sessionId === state.selectedAgentSessionId) renderAssistant();
+}
+
+function bindAgentSessionHydrationActions() {
+  if (!els.agentTimeline) return;
+  const retry = els.agentTimeline.querySelector("[data-conversation-load-retry]");
+  if (!retry) return;
+  retry.addEventListener("click", () => retryAgentSessionHydration(retry.dataset.conversationLoadRetry));
+}
+
+function conversationHasStarted(session = currentAgentSession()) {
+  if (!session) return false;
+  return currentAssistantMessages().some((message) => (message && message[0] || "") === "user");
+}
+
+function renderConversationOnboarding(session = currentAgentSession()) {
+  if (!els.conversationOnboarding) return false;
+  const visible = Boolean(
+    conversationShellEnabled()
+    && state.shell.surface === "conversation"
+    && state.assistantMode !== "registration"
+    && !conversationHasStarted(session),
+  );
+  els.conversationOnboarding.hidden = !visible;
+  if (!visible) return false;
+  const groups = [
+    { kind: "environment", label: "Environments", entries: state.catalog.environments || [], description: "Systems, simulators, evaluators, and problem settings." },
+    { kind: "method", label: "Methods", entries: state.catalog.methods || [], description: "Solvers, optimizers, policies, and agent workflows." },
+    { kind: "resource", label: "Resources", entries: state.catalog.resources || [], description: "Generators, viewers, templates, and supporting tools." },
+  ];
+  const signature = stableJsonStringify({
+    loading: state.catalogLoading,
+    error: state.catalogError,
+    conversationCreateError: state.agentSessionCreateError,
+    groups: groups.map((group) => ({
+      kind: group.kind,
+      count: group.entries.length,
+      examples: group.entries.slice(0, 3).map((entry) => entry.label || entry.id || entry.uid || ""),
+    })),
+  });
+  if (els.conversationOnboarding.dataset.signature === signature) return true;
+  els.conversationOnboarding.dataset.signature = signature;
+  const intents = [
+    ["Explore a simulator", "I want to open and explore a simulator, adjust its inputs, and understand how the system behaves."],
+    ["Improve a system", "I have a system and performance metrics. Help me identify suitable methods and improve the decisions."],
+    ["Compare methods", "I want to compare how several methods perform on an environment and dataset."],
+    ["Apply a method", "I want to use a particular method on my problem. Help me provide the necessary inputs and run it."],
+    ["Build or publish", "Help me build or publish an Environment, Method, or Resource for this problem."],
+  ];
+  const catalogBody = state.catalogLoading
+    ? `<div class="onboarding-catalog-state">Loading the local Catalog…</div>`
+    : state.catalogError
+      ? `<div class="onboarding-catalog-state error-text">Catalog is temporarily unavailable. You can still describe what you need.</div>`
+      : `<div class="onboarding-catalog-grid">${groups.map((group) => {
+          const examples = group.entries.slice(0, 3).map((entry) => entry.label || entry.id || entry.uid).filter(Boolean);
+          return `
+            <button class="onboarding-catalog-card" data-onboarding-catalog="${escapeHtml(group.kind)}" type="button">
+              <span><strong>${escapeHtml(group.label)}</strong><b>${group.entries.length}</b></span>
+              <p>${escapeHtml(group.description)}</p>
+              <small>${escapeHtml(examples.length ? examples.join(" · ") : `No ${group.label.toLowerCase()} published yet`)}</small>
+            </button>
+          `;
+        }).join("")}</div>`;
+  els.conversationOnboarding.innerHTML = `
+    ${state.agentSessionCreateError ? `<p class="error-text onboarding-conversation-error" role="alert">${escapeHtml(state.agentSessionCreateError)}</p>` : ""}
+    <div class="onboarding-hero">
+      <span class="onboarding-eyebrow">AI-assisted optimization workspace</span>
+      <h1>What would you like to accomplish?</h1>
+      <p>Describe the outcome in your own words. OptPilot can inspect the Catalog, prepare inputs, launch the appropriate work, and keep you in control of every consequential action.</p>
+    </div>
+    <div class="onboarding-intents" aria-label="Suggested requests">
+      ${intents.map(([label, prompt]) => `<button class="onboarding-intent" data-onboarding-intent="${escapeHtml(prompt)}" type="button">${escapeHtml(label)}</button>`).join("")}
+    </div>
+    <section class="onboarding-catalog">
+      <div class="onboarding-section-heading">
+        <div><strong>Available in this OptPilot</strong><span>Browse directly or let OptPilot choose.</span></div>
+        <button class="ghost-button" data-onboarding-catalog="all" type="button">Browse Catalog</button>
+      </div>
+      ${catalogBody}
+    </section>
+  `;
+  els.conversationOnboarding.querySelectorAll("[data-onboarding-intent]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!els.agentInput) return;
+      els.agentInput.value = button.dataset.onboardingIntent || "";
+      els.agentInput.dataset.touched = els.agentInput.value ? "true" : "";
+      rememberAssistantDraft();
+      els.agentInput.focus();
+    });
+  });
+  els.conversationOnboarding.querySelectorAll("[data-onboarding-catalog]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.componentFilter = button.dataset.onboardingCatalog || "all";
+      openContentSurface("catalog", { history: "push" });
+    });
+  });
+  return true;
+}
+
+function conversationWorkspaceCard(workspace, selectedWorkspaceId, duplicateTitles) {
+  const current = workspace.id === selectedWorkspaceId;
+  const conversation = assistantSessionLabel(currentAgentSession());
+  return `
+    <article class="conversation-workspace-card ${current ? "current" : ""}">
+      <div class="conversation-workspace-card-heading">
+        <strong title="${escapeHtml(workspace.title)}">${escapeHtml(workspace.title)}</strong>
+        ${current ? '<span class="status-pill status-complete">Default</span>' : ""}
+      </div>
+      <span>${escapeHtml(workspaceStorageLabel(workspace))}</span>
+      ${workspaceDisambiguatorHtml(workspace, duplicateTitles)}
+      <div class="conversation-workspace-card-actions">
+        <button class="ghost-button compact-action" data-conversation-workspace-action="open" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Open ${escapeHtml(workspace.title)} Workspace">Open Workspace</button>
+        ${current ? "" : `<button class="ghost-button compact-action" data-conversation-workspace-action="current" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Make ${escapeHtml(workspace.title)} the default Workspace for this Conversation">Make default</button>`}
+        <button class="ghost-button compact-action conversation-workspace-remove" data-conversation-workspace-action="remove" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Remove ${escapeHtml(workspace.title)} access from ${escapeHtml(conversation)}">Remove access</button>
+      </div>
+    </article>
+  `;
+}
+
+function conversationWorkspaceChoice(workspace, duplicateTitles) {
+  return `
+    <button class="conversation-workspace-choice" data-conversation-workspace-action="add" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Add ${escapeHtml(workspace.title)} to this Conversation">
+      <span>
+        <strong title="${escapeHtml(workspace.title)}">${escapeHtml(workspace.title)}</strong>
+        <small>${escapeHtml(workspaceStorageLabel(workspace))}</small>
+        ${workspaceDisambiguatorHtml(workspace, duplicateTitles)}
+      </span>
+      <b>Add</b>
+    </button>
+  `;
+}
+
+function rememberConversationWorkspaceDisclosure() {
+  const disclosure = els.conversationWorkspaceDisclosure;
+  const sessionId = String(disclosure && disclosure.dataset.sessionId || "");
+  if (!disclosure || !sessionId) return;
+  const expectedOpen = disclosure.dataset.expectedOpen === "true";
+  // Assigning `details.open` while switching Conversations also emits a
+  // toggle event. Only a user change differs from the state the renderer
+  // expected, so programmatic synchronization must not become a preference.
+  if (disclosure.open === expectedOpen) return;
+  state.conversationWorkspaceExpandedBySession[sessionId] = disclosure.open;
+  disclosure.dataset.expectedOpen = String(disclosure.open);
+}
+
+function renderConversationWorkspaceAccess() {
+  if (!els.conversationWorkspacePanel) return;
+  const agentSession = currentAgentSession();
+  const visible = Boolean(
+    conversationShellEnabled()
+    && state.shell.surface === "conversation"
+    && agentSession
+    && state.assistantMode !== "registration"
+  );
+  els.conversationWorkspacePanel.hidden = !visible;
+  if (!visible) return;
+  const hydration = agentSessionHydrationState(agentSession);
+
+  const editable = orderedWorkspaceSessions().filter((workspace) => (
+    workspace.mode !== "read-only"
+    && workspace.visibleInWorkspaces !== false
+    && !isCatalogSourceView(workspace)
+  ));
+  const attachedIds = new Set(attachedWorkspaceIds(agentSession.id));
+  const attached = editable.filter((workspace) => attachedIds.has(workspace.id));
+  const available = editable.filter((workspace) => !attachedIds.has(workspace.id));
+  const duplicateTitles = duplicateWorkspaceTitleKeys(editable);
+  const selectedWorkspaceId = state.selectedWorkspaceByAgentSession[agentSession.id] || "";
+  if (els.conversationWorkspaceDisclosure) {
+    const savedExpansion = state.conversationWorkspaceExpandedBySession[agentSession.id];
+    const expanded = typeof savedExpansion === "boolean" ? savedExpansion : attached.length > 0;
+    els.conversationWorkspaceDisclosure.dataset.sessionId = agentSession.id;
+    els.conversationWorkspaceDisclosure.dataset.expectedOpen = String(expanded);
+    els.conversationWorkspaceDisclosure.open = expanded;
+  }
+  const signature = stableJsonStringify({
+    sessionId: agentSession.id,
+    selectedWorkspaceId,
+    hydration,
+    loaded: state.uiWorkspacesLoaded,
+    workspaceError: state.uiWorkspacesError,
+    error: state.conversationWorkspaceError,
+    attached: attached.map((workspace) => [workspace.id, workspace.title, workspace.updatedAt, workspace.ownership, workspace.codeFolder || workspace.path]),
+    available: available.map((workspace) => [workspace.id, workspace.title, workspace.updatedAt, workspace.ownership, workspace.codeFolder || workspace.path]),
+  });
+  if (els.conversationWorkspacePanel.dataset.signature === signature) return;
+  els.conversationWorkspacePanel.dataset.signature = signature;
+
+  if (els.conversationWorkspaceCount) {
+    els.conversationWorkspaceCount.textContent = hydration.status === "loading"
+      ? "…"
+      : hydration.status === "error"
+        ? "!"
+        : String(attached.length);
+    els.conversationWorkspaceCount.setAttribute(
+      "aria-label",
+      hydration.status === "loading"
+        ? "Workspace access loading"
+        : hydration.status === "error"
+          ? "Workspace access unavailable"
+          : `${attached.length} Workspace${attached.length === 1 ? "" : "s"}`,
+    );
+  }
+  if (els.conversationWorkspaceAdd) {
+    els.conversationWorkspaceAdd.hidden = hydration.status !== "ready";
+    if (hydration.status !== "ready") els.conversationWorkspaceAdd.open = false;
+  }
+  if (els.conversationWorkspaceList) {
+    const refreshWarning = state.uiWorkspacesError
+      ? `
+        <div class="collection-refresh-notice conversation-workspace-refresh-notice" role="alert">
+          <div>
+            <strong>Workspaces could not be refreshed.</strong>
+            <span>${state.uiWorkspacesLoaded ? "Showing the last loaded Workspace list." : "No Workspace list is available yet."}</span>
+          </div>
+          <button class="ghost-button compact-action" data-conversation-workspace-action="refresh" type="button">Try again</button>
+        </div>
+      `
+      : "";
+    const workspaceList = hydration.status === "loading"
+      ? '<div class="conversation-workspace-empty"><strong>Loading Workspace access…</strong></div>'
+      : hydration.status === "error"
+        ? '<div class="conversation-workspace-empty"><strong>Workspaces unavailable</strong><span>Retry loading the Conversation before changing them.</span></div>'
+        : !state.uiWorkspacesLoaded && !state.uiWorkspacesError
+      ? '<div class="conversation-workspace-empty"><strong>Loading Workspaces…</strong></div>'
+      : !state.uiWorkspacesLoaded
+        ? '<div class="conversation-workspace-empty"><strong>Workspace list unavailable</strong><span>Try again to load editable projects.</span></div>'
+      : attached.length
+        ? attached.map((workspace) => conversationWorkspaceCard(workspace, selectedWorkspaceId, duplicateTitles)).join("")
+        : `
+          <div class="conversation-workspace-empty">
+            <strong>No Workspaces in this Conversation</strong>
+            <span>Add one when you want OptPilot to inspect or change its files.</span>
+          </div>
+        `;
+    const actionError = state.conversationWorkspaceError
+      ? `<p class="error-text conversation-workspace-error" role="alert">${escapeHtml(state.conversationWorkspaceError)}</p>`
+      : "";
+    els.conversationWorkspaceList.innerHTML = `${refreshWarning}${actionError}${workspaceList}`;
+  }
+  if (els.conversationWorkspaceChoices) {
+    els.conversationWorkspaceChoices.innerHTML = hydration.status !== "ready"
+      ? '<span class="conversation-workspace-picker-state">Workspaces are available after this Conversation loads.</span>'
+      : !state.uiWorkspacesLoaded && !state.uiWorkspacesError
+      ? '<span class="conversation-workspace-picker-state">Loading editable projects…</span>'
+      : !state.uiWorkspacesLoaded
+        ? '<span class="conversation-workspace-picker-state">Workspace choices are unavailable until the list refreshes.</span>'
+      : available.length
+        ? available.map((workspace) => conversationWorkspaceChoice(workspace, duplicateTitles)).join("")
+        : `<span class="conversation-workspace-picker-state">${editable.length ? "Every Workspace is already in this Conversation." : "There are no Workspaces yet. Create one or link a local folder."}</span>`;
+  }
+}
+
+async function handleConversationWorkspaceAction(event) {
+  const control = event.target && event.target.closest && event.target.closest("[data-conversation-workspace-action]");
+  if (!control || !els.conversationWorkspacePanel || !els.conversationWorkspacePanel.contains(control)) return;
+  const action = control.dataset.conversationWorkspaceAction || "";
+  const workspaceId = control.dataset.workspaceId || "";
+  if (action === "manage") {
+    openContentSurface("workspace", { history: "push" });
+    return;
+  }
+  if (action === "new") {
+    await createBlankSession({ attachToConversation: true });
+    return;
+  }
+  if (action === "folder") {
+    openLocalFolderDialog({ attachToConversation: true });
+    return;
+  }
+  if (action === "refresh") {
+    control.disabled = true;
+    control.textContent = "Refreshing…";
+    await loadUiWorkspaces();
+    rebuildDerivedState();
+    renderWorkspace();
+    renderAssistant();
+    return;
+  }
+  if (!workspaceId) return;
+  if (action === "open") {
+    await selectSession(workspaceId);
+    return;
+  }
+  if (action === "current") {
+    const agentSession = currentAgentSession();
+    const previousWorkspaceId = agentSession
+      ? state.selectedWorkspaceByAgentSession[agentSession.id] || null
+      : null;
+    if (agentSession) {
+      state.selectedWorkspaceByAgentSession[agentSession.id] = workspaceId;
+    }
+    await syncSelectedWorkspaceToBackend(workspaceId, { previousWorkspaceId });
+    renderAssistant();
+    return;
+  }
+  control.disabled = true;
+  try {
+    if (action === "add") {
+      await attachWorkspaceToCurrent(workspaceId);
+      renderWorkspace();
+      renderAssistant();
+    } else if (action === "remove") {
+      await closeWorkspaceFromCurrentSession(workspaceId);
+      renderAssistant();
+    }
+  } catch (_error) {
+    renderAssistant();
+  } finally {
+    if (control.isConnected) control.disabled = false;
+  }
+}
+
 function renderAssistant() {
+  captureAssistantContinuity();
+  renderShell();
   document.body.classList.toggle("assistant-open", state.assistantOpen);
-  document.body.classList.toggle("assistant-session-list-open", state.assistantOpen && state.assistantMode === "sessions");
+  const isSessionList = !conversationShellEnabled() && state.assistantMode === "sessions";
+  document.body.classList.toggle("assistant-session-list-open", state.assistantOpen && isSessionList);
   document.documentElement.style.setProperty("--assistant-panel-width", `${state.assistantPanelWidth}px`);
   if (els.assistantToggleButton) {
     els.assistantToggleButton.classList.toggle("active", state.assistantOpen);
     els.assistantToggleButton.setAttribute("aria-expanded", String(state.assistantOpen));
   }
   const session = currentAgentSession();
-  const isSessionList = state.assistantMode === "sessions";
   const attachedCount = session ? attachedWorkspaceIds(session.id).length : 0;
   const pageLabel = currentViewLabel();
   const isRegistration = state.assistantMode === "registration";
+  const hydration = isRegistration ? { status: "ready", error: "" } : agentSessionHydrationState(session);
   const nextApprovalKey = session && !isSessionList && !isRegistration ? pendingApprovalKeyForSession(session.id) : "";
   const previousApprovalKey = session ? state.assistantApprovalKeysBySession[session.id] || "" : "";
   const shouldScrollToApprovals = state.assistantOpen && Boolean(nextApprovalKey) && nextApprovalKey !== previousApprovalKey;
-  if (els.assistantBackButton) els.assistantBackButton.hidden = isSessionList;
+  if (els.assistantBackButton) els.assistantBackButton.hidden = conversationShellEnabled() || isSessionList;
+  if (els.closeAssistantButton) {
+    els.closeAssistantButton.hidden = conversationShellEnabled() && state.shell.surface === "conversation";
+  }
   if (els.assistantTitle) {
-    els.assistantTitle.textContent = isSessionList ? "Assistant conversations" : isRegistration ? "Publish to Catalog" : session ? assistantSessionLabel(session) : "OptPilot Assistant";
+    els.assistantTitle.textContent = isSessionList ? "Conversations" : isRegistration ? "Publish to Catalog" : session ? assistantSessionLabel(session) : "New conversation";
   }
   if (els.assistantSubtitle) {
     els.assistantSubtitle.textContent = isSessionList
@@ -2723,17 +4799,64 @@ function renderAssistant() {
       : isRegistration
         ? "Find configurations, check files, and publish Catalog items"
         : session
-          ? `Conversation · ${attachedCount} Workspace${attachedCount === 1 ? "" : "s"} available`
-          : "Start or select an Assistant conversation";
+          ? hydration.status === "loading"
+            ? "Loading messages and Workspace access…"
+            : hydration.status === "error"
+              ? "Conversation could not be loaded"
+              : conversationShellEnabled() && state.shell.surface === "conversation"
+                ? `${attachedCount} Workspace${attachedCount === 1 ? "" : "s"} available`
+                : `Same Conversation · current page included · ${attachedCount} Workspace${attachedCount === 1 ? "" : "s"} available`
+          : state.agentSessionCreatePromise
+            ? "Creating Conversation…"
+            : state.agentSessionCreateError
+              ? "Conversation was not created"
+              : conversationShellEnabled() && state.shell.surface === "conversation"
+                ? "Created when you send your first message"
+                : `Created when you send · current page will be included (${pageLabel})`;
     els.assistantSubtitle.hidden = !els.assistantSubtitle.textContent;
   }
   if (els.assistantContextHint) {
     els.assistantContextHint.textContent = assistantContextSummary();
   }
   if (els.assistantSessionList) els.assistantSessionList.hidden = !isSessionList;
+  renderConversationWorkspaceAccess();
+  const hydrationPending = hydration.status !== "ready";
+  if (hydrationPending && els.conversationOnboarding) els.conversationOnboarding.hidden = true;
+  const onboardingVisible = hydrationPending ? false : renderConversationOnboarding(session);
+  const timelineSignature = assistantTimelineSignature(session, isRegistration);
+  const timelineSessionId = String(session && session.id || "");
+  const timelineSessionChanged = Boolean(
+    els.agentTimeline
+    && els.agentTimeline.dataset.timelineSessionId !== timelineSessionId,
+  );
+  const timelineChanged = Boolean(
+    els.agentTimeline
+    && (els.agentTimeline.dataset.timelineSignature !== timelineSignature
+      || timelineSessionChanged),
+  );
   if (els.agentTimeline) {
-    els.agentTimeline.hidden = isSessionList;
-    els.agentTimeline.innerHTML = isRegistration ? registrationMenuHtml() : assistantTimelineHtml(session);
+    els.agentTimeline.hidden = isSessionList || onboardingVisible;
+    if (timelineChanged) {
+      if (timelineSessionChanged) els.agentTimeline.setAttribute("aria-live", "off");
+      els.agentTimeline.innerHTML = isRegistration
+        ? registrationMenuHtml()
+        : hydrationPending
+          ? agentSessionHydrationHtml(session, hydration)
+          : assistantTimelineHtml(session);
+      els.agentTimeline.dataset.timelineSignature = timelineSignature;
+      // This is Assistant rendering state, not a Workspace navigation
+      // coordinate. Keep it distinct from `data-session-id`, which belongs
+      // exclusively to explicit Workspace controls.
+      els.agentTimeline.dataset.timelineSessionId = timelineSessionId;
+      state.assistantTimelineSignatures[String(session && session.id || "none")] = timelineSignature;
+      if (timelineSessionChanged) {
+        window.requestAnimationFrame(() => {
+          if (els.agentTimeline && els.agentTimeline.dataset.timelineSessionId === timelineSessionId) {
+            els.agentTimeline.setAttribute("aria-live", "polite");
+          }
+        });
+      }
+    }
   }
   const composer = document.querySelector(".agent-panel .composer");
   if (composer) composer.hidden = isSessionList;
@@ -2741,12 +4864,18 @@ function renderAssistant() {
   updateAssistantComposerState();
   renderOpenHandsStatus();
   renderAssistantSessionList();
-  bindAssistantApprovals();
-  bindRegistrationMenu();
+  if (timelineChanged) {
+    bindAssistantApprovals();
+    bindAssistantUiCards();
+    bindRegistrationMenu();
+    bindAgentSessionHydrationActions();
+  }
+  refreshAssistantUiCardActions();
   if (session && !isSessionList && !isRegistration) {
     state.assistantApprovalKeysBySession[session.id] = nextApprovalKey;
   }
-  queueAssistantStepAutoScroll();
+  restoreAssistantContinuity(session && session.id || "", { timelineChanged });
+  if (timelineChanged) queueAssistantStepAutoScroll();
   if (shouldScrollToApprovals) queueAssistantApprovalAutoScroll();
 }
 
@@ -2795,7 +4924,7 @@ function assistantApprovalsHtml() {
         <div class="approval-card">
           <div>
             <span>${escapeHtml(approval.kind || "approval")}</span>
-            <strong>${escapeHtml(approval.title || "Assistant paused for approval")}</strong>
+            <strong>${escapeHtml(approval.title || "OptPilot is waiting for approval")}</strong>
             <p>${escapeHtml((approval.display_payload && approval.display_payload.summary) || approval.summary || "")}</p>
             ${((approval.display_payload && approval.display_payload.targets) || approval.targets || []).length ? `<small>${escapeHtml(((approval.display_payload && approval.display_payload.targets) || approval.targets || []).join(" - "))}</small>` : ""}
             ${queuedCount ? `<small>${escapeHtml(`${queuedCount} more approval request${queuedCount === 1 ? "" : "s"} queued after this one.`)}</small>` : ""}
@@ -2810,6 +4939,623 @@ function assistantApprovalsHtml() {
   `;
 }
 
+function normalizeAssistantUiCard(raw) {
+  const coordinateKinds = new Set(["catalog-entry", "study-workspace", "workspace", "study-launch", "run"]);
+  const operationsByCoordinate = {
+    "catalog-entry": new Set(["configure-run", "open-catalog", "open-interface", "start-run"]),
+    "study-workspace": new Set(["configure-run", "open-workspace", "start-run"]),
+    workspace: new Set(["open-workspace", "start-run"]),
+    "study-launch": new Set(["open-launch", "open-run"]),
+    run: new Set(["open-run"]),
+  };
+  const text = (value, maximum, required = false) => {
+    if (typeof value !== "string") return null;
+    if (/[\u0000-\u001f]/.test(value)) return null;
+    const normalized = value.trim();
+    if ((required && !normalized) || normalized.length > maximum) return null;
+    return normalized;
+  };
+  const opaque = (value) => text(value, 12000, true);
+  const positiveInteger = (value) => Number.isInteger(value) && value > 0 ? value : null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.schema !== ASSISTANT_UI_CARD_SCHEMA) return null;
+  const id = text(raw.id, 160, true);
+  const kind = text(raw.kind, 40, true);
+  const title = text(raw.title, 300, true);
+  const description = text(raw.description || "", 1000);
+  const status = text(raw.status || "", 80);
+  if (!id || !ASSISTANT_UI_CARD_KINDS.has(kind) || !title || description === null || status === null) return null;
+  const sourceCoordinate = raw.coordinate;
+  if (!sourceCoordinate || typeof sourceCoordinate !== "object" || Array.isArray(sourceCoordinate)) return null;
+  const coordinateKind = text(sourceCoordinate.kind, 40, true);
+  if (!coordinateKinds.has(coordinateKind)) return null;
+  let coordinate = null;
+  if (coordinateKind === "catalog-entry") {
+    const configKind = text(sourceCoordinate.config_kind, 32, true);
+    const uid = opaque(sourceCoordinate.uid);
+    if (new Set(["environment", "method", "resource", "study"]).has(configKind) && uid) {
+      coordinate = { kind: coordinateKind, config_kind: configKind, uid };
+    }
+  } else if (coordinateKind === "study-workspace") {
+    const workspaceId = opaque(sourceCoordinate.workspace_id);
+    const workspaceRevision = positiveInteger(sourceCoordinate.workspace_revision);
+    const studyRelativePath = text(sourceCoordinate.study_relative_path, 2048, true);
+    const safePath = studyRelativePath
+      && !studyRelativePath.startsWith("/")
+      && !studyRelativePath.includes("\\")
+      && studyRelativePath.split("/").every((part) => part && part !== "." && part !== "..");
+    if (workspaceId && workspaceRevision && safePath) {
+      coordinate = {
+        kind: coordinateKind,
+        workspace_id: workspaceId,
+        workspace_revision: workspaceRevision,
+        study_relative_path: studyRelativePath,
+      };
+      ["environment_uid", "method_uid", "draft_id"].forEach((key) => {
+        const value = sourceCoordinate[key] ? opaque(sourceCoordinate[key]) : null;
+        if (value) coordinate[key] = value;
+      });
+      const draftRevision = sourceCoordinate.draft_revision == null ? null : positiveInteger(sourceCoordinate.draft_revision);
+      if (draftRevision) coordinate.draft_revision = draftRevision;
+    }
+  } else if (coordinateKind === "workspace") {
+    const workspaceId = opaque(sourceCoordinate.workspace_id);
+    if (workspaceId) coordinate = { kind: coordinateKind, workspace_id: workspaceId };
+  } else if (coordinateKind === "study-launch") {
+    const launchId = opaque(sourceCoordinate.launch_id);
+    if (launchId) {
+      coordinate = { kind: coordinateKind, launch_id: launchId };
+      const runId = sourceCoordinate.run_id ? opaque(sourceCoordinate.run_id) : null;
+      if (runId) coordinate.run_id = runId;
+    }
+  } else if (coordinateKind === "run") {
+    const runId = opaque(sourceCoordinate.run_id);
+    if (runId) coordinate = { kind: coordinateKind, run_id: runId };
+  }
+  if (!coordinate) return null;
+  if (kind === "catalog-use" && (coordinateKind !== "catalog-entry" || coordinate.config_kind === "study")) return null;
+  if (
+    kind === "run-setup"
+    && (
+      !new Set(["catalog-entry", "study-workspace", "workspace"]).has(coordinateKind)
+      || coordinateKind === "catalog-entry" && coordinate.config_kind !== "study"
+    )
+  ) return null;
+  if (kind === "run" && !new Set(["study-launch", "run"]).has(coordinateKind)) return null;
+  const facts = (Array.isArray(raw.facts) ? raw.facts : []).slice(0, 8).flatMap((fact) => {
+    if (!fact || typeof fact !== "object" || Array.isArray(fact)) return [];
+    const label = text(fact.label, 120, true);
+    let value = fact.value;
+    if (!label || (!["string", "number", "boolean"].includes(typeof value) && value !== null)) return [];
+    if (typeof value === "string") value = text(value, 1000);
+    if (value === null && fact.value !== null) return [];
+    if (typeof value === "number" && !Number.isFinite(value)) return [];
+    return [{ label, value }];
+  });
+  const seenActions = new Set();
+  const allowedOperations = new Set(operationsByCoordinate[coordinateKind] || []);
+  if (coordinateKind === "catalog-entry" && coordinate.config_kind !== "study") {
+    allowedOperations.delete("configure-run");
+    allowedOperations.delete("start-run");
+  }
+  const actions = (Array.isArray(raw.actions) ? raw.actions : []).slice(0, 6).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const actionId = text(candidate.id, 160, true);
+    const label = text(candidate.label, 120, true);
+    const operation = text(candidate.operation, 64, true);
+    const reason = text(candidate.reason || "", 600);
+    if (
+      !actionId
+      || seenActions.has(actionId)
+      || !label
+      || !ASSISTANT_UI_CARD_OPERATIONS.has(operation)
+      || !allowedOperations.has(operation)
+      || reason === null
+      || typeof candidate.eligible !== "boolean"
+      || typeof candidate.approval_required !== "boolean"
+    ) return [];
+    seenActions.add(actionId);
+    return [{
+      id: actionId,
+      label,
+      operation,
+      eligible: candidate.eligible,
+      reason,
+      approval_required: operation === "start-run" ? true : candidate.approval_required === true,
+    }];
+  });
+  return { schema: ASSISTANT_UI_CARD_SCHEMA, id, kind, coordinate, title, description, status, facts, actions };
+}
+
+function assistantUiCardCatalogComponent(coordinate) {
+  if (!coordinate || coordinate.kind !== "catalog-entry" || coordinate.config_kind === "study") return null;
+  return componentByKey(`${coordinate.config_kind}:${coordinate.uid}`);
+}
+
+function findAssistantUiCardPlan(coordinate) {
+  if (!coordinate) return null;
+  if (coordinate.kind === "catalog-entry" && coordinate.config_kind === "study") {
+    const studyExists = (state.catalog.studies || []).some((study) => (
+      String(study.uid || "") === String(coordinate.uid || "")
+    ));
+    if (!studyExists) return null;
+    return (state.plans || []).find((plan) => (
+      plan
+      && plan.study
+      && String(plan.study.uid || "") === String(coordinate.uid || "")
+    )) || null;
+  }
+  if (coordinate.kind !== "study-workspace") return null;
+  const workspace = workspaceSessionByBackendId(coordinate.workspace_id);
+  if (
+    workspace
+    && workspace.workspaceRevision != null
+    && Number(workspace.workspaceRevision) !== Number(coordinate.workspace_revision)
+  ) return null;
+  return (state.plans || []).find((plan) => {
+    const draft = plan && plan.draft;
+    if (!draft) return false;
+    if (String(draft.workspace_id || "") !== String(coordinate.workspace_id || "")) return false;
+    if (String(draft.study_relative_path || "") !== String(coordinate.study_relative_path || "")) return false;
+    if (Number(draft.workspace_revision || 0) !== Number(coordinate.workspace_revision || 0)) return false;
+    if (coordinate.draft_id && String(draft.draft_id || "") !== String(coordinate.draft_id)) return false;
+    if (coordinate.draft_revision && Number(draft.draft_revision || 0) !== Number(coordinate.draft_revision)) return false;
+    if (coordinate.environment_uid && String(plan.environment && plan.environment.uid || "") !== String(coordinate.environment_uid)) return false;
+    if (coordinate.method_uid && String(plan.method && plan.method.uid || "") !== String(coordinate.method_uid)) return false;
+    return true;
+  }) || null;
+}
+
+function assistantUiCardPlanLaunchState(plan) {
+  if (!plan) {
+    return { eligible: false, reason: "This exact Study revision is no longer available. Open its Workspace and review the current configuration." };
+  }
+  if (plan.savePending || plan.launchPending) {
+    return { eligible: false, reason: "This Study is already being prepared." };
+  }
+  const active = state.studyLaunch;
+  if (active && !studyLaunchIsTerminal(active)) {
+    return {
+      eligible: false,
+      reason: active.planId === plan.id
+        ? "This Run is already being prepared."
+        : `Wait for ${active.planTitle || "the active Run"} to finish preparing.`,
+    };
+  }
+  const publicationReason = studyCatalogPublicationSetup(plan).reason;
+  if (publicationReason) return { eligible: false, reason: publicationReason };
+  const runtimeReason = studyRuntimeSetupReason(plan);
+  if (runtimeReason) return { eligible: false, reason: runtimeReason };
+  const validation = plan.draft && plan.draft.validation || plan.validation || plan.study && plan.study.validation;
+  if (validation && validation.valid === false) {
+    return { eligible: false, reason: "The current Study needs review before it can start." };
+  }
+  const capability = studyLaunchCapability(plan);
+  if (capability && capability.eligible !== true) {
+    return { eligible: false, reason: publicStudyLaunchReason(capability) };
+  }
+  const bindingReason = studyLaunchBindingReason(plan);
+  if (bindingReason) return { eligible: false, reason: bindingReason };
+  return { eligible: true, reason: "" };
+}
+
+function assistantUiCardCurrentActionState(card, action) {
+  if (!card || !action || !ASSISTANT_UI_CARD_OPERATIONS.has(action.operation)) {
+    return { eligible: false, reason: "This action is not supported." };
+  }
+  if (action.eligible !== true) {
+    return { eligible: false, reason: action.reason || "This action is not currently available." };
+  }
+  const coordinate = card.coordinate || {};
+  if (action.operation === "open-catalog") {
+    const exists = coordinate.config_kind === "study"
+      ? (state.catalog.studies || []).some((study) => String(study.uid || "") === String(coordinate.uid || ""))
+      : assistantUiCardCatalogComponent(coordinate);
+    return exists
+      ? { eligible: true, reason: "" }
+      : { eligible: false, reason: "This exact Catalog item is no longer available." };
+  }
+  if (action.operation === "open-interface") {
+    const component = assistantUiCardCatalogComponent(coordinate);
+    if (!component) return { eligible: false, reason: "This exact Catalog item is no longer available." };
+    if (isActiveInterfaceLaunch(state.interfaceLaunch)) {
+      return {
+        eligible: true,
+        reason: "",
+        label: `Return to ${String(state.interfaceLaunch.label || "running interface")}`,
+      };
+    }
+    const profile = componentSelectedInterfaceProfile(component);
+    if (!profile) return { eligible: false, reason: "This Catalog item does not currently declare an interface." };
+    const capability = componentInterfaceLaunchCapability(component, profile);
+    if (capability.eligible !== true) {
+      return { eligible: false, reason: String(capability.reason || "This interface is unavailable.") };
+    }
+    return { eligible: true, reason: "" };
+  }
+  if (action.operation === "configure-run") {
+    return findAssistantUiCardPlan(coordinate)
+      ? { eligible: true, reason: "" }
+      : { eligible: false, reason: "This exact Study revision is no longer loaded. Open its Workspace and review the current configuration." };
+  }
+  if (action.operation === "open-workspace") {
+    return workspaceSessionByBackendId(coordinate.workspace_id)
+      ? { eligible: true, reason: "" }
+      : { eligible: false, reason: "This Workspace is no longer available in Studio." };
+  }
+  if (action.operation === "start-run") {
+    if (action.approval_required !== true) {
+      return { eligible: false, reason: "Starting a Run requires an explicit user action." };
+    }
+    if (coordinate.kind === "workspace") {
+      return { eligible: false, reason: "Open this Workspace and review an exact Study revision before starting." };
+    }
+    return assistantUiCardPlanLaunchState(findAssistantUiCardPlan(coordinate));
+  }
+  if (action.operation === "open-run") {
+    return coordinate.run_id
+      ? { eligible: true, reason: "" }
+      : { eligible: false, reason: "This launch has not produced a Run yet." };
+  }
+  if (action.operation === "open-launch") {
+    return coordinate.launch_id
+      ? { eligible: true, reason: "" }
+      : { eligible: false, reason: "This exact launch is no longer available." };
+  }
+  return { eligible: false, reason: "This action is not supported for this item." };
+}
+
+function assistantUiCardLatestEventIndexes(events) {
+  const latest = new Map();
+  for (const event of events || []) {
+    if (!event || event.type !== "optpilot_tool_result") continue;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    for (const raw of Array.isArray(payload.ui_cards) ? payload.ui_cards : []) {
+      const card = normalizeAssistantUiCard(raw);
+      if (card) latest.set(card.id, event.__index);
+    }
+  }
+  return latest;
+}
+
+function assistantUiCardsFromEvents(events = currentAssistantEvents(), options = {}) {
+  const cardsById = new Map();
+  for (const event of events || []) {
+    if (!event || event.type !== "optpilot_tool_result") continue;
+    const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+    for (const raw of Array.isArray(payload.ui_cards) ? payload.ui_cards : []) {
+      const card = normalizeAssistantUiCard(raw);
+      if (!card) continue;
+      if (
+        options.latestEventIndexes instanceof Map
+        && options.latestEventIndexes.get(card.id) !== event.__index
+      ) continue;
+      if (cardsById.has(card.id)) cardsById.delete(card.id);
+      cardsById.set(card.id, card);
+      if (cardsById.size > ASSISTANT_UI_CARD_MAX_COUNT) {
+        cardsById.delete(cardsById.keys().next().value);
+      }
+    }
+  }
+  return [...cardsById.values()];
+}
+
+function assistantUiCardsHtml(events, options = {}) {
+  const seen = options.seen instanceof Set ? options.seen : new Set();
+  const cards = assistantUiCardsFromEvents(events, options).filter((card) => {
+    if (options.allowedCardIds instanceof Set && !options.allowedCardIds.has(card.id)) return false;
+    if (seen.has(card.id)) return false;
+    seen.add(card.id);
+    return true;
+  });
+  if (!cards.length) return "";
+  const kindLabels = { "catalog-use": "Recommended Catalog item", "run-setup": "Study", run: "Run" };
+  return `<div class="assistant-ui-card-stack">${cards.map((card) => {
+    const safeCardId = slug(card.id) || "assistant-card";
+    return `
+      <article class="assistant-ui-card assistant-ui-card-${escapeHtml(card.kind)}" data-assistant-card-id="${escapeHtml(card.id)}">
+        <header class="assistant-ui-card-header assistant-ui-card-heading">
+          <div>
+            <small class="assistant-ui-card-type">${escapeHtml(kindLabels[card.kind] || "OptPilot item")}</small>
+            <h3>${escapeHtml(card.title)}</h3>
+          </div>
+          ${card.status ? `<span class="status-pill ${escapeHtml(statusClass(card.status))}">${escapeHtml(card.status)}</span>` : ""}
+        </header>
+        ${card.description ? `<p class="assistant-ui-card-description">${escapeHtml(card.description)}</p>` : ""}
+        ${card.facts.length ? `<dl class="assistant-ui-card-facts">${card.facts.map((fact) => `
+          <div><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value === null ? "—" : String(fact.value))}</dd></div>
+        `).join("")}</dl>` : ""}
+        ${card.actions.length ? `<div class="assistant-ui-card-actions">${card.actions.map((action, index) => {
+          const currentAction = action.eligible
+            ? assistantUiCardCurrentActionState(card, action)
+            : { eligible: false, reason: action.reason || "This action is not currently available." };
+          const reasonId = `${safeCardId}-action-${index}-reason`;
+          const primary = action.operation === "start-run" || action.operation === "open-interface";
+          return `
+            <div class="assistant-ui-card-action">
+              <button class="${primary ? "primary-button" : "ghost-button"} compact-action assistant-ui-card-action-button" type="button"
+                data-assistant-card-action="${escapeHtml(action.id)}"
+                data-assistant-card-id="${escapeHtml(card.id)}"
+                ${currentAction.eligible ? "" : "disabled"}
+                ${currentAction.reason ? `aria-describedby="${escapeHtml(reasonId)}" title="${escapeHtml(currentAction.reason)}"` : ""}>
+                ${escapeHtml(currentAction.label || action.label)}
+              </button>
+              <small class="assistant-ui-card-confirmation" ${action.approval_required && currentAction.eligible ? "" : "hidden"}>Starts only when you click</small>
+              <small id="${escapeHtml(reasonId)}" class="assistant-ui-card-action-reason" ${currentAction.reason ? "" : "hidden"}>${escapeHtml(currentAction.reason)}</small>
+            </div>
+          `;
+        }).join("")}</div>` : ""}
+        <p class="assistant-ui-card-error" role="alert" hidden></p>
+      </article>
+    `;
+  }).join("")}</div>`;
+}
+
+function bindAssistantUiCards() {
+  if (!els.agentTimeline) return;
+  els.agentTimeline.querySelectorAll("[data-assistant-card-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const cardId = button.dataset.assistantCardId || "";
+      const actionId = button.dataset.assistantCardAction || "";
+      const card = assistantUiCardsFromEvents().find((item) => item.id === cardId);
+      const action = card && card.actions.find((item) => item.id === actionId);
+      const currentAction = assistantUiCardCurrentActionState(card, action);
+      const article = button.closest(".assistant-ui-card");
+      const errorElement = article && article.querySelector(".assistant-ui-card-error");
+      if (errorElement) {
+        errorElement.hidden = true;
+        errorElement.textContent = "";
+      }
+      if (!currentAction.eligible) {
+        if (errorElement) {
+          errorElement.textContent = currentAction.reason || "This action is no longer available.";
+          errorElement.hidden = false;
+        }
+        refreshAssistantUiCardActions();
+        return;
+      }
+      if (article) {
+        article.classList.add("is-resolving");
+        article.setAttribute("aria-busy", "true");
+        article.querySelectorAll("[data-assistant-card-action]").forEach((control) => {
+          control.disabled = true;
+        });
+      }
+      try {
+        await executeAssistantUiCardAction(card, action);
+      } catch (error) {
+        if (errorElement) {
+          errorElement.textContent = boundedPublicActionError(error, "This action is not available right now.");
+          errorElement.hidden = false;
+        }
+      } finally {
+        if (article && article.isConnected) {
+          article.classList.remove("is-resolving");
+          article.removeAttribute("aria-busy");
+          refreshAssistantUiCardActions();
+        }
+      }
+    });
+  });
+}
+
+function refreshAssistantUiCardActions() {
+  if (!els.agentTimeline) return;
+  const cards = assistantUiCardsFromEvents();
+  els.agentTimeline.querySelectorAll("[data-assistant-card-action]").forEach((button) => {
+    if (button.closest('.assistant-ui-card[aria-busy="true"]')) return;
+    const card = cards.find((item) => item.id === (button.dataset.assistantCardId || ""));
+    const action = card && card.actions.find((item) => item.id === (button.dataset.assistantCardAction || ""));
+    const currentAction = assistantUiCardCurrentActionState(card, action);
+    button.disabled = !currentAction.eligible;
+    button.textContent = currentAction.label || action && action.label || "Open";
+    const actionElement = button.closest(".assistant-ui-card-action");
+    const reason = actionElement && actionElement.querySelector(".assistant-ui-card-action-reason");
+    const confirmation = actionElement && actionElement.querySelector(".assistant-ui-card-confirmation");
+    if (reason) {
+      reason.textContent = currentAction.reason || "";
+      reason.hidden = !currentAction.reason;
+      if (currentAction.reason) {
+        button.setAttribute("aria-describedby", reason.id);
+        button.title = currentAction.reason;
+      } else {
+        button.removeAttribute("aria-describedby");
+        button.removeAttribute("title");
+      }
+    }
+    if (confirmation) confirmation.hidden = !(action && action.approval_required && currentAction.eligible);
+  });
+}
+
+async function executeAssistantUiCardAction(card, action) {
+  if (!action || action.eligible !== true) throw new Error(action && action.reason || "This action is not currently available.");
+  const currentAction = assistantUiCardCurrentActionState(card, action);
+  if (!currentAction.eligible) {
+    throw new Error(currentAction.reason || "This action is no longer available.");
+  }
+  const operation = action.operation;
+  const coordinate = card.coordinate;
+  if (operation === "open-run") {
+    const runId = coordinate.run_id;
+    if (!runId) throw new Error("This card does not identify a Run.");
+    state.selectedRunId = runId;
+    state.selectedRun = null;
+    openContentSurface("runs", { history: "push" });
+    await loadRunDetail(runId, { keepTab: true, skipListRender: true });
+    return;
+  }
+  if (operation === "open-workspace") {
+    const workspace = await resolveAssistantUiCardWorkspace(coordinate.workspace_id);
+    if (!workspace) throw new Error("This Workspace is no longer available.");
+    await selectSession(workspace.id);
+    return;
+  }
+  if (operation === "open-catalog") {
+    if (coordinate.config_kind === "study") {
+      const plan = await resolveAssistantUiCardPlan(coordinate);
+      if (!plan) throw new Error("This Study is no longer available.");
+      revealStudyPlan(plan);
+      state.selectedPlanId = plan.id;
+      openContentSurface("experiments", { history: "push" });
+      return;
+    }
+    const component = await resolveAssistantUiCardComponent(coordinate);
+    if (!component) throw new Error("This Catalog item is no longer available.");
+    revealCatalogComponent(component);
+    state.selectedComponentKey = component.key;
+    openContentSurface("catalog", { history: "push" });
+    return;
+  }
+  if (operation === "configure-run") {
+    const plan = await resolveAssistantUiCardPlan(coordinate);
+    if (!plan) throw new Error("This exact Study is no longer available.");
+    revealStudyPlan(plan);
+    state.selectedPlanId = plan.id;
+    openContentSurface("experiments", { history: "push" });
+    return;
+  }
+  if (operation === "open-interface") {
+    const component = await resolveAssistantUiCardComponent(coordinate, { refresh: true });
+    if (!component) throw new Error("This Catalog interface is no longer available.");
+    const active = state.interfaceLaunch;
+    if (isActiveInterfaceLaunch(active)) {
+      openActiveInterfaceLocation();
+      return;
+    }
+    const profile = componentSelectedInterfaceProfile(component);
+    const capability = componentInterfaceLaunchCapability(component, profile);
+    if (!profile || capability.eligible !== true) {
+      throw new Error(capability.reason || "This interface cannot be launched right now.");
+    }
+    const launchPromise = launchComponentInterface(component);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await sleep(100);
+      const launched = state.interfaceLaunch;
+      if (launched && launched.status === "failed") {
+        throw new Error(launched.error || "This interface could not be started.");
+      }
+      if (launched && launched.launch_id) {
+        void launchPromise;
+        return;
+      }
+    }
+    void launchPromise;
+    throw new Error("The interface is still starting. Check Open work for its current status.");
+  }
+  if (operation === "start-run") {
+    if (action.approval_required !== true) throw new Error("Starting a Run requires an explicit confirmation.");
+    if (coordinate.kind === "workspace") throw new Error("Open this Workspace and review an exact Study revision before starting.");
+    const plan = await resolveAssistantUiCardPlan(coordinate, { refresh: true });
+    if (!plan) throw new Error("This exact Study is no longer available.");
+    const launchState = assistantUiCardPlanLaunchState(plan);
+    if (!launchState.eligible) throw new Error(launchState.reason || "This Study needs review.");
+    revealStudyPlan(plan);
+    state.selectedPlanId = plan.id;
+    const previousLaunch = state.studyLaunch;
+    await launchPlan(plan);
+    if (state.studyLaunch === previousLaunch) {
+      const detail = plan.actionError && (plan.actionError.message || plan.actionError.title);
+      throw new Error(detail || "This Study could not be started.");
+    }
+    state.shell.openWorkExpanded = true;
+    renderOpenWork();
+    return;
+  }
+  if (operation === "open-launch") {
+    if (coordinate.run_id) {
+      await executeAssistantUiCardAction(card, { ...action, operation: "open-run" });
+      return;
+    }
+    let active = state.studyLaunch;
+    let launchId = String(active && (active.launchId || active.launch && active.launch.launch_id) || "");
+    if (!active || launchId !== String(coordinate.launch_id || "")) {
+      const anotherLaunchIsTracked = Boolean(active);
+      const payload = await getJson(`/api/studies/launches/${encodeURIComponent(coordinate.launch_id)}`);
+      const launch = payload && payload.launch;
+      if (!launch || String(launch.launch_id || "") !== String(coordinate.launch_id || "")) {
+        throw new Error("This launch is no longer available.");
+      }
+      if (launch.run_id) {
+        await executeAssistantUiCardAction({
+          ...card,
+          coordinate: { kind: "run", run_id: launch.run_id },
+        }, {
+          ...action,
+          operation: "open-run",
+          eligible: true,
+        });
+        return;
+      }
+      if (anotherLaunchIsTracked) {
+        throw new Error("This launch is still preparing, while another Run preparation is already tracked in Open work.");
+      }
+      active = {
+        schema: "optpilot.studio-active-study-launch.v1",
+        planId: "",
+        planTitle: card.title,
+        requestId: "",
+        request: null,
+        launchId: coordinate.launch_id,
+        launch,
+        stage: launch.stage || "Preparing Run",
+        message: "OptPilot started this launch from this Conversation.",
+        status: launch.status || "preparing",
+        preparationAccepted: true,
+        startedAt: Date.parse(launch.created_at || "") || Date.now(),
+        failure: launch.failure || null,
+        stopPending: false,
+        stopError: "",
+      };
+      state.studyLaunch = active;
+      launchId = coordinate.launch_id;
+      if (!studyLaunchIsTerminal(active)) {
+        const generation = ++state.studyLaunchPollGeneration;
+        void pollStudyLaunch(active, generation, { immediate: true });
+      }
+    }
+    state.shell.openWorkExpanded = true;
+    renderOpenWork();
+    return;
+  }
+  throw new Error("This card action is not supported.");
+}
+
+async function resolveAssistantUiCardComponent(coordinate, options = {}) {
+  if (!coordinate || coordinate.kind !== "catalog-entry" || coordinate.config_kind === "study") return null;
+  if (options.refresh) await loadCatalogAndCompatibility({ strict: false });
+  let component = componentByKey(`${coordinate.config_kind}:${coordinate.uid}`);
+  if (!component && !options.refresh) {
+    await loadCatalogAndCompatibility({ strict: false });
+    component = componentByKey(`${coordinate.config_kind}:${coordinate.uid}`);
+  }
+  return component;
+}
+
+async function resolveAssistantUiCardWorkspace(workspaceId) {
+  let workspace = workspaceSessionByBackendId(workspaceId);
+  if (workspace) return workspace;
+  await loadUiWorkspaces();
+  const record = (state.uiWorkspaces || []).find((item) => String(item.id || "") === String(workspaceId || ""));
+  return record ? mergeUiWorkspace(record) : null;
+}
+
+async function resolveAssistantUiCardPlan(coordinate, options = {}) {
+  const find = () => findAssistantUiCardPlan(coordinate);
+  const refresh = async () => {
+    const authoredPlans = (state.plans || []).filter((item) => item && item.source === "draft config" && !item.draft);
+    if (coordinate && coordinate.kind === "catalog-entry") await loadCatalogAndCompatibility({ strict: false });
+    else await loadStudyDrafts();
+    state.plans = buildPlans();
+    authoredPlans.forEach((item) => {
+      if (!state.plans.some((candidate) => candidate.id === item.id)) state.plans.push(item);
+    });
+  };
+  if (options.refresh) await refresh();
+  let plan = find();
+  if (plan) return plan;
+  if (!options.refresh) await refresh();
+  return find();
+}
+
 function assistantInterleavedTimelineHtml(session) {
   const messages = currentAssistantMessages();
   const events = currentAssistantEvents()
@@ -2818,15 +5564,24 @@ function assistantInterleavedTimelineHtml(session) {
       const byTime = eventTimestampMs(left) - eventTimestampMs(right);
       return Number.isFinite(byTime) && byTime !== 0 ? byTime : left.__index - right.__index;
     });
-  if (!messages.length) return "";
+  if (!messages.length) return assistantUiCardsHtml(events);
   const html = [];
   const messageTimes = messages.map(messageTimestampMs);
   const renderedEventIndexes = new Set();
-  messages.forEach((message, index) => {
+  const renderedCardIds = new Set();
+  const latestCardEventIndexes = assistantUiCardLatestEventIndexes(events);
+  const allowedCardIds = new Set(
+    assistantUiCardsFromEvents(events, { latestEventIndexes: latestCardEventIndexes }).map((card) => card.id),
+  );
+  let index = 0;
+  while (index < messages.length) {
+    const message = messages[index];
     html.push(timelineItem(message));
-    if (message[0] !== "user") return;
+    if (message[0] !== "user") {
+      index += 1;
+      continue;
+    }
     const messageTime = messageTimes[index];
-    if (!Number.isFinite(messageTime)) return;
     const nextUserIndex = messages
       .slice(index + 1)
       .findIndex((candidate) => candidate[0] === "user");
@@ -2840,16 +5595,35 @@ function assistantInterleavedTimelineHtml(session) {
       .filter((candidate) => candidate[0] === "user")
       .map(messageTimestampMs)
       .find(Number.isFinite) ?? Number.POSITIVE_INFINITY;
-    const turnEvents = events.filter((event) => {
-      if (renderedEventIndexes.has(event.__index)) return false;
-      const eventTime = eventTimestampMs(event);
-      return Number.isFinite(eventTime) && eventTime >= messageTime && eventTime < nextUserTime;
-    });
+    const turnEvents = Number.isFinite(messageTime)
+      ? events.filter((event) => {
+          if (renderedEventIndexes.has(event.__index)) return false;
+          const eventTime = eventTimestampMs(event);
+          return Number.isFinite(eventTime) && eventTime >= messageTime && eventTime < nextUserTime;
+        })
+      : [];
     turnEvents.forEach((event) => renderedEventIndexes.add(event.__index));
     if (turnEvents.length || isWorking) {
       html.push(assistantStepGroupHtml(turnEvents, { isWorking, open: isWorking }));
     }
+    for (let turnIndex = index + 1; turnIndex < turnEndIndex; turnIndex += 1) {
+      html.push(timelineItem(messages[turnIndex]));
+    }
+    const cardsHtml = assistantUiCardsHtml(turnEvents, {
+      seen: renderedCardIds,
+      latestEventIndexes: latestCardEventIndexes,
+      allowedCardIds,
+    });
+    if (cardsHtml) html.push(cardsHtml);
+    index = turnEndIndex;
+  }
+  const unmatchedEvents = events.filter((event) => !renderedEventIndexes.has(event.__index));
+  const unmatchedCards = assistantUiCardsHtml(unmatchedEvents, {
+    seen: renderedCardIds,
+    latestEventIndexes: latestCardEventIndexes,
+    allowedCardIds,
   });
+  if (unmatchedCards) html.push(unmatchedCards);
   return html.join("");
 }
 
@@ -2881,8 +5655,12 @@ function assistantStepGroupHtml(events, options = {}) {
                   <div>
                     <strong>${escapeHtml(step.title)}</strong>
                     ${step.detail ? `<p>${escapeHtml(step.detail)}</p>` : ""}
-                    ${step.codeBlock ? `<pre class="assistant-step-pre">${escapeHtml(step.codeBlock)}</pre>` : ""}
-                    <code>${escapeHtml(step.type)}</code>
+                    ${step.technical ? `
+                      <details class="assistant-step-technical">
+                        <summary>Technical details</summary>
+                        <pre class="assistant-step-pre">${escapeHtml(step.technical)}</pre>
+                      </details>
+                    ` : ""}
                   </div>
                 </li>
               `;
@@ -2908,18 +5686,65 @@ function assistantEventIsInformative(event) {
   if (!event || typeof event !== "object") return false;
   const type = event.type || "";
   const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  if (payload.tool === "optpilot_conversation_title") return false;
   if (type === "optpilot_tool_result") return true;
   if (type === "openhands_event") {
     const category = payload.category || "";
     if (String(payload.summary || "").startsWith("OptPilot tool result for ")) return false;
-    return ["reasoning", "tool_call", "user_message", "error"].includes(category) || Boolean(payload.tool || payload.reasoning);
+    return ["reasoning", "tool_call", "error"].includes(category) || Boolean(payload.tool);
   }
   if (type === "approval_requested" || type === "approval_approved" || type === "approval_rejected") return true;
   if (type === "workspace_attached" || type === "workspace_detached") return true;
+  if (type === "assistant_workspace_changed") return true;
   if (type === "openhands_dispatch_cancelled") return true;
   if (type === "openhands_cancel_acknowledged" || type === "openhands_cancel_failed") return true;
-  if (type === "openhands_tool_result_forwarded" || type === "openhands_tool_result_forward_skipped") return true;
   return type.includes("failed") || type.includes("error");
+}
+
+function assistantToolActivity(tool, phase = "active") {
+  const activities = {
+    optpilot_workspace_list: ["Checking available Workspaces", "Checked available Workspaces"],
+    optpilot_workspace_create: ["Creating a Workspace", "Created a Workspace"],
+    optpilot_workspace_attach: ["Adding a Workspace to this Conversation", "Added a Workspace to this Conversation"],
+    optpilot_workspace_detach: ["Removing a Workspace from this Conversation", "Removed a Workspace from this Conversation"],
+    optpilot_workspace_focus: ["Choosing the default Workspace", "Updated the default Workspace"],
+    optpilot_file_tree: ["Inspecting Workspace files", "Inspected Workspace files"],
+    optpilot_file_read: ["Reading a Workspace file", "Read a Workspace file"],
+    optpilot_file_diff: ["Reviewing Workspace changes", "Reviewed Workspace changes"],
+    optpilot_file_write: ["Updating Workspace files", "Updated Workspace files"],
+    optpilot_file_editor: ["Updating Workspace files", "Updated Workspace files"],
+    optpilot_shell_run: ["Running a Workspace command", "Ran a Workspace command"],
+    optpilot_terminal: ["Running a Workspace command", "Ran a Workspace command"],
+    optpilot_workspace_preview_open: ["Opening Workspace Preview", "Opened Workspace Preview"],
+    optpilot_catalog_list: ["Searching the Catalog", "Searched the Catalog"],
+    optpilot_catalog_detail: ["Reviewing a Catalog item", "Reviewed a Catalog item"],
+    optpilot_compatibility_check: ["Checking compatibility", "Checked compatibility"],
+    optpilot_config_discover: ["Finding OptPilot configuration", "Found OptPilot configuration"],
+    optpilot_config_validate: ["Checking OptPilot configuration", "Checked OptPilot configuration"],
+    optpilot_study_draft: ["Preparing a Study", "Prepared a Study"],
+    optpilot_study_save: ["Saving a Study", "Saved a Study"],
+    optpilot_study_launch: ["Starting a Run", "Started a Run"],
+    optpilot_run_list: ["Checking Runs", "Checked Runs"],
+    optpilot_run_detail: ["Reviewing Run results", "Reviewed Run results"],
+    optpilot_run_compare: ["Comparing Runs", "Compared Runs"],
+    optpilot_docs_search: ["Checking OptPilot guidance", "Checked OptPilot guidance"],
+    optpilot_capability_list: ["Checking available capabilities", "Checked available capabilities"],
+    optpilot_capability_detail: ["Reviewing an OptPilot capability", "Reviewed an OptPilot capability"],
+  };
+  const setup = String(tool || "").startsWith("optpilot_package_plan_");
+  const labels = activities[tool] || (setup
+    ? ["Checking Catalog setup", "Checked Catalog setup"]
+    : ["Using an OptPilot capability", "Used an OptPilot capability"]);
+  return phase === "done" ? labels[1] : labels[0];
+}
+
+function assistantStepTechnical(type, payload, options = {}) {
+  const lines = [`Event: ${type}`];
+  if (payload.tool) lines.push(`Capability: ${payload.tool}`);
+  if (options.arguments && payload.arguments_preview) lines.push(`Request:\n${payload.arguments_preview}`);
+  if (options.result && payload.result_preview) lines.push(`Result:\n${payload.result_preview}`);
+  if (options.raw && payload.raw_preview) lines.push(`Details:\n${payload.raw_preview}`);
+  return lines.join("\n");
 }
 
 function assistantStepSummary(event) {
@@ -2928,16 +5753,17 @@ function assistantStepSummary(event) {
   const base = {
     status: eventStatus(event),
     time: formatEventTime(event && event.created_at),
-    type,
     title: humanizeEventType(type),
-    detail: payloadPreview(payload),
+    detail: "",
+    technical: assistantStepTechnical(type, payload),
   };
   if (event.type === "optpilot_tool_result") {
+    const failed = payload.ok === false;
     return {
       ...base,
-      title: payload.tool ? `Tool result: ${payload.tool}` : "Tool result",
-      detail: payload.summary || (payload.ok === false ? "Tool failed." : "Tool completed."),
-      codeBlock: payload.result_preview || "",
+      title: failed ? "An OptPilot action needs attention" : assistantToolActivity(payload.tool, "done"),
+      detail: payload.summary || (failed ? "The action did not complete." : "Completed."),
+      technical: assistantStepTechnical(type, payload, { result: true }),
     };
   }
   if (event.type === "openhands_event") {
@@ -2945,46 +5771,48 @@ function assistantStepSummary(event) {
     if (category === "reasoning") {
       return {
         ...base,
-        title: "Reasoning",
-        detail: payload.reasoning || payload.summary || "",
-        codeBlock: "",
+        title: "Planning the next step",
+        detail: "OptPilot is deciding what information or action is needed next.",
+        technical: assistantStepTechnical(type, payload),
       };
     }
     if (category === "tool_call" || payload.tool) {
       return {
         ...base,
-        title: payload.tool ? `Tool call: ${payload.tool}` : "Tool call",
-        detail: payload.reasoning || (payload.tool_call_id ? `Call ${payload.tool_call_id}` : ""),
-        codeBlock: payload.arguments_preview || "",
-      };
-    }
-    if (category === "user_message") {
-      return {
-        ...base,
-        title: "User request sent",
-        detail: payload.summary || "",
-        codeBlock: "",
+        title: assistantToolActivity(payload.tool, "active"),
+        detail: "In progress.",
+        technical: assistantStepTechnical(type, payload, { arguments: true }),
       };
     }
     if (category === "error") {
       return {
         ...base,
-        title: "OpenHands error",
-        detail: payload.summary || payload.raw_preview || "",
-        codeBlock: "",
+        title: "The Assistant encountered a problem",
+        detail: payload.summary || "The current step could not be completed.",
+        technical: assistantStepTechnical(type, payload, { raw: true }),
       };
     }
     return {
       ...base,
-      title: payload.event_type ? `OpenHands ${payload.event_type}` : "OpenHands event",
-      detail: payload.summary || payload.raw_preview || "",
+      title: "Assistant activity",
+      detail: payload.summary || "A background step completed.",
+      technical: assistantStepTechnical(type, payload, { raw: true }),
     };
   }
   if (event.type === "workspace_attached") {
-    return { ...base, title: "Workspace added to this conversation", detail: payload.workspace_id || "" };
+    return { ...base, title: "Workspace added to this Conversation", detail: "Its files are now available to the Assistant." };
   }
   if (event.type === "workspace_detached") {
-    return { ...base, title: "Workspace removed from this conversation", detail: payload.workspace_id || "" };
+    return { ...base, title: "Workspace removed from this Conversation", detail: "The Assistant can no longer use its files here." };
+  }
+  if (event.type === "assistant_workspace_changed") {
+    return {
+      ...base,
+      title: `Using ${payload.workspace_title || "the Conversation default"}`,
+      detail: payload.workspace_id
+        ? "Future file and command actions will use this Workspace."
+        : "Future actions will not assume a Workspace until one is selected.",
+    };
   }
   if (event.type === "approval_requested") {
     return { ...base, title: payload.title || "Approval requested", detail: payload.summary || payload.tool || "" };
@@ -2995,14 +5823,8 @@ function assistantStepSummary(event) {
   if (event.type === "approval_rejected") {
     return { ...base, title: "Approval rejected", detail: payload.reason || payload.tool || "" };
   }
-  if (event.type === "openhands_tool_result_forwarded") {
-    return { ...base, title: "Tool result sent to OpenHands", detail: payload.tool || payload.tool_call_id || "" };
-  }
-  if (event.type === "openhands_tool_result_forward_skipped") {
-    return { ...base, title: "Tool result kept in Studio", detail: payload.reason || payload.tool || "" };
-  }
   if (event.type === "openhands_dispatch_failed") {
-    return { ...base, title: "OpenHands dispatch failed", detail: payload.error || "" };
+    return { ...base, title: "The Assistant could not start", detail: payload.error || "Try again after checking Assistant status." };
   }
   if (event.type === "openhands_dispatch_queued") {
     return { ...base, title: "OpenHands dispatch queued", detail: payload.mode || "" };
@@ -3015,16 +5837,15 @@ function assistantStepSummary(event) {
   }
   if (event.type === "openhands_dispatch_cancelled") {
     const detail = payload.remote_cancelled
-      ? `Interrupted OpenHands${payload.remote_action ? ` via ${payload.remote_action}` : ""}.`
-      : (payload.remote_cancel_scheduled ? "Stopped locally. Interrupting OpenHands in the background." : (payload.remote_error || "Stopped locally."));
-    return { ...base, title: "Assistant stopped", detail };
+      ? "The Assistant stopped."
+      : (payload.remote_cancel_scheduled ? "Stopped here; the background task is also being interrupted." : (payload.remote_error || "Stopped."));
+    return { ...base, title: "OptPilot stopped", detail };
   }
   if (event.type === "openhands_cancel_acknowledged") {
-    const detail = payload.remote_action ? `OpenHands accepted ${payload.remote_action}.` : "OpenHands accepted the interrupt.";
-    return { ...base, title: "OpenHands interrupt acknowledged", detail };
+    return { ...base, title: "The background task stopped", detail: "The interruption was acknowledged." };
   }
   if (event.type === "openhands_cancel_failed") {
-    return { ...base, title: "OpenHands interrupt failed", detail: payload.remote_error || "Studio stopped locally, but OpenHands did not acknowledge the interrupt." };
+    return { ...base, title: "The background task may still be stopping", detail: payload.remote_error || "Studio stopped locally, but the background task did not acknowledge the interruption." };
   }
   if (event.type === "openhands_chat_completion_completed") {
     return { ...base, title: "OpenHands chat completed", detail: payload.conversation_id || "" };
@@ -3176,18 +5997,21 @@ function updateAssistantComposerState() {
   const awaitingApproval = assistantIsAwaitingApproval();
   const session = currentAgentSession();
   const cancelling = Boolean(session && state.cancellingAgentSessionIds.has(session.id));
+  const creatingConversation = Boolean(state.agentSessionCreatePromise);
   if (els.agentInput) {
-    els.agentInput.disabled = awaitingApproval;
-    if (awaitingApproval) {
+    els.agentInput.disabled = awaitingApproval || creatingConversation;
+    if (creatingConversation) {
+      els.agentInput.placeholder = "Creating the Conversation…";
+    } else if (awaitingApproval) {
       els.agentInput.placeholder = "Resolve the pending approval before sending another message.";
     } else {
       updateAssistantInputPlaceholder();
     }
   }
-  els.sendAgentButton.disabled = cancelling || awaitingApproval;
+  els.sendAgentButton.disabled = cancelling || awaitingApproval || creatingConversation;
   els.sendAgentButton.classList.toggle("stopping", busy);
-  els.sendAgentButton.setAttribute("aria-label", awaitingApproval ? "Approval required" : busy ? "Stop assistant" : "Send message");
-  els.sendAgentButton.setAttribute("title", awaitingApproval ? "Resolve the pending approval first" : busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("aria-label", creatingConversation ? "Creating Conversation" : awaitingApproval ? "Approval required" : busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("title", creatingConversation ? "Creating the Conversation" : awaitingApproval ? "Resolve the pending approval first" : busy ? "Stop assistant" : "Send message");
   els.sendAgentButton.innerHTML = busy
     ? `<span aria-hidden="true" class="stop-icon"></span>`
     : `<span aria-hidden="true">&uarr;</span>`;
@@ -3207,6 +6031,9 @@ function assistantPromptForContext() {
   if (state.assistantOpen && state.assistantMode === "registration") {
     return "Help me choose, check, and publish the right Catalog items from this Workspace.";
   }
+  if (conversationShellEnabled() && state.shell.surface === "conversation") {
+    return "Describe your problem, desired outcome, relevant data, or the OptPilot capability you want to use.";
+  }
   if (state.view === "runs") {
     const runName = state.selectedRun && state.selectedRun.run && state.selectedRun.run.name;
     return runName
@@ -3214,7 +6041,7 @@ function assistantPromptForContext() {
       : "Summarize the selected run, compare candidates, and inspect failures or artifacts.";
   }
   if (state.view === "interface") {
-    return "Help me understand this interface session, its exact source, status, or saved try result.";
+    return "Help me understand this interface, its exact source, status, or saved try result.";
   }
   if (state.view === "catalog") return "Help me inspect this Catalog item or open it as an editable Workspace.";
   if (state.view === "experiments") return "Help me configure this Study, check it, and prepare it to launch a Run.";
@@ -3225,12 +6052,18 @@ function assistantPromptForContext() {
     && agentSession
     && !attachedWorkspaceIds(agentSession.id).includes(workspace.id)
   ) {
-    return `Ask a general question. To work with these files, choose Ask in ${assistantSessionLabel(agentSession)} from Workspace actions.`;
+    return `Ask a general question. To work with these files, choose Make available to ${assistantSessionLabel(agentSession)} from Workspace actions.`;
   }
   return "Help me inspect this Workspace, edit code, check configurations, or publish Catalog items.";
 }
 
 function assistantContextSummary() {
+  if (conversationShellEnabled() && state.shell.surface === "conversation") {
+    const environmentCount = (state.catalog.environments || []).length;
+    const methodCount = (state.catalog.methods || []).length;
+    const resourceCount = (state.catalog.resources || []).length;
+    return `Conversation · Catalog: ${environmentCount} Environments, ${methodCount} Methods, ${resourceCount} Resources`;
+  }
   const parts = [`Viewing ${currentViewLabel()}`];
   if (state.view === "catalog") {
     const component = componentByKey(state.selectedComponentKey);
@@ -3273,7 +6106,9 @@ function selectedRunSummary() {
 }
 
 function renderNavigation() {
+  renderShell();
   const catalogSourceView = state.view === "workspace" && isCatalogSourceView();
+  document.body.classList.toggle("catalog-source-view", catalogSourceView);
   ["workspace", "catalog", "experiments", "runs", "interface"].forEach((view) => {
     document.body.classList.toggle(`view-${view}`, state.view === view);
   });
@@ -3287,18 +6122,20 @@ function renderNavigation() {
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.classList.toggle(
       "active",
-      button.dataset.view === (catalogSourceView ? "catalog" : interfaceSourceView || state.view),
+      (!conversationShellEnabled() || state.shell.surface === "content")
+      && button.dataset.view === (catalogSourceView ? "catalog" : interfaceSourceView || state.view),
     );
   });
   document.querySelectorAll(".view").forEach((section) => {
-    section.classList.toggle("active-view", section.id === `${state.view}View`);
+    const contentVisible = !conversationShellEnabled() || state.shell.surface === "content";
+    section.classList.toggle("active-view", contentVisible && section.id === `${state.view}View`);
   });
   const titles = {
     workspace: ["Workspaces", "Edit code, run its interface, and publish reusable versions."],
     catalog: ["Catalog", "Reusable environments, methods, and resources."],
     experiments: ["Studies", "Configure and launch optimization Runs."],
     runs: ["Runs", "Progress, metrics, Candidates, trials, and saved results."],
-    interface: ["Interface Session", "Run and inspect an interactive Environment interface."],
+    interface: ["Interface", "Run and inspect an interactive Environment interface."],
   };
   els.pageTitle.textContent = catalogSourceView ? "Catalog item" : titles[state.view][0];
   els.pageSubtitle.textContent = catalogSourceView
@@ -3312,12 +6149,27 @@ function currentViewLabel() {
     catalog: "Catalog",
     experiments: "Studies",
     runs: "Runs",
-    interface: "Interface Session",
+    interface: "Interface",
   }[state.view] || "Editor";
+}
+
+function catalogSourceDisplayLabel(session = currentSession()) {
+  const component = isCatalogSourceView(session) ? catalogSourceComponent(session) : null;
+  return String(component && component.entry && component.entry.label || session && session.title || "Catalog item");
 }
 
 function buildSessions() {
   return (state.uiWorkspaces || []).map(uiWorkspaceSession);
+}
+
+function workspaceRecordVisibleInWorkspaces(workspace) {
+  if (typeof workspace.visible_in_workspaces === "boolean") {
+    return workspace.visible_in_workspaces;
+  }
+  if (workspace.purpose) {
+    return workspace.purpose === "user-project";
+  }
+  return true;
 }
 
 function uiWorkspaceSession(workspace) {
@@ -3329,7 +6181,7 @@ function uiWorkspaceSession(workspace) {
     files[`file${index}`] = {
       label: path,
       state: workspace.mode === "read-only" || workspace.mode === "analysis" ? "read-only" : "editable",
-      content: `# ${path}\n\nOpen this workspace in embedded or separate Code Server to inspect the live file contents.\n`,
+      content: `# ${path}\n\nOpen this ${workspace.mode === "read-only" ? "published source" : "Workspace"} in the embedded or separate editor to inspect the live file contents.\n`,
     };
   });
   if (!Object.keys(files).length) {
@@ -3356,10 +6208,10 @@ function uiWorkspaceSession(workspace) {
     backendWorkspaceId: workspace.id,
     kind: primary ? primary.kind : sourceType,
     mode: workspace.mode || "editable",
-    visibleInWorkspaces: workspace.visible_in_workspaces !== false,
+    visibleInWorkspaces: workspaceRecordVisibleInWorkspaces(workspace),
     sourceType,
     title: workspace.title || "Workspace",
-    status: workspace.status || (entries.length ? "registered" : "ready"),
+    status: workspace.status || "ready",
     target: hiddenProviderPath ? workspacePathLabel : workspace.source_path || workspace.root,
     path: workspacePathLabel,
     ideFolder: hiddenProviderPath ? workspacePathLabel : shortPath(workspace.root || ""),
@@ -3559,6 +6411,7 @@ function buildPlans() {
 function renderWorkspace() {
   renderActiveInterfaceIndicator();
   const allWorkspaces = orderedWorkspaceSessions();
+  const duplicateTitles = duplicateWorkspaceTitleKeys(allWorkspaces);
   const session = currentSession();
   els.sessionCount.textContent = String(allWorkspaces.length);
   els.sessionCount.setAttribute(
@@ -3566,10 +6419,37 @@ function renderWorkspace() {
     `${allWorkspaces.length} Workspace${allWorkspaces.length === 1 ? "" : "s"}`,
   );
   els.sessionCount.title = `${allWorkspaces.length} editable Workspace${allWorkspaces.length === 1 ? "" : "s"}`;
-  els.sessionList.innerHTML = allWorkspaces.map(sessionCard).join("") || emptyInline("No workspaces yet.");
-  document.querySelectorAll("[data-session-id]").forEach((button) => {
+  const refreshWarning = state.uiWorkspacesError
+    ? `
+      <div class="collection-refresh-notice workspace-list-refresh-notice" role="alert">
+        <div>
+          <strong>Workspaces could not be refreshed.</strong>
+          <span>${state.uiWorkspacesLoaded ? "Showing the last loaded Workspace list." : "No Workspace list is available yet."}</span>
+        </div>
+        <button class="ghost-button compact-action retry-ui-workspaces" type="button">Try again</button>
+      </div>
+    `
+    : "";
+  const workspaceCards = allWorkspaces.map((workspace) => sessionCard(workspace, duplicateTitles)).join("")
+    || emptyInline(state.uiWorkspacesError ? "Workspace history is temporarily unavailable." : "No Workspaces yet.");
+  els.sessionList.innerHTML = `${refreshWarning}${workspaceCards}`;
+  // Workspace navigation must never bind to similarly named data attributes
+  // elsewhere on the page (for example, the Conversation timeline). Blank
+  // conversation space is intentionally inert.
+  els.sessionList.querySelectorAll("[data-session-id]").forEach((button) => {
     button.addEventListener("click", () => selectSession(button.dataset.sessionId));
   });
+  const retryWorkspaces = els.sessionList.querySelector(".retry-ui-workspaces");
+  if (retryWorkspaces) {
+    retryWorkspaces.addEventListener("click", async () => {
+      retryWorkspaces.disabled = true;
+      retryWorkspaces.textContent = "Refreshing…";
+      await loadUiWorkspaces();
+      rebuildDerivedState();
+      renderWorkspace();
+      renderAssistant();
+    });
+  }
   document.querySelectorAll("[data-close-workspace-id]").forEach((button) => {
     button.addEventListener("click", () => closeWorkspaceFromCurrentSession(button.dataset.closeWorkspaceId));
   });
@@ -3638,7 +6518,7 @@ function renderWorkspace() {
   ] : [
     ["Storage", workspaceStorageLabel(session)],
     ["Catalog", workspaceCatalogStatus(session)],
-    ["Assistant", workspaceAssistantAccessLabel(session)],
+    ["Conversation access", workspaceAssistantAccessLabel(session)],
     ["Interface", session.interface && (session.interface.profiles || []).length ? "available" : "not declared"],
   ]).filter(Boolean).map(summaryCell).join("");
   els.sessionFiles.innerHTML = Object.entries(session.files).map(([key, file]) => `
@@ -3653,7 +6533,7 @@ function renderWorkspace() {
   els.sessionContext.innerHTML = session.context.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join("");
   els.sessionTools.innerHTML = session.tools.map(capabilityItem).join("");
   els.sessionWorkspaceActions.innerHTML = `
-    <button class="file-tree-item open-session-code" type="button">${isCatalogSourceView(session) ? "View source in Code Server" : "Open folder in Code Server"}</button>
+    <button class="file-tree-item open-session-code" type="button">${isCatalogSourceView(session) ? "View read-only source" : "Open Workspace editor"}</button>
     <div class="path-text">${escapeHtml(shortPath(session.codeFolder || session.path))}</div>
   `;
   els.sessionWorkspaceActions.querySelector(".open-session-code").addEventListener("click", openCodeServerEmbedded);
@@ -3689,11 +6569,73 @@ async function runWorkspaceAction(action) {
 }
 
 function renderAssistantSessionList() {
-  if (!els.assistantSessionCards) return;
-  els.assistantSessionCards.innerHTML = state.agentSessions.map(agentSessionCard).join("");
-  document.querySelectorAll("#assistantSessionCards [data-agent-session-id]").forEach((button) => {
-    button.addEventListener("click", () => selectAgentSession(button.dataset.agentSessionId));
+  const cards = state.agentSessions.map(agentSessionCard).join("");
+  const listState = state.agentSessionsError
+    ? `
+      <section class="conversation-list-notice error" role="alert">
+        <strong>Conversations could not be refreshed</strong>
+        <span>${escapeHtml(state.agentSessionsError)}</span>
+        ${cards ? "<span>The Conversations already shown have been kept.</span>" : ""}
+        <button class="ghost-button compact-action" data-conversation-list-retry type="button">Try again</button>
+      </section>
+    `
+    : !state.agentSessionsLoaded && !cards
+      ? `
+        <section class="conversation-list-notice" role="status" aria-live="polite">
+          <span class="conversation-load-indicator" aria-hidden="true"></span>
+          <span>Loading Conversations…</span>
+        </section>
+      `
+      : "";
+  const html = `${listState}${cards || (state.agentSessionsLoaded ? emptyInline("No Conversations yet.") : "")}`;
+  const signature = stableJsonStringify({
+    selected: state.selectedAgentSessionId || "",
+    loaded: state.agentSessionsLoaded,
+    error: state.agentSessionsError,
+    sessions: state.agentSessions.map((session) => ({
+      id: session.id,
+      title: session.title,
+      status: assistantSessionStatus(session),
+      hydration: agentSessionHydrationState(session).status,
+      approvals: Number(session.pending_approval_count || 0),
+      workspaces: (state.agentWorkspaceAttachments[session.id] || []).length,
+    })),
   });
+  [els.assistantSessionCards, els.legacyAssistantSessionCards].filter(Boolean).forEach((root) => {
+    if (root.dataset.sessionListSignature === signature) return;
+    const scrollTop = root.scrollTop;
+    const focusedSessionId = root.contains(document.activeElement)
+      && document.activeElement.closest("[data-agent-session-id]")
+      && document.activeElement.closest("[data-agent-session-id]").dataset.agentSessionId || "";
+    root.innerHTML = html;
+    root.dataset.sessionListSignature = signature;
+    root.scrollTop = scrollTop;
+    root.querySelectorAll("[data-agent-session-id]").forEach((button) => {
+      button.addEventListener("click", () => selectAgentSession(button.dataset.agentSessionId));
+    });
+    root.querySelectorAll("[data-conversation-list-retry]").forEach((button) => {
+      button.addEventListener("click", () => retryAgentSessionList(button));
+    });
+    if (focusedSessionId) {
+      const restored = [...root.querySelectorAll("[data-agent-session-id]")]
+        .find((button) => button.dataset.agentSessionId === focusedSessionId);
+      if (restored) restored.focus({ preventScroll: true });
+    }
+  });
+}
+
+async function retryAgentSessionList(button = null) {
+  if (button) button.disabled = true;
+  state.agentSessionsError = "";
+  renderAssistantSessionList();
+  const refreshed = await refreshAgentSessionSummaries();
+  if (refreshed.loaded && state.selectedAgentSessionId) {
+    await hydrateAgentSessionById(state.selectedAgentSessionId, {
+      force: true,
+      render: false,
+    });
+  }
+  renderAssistant();
 }
 
 async function openRegistrationMenu() {
@@ -4319,8 +7261,8 @@ function resourceRegistrationHtml(draft) {
       <button class="primary-button registration-resource-apply" type="button">${escapeHtml(roleNeedsCode ? `Create ${fieldLabel(role)} starter` : `Configure as ${fieldLabel(role)}`)}</button>
       <details class="registration-assistant-help">
         <summary>Want help configuring?</summary>
-        <p>This makes the Workspace available to ${escapeHtml(assistantLabel)} and opens that Assistant conversation. You can also configure and publish without Assistant.</p>
-        <button class="ghost-button registration-curate-assistant" type="button" ${curationBlocked ? "disabled" : ""} title="${curationBlocked ? "Assistant is unavailable or busy. You can continue with Configure." : `Make this Workspace available to ${escapeHtml(assistantLabel)} and ask for configuration help.`}">Ask in ${escapeHtml(assistantLabel)}</button>
+        <p>This makes the Workspace available to ${escapeHtml(assistantLabel)} and asks OptPilot for configuration help there. You can also configure and publish without using the Conversation.</p>
+        <button class="ghost-button registration-curate-assistant" type="button" ${curationBlocked ? "disabled" : ""} title="${curationBlocked ? "OptPilot is unavailable or busy. You can continue with Configure." : `Make this Workspace available to ${escapeHtml(assistantLabel)} and ask for configuration help.`}">Get help in ${escapeHtml(assistantLabel)}</button>
       </details>
     </div>
   `;
@@ -4371,7 +7313,10 @@ function openRegisteredCatalogResult(applied) {
     && item.entry.id === registered.id
     && (!registered.package_id || item.entry.package_id === registered.package_id)
   ))).find(Boolean);
-  if (component) state.selectedComponentKey = component.key;
+  if (component) {
+    revealCatalogComponent(component);
+    state.selectedComponentKey = component.key;
+  }
   setView("catalog");
   return true;
 }
@@ -4787,7 +7732,7 @@ async function requestWorkspaceCuration() {
     const attached = await attachWorkspaceToCurrent(workspace.id);
     if (!attached) {
       setRegistrationNotice(
-        "Assistant access could not be added",
+        "Conversation access could not be added",
         `This Workspace was not made available to ${assistantSessionLabel(agentSession)}.`,
         true,
       );
@@ -4814,7 +7759,7 @@ async function requestWorkspaceCuration() {
   const curate = document.querySelector(".registration-curate-assistant");
   if (curate) {
     curate.disabled = true;
-    curate.textContent = "Opening Assistant...";
+    curate.textContent = "Opening Conversation…";
   }
   renderAssistant();
   try {
@@ -4823,7 +7768,7 @@ async function requestWorkspaceCuration() {
       sessionId: agentSession.id,
       rethrowError: true,
     });
-    if (!persisted) throw new Error("The Assistant conversation is not ready yet.");
+    if (!persisted) throw new Error("The Conversation is not ready yet.");
     state.assistantMode = "chat";
   } catch (error) {
     agentSession.status = priorStatus;
@@ -4833,7 +7778,7 @@ async function requestWorkspaceCuration() {
       "Curation request not sent",
       boundedPublicActionError(
         error,
-        "The backend Assistant could not accept this request. Refresh Studio and try again.",
+        "OptPilot could not accept this request. Refresh Studio and try again.",
       ),
     ], { persist: false });
   }
@@ -4917,17 +7862,11 @@ async function selectSession(sessionId) {
     const reopened = await reopenManagedWorkspace(selected);
     if (!reopened) return;
   }
-  if (state.view !== "workspace") setView("workspace");
-  const attachedToAssistant = attachedWorkspaceIds().includes(sessionId);
-  setSelectedWorkspace(sessionId, { sync: attachedToAssistant });
-  syncStudioRoute();
-  const agentSession = attachedToAssistant ? currentAgentSession() : null;
-  const selectedWorkspace = state.sessions.find((item) => item.id === sessionId);
-  if (agentSession && selectedWorkspace && selectedWorkspace.backendWorkspaceId && !agentSession.id.startsWith("agent-session-")) {
-    postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/select-workspace`, { workspace_id: selectedWorkspace.backendWorkspaceId })
-      .then((payload) => updateAgentSessionFromPayload(payload.session))
-      .catch(() => {});
+  if (state.view !== "workspace" || !contentSurfaceIsVisible("workspace")) {
+    openContentSurface("workspace", { history: "push" });
   }
+  setSelectedWorkspace(sessionId);
+  syncStudioRoute();
   const next = currentSession();
   state.selectedFileKey = firstFileKey(next);
   if (isEmbeddedCodeWorkspaceActive() || shouldAutoOpenCodeWorkspace(next)) {
@@ -4941,26 +7880,10 @@ async function attachWorkspaceAndRender(workspaceId) {
   if (!workspaceId) return;
   const agentSession = await attachWorkspaceToCurrent(workspaceId);
   if (!agentSession) return;
-  if (agentSession.id === state.selectedAgentSessionId) {
-    state.workspaceNotice = {
-      workspaceId,
-      assistantSessionId: agentSession.id,
-      title: `Available to ${assistantSessionLabel(agentSession)}`,
-      body: "This Assistant conversation can now use the Workspace files. The Workspace still exists independently.",
-      error: false,
-    };
-  }
-  if (state.view !== "workspace") setView("workspace");
-  state.selectedFileKey = firstFileKey(currentSession());
   await loadUiWorkspaces();
   rebuildDerivedState();
-  state.assistantMode = "chat";
-  setAssistantOpen(true);
   renderWorkspace();
   renderAssistant();
-  window.requestAnimationFrame(() => {
-    if (els.agentInput) els.agentInput.focus();
-  });
 }
 
 function startAssistantResize(event) {
@@ -5016,41 +7939,63 @@ function setSelectedAgentSessionState(sessionId) {
 }
 
 async function selectAgentSession(sessionId) {
+  captureAssistantContinuity();
   setSelectedAgentSessionState(sessionId);
   state.assistantMode = "chat";
+  const hydration = hydrateAgentSessionById(sessionId, { force: true });
   renderWorkspace();
-  renderAssistant();
+  if (conversationShellEnabled()) openConversationSurface({ history: "push" });
+  else renderAssistant();
+  await hydration;
+  if (sessionId === state.selectedAgentSessionId) renderAssistant();
 }
 
 async function createAgentSession() {
-  try {
-    const payload = await postJson("/api/agent-sessions", {
-      title: `Conversation ${state.agentSessions.length + 1}`,
-      description: "New conversation",
-      attached_workspace_ids: [],
-      selected_workspace_id: "",
-    });
-    await updateAgentSessionFromPayload(payload.session);
-    setSelectedAgentSessionState(payload.session.id);
-  } catch (error) {
-    const id = `agent-session-${Date.now().toString(36)}`;
-    const index = state.agentSessionSeq++;
-    const session = {
-      id,
-      title: `Conversation ${index}`,
-      description: "New conversation",
-      createdAt: "now",
-    };
-    state.agentSessions = [session, ...state.agentSessions];
-    state.agentWorkspaceAttachments[id] = [];
-    state.selectedWorkspaceByAgentSession[id] = null;
-    state.assistantMessagesBySession[id] = defaultAssistantMessages();
-    state.agentEventsBySession[id] = [];
-    setSelectedAgentSessionState(id);
+  return createAgentSessionForSurface({ navigate: true });
+}
+
+async function createAgentSessionForSurface(options = {}) {
+  const navigate = options.navigate !== false;
+  captureAssistantContinuity();
+  if (!state.agentSessionCreatePromise) {
+    state.agentSessionCreateError = "";
+    state.agentSessionCreatePromise = (async () => {
+      try {
+        const payload = await postJson("/api/agent-sessions", {
+          title: "Untitled conversation",
+          description: "New conversation",
+          attached_workspace_ids: [],
+          selected_workspace_id: "",
+        }, { timeoutMs: 15000 });
+        if (!payload.session || !payload.session.id) {
+          throw new Error("Studio did not return the new Conversation.");
+        }
+        await updateAgentSessionFromPayload(payload.session);
+        setSelectedAgentSessionState(payload.session.id);
+        state.assistantMode = "chat";
+        return currentAgentSession() || payload.session;
+      } catch (error) {
+        state.agentSessionCreateError = boundedPublicActionError(
+          error,
+          "The Conversation could not be created. Check Studio status and try again.",
+        );
+        return null;
+      } finally {
+        state.agentSessionCreatePromise = null;
+      }
+    })();
   }
-  state.assistantMode = "chat";
+  updateAssistantComposerState();
+  const session = await state.agentSessionCreatePromise;
   renderWorkspace();
-  setAssistantOpen(true);
+  if (!session) {
+    renderAssistant();
+    return null;
+  }
+  if (navigate && conversationShellEnabled()) openConversationSurface({ history: "push" });
+  else if (navigate) setAssistantOpen(true);
+  else renderAssistant();
+  return session;
 }
 
 async function closeWorkspaceFromCurrentSession(workspaceId) {
@@ -5063,24 +8008,35 @@ async function detachWorkspaceFromSession(workspaceId, agentSessionId, options =
   const workspace = state.sessions.find((item) => item.id === workspaceId);
   const label = workspace ? workspace.title : "this workspace";
   const agentSession = state.agentSessions.find((item) => item.id === agentSessionId) || currentAgentSession();
-  if (!agentSession) return;
-  state.agentWorkspaceAttachments[agentSession.id] = attachedWorkspaceIds(agentSession.id).filter((id) => id !== workspaceId);
+  if (!agentSession) return false;
+  const persistedWorkspaceId = String(workspace && workspace.backendWorkspaceId || workspaceId || "");
+  const previousAttachments = [...(state.agentWorkspaceAttachments[agentSession.id] || [])];
+  const previousSelectedWorkspaceId = state.selectedWorkspaceByAgentSession[agentSession.id] || null;
+  state.conversationWorkspaceError = "";
   if (!agentSession.id.startsWith("agent-session-")) {
     try {
-      const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`, { workspace_id: workspaceId });
-      if (payload.session) mergeAgentSessionPayload(payload.session);
+      const payload = await postJson(
+        `/api/agent-sessions/${encodeURIComponent(agentSession.id)}/detach-workspace`,
+        { workspace_id: persistedWorkspaceId },
+        { timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS },
+      );
+      if (!payload.session) throw new Error("Studio did not return the updated Conversation.");
+      mergeAgentSessionPayload(payload.session);
     } catch (error) {
-      // Keep the optimistic UI state; a refresh will reconcile if needed.
+      state.agentWorkspaceAttachments[agentSession.id] = previousAttachments;
+      state.selectedWorkspaceByAgentSession[agentSession.id] = previousSelectedWorkspaceId;
+      state.conversationWorkspaceError = boundedPublicActionError(
+        error,
+        `Studio could not remove ${label} access from ${assistantSessionLabel(agentSession)}.`,
+      );
+      renderWorkspace();
+      renderAssistant();
+      return false;
     }
-  }
-  if (workspace && workspace.backendWorkspaceId) {
-    try {
-      const payload = await postJson(`/api/workspaces/${encodeURIComponent(workspace.backendWorkspaceId)}/detach`, { session_id: agentSession.id });
-      if (payload.workspace) {
-        mergeUiWorkspace(payload.workspace);
-      }
-    } catch (error) {
-      // Session detach already succeeded; workspace record can be refreshed later.
+  } else {
+    state.agentWorkspaceAttachments[agentSession.id] = previousAttachments.filter((id) => id !== workspaceId);
+    if (previousSelectedWorkspaceId === workspaceId) {
+      state.selectedWorkspaceByAgentSession[agentSession.id] = null;
     }
   }
   if (options.announce && agentSession.id === state.selectedAgentSessionId) {
@@ -5095,6 +8051,8 @@ async function detachWorkspaceFromSession(workspaceId, agentSessionId, options =
   await loadUiWorkspaces();
   rebuildDerivedState();
   renderWorkspace();
+  renderAssistant();
+  return true;
 }
 
 function renderWorkspaceCleanupModal() {
@@ -5102,6 +8060,7 @@ function renderWorkspaceCleanupModal() {
   const pending = state.pendingWorkspaceCleanup;
   const workspace = pending && state.sessions.find((item) => item.id === pending.workspaceId);
   els.workspaceCleanupModal.hidden = !pending;
+  syncManagedModalBackgroundInert();
   if (!pending || !workspace) return;
   const destructiveLabel = workspaceDestructiveLabel(workspace);
   const isCatalogCopy = workspace.sourceType === "catalog-copy";
@@ -5121,36 +8080,73 @@ function renderWorkspaceCleanupModal() {
         : "OptPilot will delete this Workspace and its managed files."
       : "OptPilot will remove this Workspace from the list. The linked local folder and its files remain on disk.";
     els.workspaceCleanupBody.textContent = attachedNames.length
-      ? `${destructiveDescription} First remove it from these Assistant conversations: ${attachedNames.join(", ")}.`
+      ? `${destructiveDescription} First remove it from these Conversations: ${attachedNames.join(", ")}.`
       : destructiveDescription;
   }
   if (els.workspaceCleanupDeleteButton) {
     els.workspaceCleanupDeleteButton.textContent = destructiveLabel;
     els.workspaceCleanupDeleteButton.disabled = attachedNames.length > 0;
     els.workspaceCleanupDeleteButton.title = attachedNames.length
-      ? "Remove this Workspace from every named Assistant conversation first."
+      ? "Remove this Workspace from every named Conversation first."
       : destructiveLabel;
   }
 }
 
-function cancelPendingWorkspaceDelete() {
+function restoreWorkspaceCleanupFocus(returnFocus) {
+  window.requestAnimationFrame(() => {
+    const target = returnFocus && returnFocus.isConnected
+      ? returnFocus
+      : document.querySelector(".nav-button[data-view='workspace']");
+    if (target && typeof target.focus === "function") target.focus();
+  });
+}
+
+function closeWorkspaceCleanupModal(options = {}) {
+  const returnFocus = state.workspaceCleanupReturnFocus;
   state.pendingWorkspaceCleanup = null;
+  state.workspaceCleanupReturnFocus = null;
   renderWorkspaceCleanupModal();
+  if (options.restoreFocus !== false) restoreWorkspaceCleanupFocus(returnFocus);
+  return returnFocus;
+}
+
+function cancelPendingWorkspaceDelete() {
+  closeWorkspaceCleanupModal();
+}
+
+function handleWorkspaceCleanupModalKeydown(event) {
+  if (!state.pendingWorkspaceCleanup || !els.workspaceCleanupModal) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelPendingWorkspaceDelete();
+    return;
+  }
+  trapModalFocus(event, els.workspaceCleanupModal, els.workspaceCleanupDialog);
 }
 
 async function deletePendingWorkspaceDraft() {
   const pending = state.pendingWorkspaceCleanup;
-  state.pendingWorkspaceCleanup = null;
-  renderWorkspaceCleanupModal();
   if (!pending) return;
+  const returnFocus = closeWorkspaceCleanupModal({ restoreFocus: false });
   await deleteWorkspaceDraft(pending.workspaceId);
+  restoreWorkspaceCleanupFocus(returnFocus);
 }
 
 async function requestWorkspaceDelete(workspaceId) {
   const workspace = state.sessions.find((item) => item.id === workspaceId);
   if (!workspace) return;
+  const activeElement = document.activeElement;
+  state.workspaceCleanupReturnFocus = activeElement && activeElement !== document.body
+    ? activeElement
+    : null;
   state.pendingWorkspaceCleanup = { workspaceId, sessionId: state.selectedAgentSessionId || "", intent: "delete" };
   renderWorkspaceCleanupModal();
+  window.requestAnimationFrame(() => {
+    const target = els.workspaceCleanupDeleteButton && !els.workspaceCleanupDeleteButton.disabled
+      ? els.workspaceCleanupDeleteButton
+      : els.workspaceCleanupKeepButton;
+    if (target) target.focus();
+  });
 }
 
 async function deleteWorkspaceDraft(workspaceId) {
@@ -5204,9 +8200,12 @@ function updateSidebarCodeServerStatus() {
 function renderPlatformStatus() {
   const services = platformServices();
   const requiredBlocked = services.some((service) => service.required && service.level === "failed");
+  const requiredStale = services.some((service) => service.required && service.stale);
   const requiredWaiting = services.some((service) => service.required && service.level === "review");
   const summary = requiredBlocked
     ? ["Needs setup", "failed"]
+    : requiredStale
+    ? ["Status stale", "review"]
     : requiredWaiting
     ? ["Starting", "review"]
     : ["Ready", "ready"];
@@ -5221,40 +8220,50 @@ function platformServices() {
   const runtime = state.runtime || {};
   const agent = state.agentRuntimeStatus || {};
   return [
-    {
+    platformServiceWithRefreshState({
       label: "Studio",
       badge: state.platformReady ? "ready" : "offline",
       level: state.platformReady ? "ready" : "failed",
       detail: state.platformReady ? "Local UI serving" : "Local UI unreachable",
       required: true,
-    },
-    codeEditorService(code),
-    openHandsService(agent),
-    sandboxService(runtime),
+    }, "workspace"),
+    platformServiceWithRefreshState(codeEditorService(code), "codeServer"),
+    platformServiceWithRefreshState(openHandsService(agent), "agentSettings"),
+    platformServiceWithRefreshState(sandboxService(runtime), "runtime"),
   ];
+}
+
+function platformServiceWithRefreshState(service, key) {
+  const error = String(state.platformRefreshErrors[key] || "");
+  if (!error) return service;
+  return {
+    ...service,
+    stale: true,
+    detail: `${service.detail || "Last known status"}. Latest check failed; showing the last known status. ${error}`,
+  };
 }
 
 function codeEditorService(status) {
   if (status.running) {
     return {
-      label: "Code editing",
+      label: "Code editor",
       badge: "running",
       level: "ready",
-      detail: `Port ${status.port || 8766}${status.workspace_root ? ` - ${shortPath(status.workspace_root)}` : ""}`,
+      detail: `code-server · Port ${status.port || 8766}${status.workspace_root ? ` - ${shortPath(status.workspace_root)}` : ""}`,
       required: false,
     };
   }
   if (status.installed || status.available) {
     return {
-      label: "Code editing",
+      label: "Code editor",
       badge: "ready",
       level: "review",
-      detail: "Installed; start from Editor",
+      detail: "code-server installed; start from the Code editor",
       required: false,
     };
   }
   return {
-    label: "Code editing",
+    label: "Code editor",
     badge: "missing",
     level: "review",
     detail: status.error || status.install_hint || "code-server not installed",
@@ -5268,7 +8277,7 @@ function openHandsService(status) {
       label: "Assistant",
       badge: "connected",
       level: "ready",
-      detail: status.model || "Agent server reachable",
+      detail: status.model ? `OpenHands · ${status.model}` : "OpenHands agent server reachable",
       required: false,
     };
   }
@@ -5277,7 +8286,7 @@ function openHandsService(status) {
       label: "Assistant",
       badge: "off",
       level: "review",
-      detail: "Assistant runtime disabled",
+      detail: "OpenHands conversation runtime disabled",
       required: false,
     };
   }
@@ -5286,7 +8295,7 @@ function openHandsService(status) {
       label: "Assistant",
       badge: "setup",
       level: "review",
-      detail: !status.model ? "Model missing" : "API key missing",
+      detail: !status.model ? "OpenHands · Model missing" : "OpenHands · API key missing",
       required: false,
     };
   }
@@ -5295,7 +8304,7 @@ function openHandsService(status) {
       label: "Assistant",
       badge: "offline",
       level: "review",
-      detail: status.base_url || "Agent server not reachable",
+      detail: status.base_url ? `OpenHands · ${status.base_url}` : "OpenHands agent server not reachable",
       required: false,
     };
   }
@@ -5303,7 +8312,7 @@ function openHandsService(status) {
     label: "Assistant",
     badge: "chat",
     level: "review",
-    detail: "No agent server URL configured",
+    detail: "OpenHands agent server URL not configured",
     required: false,
   };
 }
@@ -5340,6 +8349,7 @@ function sidebarServiceRow(service) {
 }
 
 function compactServiceBadge(service) {
+  if (service.stale) return "STALE";
   return service.level === "ready" ? "ON" : "OFF";
 }
 
@@ -5363,6 +8373,13 @@ function renderWorkbenchMode() {
     : requestedMode;
   state.workbenchMode = mode;
   const session = currentSession();
+  if (els.workspaceCodeTab) {
+    els.workspaceCodeTab.textContent = catalogSourceView ? "Source" : "Code";
+    els.workspaceCodeTab.setAttribute(
+      "aria-label",
+      catalogSourceView ? "Read-only Catalog item source" : "Editable Workspace code",
+    );
+  }
   const grid = document.querySelector("#workspaceView .workspace-grid");
   if (grid) {
     grid.classList.toggle("workbench-focused", true);
@@ -5417,7 +8434,21 @@ function renderWorkbenchMode() {
 function renderWorkspaceWorkbenchToolbar(session = currentSession()) {
   const catalogSourceView = isCatalogSourceView(session);
   const catalogComponent = catalogSourceView ? catalogSourceComponent(session) : null;
+  const sourceLabel = catalogSourceView ? catalogSourceDisplayLabel(session) : "";
+  if (els.workbenchContextBadge) {
+    els.workbenchContextBadge.hidden = !session;
+    els.workbenchContextBadge.textContent = catalogSourceView
+      ? "Read-only Catalog item"
+      : "Workspace · Editable";
+    els.workbenchContextBadge.className = `workbench-context-badge ${catalogSourceView ? "read-only" : "editable"}`;
+  }
+  if (els.catalogSourceTitle) {
+    els.catalogSourceTitle.hidden = !catalogSourceView;
+    els.catalogSourceTitle.textContent = sourceLabel;
+    els.catalogSourceTitle.title = sourceLabel;
+  }
   if (els.workspaceTitleInput) {
+    els.workspaceTitleInput.hidden = catalogSourceView;
     els.workspaceTitleInput.setAttribute("aria-label", catalogSourceView ? "Catalog item name" : "Workspace name");
     els.workspaceTitleInput.disabled = !session || Boolean(session && session.mode === "read-only");
     els.workspaceTitleInput.placeholder = catalogSourceView ? "Catalog item" : session ? "Workspace name" : "No Workspace selected";
@@ -5450,13 +8481,17 @@ function renderWorkspaceWorkbenchToolbar(session = currentSession()) {
       ? Boolean(catalogLaunch && ["queued", "running", "stopping"].includes(catalogLaunch.status))
       : preview.status === "opening";
     const codeOpening = state.codeWorkspaceStatus === "opening";
-    els.openWorkspaceExternalButton.hidden = mode === "setup" || (catalogSourceView && mode !== "preview");
+    els.openWorkspaceExternalButton.hidden = mode === "setup";
     els.openWorkspaceExternalButton.textContent = mode === "preview"
       ? "Open interface in new window"
-      : "Open editor in new window";
+      : catalogSourceView
+      ? "Open source in new window"
+      : "Open Workspace editor";
     els.openWorkspaceExternalButton.title = mode === "preview"
       ? "Open the running interface outside Studio."
-      : "Open this Workspace in a separate code editor window.";
+      : catalogSourceView
+      ? "Open the exact published files in a read-only source viewer."
+      : "Open this editable Workspace in a separate editor window.";
     els.openWorkspaceExternalButton.disabled = !session
       || session.reopenRequired
       || (mode === "preview" ? (!previewUrl || openingPreview) : codeOpening);
@@ -5562,7 +8597,11 @@ async function commitManagedWorkspace() {
 
 function renderCodeWorkspacePlaceholder() {
   const active = Boolean(state.embeddedCodeUrl);
+  const catalogSourceView = isCatalogSourceView();
   if (els.embeddedCodeWorkspace) {
+    els.embeddedCodeWorkspace.title = catalogSourceView
+      ? "Read-only published Catalog source"
+      : "Editable Workspace editor";
     if (active) {
       if (els.embeddedCodeWorkspace.getAttribute("src") !== state.embeddedCodeUrl) {
         els.embeddedCodeWorkspace.src = state.embeddedCodeUrl;
@@ -5576,7 +8615,7 @@ function renderCodeWorkspacePlaceholder() {
   els.embeddedCodeWorkspaceEmpty.style.display = active ? "none" : "grid";
   if (active) return;
   const status = state.codeWorkspaceStatus || "idle";
-  const details = {
+  const workspaceDetails = {
     detached: [
       "No Workspace selected",
       state.codeWorkspaceMessage || "Select, create, or open a Workspace to start editing.",
@@ -5584,35 +8623,65 @@ function renderCodeWorkspacePlaceholder() {
       false,
     ],
     error: [
-      "Code Server unavailable",
-      state.codeWorkspaceMessage || "Code Server could not open this workspace. Check the server logs or retry.",
-      "Retry Code Server",
+      "Workspace editor unavailable",
+      state.codeWorkspaceMessage || "The editor could not open this Workspace. Check the service status or retry.",
+      "Retry editor",
       false,
     ],
     opening: [
-      "Opening Code Server",
-      state.codeWorkspaceMessage || "Preparing the selected workspace folder in Code Server.",
+      "Opening Workspace editor",
+      state.codeWorkspaceMessage || "Preparing the selected editable project.",
       "Opening...",
       true,
     ],
     paused: [
-      "Code Server paused",
-      "Start the selected workspace folder when you are ready to inspect or edit code.",
-      "Start Code Server",
+      "Workspace editor paused",
+      "Open the selected Workspace when you are ready to inspect or edit its files.",
+      "Open Workspace editor",
       false,
     ],
     idle: [
-      "Starting Code Server",
-      "OptPilot is preparing the selected workspace folder.",
-      "Start Code Server",
+      "Opening Workspace editor",
+      "OptPilot is preparing the selected editable project.",
+      "Open Workspace editor",
       false,
     ],
-  }[status] || [
-    "Start Code Server",
-    "Inspect or edit this workspace without leaving OptPilot.",
-    "Start Code Server",
-    false,
-  ];
+  };
+  const catalogDetails = {
+    detached: [
+      "No Catalog source selected",
+      "Return to a Catalog item and choose View source.",
+      "Return to Catalog",
+      false,
+    ],
+    error: [
+      "Source viewer unavailable",
+      state.codeWorkspaceMessage || "The exact published files could not be opened. Check the editor service or retry.",
+      "Retry source viewer",
+      false,
+    ],
+    opening: [
+      "Opening read-only source",
+      state.codeWorkspaceMessage || "Preparing the exact published files without making an editable Workspace.",
+      "Opening...",
+      true,
+    ],
+    paused: [
+      "Source viewer paused",
+      "Reopen the exact published files when you are ready to inspect them.",
+      "Open read-only source",
+      false,
+    ],
+    idle: [
+      "Opening read-only source",
+      "OptPilot is preparing the exact published files. This does not create a Workspace.",
+      "Open read-only source",
+      false,
+    ],
+  };
+  const details = (catalogSourceView ? catalogDetails : workspaceDetails)[status] || (catalogSourceView
+    ? ["Open read-only source", "Inspect the exact published files without creating a Workspace.", "Open read-only source", false]
+    : ["Open Workspace editor", "Inspect or edit this Workspace without leaving OptPilot.", "Open Workspace editor", false]);
   if (els.codeWorkspaceEmptyTitle) els.codeWorkspaceEmptyTitle.textContent = details[0];
   if (els.codeWorkspaceEmptyBody) els.codeWorkspaceEmptyBody.textContent = details[1];
   if (els.startEmbeddedCodeButton) {
@@ -5652,7 +8721,7 @@ function renderPreviewWorkbench() {
   renderInterfaceConflictActions(otherInterfaceLaunch);
   const otherInterfaceReason = otherInterfaceLaunch
     ? state.interfaceReturnError
-      || `${otherInterfaceLaunch.label || "Another interface"} is already running in this tab. Return to it or stop it before launching this Workspace’s interface.`
+      || `${otherInterfaceLaunch.label || "Another interface"} is already running. Return to it here, or stop it before launching this Workspace’s interface.`
     : "";
   const launchingInterface = Boolean(
     workspaceLaunch && ["queued", "running", "stopping"].includes(workspaceLaunch.status),
@@ -5706,7 +8775,7 @@ function renderPreviewWorkbench() {
       : opening
       ? `Preparing ${workspaceInterface && workspaceInterface.label || "the declared interface"}.`
       : otherInterfaceReason
-      ? `${otherInterfaceReason} Interface launches are tracked independently in each browser tab.`
+      ? otherInterfaceReason
       : preview.status === "error"
       ? preview.message || "The preview could not be opened."
       : workspaceInterfaceUnavailable
@@ -5733,7 +8802,7 @@ function renderPreviewWorkbench() {
         : hasPreview
         ? "Reopen interface"
         : otherInterfaceReason
-        ? "Stop the running interface first"
+        ? `Return to ${otherInterfaceLaunch.label || "running interface"}`
         : "Launch interface";
       els.launchWorkspaceInterfaceButton.title = otherInterfaceReason || workspaceInterfaceReason
         || `Start ${workspaceInterface.label || workspaceInterface.id} from its declared profile.`;
@@ -5773,7 +8842,7 @@ function renderCatalogInterfaceWorkbench(session) {
   renderInterfaceConflictActions(otherLaunch);
   const otherLaunchReason = otherLaunch
     ? state.interfaceReturnError
-      || `${otherLaunch.label || "Another interface"} is already running in this browser tab. Return to it or stop it before starting this Catalog interface.`
+      || `${otherLaunch.label || "Another interface"} is already running. Return to it here, or stop it before starting this Catalog interface.`
     : "";
   const status = String(launch && launch.status || "");
   const opening = ["queued", "running"].includes(status);
@@ -5852,7 +8921,7 @@ function renderCatalogInterfaceWorkbench(session) {
       : failed
       ? "Try interface again"
       : otherLaunchReason
-      ? "Stop the running interface first"
+      ? `Return to ${otherLaunch.label || "running interface"}`
       : "Start interface";
     els.launchWorkspaceInterfaceButton.title = otherLaunchReason
       || unavailableReason
@@ -5952,6 +9021,29 @@ function renderSessionBottom() {
     diff: `<pre class="code-box terminal-box">--- Catalog version\n+++ ${escapeHtml(session.path)}\n@@\n+ changes stay in this Workspace until you publish a new Catalog version\n</pre>`,
   };
   els.sessionBottom.innerHTML = content[state.sessionTab] || content.terminal;
+}
+
+function revealCatalogComponent(component) {
+  if (!component) return false;
+  let changed = false;
+  if (state.componentFilter !== "all" && state.componentFilter !== component.kind) {
+    state.componentFilter = "all";
+    changed = true;
+  }
+  if (
+    state.componentPackageFilter !== "all"
+    && state.componentPackageFilter !== componentPackageId(component)
+  ) {
+    state.componentPackageFilter = "all";
+    changed = true;
+  }
+  const query = normalizeSearch(state.componentSearch);
+  if (query && !catalogSearchText(component).includes(query)) {
+    state.componentSearch = "";
+    if (els.componentSearch) els.componentSearch.value = "";
+    changed = true;
+  }
+  return changed;
 }
 
 function renderCatalog() {
@@ -6292,7 +9384,11 @@ function catalogComponentAction(component) {
 function catalogComponentActionStatus(component) {
   const action = catalogComponentAction(component);
   if (!action) return "";
-  const label = action.mode === "edit" ? "editable Workspace" : "read-only source";
+  const label = action.mode === "edit"
+    ? "editable Workspace"
+    : action.mode === "interface"
+    ? "interface"
+    : "read-only source";
   if (action.pending) {
     return `
       <section class="component-action-status" role="status" aria-live="polite">
@@ -6304,9 +9400,13 @@ function catalogComponentActionStatus(component) {
   if (!action.error) return "";
   return `
     <section class="component-action-status component-action-failed" role="alert">
-      <strong>${escapeHtml(action.mode === "edit" ? "Workspace could not be opened" : "Source could not be opened")}</strong>
+      <strong>${escapeHtml(action.mode === "edit"
+        ? "Workspace could not be opened"
+        : action.mode === "interface"
+        ? "Interface could not be opened"
+        : "Source could not be opened")}</strong>
       <p>${escapeHtml(action.error)}</p>
-      <small>Use the action above to try again.</small>
+      <small>${escapeHtml(action.mode === "interface" ? "Review the reason above, then try again when the interface is available." : "Use the action above to try again.")}</small>
     </section>
   `;
 }
@@ -6328,15 +9428,39 @@ function renderComponentDetail() {
   const interfaceUnavailable = Boolean(
     interfaceCapability && interfaceCapability.eligible !== true,
   );
-  const launchState = hasInterface && state.interfaceLaunch && state.interfaceLaunch.key === componentLaunchKey(component)
+  const activeLaunch = isActiveInterfaceLaunch(state.interfaceLaunch)
     ? state.interfaceLaunch
     : null;
-  const interfaceFailed = Boolean(launchState && launchState.status === "failed");
-  const interfaceReason = interfaceUnavailable
+  const launchState = hasInterface && activeLaunch && activeLaunch.key === componentLaunchKey(component)
+    ? state.interfaceLaunch
+    : null;
+  const failedLaunchState = hasInterface && state.interfaceLaunch && state.interfaceLaunch.key === componentLaunchKey(component)
+    && state.interfaceLaunch.status === "failed"
+    ? state.interfaceLaunch
+    : null;
+  const otherInterfaceLaunch = activeLaunch && activeLaunch.key !== componentLaunchKey(component)
+    ? activeLaunch
+    : null;
+  const interfaceFailed = Boolean(failedLaunchState);
+  const interfaceReason = otherInterfaceLaunch
+    ? `${otherInterfaceLaunch.label || "Another interface"} is already running. Return to it here, or stop it from Open work before starting this interface.`
+    : interfaceUnavailable
     ? String(interfaceCapability.reason || "This interface is unavailable.")
     : "";
+  const interfaceDisabled = interfaceUnavailable && !launchState && !otherInterfaceLaunch;
+  const interfaceLabel = otherInterfaceLaunch
+    ? `Return to ${otherInterfaceLaunch.label || "running interface"}`
+    : launchState && launchState.status === "ready"
+    ? "Open running interface"
+    : interfaceFailed
+    ? "Try interface again"
+    : launchState
+    ? "View interface progress"
+    : interfaceUnavailable
+    ? "Interface unavailable"
+    : "Open interface";
   const interfaceAction = hasInterface
-    ? `<button class="ghost-button component-launch-interface" type="button">${launchState && launchState.status === "ready" ? "Open running interface" : interfaceFailed ? "Try interface again" : launchState ? "View interface progress" : "Open interface"}</button>`
+    ? `<button class="ghost-button component-launch-interface" type="button" ${interfaceDisabled ? `disabled aria-disabled="true" title="${escapeHtml(interfaceReason)}"` : ""}>${escapeHtml(interfaceLabel)}</button>`
     : "";
   const interfaceGuidance = interfaceReason
     ? `<p class="source-note component-interface-guidance">${escapeHtml(interfaceReason)}</p>`
@@ -6404,10 +9528,11 @@ function renderComponentDetail() {
   const studyActionReason = pairs.length
     ? ""
     : `No compatible ${component.kind === "environment" ? "Method" : "Environment"} is currently available.`;
+  const counterpartLabel = component.kind === "environment" ? "Method" : "Environment";
   els.componentDetail.innerHTML = `
     ${entityHeader(item, component.kind)}
     <div class="action-row">
-      <button class="primary-button component-use-study" type="button" ${pairs.length ? "" : `disabled title="${escapeHtml(studyActionReason)}"`}>Use in new Study</button>
+      <button class="primary-button component-use-study" type="button" ${pairs.length ? "" : `disabled title="${escapeHtml(studyActionReason)}"`}>Choose ${escapeHtml(counterpartLabel)} for Study</button>
       <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
       ${editButton}
       ${interfaceAction}
@@ -6440,7 +9565,7 @@ function renderComponentDetail() {
     </div>
     ${componentGuidePanel(component)}
     ${componentEnvRequirementsPanel(item.raw_config || {})}
-    <div class="panel-section">
+    <div class="panel-section component-compatible-options" tabindex="-1">
       <h3>Compatible ${component.kind === "environment" ? "Methods" : "Environments"}</h3>
       ${compatList(pairs, component.kind === "environment" ? "method" : "environment")}
     </div>
@@ -6448,7 +9573,10 @@ function renderComponentDetail() {
   els.componentDetail.querySelector(".component-inspect").addEventListener("click", () => openComponentSession(component, "inspect"));
   els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openCatalogEditableWorkspace(component));
   els.componentDetail.querySelector(".component-use-study").addEventListener("click", () => {
-    if (pairs[0]) createPlanFromPair(pairs[0]);
+    const options = els.componentDetail.querySelector(".component-compatible-options");
+    if (options) options.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const first = options && options.querySelector("[data-build-study-index]");
+    if (first) first.focus({ preventScroll: true });
   });
   const launchButton = els.componentDetail.querySelector(".component-launch-interface");
   if (launchButton) launchButton.addEventListener("click", () => openComponentInterface(component));
@@ -6468,7 +9596,7 @@ function componentEditableWorkspaceCapability(component) {
   return {
     eligible: false,
     code: "catalog_source_unpublished",
-    reason: "Open the local source folder as a Workspace, then Check and publish it before creating an editable copy.",
+    reason: "Open the local source folder as a Workspace, then check and publish the version you want to reuse.",
   };
 }
 
@@ -6823,11 +9951,16 @@ function interfaceLaunchStateClass(status) {
 
 function interfaceLaunchSummaryStageHtml(launchState, currentStep) {
   const status = String(launchState && launchState.status || "");
+  const connectionStatus = String(launchState && launchState.connection_status || "");
   const startedAt = interfaceLaunchTimestampMs(
     launchState && (launchState.started_at || launchState.startedAt),
   ) || Date.now();
   const elapsed = formatDuration(Math.max(0, Date.now() - startedAt)) || "<1s";
-  const stage = status === "ready"
+  const stage = connectionStatus === "reconnecting"
+    ? "Reconnecting"
+    : connectionStatus === "unavailable"
+    ? "Connection needs attention"
+    : status === "ready"
     ? "Ready"
     : status === "failed"
     ? "Attention required"
@@ -6857,7 +9990,7 @@ function renderInterfaceOutputRecovery(launchState) {
   if (!action || typeof action !== "object" || action.supported === false) return "";
   return `
     <details class="interface-output-more interface-output-recovery">
-      <summary>Add a missing output</summary>
+      <summary>Can't find generated files?</summary>
       <div class="interface-output-picker-slot" data-picker-signature="${escapeHtml(interfaceOutputPickerRenderSignature(launchState))}">
         ${renderInterfaceOutputTreePicker(launchState)}
       </div>
@@ -6876,13 +10009,16 @@ function compactInterfaceLaunchStatus({
   lifecycleActions,
 }) {
   const status = String(launchState && launchState.status || "queued");
+  const connectionStatus = String(launchState && launchState.connection_status || "");
+  const reconnecting = connectionStatus === "reconnecting";
+  const connectionUnavailable = connectionStatus === "unavailable";
   const failed = status === "failed";
   const cleanupPending = status === "cleanup_pending";
   const outputs = launchState && launchState.result && Array.isArray(launchState.result.outputs)
     ? launchState.result.outputs
     : [];
   const outputFailure = outputs.some((output) => String(output && output.status || "").toLowerCase() === "failed");
-  const defaultPanel = failed || cleanupPending
+  const defaultPanel = failed || cleanupPending || connectionUnavailable
     ? "details"
     : outputFailure
     ? "outputs"
@@ -6894,7 +10030,17 @@ function compactInterfaceLaunchStatus({
   const errorText = failed
     ? String(launchState.error || detail || "Studio could not start this interface.")
     : "";
-  const hasVisibleError = Boolean(errorText || errorDetail || launchState.stop_error);
+  const hasVisibleError = Boolean(errorText || errorDetail || launchState.stop_error || connectionUnavailable);
+  const connectionDetail = reconnecting
+    ? "Studio temporarily lost contact with this same interface. It is retrying; no new interface is being started."
+    : connectionUnavailable
+    ? "Studio could not confirm the current status. The same interface may still be running; reconnect before starting another one."
+    : "";
+  const displayTitle = reconnecting
+    ? `Reconnecting to ${label}`
+    : connectionUnavailable
+    ? `Connection to ${label} needs attention`
+    : interfaceLaunchTitle(label, status);
   const recovery = outputs.length ? "" : renderInterfaceOutputRecovery(launchState);
   return `
     <section
@@ -6906,7 +10052,7 @@ function compactInterfaceLaunchStatus({
         <div class="interface-launch-summary-copy">
           <span class="interface-launch-state" role="status" aria-live="polite">
             <span class="interface-launch-state-dot ${escapeHtml(interfaceLaunchStateClass(status))}" aria-hidden="true"></span>
-            <strong>${escapeHtml(interfaceLaunchTitle(label, status))}</strong>
+            <strong>${escapeHtml(displayTitle)}</strong>
           </span>
           ${interfaceLaunchSummaryStageHtml(launchState, currentStep)}
         </div>
@@ -6927,6 +10073,7 @@ function compactInterfaceLaunchStatus({
               aria-controls="${escapeHtml(outputsId)}"
             >Outputs (${escapeHtml(String(outputs.length))})</button>
           ` : ""}
+          ${connectionUnavailable ? `<button class="primary-button interface-reconnect" type="button">Reconnect</button>` : ""}
           ${lifecycleActions}
         </div>
       </div>
@@ -6935,6 +10082,7 @@ function compactInterfaceLaunchStatus({
           ${errorText ? `<p>${escapeHtml(errorText)}</p>` : ""}
           ${errorDetail ? `<p><strong>Last process error:</strong> ${escapeHtml(errorDetail)}</p>` : ""}
           ${launchState.stop_error ? `<p>${escapeHtml(launchState.stop_error)}</p>` : ""}
+          ${connectionUnavailable ? `<p>${escapeHtml(launchState.connection_error || connectionDetail)}</p>` : ""}
         </div>
       ` : ""}
       <div
@@ -6943,7 +10091,7 @@ function compactInterfaceLaunchStatus({
         data-interface-drawer-panel="details"
         ${defaultPanel === "details" ? "" : "hidden"}
       >
-        <p class="interface-launch-detail-copy">${escapeHtml(detail)}</p>
+        <p class="interface-launch-detail-copy">${escapeHtml(connectionDetail || detail)}</p>
         ${interfaceLaunchActivityHtml(launchState, currentStep)}
         ${steps.length ? `
           <ol class="interface-launch-steps">
@@ -7327,8 +10475,10 @@ function renderInterfaceOutputCard(output) {
     && !viewEligible;
   const keepEligible = Boolean(outputId) && Boolean(keepAction.eligible);
   const keptWorkspaceId = String(output && output.kept_workspace_id || "");
+  const keptConversationTitle = String(output && output.kept_conversation_title || "");
+  const conversationAttachError = String(output && output.conversation_attach_error || "");
   const visibleStatusLabel = keptWorkspaceId
-    ? "Saved"
+    ? "Saved as Workspace"
     : status === "ready" && output && output.retained
     ? keepAction.supported === false
       ? "Saved result"
@@ -7372,7 +10522,7 @@ function renderInterfaceOutputCard(output) {
       ${executeUnavailable ? `<p class="interface-output-guidance">${escapeHtml(executeAction.reason || "This output cannot be run right now.")}</p>` : ""}
       ${renderInterfaceOutputExecution(output)}
       ${failed && outputId && retryAction.eligible !== false ? `<div class="action-row interface-output-actions"><button class="ghost-button interface-output-retry" type="button" data-output-id="${escapeHtml(outputId)}" ${retryPending ? "disabled" : ""}>${retryPending ? "Retrying..." : "Try again"}</button></div>` : ""}
-      ${viewEligible || keepEligible || eligibleExecuteItems.length ? `
+      ${viewEligible || keepEligible || keptWorkspaceId || eligibleExecuteItems.length ? `
         <div class="action-row interface-output-actions">
           ${eligibleExecuteItems.map((item) => {
             const actionId = String(item.id || "");
@@ -7397,11 +10547,15 @@ function renderInterfaceOutputCard(output) {
             `;
           }).join("")}
           ${viewEligible ? `<button class="ghost-button interface-output-view" type="button" data-output-id="${escapeHtml(outputId)}" ${viewPending ? "disabled" : ""}>${viewPending ? "Opening…" : "View result"}</button>` : ""}
-          ${keepEligible ? keptWorkspaceId
-            ? `<span class="interface-output-kept">Workspace created: ${escapeHtml(output.kept_workspace_title || "Generated output")}.</span><button class="primary-button interface-output-open" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Open Workspace</button><button class="ghost-button interface-output-curate" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Publish</button>`
-            : `<button class="ghost-button interface-output-keep" type="button" data-output-id="${escapeHtml(outputId)}" ${pending ? "disabled" : ""}>${pending ? "Saving..." : "Save as Workspace"}</button>` : ""}
+          ${keptWorkspaceId
+            ? `<span class="interface-output-kept">Saved as Workspace: ${escapeHtml(output.kept_workspace_title || "Generated output")}.</span><button class="primary-button interface-output-open" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Open Workspace</button><button class="ghost-button interface-output-curate" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Set up for Catalog</button>`
+            : keepEligible
+            ? `<button class="ghost-button interface-output-keep" type="button" data-output-id="${escapeHtml(outputId)}" ${pending ? "disabled" : ""}>${pending ? "Saving..." : "Save as Workspace"}</button>`
+            : ""}
         </div>
-        ${keptWorkspaceId ? `<p class="interface-output-guidance">Publish can configure and check this same Workspace for Catalog; it does not make another copy.</p>` : ""}
+        ${keptWorkspaceId && keptConversationTitle ? `<p class="interface-output-guidance">Made available to the originating Conversation: ${escapeHtml(keptConversationTitle)}.</p>` : ""}
+        ${conversationAttachError ? `<p class="interface-output-error" role="alert">The Workspace was saved, but could not be made available to the originating Conversation. ${escapeHtml(conversationAttachError)}</p>` : ""}
+        ${keptWorkspaceId ? `<p class="interface-output-guidance">Set up for Catalog opens this Workspace's publishing steps. Publishing records an exact reusable version; it does not create another Workspace.</p>` : ""}
       ` : ""}
     </article>
   `;
@@ -7424,6 +10578,15 @@ function persistActiveInterfaceLaunch(launch) {
     port: Number(launch.port || 0) || 0,
     launch_scope: String(launch.launch_scope || ""),
     source_workspace_id: String(launch.source_workspace_id || ""),
+    origin_conversation_id: String(launch.origin_conversation_id || ""),
+    origin_conversation_title: String(launch.origin_conversation_title || ""),
+    status: String(launch.status || ""),
+    error: String(launch.error || ""),
+    stop_error: String(launch.stop_error || ""),
+    connection_status: String(launch.connection_status || ""),
+    reconnect_attempts: Number(launch.reconnect_attempts || 0) || 0,
+    connection_error: String(launch.connection_error || ""),
+    startedAt: Number(launch.startedAt || 0) || 0,
   };
   state.storedInterfaceLaunch = coordinate;
   storeSessionValue(STORAGE_KEYS.activeInterfaceLaunch, JSON.stringify(coordinate));
@@ -7454,6 +10617,9 @@ function mergeInterfaceLaunchPayload(current, incoming, launchKey) {
           keep_state: output && output.keep_state || local.keep_state || "not-started",
           kept_workspace_id: output && output.kept_workspace_id || local.kept_workspace_id || "",
           kept_workspace_title: output && output.kept_workspace_title || local.kept_workspace_title || "",
+          kept_conversation_id: local.kept_conversation_id || "",
+          kept_conversation_title: local.kept_conversation_title || "",
+          conversation_attach_error: local.conversation_attach_error || "",
           retry_pending: Boolean(local.retry_pending),
           retry_error: local.retry_error || "",
           view_pending: Boolean(local.view_pending),
@@ -7488,7 +10654,7 @@ function updateInterfaceOutput(outputId, patch) {
 }
 
 function interfaceOutputControlRoots() {
-  return [els.componentDetail, els.workspaceInterfaceLaunchStatus].filter(Boolean);
+  return [els.componentDetail, els.workspaceInterfaceLaunchStatus, els.interfaceSessionOutputsBody].filter(Boolean);
 }
 
 function updateInterfaceOutputPanel(launchState, root = null) {
@@ -7539,6 +10705,14 @@ function updateInterfaceOutputPanel(launchState, root = null) {
     }
     updated = true;
   });
+  if (
+    state.view === "interface"
+    && state.interfaceSessionRoute
+    && String(state.interfaceSessionRoute.launchId || "") === String(launchState && launchState.launch_id || "")
+  ) {
+    renderInterfaceSession();
+    updated = true;
+  }
   return updated;
 }
 
@@ -7634,8 +10808,27 @@ function bindComponentInterfaceLaunchControls(component, root = els.componentDet
   if (stopButton) stopButton.addEventListener("click", () => stopComponentInterface(component));
   const retryButton = root.querySelector(".component-retry-interface");
   if (retryButton) retryButton.addEventListener("click", () => launchComponentInterface(component));
+  const reconnectButton = root.querySelector(".interface-reconnect");
+  if (reconnectButton) reconnectButton.addEventListener("click", () => resumeInterfaceLaunchPolling());
   bindInterfaceLaunchDisclosureControls(root);
   bindInterfaceOutputControls(root);
+}
+
+function revealStudyPlan(plan) {
+  if (!plan) return false;
+  const query = normalizeSearch(state.planSearch);
+  if (!query || planSearchText(plan).includes(query)) return false;
+  state.planSearch = "";
+  if (els.planSearch) els.planSearch.value = "";
+  return true;
+}
+
+function reconcileStudySelectionWithVisiblePlans(plans) {
+  if (!state.selectedPlanId) return false;
+  if (plans.some((plan) => plan.id === state.selectedPlanId)) return false;
+  state.selectedPlanId = null;
+  if (state.view === "experiments") syncStudioRoute();
+  return true;
 }
 
 function renderExperiments() {
@@ -7644,8 +10837,21 @@ function renderExperiments() {
   }
   const query = normalizeSearch(state.planSearch);
   const plans = state.plans.filter((plan) => !query || planSearchText(plan).includes(query));
-  els.planList.innerHTML = plans.map(planButton).join("") || emptyInline(query ? "No Studies match." : "No Studies yet.");
-  document.querySelectorAll("[data-plan-id]").forEach((button) => {
+  reconcileStudySelectionWithVisiblePlans(plans);
+  const draftNotice = state.studyDraftsError
+    ? `
+      <div class="collection-refresh-notice" role="alert">
+        <div>
+          <strong>Saved drafts could not be refreshed.</strong>
+          <span>${escapeHtml(state.studyDraftsLoaded ? "Showing the last loaded drafts and current built-in Studies." : "Built-in Studies are still available.")}</span>
+        </div>
+        <button class="ghost-button compact-action retry-study-drafts" type="button">Try again</button>
+      </div>
+    `
+    : "";
+  const emptyMessage = query ? "No Studies match this search." : "No Studies yet.";
+  els.planList.innerHTML = `${draftNotice}${plans.map(planButton).join("") || emptyInline(emptyMessage)}`;
+  els.planList.querySelectorAll("[data-plan-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedPlanId = button.dataset.planId;
       syncStudioRoute();
@@ -7653,6 +10859,16 @@ function renderExperiments() {
       renderAssistant();
     });
   });
+  const retryDrafts = els.planList.querySelector(".retry-study-drafts");
+  if (retryDrafts) {
+    retryDrafts.addEventListener("click", async () => {
+      retryDrafts.disabled = true;
+      retryDrafts.textContent = "Refreshing…";
+      await loadStudyDrafts();
+      state.plans = buildPlans();
+      renderExperiments();
+    });
+  }
   renderPlanDetail();
 }
 
@@ -7823,9 +11039,9 @@ function studyPersistencePresentation(plan) {
   if (plan && plan.draft && plan.draft.saved_as_draft) {
     return plan.draft.dirty
       ? { label: "Unsaved changes", status: "draft" }
-      : { label: "Saved", status: "saved" };
+      : { label: "Saved draft", status: "saved" };
   }
-  return { label: "Not saved", status: "draft" };
+  return { label: "Unsaved draft", status: "draft" };
 }
 
 function studyLaunchPresentation(plan) {
@@ -7847,7 +11063,7 @@ function studyLaunchPresentation(plan) {
   if (launch && launch.eligible !== true) {
     return { label: "Run unavailable", status: "review" };
   }
-  if (!plan || !plan.environment || !plan.method) {
+  if (!studyComponentPairReady(plan)) {
     return { label: "Setup needed", status: "setup" };
   }
   return { label: "Ready to launch", status: "ready" };
@@ -7910,9 +11126,14 @@ function renderPlanDetail() {
     return;
   }
   const draftValid = Boolean(hasCurrentWorkspaceStudyDraft(plan.draft) && (!plan.draft.validation || plan.draft.validation.valid));
-  const savedConfig = Boolean(plan.study && (plan.study.ref || plan.study.uid));
   const savedDraft = Boolean(plan.draft && plan.draft.saved_as_draft);
   const draftUnavailable = Boolean(savedDraft && plan.draft.available === false);
+  const componentPairReady = studyComponentPairReady(plan);
+  const componentPairReason = !plan.environment || !plan.method
+    ? studyBindingReason(plan)
+    : componentPairReady
+    ? ""
+    : "Choose a compatible Environment and Method.";
   const launchCapability = studyLaunchCapability(plan);
   const activeLaunch = studyLaunchForPlan(plan);
   const launchPreparing = Boolean(activeLaunch && !studyLaunchIsTerminal(activeLaunch));
@@ -7927,7 +11148,7 @@ function renderPlanDetail() {
   const publicationSetup = studyCatalogPublicationSetup(plan);
   const publicationReason = publicationSetup.reason;
   const runtimeSetupReason = studyRuntimeSetupReason(plan);
-  const launchEnabled = Boolean(savedConfig || plan.environment && plan.method)
+  const launchEnabled = componentPairReady
     && !draftUnavailable
     && !actionPending
     && !launchPreparing
@@ -7939,6 +11160,8 @@ function renderPlanDetail() {
     ? `Another Study (${trackedLaunch.planTitle || "untitled Study"}) is already being prepared. Wait for that request to finish before launching this Study.`
     : draftUnavailable
     ? publicStudyMessage(plan.draft.unavailableReason || "This saved draft could not be reopened safely.")
+    : componentPairReason
+    ? componentPairReason
     : bindingReason
     ? bindingReason
     : publicationReason
@@ -7963,11 +11186,13 @@ function renderPlanDetail() {
     : plan.actionError && plan.actionError.kind === "save"
     ? "Try saving again"
     : defaultSaveLabel;
-  const locked = draftUnavailable || !plan.environment || !plan.method;
-  const saveDisabled = locked || actionPending || launchPreparing || Boolean(publicationReason);
+  // An incomplete setup must remain editable so users can choose the missing
+  // Environment or Method. Only an unavailable saved revision locks the form.
+  const locked = draftUnavailable;
+  const saveDisabled = !componentPairReady || locked || actionPending || launchPreparing || Boolean(publicationReason);
   const saveReason = draftUnavailable
     ? publicStudyMessage(plan.draft.unavailableReason || "This saved draft could not be reopened safely.")
-    : bindingReason || publicationReason;
+    : componentPairReason || bindingReason || publicationReason;
   els.planDetail.innerHTML = `
     <div class="detail-heading">
       <div>
@@ -7981,6 +11206,7 @@ function renderPlanDetail() {
       <div class="action-row study-action-row">
         <button class="ghost-button plan-draft" type="button" ${saveDisabled ? "disabled" : ""} ${saveReason ? `title="${escapeHtml(saveReason)}"` : ""}>${escapeHtml(saveLabel)}</button>
         <button class="primary-button plan-launch" type="button" ${launchEnabled ? "" : "disabled"} ${launchReason ? `title="${escapeHtml(launchReason)}"` : ""}>${escapeHtml(launchLabel)}</button>
+        ${draftUnavailable ? `<button class="ghost-button study-browse-current-catalog" type="button">Browse current Catalog</button>` : ""}
         ${savedDraft ? `<details class="study-more"><summary>More</summary><button class="danger-button plan-discard-draft" type="button">Discard draft</button></details>` : ""}
       </div>
       ${studyCatalogPublicationStatus(publicationSetup)}
@@ -8000,6 +11226,12 @@ function renderPlanDetail() {
   const saveButton = els.planDetail.querySelector(".plan-draft");
   if (saveButton) saveButton.addEventListener("click", () => generatePlanDraft(plan));
   els.planDetail.querySelector(".plan-launch").addEventListener("click", () => launchPlan(plan));
+  const browseCurrentCatalogButton = els.planDetail.querySelector(".study-browse-current-catalog");
+  if (browseCurrentCatalogButton) {
+    browseCurrentCatalogButton.addEventListener("click", () => {
+      openContentSurface("catalog", { history: "push" });
+    });
+  }
   const settingsButton = els.planDetail.querySelector(".study-open-environment-settings");
   if (settingsButton) settingsButton.addEventListener("click", () => openSettings({ tab: "environment" }));
   els.planDetail.querySelectorAll("[data-study-package-source]").forEach((button) => {
@@ -8009,6 +11241,8 @@ function renderPlanDetail() {
   if (discardButton) discardButton.addEventListener("click", () => discardStudyDraft(plan));
   const stopLaunchButton = els.planDetail.querySelector(".study-launch-stop");
   if (stopLaunchButton) stopLaunchButton.addEventListener("click", stopActiveStudyLaunch);
+  const dismissLaunchButton = els.planDetail.querySelector(".study-launch-dismiss");
+  if (dismissLaunchButton) dismissLaunchButton.addEventListener("click", dismissActiveStudyLaunch);
   if (!locked) bindPlanConfigControls(plan);
 }
 
@@ -8044,6 +11278,7 @@ function studyLaunchElapsedText(active) {
 
 function refreshActiveStudyLaunchElapsed() {
   const active = state.studyLaunch;
+  renderOpenWork();
   if (!active || studyLaunchIsTerminal(active) || !els.planDetail) return;
   const elapsed = els.planDetail.querySelector(".study-launch-elapsed");
   if (elapsed) elapsed.textContent = studyLaunchElapsedText(active);
@@ -8054,9 +11289,7 @@ function renderStudyLaunchStatus(plan) {
   if (!active) return "";
   const launch = active.launch || {};
   const failure = active.failure || launch.failure;
-  const stage = failure
-    ? "Preparation failed"
-    : launch.stage || active.stage || "Preparing Run";
+  const stage = launch.stage || active.stage || (failure ? "Preparation failed" : "Preparing Run");
   const elapsedText = studyLaunchElapsedText(active);
   const message = failure
     ? String(failure.message || active.error || "OptPilot could not prepare this Run.")
@@ -8076,7 +11309,16 @@ function renderStudyLaunchStatus(plan) {
         <span class="study-launch-elapsed">${escapeHtml(elapsedText)}</span>
         ${logs.length ? `<details class="study-launch-log-summary"><summary>Log summary</summary><div>${logs.map((item) => `<span>${escapeHtml(item.stream || "log")} · ${escapeHtml(item.line_count ?? 0)} lines${item.truncated ? " · truncated" : ""}</span>`).join("")}</div></details>` : ""}
       </div>
-      ${launch.can_stop && !active.stopPending ? `<button class="ghost-button study-launch-stop" type="button">Stop</button>` : active.stopPending ? `<button class="ghost-button" type="button" disabled>Stopping…</button>` : statusPill(status)}
+      <div class="study-launch-status-actions">
+        ${failure
+          ? statusPill(status)
+          : launch.can_stop && !active.stopPending
+          ? `<button class="ghost-button study-launch-stop" type="button">Stop</button>`
+          : active.stopPending
+          ? `<button class="ghost-button" type="button" disabled>Stopping…</button>`
+          : statusPill(status)}
+        ${failure ? `<button class="ghost-button study-launch-dismiss" type="button">Dismiss</button>` : ""}
+      </div>
     </section>
   `;
 }
@@ -8086,7 +11328,7 @@ function studyConfigEditor(plan, locked) {
     <section class="study-card study-config-card study-primary-settings" aria-labelledby="study-primary-settings-heading">
       <header class="study-card-heading study-primary-heading">
         <div>
-          <h3 id="study-primary-settings-heading">Study setup</h3>
+          <h3 id="study-primary-settings-heading">Study configuration</h3>
           <p class="study-card-help">Choose what evaluates Candidates, what proposes them, the goal, and how many trials to run.</p>
         </div>
         <span class="study-card-meta">Required</span>
@@ -8283,6 +11525,7 @@ function catalogSelectField(label, field, value, entries, disabled = false, help
     <label class="control-field">
       ${controlLabelHtml(label, help)}
       <select data-plan-field="${escapeHtml(field)}" ${disabled ? "disabled" : ""}>
+        ${value ? "" : `<option value="" selected disabled>Choose ${escapeHtml(label)}</option>`}
         ${(entries || []).map((entry) => {
           const label = entry.label || entry.id || entry.qualified_id || "Catalog item";
           const suffix = entry.choiceCompatibility === false ? " · incompatible" : "";
@@ -8305,6 +11548,17 @@ function selectedCompatibilityPair(plan) {
     pair.environment.uid === plan.environment.uid
     && pair.method.uid === plan.method.uid
   )) || null;
+}
+
+function studyComponentPairReady(plan) {
+  const pair = selectedCompatibilityPair(plan);
+  return Boolean(
+    plan
+    && plan.environment
+    && plan.method
+    && pair
+    && pair.compatible === true
+  );
 }
 
 function catalogChoicesForPlan(kind, plan) {
@@ -8468,6 +11722,46 @@ function runProjectionNotice(unavailable) {
   `;
 }
 
+function runRefreshNotice() {
+  if (!state.runsError) return "";
+  const lastUpdated = state.runsLastSuccessAt ? formatRealmTime(state.runsLastSuccessAt) : "";
+  const message = state.runsLoaded
+    ? `Showing the last loaded Runs${lastUpdated ? ` from ${lastUpdated}` : ""}.`
+    : "No Run list is available yet.";
+  return `
+    <div class="collection-refresh-notice" role="alert">
+      <div>
+        <strong>Runs could not be refreshed.</strong>
+        <span>${escapeHtml(message)}</span>
+      </div>
+      <button class="ghost-button compact-action retry-runs" type="button">Try again</button>
+    </div>
+  `;
+}
+
+function reconcileRunSelectionWithVisibleRows(runs) {
+  if (!state.selectedRunId) return false;
+  const selectedVisible = runs.some((run) => canonicalRunId(run) === state.selectedRunId);
+  if (selectedVisible) return false;
+  if (state.runRouteResolutionPendingId === state.selectedRunId) return false;
+  state.runDetailRequestSeq += 1;
+  state.runPageRequestSeq += 1;
+  state.runRouteResolutionPendingId = null;
+  state.selectedRunId = null;
+  state.selectedRun = null;
+  state.routedCandidateId = null;
+  state.routedCandidateResolution = null;
+  state.routedCandidateFocusApplied = "";
+  state.runDetailLoadingRunId = null;
+  state.runDetailLoadingVisible = false;
+  state.runDetailError = "";
+  state.runDetailRefreshError = "";
+  state.activeRunTab = "overview";
+  if (state.selectionContentView) void closeSelectionContentView({ render: false });
+  if (state.view === "runs") syncStudioRoute();
+  return true;
+}
+
 function renderRuns() {
   document.querySelectorAll("[data-run-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.runFilter === state.runStatusFilter);
@@ -8479,16 +11773,34 @@ function renderRuns() {
     const matchesSearch = !query || runSearchText(run).includes(query);
     return matchesStatus && matchesSearch;
   });
+  const selectionCleared = reconcileRunSelectionWithVisibleRows(runs);
   if (els.totalRuns) els.totalRuns.textContent = String(rows.length);
   if (els.runningRuns) els.runningRuns.textContent = String(rows.filter((run) => runStatus(run) === "running").length);
   if (els.completedTrials) els.completedTrials.textContent = String(sum(state.runs.map((run) => runCounts(run).terminalTrials)));
   if (els.failureCount) els.failureCount.textContent = String(sum(state.runs.map((run) => runCounts(run).finalFailures)));
-  const notice = runProjectionNotice(state.runUnavailable);
-  const list = runs.map(runRow).join("") || emptyInline("No runs match.");
+  const notice = `${runRefreshNotice()}${runProjectionNotice(state.runUnavailable)}`;
+  const filtersActive = Boolean(query || state.runStatusFilter !== "all");
+  const emptyMessage = filtersActive
+    ? "No Runs match these filters."
+    : state.runsError && !state.runsLoaded
+    ? "Run history is temporarily unavailable."
+    : "No Runs yet. Launch one from Studies.";
+  const list = runs.map(runRow).join("") || emptyInline(emptyMessage);
   els.runsTable.innerHTML = `${notice}${list}`;
-  document.querySelectorAll(".run-row").forEach((row) => {
-    row.addEventListener("click", () => loadRunDetail(row.dataset.runId));
+  els.runsTable.querySelectorAll(".run-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      loadRunDetail(row.dataset.runId).catch(() => {});
+    });
   });
+  const retryRuns = els.runsTable.querySelector(".retry-runs");
+  if (retryRuns) {
+    retryRuns.addEventListener("click", async () => {
+      retryRuns.disabled = true;
+      retryRuns.textContent = "Refreshing…";
+      await loadRunsAndJobs();
+    });
+  }
+  if (selectionCleared) renderRunDetail();
 }
 
 function runMatchesStatusFilter(status, filter) {
@@ -8503,10 +11815,66 @@ function runSearchText(run) {
   return `${canonicalRunId(run)} ${run.name || ""} ${runStatus(run)} ${run.stop_code || ""} ${objective.name} ${objective.direction}`.toLowerCase();
 }
 
-async function loadRunDetail(runId, options = {}) {
-  if (state.selectionContentView && state.selectionContentView.run_id !== runId) {
-    await closeSelectionContentView({ silent: true, render: false });
+function revealRunInList(runId) {
+  const run = state.runs.find((item) => canonicalRunId(item) === runId);
+  if (!run) return false;
+  let changed = false;
+  if (!runMatchesStatusFilter(runStatus(run), state.runStatusFilter)) {
+    state.runStatusFilter = "all";
+    changed = true;
   }
+  const query = els.runFilter ? els.runFilter.value.trim().toLowerCase() : "";
+  if (query && !runSearchText(run).includes(query)) {
+    els.runFilter.value = "";
+    changed = true;
+  }
+  return changed;
+}
+
+function settleMissingRunRoute(runId) {
+  const route = parseStudioRoute();
+  if (
+    state.selectedRunId !== runId
+    || !route
+    || route.runId !== runId
+    || !["runs", "interface"].includes(route.view)
+  ) {
+    return false;
+  }
+  state.runDetailRequestSeq += 1;
+  state.runPageRequestSeq += 1;
+  state.runs = state.runs.filter((run) => canonicalRunId(run) !== runId);
+  state.runRouteResolutionPendingId = null;
+  state.selectedRunId = null;
+  state.selectedRun = null;
+  state.routedCandidateId = null;
+  state.routedCandidateResolution = null;
+  state.routedCandidateFocusApplied = "";
+  state.runDetailLoadingRunId = null;
+  state.runDetailLoadingVisible = false;
+  state.runDetailError = "";
+  state.runDetailRefreshError = "";
+  state.activeRunTab = "overview";
+  if (state.selectionContentView) void closeSelectionContentView({ render: false });
+  if (route.view === "interface") {
+    state.view = "runs";
+    state.interfaceSessionRoute = null;
+    state.interfaceSessionLaunchSnapshot = null;
+  }
+  syncStudioRoute();
+  renderAll();
+  return true;
+}
+
+async function loadRunDetail(runId, options = {}) {
+  runId = String(runId || "");
+  if (
+    canonicalRunId(state.selectedRun && state.selectedRun.run) !== runId
+    && !state.runs.some((run) => canonicalRunId(run) === runId)
+  ) {
+    state.runRouteResolutionPendingId = runId;
+  }
+  revealRunInList(runId);
   const requestSeq = ++state.runDetailRequestSeq;
   state.runPageRequestSeq += 1;
   state.runPageLoadingKind = null;
@@ -8514,36 +11882,88 @@ async function loadRunDetail(runId, options = {}) {
     state.assistantRunSelection = null;
   }
   const sameSelectedRun = state.selectedRunId === runId;
+  const selectedDetailRunId = state.selectedRun && state.selectedRun.run
+    ? canonicalRunId(state.selectedRun.run)
+    : null;
+  const showLoadingState = !sameSelectedRun || selectedDetailRunId !== runId;
   const preserveCandidateRoute = Boolean(
     state.routedCandidateId
     && (options.fromRoute || options.keepTab && sameSelectedRun),
   );
   state.selectedRunId = runId;
+  if (showLoadingState) state.selectedRun = null;
+  state.runDetailLoadingRunId = runId;
+  state.runDetailLoadingVisible = showLoadingState;
+  state.runDetailError = "";
+  if (showLoadingState) state.runDetailRefreshError = "";
   if (!preserveCandidateRoute) {
     state.routedCandidateId = null;
     state.routedCandidateResolution = null;
     state.routedCandidateFocusApplied = "";
   }
   if (!options.fromRoute) syncStudioRoute();
+  if (!options.skipListRender) renderRuns();
+  if (showLoadingState) renderRunDetail();
   const candidateQuery = preserveCandidateRoute
     ? `?candidate_id=${encodeURIComponent(state.routedCandidateId)}`
     : "";
-  const detail = await getJson(`/api/runs/${encodeURIComponent(runId)}${candidateQuery}`);
-  if (!coherentRunDetail(detail, runId)) throw new Error("Run data changed during refresh. Try again.");
-  if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return;
-  state.selectedRun = detail;
-  state.routedCandidateResolution = preserveCandidateRoute
-    ? detail.candidate_resolution || null
-    : null;
-  selectRunActionContext(runId);
-  selectCandidateComparisonContext(runId, detail.workbench.head);
-  selectOperatorJobsRun(runId);
-  if (preserveCandidateRoute) state.activeRunTab = "candidate";
-  else if (!options.keepTab) state.activeRunTab = "overview";
-  if (!options.skipListRender) renderRuns();
-  renderRunDetail();
-  renderAssistant();
-  loadSelectedRunOperatorJobs({ silent: state.operatorJobsLoaded });
+  try {
+    if (state.selectionContentView && state.selectionContentView.run_id !== runId) {
+      await closeSelectionContentView({ silent: true, render: false });
+    }
+    if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return null;
+    const detail = await getJson(
+      `/api/runs/${encodeURIComponent(runId)}${candidateQuery}`,
+      { timeoutMs: RUN_DETAIL_REQUEST_TIMEOUT_MS },
+    );
+    if (!coherentRunDetail(detail, runId)) throw new Error("Run data changed during refresh. Try again.");
+    if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return null;
+    state.selectedRun = detail;
+    const exactSummaryAdded = mergeExactRunSummary(detail.run);
+    if (state.runRouteResolutionPendingId === runId) state.runRouteResolutionPendingId = null;
+    const listVisibilityChanged = revealRunInList(runId);
+    state.runDetailLoadingRunId = null;
+    state.runDetailLoadingVisible = false;
+    state.runDetailError = "";
+    state.runDetailRefreshError = "";
+    state.runDetailLastSuccessAt = Date.now();
+    state.routedCandidateResolution = preserveCandidateRoute
+      ? detail.candidate_resolution || null
+      : null;
+    selectRunActionContext(runId);
+    selectCandidateComparisonContext(runId, detail.workbench.head);
+    selectOperatorJobsRun(runId);
+    if (preserveCandidateRoute) state.activeRunTab = "candidate";
+    else if (!options.keepTab || showLoadingState) state.activeRunTab = initialRunDetailTab(detail);
+    if (!options.skipListRender || exactSummaryAdded || listVisibilityChanged) renderRuns();
+    renderRunDetail();
+    renderAssistant();
+    if (exactSummaryAdded) renderOpenWork();
+    loadSelectedRunOperatorJobs({ silent: state.operatorJobsLoaded });
+    return detail;
+  } catch (error) {
+    if (requestSeq !== state.runDetailRequestSeq || state.selectedRunId !== runId) return null;
+    if (Number(error && error.status || 0) === 404 && settleMissingRunRoute(runId)) {
+      return null;
+    }
+    state.runDetailLoadingRunId = null;
+    state.runDetailLoadingVisible = false;
+    if (showLoadingState) {
+      state.selectedRun = null;
+      state.runDetailError = error && error.message
+        ? String(error.message)
+        : "The Run details are unavailable.";
+      if (!options.skipListRender) renderRuns();
+      renderRunDetail();
+    } else {
+      state.runDetailRefreshError = boundedPublicActionError(
+        error,
+        "Live Run updates could not be refreshed.",
+      );
+      renderRunDetail();
+    }
+    throw error;
+  }
 }
 
 function runLineageHtml(lineage, fallbackStudyName = "") {
@@ -8573,9 +11993,203 @@ function runLineageHtml(lineage, fallbackStudyName = "") {
   `;
 }
 
+function runRecordedUpdateMilliseconds(value) {
+  if (value == null || value === "") return Number.NaN;
+  const numeric = Number(value);
+  const milliseconds = Number.isFinite(numeric)
+    ? numeric < 1e12 ? numeric * 1000 : numeric
+    : Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : Number.NaN;
+}
+
+function clearRunHandoffGuidanceTimer() {
+  if (state.runHandoffGuidanceTimer != null) {
+    window.clearTimeout(state.runHandoffGuidanceTimer);
+  }
+  state.runHandoffGuidanceTimer = null;
+  state.runHandoffGuidanceKey = "";
+}
+
+function scheduleRunHandoffGuidance(runId, referenceMilliseconds) {
+  const elapsed = Math.max(0, Date.now() - referenceMilliseconds);
+  const remaining = RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS - elapsed;
+  if (remaining <= 0) return;
+  const timerKey = `${runId}:${referenceMilliseconds}`;
+  if (state.runHandoffGuidanceTimer != null && state.runHandoffGuidanceKey === timerKey) return;
+  clearRunHandoffGuidanceTimer();
+  state.runHandoffGuidanceKey = timerKey;
+  state.runHandoffGuidanceTimer = window.setTimeout(() => {
+    state.runHandoffGuidanceTimer = null;
+    state.runHandoffGuidanceKey = "";
+    if (state.view === "runs" && state.selectedRunId === runId) renderRunDetail();
+  }, remaining + 50);
+}
+
+function failedRunEvidenceTarget(detail, counts) {
+  const hasAttempts = counts.attempts > 0 || workbenchPage(detail, "attempt").items.length > 0;
+  if (hasAttempts) return { tab: "attempt", label: "Review trial attempts" };
+  const hasObservations = counts.observations > 0 || workbenchPage(detail, "observation").items.length > 0;
+  if (hasObservations) return { tab: "observation", label: "Review trial results" };
+  const hasTrials = counts.acceptedTrials > 0 || workbenchPage(detail, "logical_trial").items.length > 0;
+  if (hasTrials) return { tab: "logical_trial", label: "Review trials" };
+  return { tab: "timeline", label: "Open event history" };
+}
+
+function initialRunDetailTab(detail) {
+  const run = detail && detail.run || {};
+  const summary = detail && detail.workbench && detail.workbench.summary || run;
+  if (runStatus(summary) !== "failed") return "overview";
+  return failedRunEvidenceTarget(detail, runCounts(summary)).tab;
+}
+
+function runProgressGuidance(status, plannedTrials, counts, trialCounts, recordedUpdateValue, detail) {
+  const activeTrials = Number(trialCounts.active ?? Math.max(0, counts.acceptedTrials - counts.terminalTrials));
+  const planned = Number(plannedTrials);
+  const hasRemainingWork = Number.isFinite(planned) && counts.terminalTrials < planned;
+  if (status === "running" && hasRemainingWork && activeTrials === 0) {
+    const recordedUpdateMilliseconds = runRecordedUpdateMilliseconds(recordedUpdateValue);
+    const now = Date.now();
+    const referenceMilliseconds = Number.isFinite(recordedUpdateMilliseconds) && recordedUpdateMilliseconds <= now
+      ? recordedUpdateMilliseconds
+      : state.runDetailLastSuccessAt || now;
+    const idleMilliseconds = Math.max(0, now - referenceMilliseconds);
+    if (idleMilliseconds < RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS) {
+      scheduleRunHandoffGuidance(canonicalRunId(detail && detail.run), referenceMilliseconds);
+      return "";
+    }
+    clearRunHandoffGuidanceTimer();
+    const lastRecordedUpdate = recordedUpdateValue ? formatRealmTime(recordedUpdateValue) : "";
+    return `
+      <section class="run-progress-guidance" role="status">
+        <div>
+          <strong>Waiting for the next trial</strong>
+          <span>No trial is active, and no progress has been recorded for ${escapeHtml(formatDuration(idleMilliseconds) || "a short while")}. The Method may still be preparing another Candidate.${lastRecordedUpdate ? ` Last recorded Run update: ${escapeHtml(lastRecordedUpdate)}.` : ""}</span>
+        </div>
+        <div class="action-row">
+          <button class="ghost-button compact-action" data-refresh-run-detail="detail" type="button">Refresh Run</button>
+          <button class="ghost-button compact-action" data-run-tab="timeline" type="button">Open event history</button>
+        </div>
+      </section>
+    `;
+  }
+  clearRunHandoffGuidanceTimer();
+  if (status === "failed") {
+    const evidence = failedRunEvidenceTarget(detail, counts);
+    return `
+      <section class="run-progress-guidance error" role="alert">
+        <div>
+          <strong>This Run needs attention</strong>
+          <span>Review the recorded trial execution and event history to see where work stopped.</span>
+        </div>
+        <div class="action-row">
+          ${evidence.tab === "timeline" ? "" : `<button class="ghost-button compact-action" data-run-tab="${escapeHtml(evidence.tab)}" type="button">${escapeHtml(evidence.label)}</button>`}
+          <button class="ghost-button compact-action" data-run-tab="timeline" type="button">Open event history</button>
+        </div>
+      </section>
+    `;
+  }
+  return "";
+}
+
+function runDetailRefreshNoticeHtml(run, summary) {
+  const recordedUpdateValue = run && (run.updated_at || summary && summary.updated_at) || "";
+  const lastRecordedRunUpdate = recordedUpdateValue ? formatRealmTime(recordedUpdateValue) : "";
+  const lastSuccessfulRefresh = state.runDetailLastSuccessAt
+    ? formatRealmTime(state.runDetailLastSuccessAt)
+    : "";
+  const refreshErrorSource = state.runsError
+    ? "list"
+    : state.runDetailRefreshError
+      ? "detail"
+      : "";
+  if (!refreshErrorSource) return "";
+  return `
+    <div class="collection-refresh-notice run-detail-refresh-notice" role="alert">
+      <div>
+        <strong>Run updates are paused.</strong>
+        <span>Showing the last successfully loaded Run details.${lastSuccessfulRefresh ? ` Last successful refresh: ${escapeHtml(lastSuccessfulRefresh)}.` : ""}${lastRecordedRunUpdate ? ` Last recorded Run update: ${escapeHtml(lastRecordedRunUpdate)}.` : ""}</span>
+      </div>
+      <button class="ghost-button compact-action" data-refresh-run-detail="${escapeHtml(refreshErrorSource)}" type="button">Try again</button>
+    </div>
+  `;
+}
+
+function bindRunDetailRefreshButton(button, runId) {
+  if (!button || button.dataset.refreshBound === "true") return;
+  button.dataset.refreshBound = "true";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    button.textContent = "Refreshing…";
+    if (button.dataset.refreshRunDetail === "list") {
+      loadRunsAndJobs().catch(() => {});
+    } else {
+      loadRunDetail(runId, { keepTab: true, skipListRender: true }).catch(() => {});
+    }
+  });
+}
+
+function updateRunDetailRefreshNoticeInPlace() {
+  if (!els.runDetail) return;
+  const detail = state.selectedRun
+    && state.selectedRun.run
+    && canonicalRunId(state.selectedRun.run) === state.selectedRunId
+    ? state.selectedRun
+    : null;
+  if (!detail || !detail.workbench) return;
+  const run = detail.run;
+  const summary = detail.workbench.summary || run;
+  const noticeHtml = runDetailRefreshNoticeHtml(run, summary);
+  const existing = els.runDetail.querySelector(".run-detail-refresh-notice");
+  if (existing) existing.remove();
+  if (!noticeHtml) return;
+  const anchor = els.runDetail.querySelector(".run-origin-banner")
+    || els.runDetail.querySelector(".detail-heading");
+  if (!anchor) return;
+  anchor.insertAdjacentHTML("afterend", noticeHtml);
+  bindRunDetailRefreshButton(
+    els.runDetail.querySelector(".run-detail-refresh-notice [data-refresh-run-detail]"),
+    canonicalRunId(run),
+  );
+}
+
 function renderRunDetail() {
   renderSelectionContentHost();
-  const detail = state.selectedRun;
+  const loadingSelectedRun = Boolean(
+    state.selectedRunId
+    && state.runDetailLoadingVisible
+    && state.runDetailLoadingRunId === state.selectedRunId
+  );
+  if (loadingSelectedRun) {
+    els.runDetail.innerHTML = `
+      <div class="run-detail-load-state" role="status" aria-live="polite">
+        <span class="run-detail-loading-indicator" aria-hidden="true"></span>
+        <strong>Loading Run…</strong>
+        <p>Fetching progress, Candidates, and results for the selected Run.</p>
+      </div>
+    `;
+    return;
+  }
+  if (state.selectedRunId && state.runDetailError) {
+    els.runDetail.innerHTML = `
+      <div class="run-detail-load-state error" role="alert">
+        <strong>This Run could not be loaded.</strong>
+        <p>${escapeHtml(state.runDetailError)}</p>
+        <button class="ghost-button retry-run-detail" type="button">Retry</button>
+      </div>
+    `;
+    const retryButton = els.runDetail.querySelector(".retry-run-detail");
+    if (retryButton) {
+      retryButton.addEventListener("click", () => {
+        loadRunDetail(state.selectedRunId, { keepTab: true }).catch(() => {});
+      });
+    }
+    return;
+  }
+  const detail = state.selectedRun
+    && state.selectedRun.run
+    && canonicalRunId(state.selectedRun.run) === state.selectedRunId
+    ? state.selectedRun
+    : null;
   if (!detail) {
     els.runDetail.innerHTML = emptyState("Select a Run to see its progress and Candidates.");
     return;
@@ -8626,6 +12240,16 @@ function renderRunDetail() {
   const canStopRun = Boolean(run.can_stop);
   const technicalTabs = runTechnicalTabs();
   const activeTechnicalTab = technicalTabs.find(([tab]) => tab === state.activeRunTab);
+  const recordedUpdateValue = run.updated_at || summary.updated_at || "";
+  const refreshNotice = runDetailRefreshNoticeHtml(run, summary);
+  const progressGuidance = runProgressGuidance(
+    status,
+    plannedTrials,
+    counts,
+    trialCounts,
+    recordedUpdateValue,
+    detail,
+  );
   els.runDetail.innerHTML = `
     <div class="detail-heading">
       <div>
@@ -8638,6 +12262,7 @@ function renderRunDetail() {
       </div>
     </div>
     ${runLineageHtml(detail.lineage, run.name)}
+    ${refreshNotice}
     <div class="detail-stats run-headline-stats">
       <div><span>Trial progress</span><strong>${escapeHtml(progress)}</strong></div>
       <div><span>Complete Candidates</span><strong>${escapeHtml(completeCandidates)}</strong></div>
@@ -8645,24 +12270,28 @@ function renderRunDetail() {
       <div><span>${escapeHtml(headlineResult.label)}</span><strong>${escapeHtml(headlineResult.value)}</strong></div>
     </div>
     ${completionMessage ? `<p class="muted-text run-stop-code">${escapeHtml(completionMessage)}</p>` : ""}
+    ${progressGuidance}
     <div class="tabs" ${runWorkbenchTabs(detail).some(([tab]) => tab === state.activeRunTab) ? 'role="tablist" aria-orientation="horizontal"' : ""} aria-label="Run result sections" data-run-tablist>
       ${runWorkbenchTabs(detail).map(([tab, label]) => runTabButtonHtml(tab, label, detail)).join("")}
     </div>
     <details class="run-more-navigation" ${activeTechnicalTab ? "open" : ""}>
-      <summary>Run details${activeTechnicalTab ? ` · ${escapeHtml(activeTechnicalTab[1])}` : ""}</summary>
+      <summary>Technical evidence${activeTechnicalTab ? ` · ${escapeHtml(activeTechnicalTab[1])}` : ""}</summary>
       <div class="run-more-actions">
         ${technicalTabs.map(([tab, label]) => `<button class="ghost-button compact-action ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button" aria-pressed="${state.activeRunTab === tab ? "true" : "false"}">${escapeHtml(label)}</button>`).join("")}
       </div>
     </details>
     ${runTabPanelHtml(detail)}
   `;
-  document.querySelectorAll("[data-run-tab]").forEach((button) => {
+  els.runDetail.querySelectorAll("[data-run-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       activateRunTab(button.dataset.runTab, { restoreFocus: button.getAttribute("role") === "tab" });
     });
   });
   const runTablist = els.runDetail.querySelector("[data-run-tablist]");
   if (runTablist) runTablist.addEventListener("keydown", handleRunTablistKeydown);
+  els.runDetail.querySelectorAll("[data-refresh-run-detail]").forEach((button) => {
+    bindRunDetailRefreshButton(button, runId);
+  });
   els.runDetail.querySelectorAll("[data-open-lineage-run]").forEach((button) => {
     button.addEventListener("click", async () => {
       const targetRunId = button.dataset.openLineageRun;
@@ -9169,7 +12798,7 @@ function renderOperatorJobRow(job, selectedJobId = state.selectedOperatorJobId) 
 }
 
 function operatorJobLabel(job) {
-  if (job && job.job_kind === "candidate-debug-run") return "Run headless";
+  if (job && job.job_kind === "candidate-debug-run") return "Try once";
   if (job && job.job_kind === "environment-preview") return "Open interactive interface";
   return "Candidate try";
 }
@@ -9204,7 +12833,7 @@ function renderOperatorJobSummary(job) {
     ${networkEnforcement === "advisory" ? `<div class="operator-job-notice warning" role="status">Network access is ${escapeHtml(networkPolicy || "unspecified")}, but isolation could not be fully enforced for this try.</div>` : ""}
     ${state.operatorJobStopErrors[job.job_id] ? `<div class="operator-job-notice error" role="alert">Could not stop this try: ${escapeHtml(state.operatorJobStopErrors[job.job_id])}</div>` : ""}
     ${state.operatorJobDetailError && job.job_id === state.selectedOperatorJobId ? `<div class="operator-job-notice error" role="alert">Could not refresh this try: ${escapeHtml(state.operatorJobDetailError)}</div>` : ""}
-    ${renderOperatorJobReviewAction(job)}
+    ${renderOperatorJobReviewAction(job, result)}
     ${renderOperatorJobInterfaceAction(job)}
     ${renderOperatorJobInterfaceOutputs(job)}
     ${result ? renderOperatorJobResult(result, { includeOutputs: false }) : `<div class="operator-job-pending-result">${operatorJobIsActive(job) ? "Waiting for results." : "This try has no saved result."}</div>`}
@@ -9224,8 +12853,8 @@ function renderOperatorJobSummary(job) {
   `;
 }
 
-function renderOperatorJobReviewAction(job) {
-  if (!job || !["candidate-debug-run", "environment-preview"].includes(job.job_kind) || !["succeeded", "failed", "cancelled"].includes(job.state)) return "";
+function renderOperatorJobReviewAction(job, result = null) {
+  if (!job || !result || !["candidate-debug-run", "environment-preview"].includes(job.job_kind) || !["succeeded", "failed"].includes(job.state)) return "";
   const candidateId = String(job.target && job.target.candidate_id || "");
   const reviewItem = reviewItemForCandidate(candidateId);
   const attached = reviewHasOperatorJob(reviewItem, job.job_id);
@@ -9262,7 +12891,7 @@ function renderOperatorJobInterfaceAction(job) {
         <div class="operator-job-interface-action-heading">
           <div>
             <h4>Interactive interface</h4>
-            <p>The full Interface Session uses this saved Candidate and selected Environment profile.</p>
+            <p>The interface uses this saved Candidate and selected Environment profile.</p>
           </div>
           <button class="primary-button compact-action" data-open-operator-interface="${escapeHtml(job.job_id)}" title="Interactive Candidate interface" type="button">Open interface</button>
         </div>
@@ -9542,7 +13171,11 @@ function handleRunStopConfirmationKeydown(event) {
   if (event.key !== "Tab") return;
   const focusable = [...els.runStopModal.querySelectorAll(
     "button:not([disabled]), [tabindex]:not([tabindex='-1'])",
-  )].filter((element) => !element.hidden && !element.closest("[hidden]"));
+  )].filter((element) => (
+    !element.hidden
+    && !element.closest("[hidden]")
+    && element.getClientRects().length > 0
+  ));
   if (!focusable.length) {
     event.preventDefault();
     if (els.runStopDialog) els.runStopDialog.focus();
@@ -10447,7 +14080,7 @@ function capabilityActionLabel(action, workspaceId = "") {
   if (action === "inspect") return "View details";
   if (action === "keep_editable") return workspaceId ? "Open Workspace" : "Edit in Workspace";
   if (action === "open_read_only") return "View files";
-  if (action === "debug_run") return "Run headless";
+  if (action === "debug_run") return "Try once";
   if (action === "environment_preview") return "Open interactive interface";
   if (action === "evaluate_child_run") return "Re-evaluate in a new Run";
   return String(action || "action")
@@ -10603,7 +14236,7 @@ function renderCandidateResultsPage(detail, page) {
       <span class="tag">${escapeHtml(items.length)} shown${focusedCandidate && !focusedAlreadyLoaded ? " + focused Candidate" : ""}</span>
     </div>
     ${renderRoutedCandidateNotice(detail)}
-    ${unavailable ? `<p class="candidate-results-unavailable">Candidate summaries are temporarily unavailable. Recorded trial results are still available under Run details.</p>` : `
+    ${unavailable ? `<p class="candidate-results-unavailable">Candidate summaries are temporarily unavailable. Recorded trial results are still available under Technical evidence.</p>` : `
       ${renderCandidateComparisonPanel()}
       <div class="workbench-entity-list candidate-results-list">
         ${visibleItems.map((item) => renderCandidateResultItem(item, page)).join("") || emptyInline(emptyMessage)}
@@ -10703,7 +14336,7 @@ function candidateTryPrimaryLabel(modes, pending) {
 }
 
 function candidateTrySubmitLabel(actionName) {
-  if (actionName === "debug_run") return "Run headless";
+  if (actionName === "debug_run") return "Try once";
   if (actionName === "environment_preview") return "Open interface";
   return "Start";
 }
@@ -10788,7 +14421,7 @@ function renderFocusedCandidateMore(item, page) {
       <summary>More actions and details</summary>
       <div class="candidate-focused-more-actions">
         ${reEvaluate.supported ? `<button class="ghost-button compact-action" data-workbench-action="evaluate_child_run" data-workbench-selection="${escapeHtml(selectionId)}" type="button" ${!reEvaluate.eligible || pending ? "disabled" : ""} title="${escapeHtml(reEvaluate.eligible ? "Re-evaluate in a new Run" : capabilityReason(reEvaluate.reason))}">${escapeHtml(pending ? "Starting…" : "Re-evaluate in a new Run")}</button>` : ""}
-        ${selectionId ? `<button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Ask in ${escapeHtml(assistantSessionLabel())}</button>` : ""}
+        ${selectionId ? `<button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Discuss in ${escapeHtml(assistantSessionLabel())}</button>` : ""}
       </div>
       ${reEvaluate.supported && !reEvaluate.eligible ? `<p>Re-evaluation is unavailable: ${escapeHtml(capabilityReason(reEvaluate.reason))}</p>` : ""}
       <dl class="workbench-data-grid candidate-context-details">
@@ -11580,8 +15213,8 @@ function renderSpecializedWorkbenchBody(item, page, evidence) {
       ${renderSelectionActions(item, page)}
       ${selectionId ? `
         <div class="workbench-assistant-action">
-          <button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Ask in ${escapeHtml(assistantSessionLabel())}</button>
-          <span>Send this exact Run selection to the named Assistant conversation.</span>
+          <button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Discuss in ${escapeHtml(assistantSessionLabel())}</button>
+          <span>Open this exact Run selection in the named Conversation.</span>
         </div>
       ` : ""}
       ${correlations.length ? `
@@ -11620,8 +15253,8 @@ function renderWorkbenchItem(item, page) {
         ${renderSelectionActions(item, page)}
         ${selectionId ? `
           <div class="workbench-assistant-action">
-            <button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Ask in ${escapeHtml(assistantSessionLabel())}</button>
-            <span>Send this exact Run selection to the named Assistant conversation.</span>
+            <button class="ghost-button compact-action" data-workbench-ask-assistant="${escapeHtml(selectionId)}" type="button">Discuss in ${escapeHtml(assistantSessionLabel())}</button>
+            <span>Open this exact Run selection in the named Conversation.</span>
           </div>
         ` : ""}
         ${correlations.length ? `
@@ -12070,7 +15703,7 @@ function closeCandidateTrySheet({ restoreFocus = true } = {}) {
   if (els.candidateTrySubmitButton) {
     els.candidateTrySubmitButton.hidden = false;
     els.candidateTrySubmitButton.disabled = false;
-    els.candidateTrySubmitButton.textContent = "Run headless";
+    els.candidateTrySubmitButton.textContent = "Try once";
   }
   if (els.candidateTryCancelButton) {
     els.candidateTryCancelButton.hidden = false;
@@ -12096,7 +15729,34 @@ function confirmCandidateTry() {
     && Number(pending.run_head && pending.run_head.revision) === Number(currentHead.revision)
     && Number(pending.run_head && pending.run_head.sequence) === Number(currentHead.sequence);
   if (!contextMatches) {
+    const refreshRunId = selectedCanonicalRunId();
+    const refreshCandidateId = String(state.routedCandidateId || "");
+    const refreshSelectionId = pending.selection_id;
+    state.candidateTryNotice = "The Run or Candidate changed before this try started. OptPilot is refreshing the current options; review them, then try again.";
     closeCandidateTrySheet({ restoreFocus: false });
+    renderRunDetail();
+    if (!refreshRunId || !refreshCandidateId) {
+      return;
+    }
+    loadRunDetail(refreshRunId, { keepTab: true, skipListRender: true })
+      .then(() => {
+        if (
+          selectedCanonicalRunId() !== refreshRunId
+          || String(state.routedCandidateId || "") !== refreshCandidateId
+        ) return;
+        state.candidateTryNotice = "The Run changed before this try started. OptPilot refreshed this Candidate's options; review them, then try again.";
+        renderRunDetail();
+        restoreFocusedCandidateTryFocus(refreshSelectionId, "notice");
+      })
+      .catch(() => {
+        if (
+          selectedCanonicalRunId() !== refreshRunId
+          || String(state.routedCandidateId || "") !== refreshCandidateId
+        ) return;
+        state.candidateTryNotice = "The Run changed before this try started, and the current options could not be refreshed. Reload this Candidate, then try again.";
+        renderRunDetail();
+        restoreFocusedCandidateTryFocus(refreshSelectionId, "notice");
+      });
     return;
   }
   const selectionId = pending.selection_id;
@@ -12141,7 +15801,11 @@ function trapModalFocus(event, modal, fallback) {
   if (event.key !== "Tab" || !modal) return;
   const focusable = [...modal.querySelectorAll(
     "button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex='-1'])",
-  )].filter((element) => !element.hidden && !element.closest("[hidden]"));
+  )].filter((element) => (
+    !element.hidden
+    && !element.closest("[hidden]")
+    && element.getClientRects().length > 0
+  ));
   if (!focusable.length) {
     event.preventDefault();
     if (fallback && typeof fallback.focus === "function") fallback.focus();
@@ -12314,7 +15978,7 @@ async function askAssistantAboutWorkbenchSelection(selectionId) {
     pushAssistantMessage([
       "tool",
       "Selection unavailable",
-      "Start an Assistant conversation, then choose the Assistant action again.",
+      "Start a Conversation, then choose the action again.",
     ], { persist: false });
     renderAssistant();
     return;
@@ -12342,6 +16006,7 @@ async function askAssistantAboutWorkbenchSelection(selectionId) {
       if (els.agentInput) {
         els.agentInput.value = `Help me inspect this ${state.assistantRunSelection.kind} from run ${runId}. Explain what it shows, relate it to the objective and its correlated records, and call out any evidence or failures I should inspect next.`;
         els.agentInput.dataset.touched = "true";
+        rememberAssistantDraft(session.id);
         els.agentInput.focus();
         els.agentInput.select();
       }
@@ -12353,7 +16018,7 @@ async function askAssistantAboutWorkbenchSelection(selectionId) {
       "Selection unavailable",
       boundedPublicActionError(
         error,
-        "The run item changed or is no longer available. Choose the Assistant action again.",
+        "The Run item changed or is no longer available. Choose the Conversation action again.",
       ),
     ], { persist: false });
     renderAssistant();
@@ -12631,6 +16296,13 @@ async function openSelectionContentView(payload, item, runId, options = {}) {
   ) {
     throw new Error("Read-only content response does not match this exact selection.");
   }
+  if (!state.selectionContentView) {
+    const activeElement = document.activeElement;
+    state.selectionContentReturnFocus = activeElement && typeof activeElement.focus === "function"
+      ? activeElement
+      : null;
+  }
+  state.selectionContentFocusPending = true;
   state.selectionContentSessionId = contentSessionId;
   state.selectionContentView = {
     schema: raw.schema,
@@ -12885,13 +16557,23 @@ async function closeSelectionContentView(options = {}) {
   const view = state.selectionContentView;
   const contentSessionId = state.selectionContentSessionId;
   if (!view) return;
+  const returnFocus = options.restoreFocus !== false && options.render !== false
+    ? state.selectionContentReturnFocus
+    : null;
   state.selectionContentRequestSeq += 1;
   state.selectionContentView = null;
   state.selectionContentTree = null;
   state.selectionContentPreview = null;
   state.selectionContentLoading = false;
   state.selectionContentError = "";
+  state.selectionContentReturnFocus = null;
+  state.selectionContentFocusPending = false;
   if (options.render !== false) renderSelectionContentHost();
+  if (returnFocus) {
+    window.requestAnimationFrame(() => {
+      if (returnFocus.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+    });
+  }
   if (!contentSessionId) return;
   try {
     await postJson(`/api/content-views/${encodeURIComponent(view.handle)}/close`, {
@@ -12938,6 +16620,15 @@ function renderSelectionContentHost() {
   host.querySelectorAll("[data-selection-content-path]").forEach((button) => {
     button.addEventListener("click", () => loadSelectionContentPreview(button.dataset.selectionContentPath || ""));
   });
+  if (state.selectionContentFocusPending) {
+    state.selectionContentFocusPending = false;
+    window.requestAnimationFrame(() => {
+      const closeButton = host.querySelector(".selection-content-close");
+      const drawer = host.querySelector(".selection-content-drawer");
+      const target = closeButton || drawer;
+      if (target && typeof target.focus === "function") target.focus();
+    });
+  }
 }
 
 function handleSelectionContentKeydown(event) {
@@ -12953,7 +16644,7 @@ function renderSelectionContentDrawer() {
   const tree = state.selectionContentTree;
   const preview = state.selectionContentPreview;
   return `
-    <aside class="selection-content-drawer" role="dialog" aria-modal="false" aria-labelledby="selection-content-title">
+    <aside class="selection-content-drawer" role="dialog" aria-modal="false" aria-labelledby="selection-content-title" tabindex="-1">
       <header class="selection-content-heading">
         <div class="selection-content-heading-copy">
           <span class="selection-content-mode">Read-only result</span>
@@ -13866,20 +17557,144 @@ async function openComponentSession(component, mode, options = {}) {
 }
 
 async function openComponentInterface(component) {
-  const session = await openComponentSession(component, "inspect", { workbenchMode: "preview" });
-  if (!session) return;
   const launch = state.interfaceLaunch;
-  if (
-    launch
-    && launch.key === componentLaunchKey(component)
-    && !["failed", "stopped"].includes(String(launch.status || ""))
-  ) {
-    session.catalogLaunchId = String(launch.launch_id || "");
-    renderWorkspace();
+  if (isActiveInterfaceLaunch(launch)) {
     openLaunchInterfaceSession(launch);
     return;
   }
+  const profile = componentSelectedInterfaceProfile(component);
+  const capability = profile
+    ? componentInterfaceLaunchCapability(component, profile)
+    : null;
+  if (!profile || capability.eligible !== true) {
+    state.catalogComponentActions[componentLaunchKey(component)] = {
+      mode: "interface",
+      pending: false,
+      error: String(
+        capability && capability.reason
+        || "This Catalog item does not currently provide an available interface.",
+      ),
+    };
+    renderComponentDetail();
+    return;
+  }
   await launchComponentInterface(component);
+}
+
+async function fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId) {
+  let attempts = 0;
+  while (
+    state.interfaceLaunch
+    && state.interfaceLaunch.key === launchKey
+    && String(state.interfaceLaunch.launch_id || "") === String(launchId || "")
+  ) {
+    try {
+      const payload = await getJson(
+        `/api/interface-launches/${encodeURIComponent(launchId)}`,
+        { timeoutMs: INTERFACE_LAUNCH_POLL_TIMEOUT_MS },
+      );
+      if (
+        !state.interfaceLaunch
+        || state.interfaceLaunch.key !== launchKey
+        || String(state.interfaceLaunch.launch_id || "") !== String(launchId || "")
+      ) return null;
+      const hadConnectionWarning = Boolean(state.interfaceLaunch.connection_status);
+      state.interfaceLaunch = {
+        ...state.interfaceLaunch,
+        connection_status: "",
+        reconnect_attempts: 0,
+        connection_error: "",
+      };
+      persistActiveInterfaceLaunch(state.interfaceLaunch);
+      if (hadConnectionWarning) renderInterfaceLaunchSurface(state.interfaceLaunch);
+      return payload;
+    } catch (error) {
+      const status = Number(error && error.status || 0);
+      if ([404, 410].includes(status)) {
+        const missing = new Error("This interface launch is no longer available.");
+        missing.status = status;
+        throw missing;
+      }
+      attempts += 1;
+      if (
+        !state.interfaceLaunch
+        || state.interfaceLaunch.key !== launchKey
+        || String(state.interfaceLaunch.launch_id || "") !== String(launchId || "")
+      ) return null;
+      const unavailable = attempts >= INTERFACE_LAUNCH_RECONNECT_LIMIT;
+      state.interfaceLaunch = {
+        ...state.interfaceLaunch,
+        connection_status: unavailable ? "unavailable" : "reconnecting",
+        reconnect_attempts: attempts,
+        connection_error: boundedPublicActionError(
+          error,
+          unavailable
+            ? "Studio could not reconnect to this interface."
+            : "Studio temporarily lost contact with this interface.",
+        ),
+      };
+      persistActiveInterfaceLaunch(state.interfaceLaunch);
+      renderInterfaceLaunchSurface(state.interfaceLaunch);
+      if (unavailable) {
+        const unavailableError = new Error(state.interfaceLaunch.connection_error);
+        unavailableError.interfaceConnectionUnavailable = true;
+        throw unavailableError;
+      }
+      await sleep(1200);
+    }
+  }
+  return null;
+}
+
+function handleInterfaceLaunchPollingError(error, launchKey, launchId, fallback) {
+  if (
+    !state.interfaceLaunch
+    || state.interfaceLaunch.key !== launchKey
+    || String(state.interfaceLaunch.launch_id || "") !== String(launchId || "")
+  ) return;
+  if (error && error.interfaceConnectionUnavailable) {
+    persistActiveInterfaceLaunch(state.interfaceLaunch);
+    renderInterfaceLaunchSurface(state.interfaceLaunch);
+    return;
+  }
+  state.interfaceLaunch = {
+    ...state.interfaceLaunch,
+    status: "failed",
+    error: boundedPublicActionError(error, fallback),
+    connection_status: "",
+    reconnect_attempts: 0,
+    connection_error: "",
+  };
+  persistActiveInterfaceLaunch(state.interfaceLaunch);
+  renderInterfaceLaunchSurface(state.interfaceLaunch);
+}
+
+function resumeInterfaceLaunchPolling(launch = state.interfaceLaunch) {
+  const launchKey = String(launch && launch.key || "");
+  const launchId = String(launch && launch.launch_id || "");
+  if (!launchKey || !launchId) return;
+  if (
+    !state.interfaceLaunch
+    || state.interfaceLaunch.key !== launchKey
+    || String(state.interfaceLaunch.launch_id || "") !== launchId
+  ) return;
+  state.interfaceLaunch = {
+    ...state.interfaceLaunch,
+    connection_status: "reconnecting",
+    reconnect_attempts: 0,
+    connection_error: "",
+  };
+  persistActiveInterfaceLaunch(state.interfaceLaunch);
+  renderInterfaceLaunchSurface(state.interfaceLaunch);
+  const polling = state.interfaceLaunch.launch_scope === "workspace-transient"
+    ? pollWorkspaceInterfaceLaunch(launchKey, launchId)
+    : pollComponentInterfaceLaunch(launchKey, launchId);
+  polling.catch((error) => handleInterfaceLaunchPollingError(
+    error,
+    launchKey,
+    launchId,
+    "This interface could not be reconnected.",
+  ));
 }
 
 async function resumeStoredInterfaceLaunch() {
@@ -13889,7 +17704,8 @@ async function resumeStoredInterfaceLaunch() {
   if (!launchId || !launchKey || state.interfaceLaunch) return;
   state.interfaceLaunch = { ...stored };
   try {
-    const payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
+    const payload = await fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId);
+    if (!payload) return;
     const launch = payload.launch && typeof payload.launch === "object" ? payload.launch : {};
     state.interfaceLaunch = mergeInterfaceLaunchPayload(state.interfaceLaunch, launch, launchKey);
     if (state.interfaceLaunch.status === "stopped") {
@@ -13912,48 +17728,40 @@ async function resumeStoredInterfaceLaunch() {
     }
     if (state.interfaceLaunch.status === "failed") {
       closeInterfaceStopConfirmation();
-      persistActiveInterfaceLaunch(null);
+      persistActiveInterfaceLaunch(state.interfaceLaunch);
       renderAll();
       return;
     }
     renderInterfaceLaunchSurface(state.interfaceLaunch);
     if (state.interfaceLaunch.launch_scope === "workspace-transient") {
-      pollWorkspaceInterfaceLaunch(launchKey, launchId).catch(() => {
-        if (state.interfaceLaunch && state.interfaceLaunch.launch_id === launchId) {
-          state.interfaceLaunch = {
-            ...state.interfaceLaunch,
-            status: "failed",
-            error: state.interfaceLaunch.error || "This interface launch could not be restored.",
-          };
-          persistActiveInterfaceLaunch(null);
-          renderInterfaceLaunchSurface(state.interfaceLaunch);
-        }
+      pollWorkspaceInterfaceLaunch(launchKey, launchId).catch((error) => {
+        handleInterfaceLaunchPollingError(
+          error,
+          launchKey,
+          launchId,
+          "This interface launch could not be restored.",
+        );
       });
     } else {
-      pollComponentInterfaceLaunch(launchKey, launchId).catch(() => {
-        if (state.interfaceLaunch && state.interfaceLaunch.launch_id === launchId) {
-          state.interfaceLaunch = {
-            ...state.interfaceLaunch,
-            status: "failed",
-            error: state.interfaceLaunch.error || "This interface launch could not be restored.",
-          };
-          persistActiveInterfaceLaunch(null);
-          renderInterfaceLaunchSurface(state.interfaceLaunch);
-        }
+      pollComponentInterfaceLaunch(launchKey, launchId).catch((error) => {
+        handleInterfaceLaunchPollingError(
+          error,
+          launchKey,
+          launchId,
+          "This interface launch could not be restored.",
+        );
       });
     }
   } catch (error) {
     // A Studio restart can retire the transient launch. Its saved Workspace
     // remains discoverable through the durable server-side action receipt.
-    if (state.interfaceLaunch && state.interfaceLaunch.launch_id === launchId) {
-      state.interfaceLaunch = {
-        ...state.interfaceLaunch,
-        status: "failed",
-        error: boundedPublicActionError(error, "This interface launch could not be restored."),
-      };
-      persistActiveInterfaceLaunch(null);
-      renderAll();
-    }
+    handleInterfaceLaunchPollingError(
+      error,
+      launchKey,
+      launchId,
+      "This interface launch could not be restored.",
+    );
+    renderAll();
   }
 }
 
@@ -13964,22 +17772,49 @@ async function launchComponentInterface(component) {
     previousLaunch
     && previousLaunch.status === "failed",
   );
-  if (previousLaunch && !retryingFailedLaunch) return;
+  if (previousLaunch && !retryingFailedLaunch) {
+    openLaunchInterfaceSession(previousLaunch);
+    return;
+  }
   if (retryingFailedLaunch) {
     state.interfaceLaunch = null;
     persistActiveInterfaceLaunch(null);
   }
   const profile = componentSelectedInterfaceProfile(component);
-  if (!profile) return;
+  if (!profile) {
+    state.catalogComponentActions[launchKey] = {
+      mode: "interface",
+      pending: false,
+      error: "This Catalog item does not currently provide an available interface.",
+    };
+    renderComponentDetail();
+    return;
+  }
   const capability = componentInterfaceLaunchCapability(component, profile);
-  if (capability.eligible !== true) return;
+  if (capability.eligible !== true) {
+    state.catalogComponentActions[launchKey] = {
+      mode: "interface",
+      pending: false,
+      error: String(capability.reason || "This interface is unavailable."),
+    };
+    renderComponentDetail();
+    return;
+  }
+  delete state.catalogComponentActions[launchKey];
   rememberCatalogSourceComponent(component);
   resetActiveInterfaceReturnState();
+  const originConversation = currentAgentSession();
   state.interfaceLaunch = {
     key: launchKey,
     label: profile.label || profile.id,
     port: profile.presentation.port,
     profile_id: profile.id,
+    origin_conversation_id: originConversation && !originConversation.id.startsWith("agent-session-")
+      ? originConversation.id
+      : "",
+    origin_conversation_title: originConversation && !originConversation.id.startsWith("agent-session-")
+      ? assistantSessionLabel(originConversation)
+      : "",
     startedAt: Date.now(),
     status: "queued",
     error: "",
@@ -14000,15 +17835,12 @@ async function launchComponentInterface(component) {
     openLaunchInterfaceSession(state.interfaceLaunch);
     await pollComponentInterfaceLaunch(launchKey, launch.launch_id);
   } catch (error) {
-    if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
-      state.interfaceLaunch = {
-        ...state.interfaceLaunch,
-        status: "failed",
-        error: boundedPublicActionError(error, "This interface could not be started."),
-      };
-      persistActiveInterfaceLaunch(null);
-      renderInterfaceLaunchSurface(state.interfaceLaunch);
-    }
+    handleInterfaceLaunchPollingError(
+      error,
+      launchKey,
+      state.interfaceLaunch && state.interfaceLaunch.launch_id,
+      "This interface could not be started.",
+    );
   }
 }
 
@@ -14016,14 +17848,8 @@ async function pollComponentInterfaceLaunch(launchKey, launchId) {
   if (!launchId) throw new Error("Interface launch did not return a launch id.");
   let readyObserved = false;
   while (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
-    let payload;
-    try {
-      payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
-    } catch (error) {
-      if (!readyObserved) throw error;
-      await sleep(1000);
-      continue;
-    }
+    const payload = await fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId);
+    if (!payload) return;
     const launch = payload.launch || {};
     if (!state.interfaceLaunch || state.interfaceLaunch.key !== launchKey || state.interfaceLaunch.launch_id !== launchId) return;
     state.interfaceLaunch = mergeInterfaceLaunchPayload(state.interfaceLaunch, launch, launchKey);
@@ -14289,12 +18115,30 @@ async function keepInterfaceOutput(outputId) {
     const workspace = mergeUiWorkspace(payload.workspace);
     if (!workspace) throw new Error("Keep response did not include an editable workspace.");
     renderWorkspace();
+    const originConversationId = String(launch.origin_conversation_id || "");
+    const originConversation = state.agentSessions.find((session) => session.id === originConversationId);
+    let conversationAttachError = "";
+    let keptConversationTitle = "";
+    if (originConversation && !originConversation.id.startsWith("agent-session-")) {
+      try {
+        await attachWorkspaceToAgentSession(workspace.id, originConversation.id);
+        keptConversationTitle = assistantSessionLabel(originConversation);
+      } catch (error) {
+        conversationAttachError = boundedPublicActionError(
+          error,
+          `Open the Workspace and make it available to ${assistantSessionLabel(originConversation)} manually.`,
+        );
+      }
+    }
     updateInterfaceOutput(outputId, {
       keep_pending: false,
       keep_error: "",
       keep_state: "saved",
       kept_workspace_id: workspace.id,
       kept_workspace_title: workspace.title,
+      kept_conversation_id: keptConversationTitle ? originConversationId : "",
+      kept_conversation_title: keptConversationTitle,
+      conversation_attach_error: conversationAttachError,
     });
     return true;
   } catch (error) {
@@ -14319,6 +18163,15 @@ function unsavedReadyInterfaceOutputs(launch) {
     && !output.kept_workspace_id);
 }
 
+function sealingInterfaceOutputs(launch) {
+  const outputs = launch && launch.result && Array.isArray(launch.result.outputs) ? launch.result.outputs : [];
+  return outputs.filter((output) => output && String(output.status || "").toLowerCase() === "sealing");
+}
+
+function interfaceOutputsAtRisk(launch) {
+  return [...unsavedReadyInterfaceOutputs(launch), ...sealingInterfaceOutputs(launch)];
+}
+
 function renderInterfaceStopConfirmation() {
   const pending = state.pendingInterfaceStop;
   const launch = state.interfaceLaunch;
@@ -14326,30 +18179,41 @@ function renderInterfaceStopConfirmation() {
     closeInterfaceStopConfirmation();
     return;
   }
-  const outputs = unsavedReadyInterfaceOutputs(launch);
+  const readyOutputs = unsavedReadyInterfaceOutputs(launch);
+  const sealingOutputs = sealingInterfaceOutputs(launch);
+  const outputs = [...readyOutputs, ...sealingOutputs];
   if (!outputs.length) {
     closeInterfaceStopConfirmation();
     performInterfaceStop(pending.launchKey);
     return;
   }
-  const next = outputs[0];
+  const next = readyOutputs[0];
   els.interfaceStopBody.innerHTML = `
-    <p>${outputs.length === 1
-      ? "This output folder is ready but still temporary."
-      : `${outputs.length} output folders are ready but still temporary.`}</p>
+    <p>${readyOutputs.length
+      ? readyOutputs.length === 1
+        ? "This output is ready but still temporary."
+        : `${readyOutputs.length} outputs are ready but still temporary.`
+      : sealingOutputs.length === 1
+      ? "Studio is still preparing one generated output."
+      : `Studio is still preparing ${sealingOutputs.length} generated outputs.`}</p>
     <ul class="interface-stop-output-list">
-      ${outputs.map((output, index) => `<li${index === 0 ? ' class="next"' : ""}>${escapeHtml(output.label || output.id || "Output")}</li>`).join("")}
+      ${outputs.map((output, index) => `<li${index === 0 && next ? ' class="next"' : ""}>${escapeHtml(output.label || output.id || "Output")}${String(output.status || "").toLowerCase() === "sealing" ? " · preparing" : ""}</li>`).join("")}
     </ul>
-    <p>${outputs.length === 1
-      ? "Save it as an editable Workspace, or stop and let the temporary output go."
-      : `Save them one at a time. The next click saves “${escapeHtml(next.label || next.id || "Output")}”; the interface stops after the last save.`}</p>
+    <p>${next
+      ? readyOutputs.length === 1
+        ? "Save it as an editable Workspace, or stop and let the temporary output go."
+        : `Save ready outputs one at a time. The next click saves “${escapeHtml(next.label || next.id || "Output")}”.`
+      : "Wait for preparation to finish so Studio can offer a safe read-only result, or stop anyway and discard it."}</p>
   `;
   if (els.interfaceStopError) {
     els.interfaceStopError.textContent = "";
     els.interfaceStopError.hidden = true;
   }
-  els.interfaceStopSaveButton.disabled = false;
+  els.interfaceStopSaveButton.hidden = !next;
+  els.interfaceStopSaveButton.disabled = !next;
   els.interfaceStopSaveButton.textContent = "Save as Workspace";
+  els.interfaceStopDiscardButton.textContent = next ? "Stop without saving" : "Stop anyway";
+  els.interfaceStopCancelButton.textContent = next ? "Cancel" : "Keep running";
   els.interfaceStopDiscardButton.disabled = false;
   els.interfaceStopCancelButton.disabled = false;
 }
@@ -14367,7 +18231,8 @@ function openInterfaceStopConfirmation(launchKey, outputs) {
   };
   els.interfaceStopModal.hidden = false;
   renderInterfaceStopConfirmation();
-  els.interfaceStopSaveButton.focus();
+  if (els.interfaceStopSaveButton.hidden) els.interfaceStopCancelButton.focus();
+  else els.interfaceStopSaveButton.focus();
 }
 
 function closeInterfaceStopConfirmation(options = {}) {
@@ -14382,6 +18247,13 @@ function closeInterfaceStopConfirmation(options = {}) {
     els.interfaceStopError.textContent = "";
     els.interfaceStopError.hidden = true;
   }
+  if (els.interfaceStopSaveButton) {
+    els.interfaceStopSaveButton.hidden = false;
+    els.interfaceStopSaveButton.disabled = false;
+    els.interfaceStopSaveButton.textContent = "Save as Workspace";
+  }
+  if (els.interfaceStopDiscardButton) els.interfaceStopDiscardButton.textContent = "Stop without saving";
+  if (els.interfaceStopCancelButton) els.interfaceStopCancelButton.textContent = "Cancel";
   if (options.restoreFocus !== false) {
     window.requestAnimationFrame(() => {
       const fallback = document.querySelector(fallbackSelector);
@@ -14393,7 +18265,11 @@ function closeInterfaceStopConfirmation(options = {}) {
 
 function handleInterfaceStopConfirmationKeydown(event) {
   if (!state.pendingInterfaceStop || !els.interfaceStopModal) return;
-  const saving = Boolean(els.interfaceStopSaveButton && els.interfaceStopSaveButton.disabled);
+  const saving = Boolean(
+    els.interfaceStopSaveButton
+    && !els.interfaceStopSaveButton.hidden
+    && els.interfaceStopSaveButton.disabled,
+  );
   if (event.key === "Escape" && !saving) {
     event.preventDefault();
     closeInterfaceStopConfirmation();
@@ -14506,9 +18382,9 @@ function clearWorkspaceInterfacePreview(launch, status, message) {
 async function stopInterfaceLaunch(launchKey) {
   const launch = state.interfaceLaunch;
   if (!launch || launch.key !== launchKey || !launch.launch_id) return;
-  const unsavedReady = unsavedReadyInterfaceOutputs(launch);
-  if (unsavedReady.length) {
-    openInterfaceStopConfirmation(launchKey, unsavedReady);
+  const atRisk = interfaceOutputsAtRisk(launch);
+  if (atRisk.length) {
+    openInterfaceStopConfirmation(launchKey, atRisk);
     return;
   }
   await performInterfaceStop(launchKey);
@@ -14560,6 +18436,8 @@ function bindWorkspaceInterfaceLaunchControls(launchState) {
   if (stopButton) stopButton.addEventListener("click", () => stopWorkspaceInterface(launchState.key));
   const retryButton = root.querySelector(".workspace-retry-interface");
   if (retryButton) retryButton.addEventListener("click", launchWorkspaceInterface);
+  const reconnectButton = root.querySelector(".interface-reconnect");
+  if (reconnectButton) reconnectButton.addEventListener("click", () => resumeInterfaceLaunchPolling());
   bindInterfaceLaunchDisclosureControls(root);
   bindInterfaceOutputControls(root);
 }
@@ -14575,7 +18453,11 @@ function applyWorkspacePreviewPayload(session, previewPayload, interfaceConfig =
   session.timeline.push(["tool", "interface launched", preview.message]);
 }
 
-async function createBlankSession() {
+async function createBlankSession(options = {}) {
+  const attachToConversation = Boolean(options && options.attachToConversation);
+  const originatingConversationId = attachToConversation && currentAgentSession()
+    ? currentAgentSession().id
+    : "";
   try {
     const title = nextDraftWorkspaceTitle();
     const payload = await postJson("/api/workspaces", {
@@ -14585,11 +18467,24 @@ async function createBlankSession() {
     });
     if (payload.workspace) {
       const session = mergeUiWorkspace(payload.workspace);
+      if (attachToConversation) {
+        try {
+          await attachWorkspaceToAgentSession(session.id, originatingConversationId);
+        } catch (error) {
+          // The Workspace itself was created successfully. Keep it visible and
+          // report only the access failure in the originating Conversation.
+        }
+      }
       state.selectedSessionId = session.id;
       state.selectedFileKey = firstFileKey(session);
-      setView("workspace");
-      renderWorkspace();
-      return;
+      if (attachToConversation && conversationShellEnabled()) {
+        openConversationSurface({ history: "replace" });
+        renderAssistant();
+      } else {
+        setView("workspace");
+        renderWorkspace();
+      }
+      return session;
     }
   } catch (error) {
     state.codeWorkspaceStatus = "failed";
@@ -14598,8 +18493,9 @@ async function createBlankSession() {
   }
 }
 
-function openLocalFolderDialog() {
+function openLocalFolderDialog(options = {}) {
   if (!els.openLocalFolderModal) return;
+  state.localFolderAttachToConversation = Boolean(options && options.attachToConversation);
   const activeElement = document.activeElement;
   state.localFolderReturnFocus = activeElement && activeElement !== document.body
     ? activeElement
@@ -14615,10 +18511,11 @@ function openLocalFolderDialog() {
 function closeLocalFolderDialog(options = {}) {
   const returnFocus = state.localFolderReturnFocus;
   state.localFolderReturnFocus = null;
+  state.localFolderAttachToConversation = false;
   if (els.openLocalFolderModal) els.openLocalFolderModal.hidden = true;
   if (els.openLocalFolderSubmitButton) {
     els.openLocalFolderSubmitButton.disabled = false;
-    els.openLocalFolderSubmitButton.textContent = "Open folder";
+    els.openLocalFolderSubmitButton.textContent = "Link local folder";
   }
   if (options.restoreFocus !== false) {
     window.requestAnimationFrame(() => {
@@ -14653,19 +18550,36 @@ async function connectLocalFolder() {
     }
     return;
   }
+  const attachToConversation = state.localFolderAttachToConversation;
+  const originatingConversationId = attachToConversation && currentAgentSession()
+    ? currentAgentSession().id
+    : "";
   if (els.openLocalFolderSubmitButton) {
     els.openLocalFolderSubmitButton.disabled = true;
-    els.openLocalFolderSubmitButton.textContent = "Opening…";
+    els.openLocalFolderSubmitButton.textContent = "Linking…";
   }
   try {
     const payload = await postJson("/api/workspaces/connect-local-folder", { path, title });
     const session = mergeUiWorkspace(payload.workspace);
     if (!session) throw new Error("Studio did not return the connected Workspace.");
+    if (attachToConversation) {
+      try {
+        await attachWorkspaceToAgentSession(session.id, originatingConversationId);
+      } catch (error) {
+        // Connecting the folder succeeded even when Conversation access did
+        // not. Return to the Conversation where the access error is visible.
+      }
+    }
     state.selectedSessionId = session.id;
     state.selectedFileKey = firstFileKey(session);
     closeLocalFolderDialog({ restoreFocus: false });
-    setView("workspace");
-    renderWorkspace();
+    if (attachToConversation && conversationShellEnabled()) {
+      openConversationSurface({ history: "replace" });
+      renderAssistant();
+    } else {
+      setView("workspace");
+      renderWorkspace();
+    }
   } catch (error) {
     if (els.openLocalFolderError) {
       els.openLocalFolderError.textContent = String(error.message || error);
@@ -14673,7 +18587,7 @@ async function connectLocalFolder() {
     }
     if (els.openLocalFolderSubmitButton) {
       els.openLocalFolderSubmitButton.disabled = false;
-      els.openLocalFolderSubmitButton.textContent = "Open folder";
+      els.openLocalFolderSubmitButton.textContent = "Link local folder";
     }
   }
 }
@@ -14691,6 +18605,7 @@ function createPlanFromPair(pair) {
   if (!pair || !pair.environment || !pair.method) return;
   const plan = planFromPair(pair);
   upsertPlan(plan);
+  revealStudyPlan(plan);
   state.selectedPlanId = plan.id;
   setView("experiments");
 }
@@ -14700,6 +18615,7 @@ function createPlanFromCurrentContext() {
   if (!pair) return;
   const plan = planFromPair(pair);
   upsertPlan(plan);
+  revealStudyPlan(plan);
   state.selectedPlanId = plan.id;
   setView("experiments");
 }
@@ -14931,6 +18847,7 @@ async function launchPlan(plan) {
     failure: null,
     stopPending: false,
     stopError: "",
+    reconnectAttempts: 0,
   };
   state.studyLaunch = active;
   plan.launchPending = false;
@@ -14962,6 +18879,7 @@ function persistActiveStudyLaunch(active) {
     startedAt: active.startedAt,
     failure: active.failure || null,
     stopRequestId: active.stopRequestId || "",
+    reconnectAttempts: Number(active.reconnectAttempts || 0),
   };
   state.storedStudyLaunch = stored;
   storeValue(STORAGE_KEYS.activeStudyLaunch, JSON.stringify(stored));
@@ -14978,6 +18896,7 @@ function resumeStoredStudyLaunch() {
     failure: stored.failure || null,
     stopPending: false,
     stopError: "",
+    reconnectAttempts: Number(stored.reconnectAttempts || 0),
   };
   state.studyLaunch = active;
   const generation = ++state.studyLaunchPollGeneration;
@@ -15030,6 +18949,7 @@ function applyStudyLaunchPreparationPayload(active, payload) {
     };
     active.stage = payload.stage || "Preparation failed";
     active.preparationAccepted = true;
+    active.reconnectAttempts = 0;
     return "failed";
   }
   if (launch) {
@@ -15039,6 +18959,7 @@ function applyStudyLaunchPreparationPayload(active, payload) {
     active.status = launch.status || preparationState || "preparing";
     active.preparationAccepted = true;
     active.stopError = "";
+    active.reconnectAttempts = 0;
     return "launch";
   }
   if (["preparing", "pending", "accepted"].includes(preparationState)) {
@@ -15047,6 +18968,7 @@ function applyStudyLaunchPreparationPayload(active, payload) {
       ? publicStudyMessage(payload.message)
       : active.message || "OptPilot is checking this Study and preparing exact Run inputs. You can leave this page while it prepares.";
     active.preparationAccepted = true;
+    active.reconnectAttempts = 0;
     return "preparing";
   }
   if (preparationState === "uncertain") {
@@ -15055,12 +18977,65 @@ function applyStudyLaunchPreparationPayload(active, payload) {
       ? publicStudyMessage(payload.message)
       : "OptPilot is confirming whether this same launch request was accepted.";
     active.preparationAccepted = true;
+    active.reconnectAttempts = 0;
     return "uncertain";
   }
   if (preparationState === "ready") {
     throw new Error("Study launch preparation is ready but has no launch record.");
   }
   return payload.error ? "legacy_error" : "unknown";
+}
+
+function studyLaunchHttpStatus(error) {
+  const explicit = Number(error && error.status);
+  if (Number.isInteger(explicit) && explicit > 0) return explicit;
+  const match = String(error && error.message || "").match(/^(\d{3})\b/);
+  return match ? Number(match[1]) : 0;
+}
+
+function failStudyLaunchRecovery(active, options = {}) {
+  active.failure = {
+    code: options.code || "study_launch_reconnect_failed",
+    message: publicStudyMessage(
+      options.message
+      || "Studio could not reconnect to this saved Run preparation. Launch the Study again to create a new Run."
+    ),
+  };
+  active.stage = options.stage || "Run preparation unavailable";
+  active.message = active.failure.message;
+  active.status = "failed";
+  active.stopPending = false;
+  active.stopError = "";
+  active.reconnectAttempts = 0;
+  persistActiveStudyLaunch(active);
+  if (state.view === "experiments") renderExperiments();
+}
+
+function handleStudyLaunchReconnectFailure(active, error, options = {}) {
+  const status = studyLaunchHttpStatus(error);
+  if ([404, 410].includes(status)) {
+    failStudyLaunchRecovery(active, {
+      code: "study_launch_no_longer_available",
+      stage: "Run preparation no longer available",
+      message: options.missingMessage
+        || "This saved Run preparation is no longer available. Launch the Study again to create a new Run.",
+    });
+    return true;
+  }
+  active.reconnectAttempts = Number(active.reconnectAttempts || 0) + 1;
+  if (active.reconnectAttempts >= STUDY_LAUNCH_RECONNECT_LIMIT) {
+    failStudyLaunchRecovery(active, {
+      stage: "Could not reconnect to Run preparation",
+      message: "Studio could not reconnect to this saved Run preparation after several attempts. Launch the Study again, or dismiss this notice.",
+    });
+    return true;
+  }
+  active.stage = options.stage || "Reconnecting to Run preparation";
+  active.message = options.message || "OptPilot is reconnecting to this same launch request.";
+  active.stopError = "";
+  persistActiveStudyLaunch(active);
+  if (state.view === "experiments") renderExperiments();
+  return false;
 }
 
 async function submitStudyLaunch(active, generation) {
@@ -15096,8 +19071,13 @@ async function submitStudyLaunch(active, generation) {
       if (outcome === "legacy_error") {
         const durableRejection = payload.schema === "optpilot.studio-study-launch-response.v1";
         if (!durableRejection && payload.type !== "CoordinationConflict") {
-          active.stage = "Reconciling launch preparation";
-          if (state.view === "experiments") renderExperiments();
+          const responseError = new Error(payload.error || "Study launch response is incomplete.");
+          responseError.status = Number(payload.__httpStatus || 0);
+          if (handleStudyLaunchReconnectFailure(active, responseError, {
+            stage: "Reconciling launch preparation",
+            message: "OptPilot is confirming whether this same launch request was accepted.",
+            missingMessage: "This saved Run preparation request is no longer available. Launch the Study again to create a new Run.",
+          })) return;
           await sleep(1200);
           continue;
         }
@@ -15114,9 +19094,10 @@ async function submitStudyLaunch(active, generation) {
       throw new Error("Study launch response is incomplete.");
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
-      active.stage = "Reconnecting to launch preparation";
-      active.stopError = "";
-      if (state.view === "experiments") renderExperiments();
+      if (handleStudyLaunchReconnectFailure(active, error, {
+        stage: "Reconnecting to launch preparation",
+        message: "OptPilot is reconnecting to this same launch request.",
+      })) return;
       await sleep(1500);
     }
   }
@@ -15160,9 +19141,9 @@ async function pollStudyLaunchRequest(active, generation, options = {}) {
       if (state.view === "experiments") renderExperiments();
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
-      active.stage = "Reconnecting to Run preparation";
-      active.message = "OptPilot is reconnecting to this same launch request.";
-      if (state.view === "experiments") renderExperiments();
+      if (handleStudyLaunchReconnectFailure(active, error, {
+        missingMessage: "This saved Run preparation request is no longer available. Launch the Study again to create a new Run.",
+      })) return;
       await sleep(1200);
       immediate = true;
     }
@@ -15183,6 +19164,7 @@ async function pollStudyLaunch(active, generation, options = {}) {
       active.launch = payload.launch;
       active.stage = payload.launch.stage || active.stage;
       active.stopError = "";
+      active.reconnectAttempts = 0;
       persistActiveStudyLaunch(active);
       if (state.view === "experiments") renderExperiments();
       if (await handoffStudyLaunchIfReady(active, generation)) return;
@@ -15197,17 +19179,32 @@ async function pollStudyLaunch(active, generation, options = {}) {
       }
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
-      active.stage = "Reconnecting to launch preparation";
-      if (state.view === "experiments") renderExperiments();
+      if (handleStudyLaunchReconnectFailure(active, error, {
+        stage: "Reconnecting to Run preparation",
+        message: "OptPilot is reconnecting to this saved Run preparation.",
+        missingMessage: "This saved Run preparation can no longer be restored. Launch the Study again to create a new Run.",
+      })) return;
       await sleep(1200);
     }
   }
 }
 
+function dismissActiveStudyLaunch() {
+  const active = state.studyLaunch;
+  if (!active || !studyLaunchIsTerminal(active)) return;
+  state.studyLaunchPollGeneration += 1;
+  state.studyLaunch = null;
+  persistActiveStudyLaunch(null);
+  if (state.view === "experiments") renderExperiments();
+  renderOpenWork();
+}
+
 async function handoffStudyLaunchIfReady(active, generation) {
   const runId = String(active.launch && active.launch.run_id || "");
   if (!runId || generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return false;
-  const shouldOpenRun = state.view === "experiments" && state.selectedPlanId === active.planId;
+  const shouldOpenRun = state.view === "experiments"
+    && contentSurfaceIsVisible("experiments")
+    && state.selectedPlanId === active.planId;
   state.studyLaunchPollGeneration += 1;
   state.studyLaunch = null;
   persistActiveStudyLaunch(null);
@@ -15646,13 +19643,7 @@ async function launchWorkspaceInterface() {
     && previousLaunch.status === "failed",
   );
   if (previousLaunch && !retryingFailedLaunch) {
-    const preview = currentWorkspacePreview(session);
-    preview.status = "blocked";
-    preview.message = previousLaunch.key === launchKey
-      ? `${previousLaunch.label || "This interface"} is already running.`
-      : `${previousLaunch.label || "Another interface"} is already running in this tab. Stop it before launching this Workspace’s interface.`;
-    state.workbenchMode = "preview";
-    renderWorkspace();
+    openLaunchInterfaceSession(previousLaunch);
     return;
   }
   if (retryingFailedLaunch) {
@@ -15660,6 +19651,7 @@ async function launchWorkspaceInterface() {
     persistActiveInterfaceLaunch(null);
   }
   resetActiveInterfaceReturnState();
+  const originConversation = currentAgentSession();
   const preview = currentWorkspacePreview(session);
   preview.port = Number(workspaceInterface.presentation.port || preview.port || 5173);
   state.interfaceLaunch = {
@@ -15669,6 +19661,12 @@ async function launchWorkspaceInterface() {
     profile_id: workspaceInterface.id,
     launch_scope: "workspace-transient",
     source_workspace_id: workspaceId,
+    origin_conversation_id: originConversation && !originConversation.id.startsWith("agent-session-")
+      ? originConversation.id
+      : "",
+    origin_conversation_title: originConversation && !originConversation.id.startsWith("agent-session-")
+      ? assistantSessionLabel(originConversation)
+      : "",
     startedAt: Date.now(),
     status: "queued",
     error: "",
@@ -15694,13 +19692,18 @@ async function launchWorkspaceInterface() {
     openLaunchInterfaceSession(state.interfaceLaunch);
     await pollWorkspaceInterfaceLaunch(launchKey, state.interfaceLaunch.launch_id);
   } catch (error) {
-    if (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
-      state.interfaceLaunch = {
-        ...state.interfaceLaunch,
-        status: "failed",
-        error: boundedPublicActionError(error, "This interface could not be started."),
-      };
-      persistActiveInterfaceLaunch(null);
+    handleInterfaceLaunchPollingError(
+      error,
+      launchKey,
+      state.interfaceLaunch && state.interfaceLaunch.launch_id,
+      "This interface could not be started.",
+    );
+    if (error && error.interfaceConnectionUnavailable) {
+      preview.status = state.interfaceLaunch && state.interfaceLaunch.status === "ready" ? "ready" : "opening";
+      preview.message = "Studio could not confirm the interface status. Reconnect to the same launch before starting another one.";
+      renderWorkspace();
+      renderInterfaceLaunchSurface(state.interfaceLaunch);
+      return;
     }
     preview.status = "error";
     preview.message = boundedPublicActionError(error, "This interface could not be started.");
@@ -15714,14 +19717,8 @@ async function pollWorkspaceInterfaceLaunch(launchKey, launchId) {
   if (!launchId) throw new Error("Interface launch did not return a launch id.");
   let readyObserved = false;
   while (state.interfaceLaunch && state.interfaceLaunch.key === launchKey) {
-    let payload;
-    try {
-      payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
-    } catch (error) {
-      if (!readyObserved) throw error;
-      await sleep(1000);
-      continue;
-    }
+    const payload = await fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId);
+    if (!payload) return;
     const launch = payload.launch || {};
     if (!state.interfaceLaunch || state.interfaceLaunch.key !== launchKey || state.interfaceLaunch.launch_id !== launchId) return;
     const expectedWorkspaceId = state.interfaceLaunch.source_workspace_id;
@@ -15915,11 +19912,19 @@ async function cancelAgentMessage() {
   state.cancellingAgentSessionIds.add(session.id);
   updateAssistantComposerState();
   try {
-    const payload = await postJson(`/api/agent-sessions/${encodeURIComponent(session.id)}/cancel`, {});
+    const payload = await postJson(
+      `/api/agent-sessions/${encodeURIComponent(session.id)}/cancel`,
+      {},
+      { timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS },
+    );
     if (payload.session) await updateAgentSessionFromPayload(payload.session);
     await loadAgentSessions();
   } catch (error) {
-    pushAssistantMessage(["tool", "Stop failed", String(error.message || error)]);
+    pushAssistantMessage([
+      "tool",
+      "Stop failed",
+      boundedPublicActionError(error, "The Assistant did not confirm that it stopped. Try Stop again."),
+    ], { persist: false });
   } finally {
     state.cancellingAgentSessionIds.delete(session.id);
     renderAssistant();
@@ -15930,24 +19935,51 @@ async function sendAgentMessage() {
   if (assistantIsBusy() || assistantIsAwaitingApproval()) return;
   const message = els.agentInput.value.trim();
   if (!message) return;
+  let session = currentAgentSession();
+  if (!session || String(session.id || "").startsWith("agent-session-")) {
+    session = await createAgentSessionForSurface({ navigate: false });
+    if (!session) {
+      if (els.agentInput) {
+        els.agentInput.value = message;
+        els.agentInput.dataset.touched = "true";
+        els.agentInput.focus();
+      }
+      renderAssistant();
+      return;
+    }
+  }
+  state.agentSessionCreateError = "";
+  const sessionId = session.id;
+  const priorStatus = session.status;
+  const priorEffectiveStatus = session.effective_status;
   const userMessage = ["user", "User", message];
-  pushAssistantMessage(userMessage);
-  const session = currentAgentSession();
-  if (session && !session.id.startsWith("agent-session-")) session.status = "running";
+  const localUserMessage = pushAssistantMessage(userMessage, { persist: false });
+  session.status = "running";
+  session.effective_status = "running";
   els.agentInput.value = "";
   delete els.agentInput.dataset.touched;
+  if (session) {
+    state.assistantDraftsBySession[session.id] = "";
+    storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
+  }
   renderAssistant();
   let persisted = null;
   try {
     persisted = await persistAssistantMessage(userMessage, {
       keepalive: true,
-      sessionId: session && session.id,
+      sessionId,
       rethrowError: true,
+      timeoutMs: ASSISTANT_MUTATION_TIMEOUT_MS,
     });
+    if (!persisted) throw new Error("Studio did not confirm this message.");
   } catch (error) {
+    removeLocalAssistantMessage(sessionId, localUserMessage);
+    session.status = priorStatus;
+    session.effective_status = priorEffectiveStatus;
+    restoreUnsentAssistantDraft(sessionId, message);
     const reason = boundedPublicActionError(
       error,
-      "The message was not sent. Refresh Studio and try again.",
+      "The message was not sent. Its text has been restored so you can try again.",
     );
     if (/Assistant run selection|selected_run/i.test(reason)) {
       state.assistantRunSelection = null;
@@ -15955,13 +19987,15 @@ async function sendAgentMessage() {
     pushAssistantMessage([
       "assistant",
       "Message not sent",
-      reason,
+      `${reason} Your text is still in the message box.`,
     ], { persist: false });
     renderAssistant();
+    window.requestAnimationFrame(() => {
+      if (currentAgentSession() && currentAgentSession().id === sessionId && els.agentInput) {
+        els.agentInput.focus();
+      }
+    });
     return;
-  }
-  if (!persisted) {
-    pushAssistantMessage(["assistant", "Runtime unavailable", "This message is visible locally, but the Assistant conversation could not store it."]);
   }
   renderAssistant();
 }
@@ -16444,7 +20478,7 @@ function entityHeader(item, kind) {
   `;
 }
 
-function sessionCard(session) {
+function sessionCard(session, duplicateTitles) {
   const active = state.view === "workspace" && session.id === state.selectedSessionId;
   const canDelete = session.registrationEnabled !== false && session.mode === "editable";
   const attached = Boolean(session.attachedToCurrent);
@@ -16457,6 +20491,7 @@ function sessionCard(session) {
       <button class="session-main" data-session-id="${escapeHtml(session.id)}" type="button">
         <strong>${escapeHtml(session.title)}</strong>
         <span>${escapeHtml(workspaceSubtitle(session))}</span>
+        ${workspaceDisambiguatorHtml(session, duplicateTitles)}
         ${workspaceBadges(session)}
       </button>
       ${(assistantAvailable || canDelete) ? `
@@ -16467,7 +20502,7 @@ function sessionCard(session) {
           <div class="session-card-actions">
             ${assistantAvailable ? attached
               ? `<button class="ghost-button compact-action" data-close-workspace-id="${escapeHtml(session.id)}" type="button">Remove from ${escapeHtml(assistantLabel)}</button>`
-              : `<button class="ghost-button compact-action" data-attach-workspace-id="${escapeHtml(session.id)}" type="button">Ask in ${escapeHtml(assistantLabel)}</button>`
+              : `<button class="ghost-button compact-action" data-attach-workspace-id="${escapeHtml(session.id)}" type="button">Make available to ${escapeHtml(assistantLabel)}</button>`
             : ""}
             ${canDelete ? `<button class="ghost-button compact-action session-card-destructive-action" data-delete-workspace-id="${escapeHtml(session.id)}" type="button">${escapeHtml(destructiveLabel)}</button>` : ""}
           </div>
@@ -16483,7 +20518,7 @@ function workspaceSubtitle(session) {
 
 function workspaceBadges(session) {
   if (session.kind === "run" || session.sourceType === "run") {
-    return '<span class="workspace-badges"><span class="tag">run evidence</span></span>';
+    return '<span class="workspace-badges"><span class="tag">Run evidence</span></span>';
   }
   if (session.sourceType === "catalog" || session.mode === "read-only") {
     const label = session.kind && session.kind !== "catalog" ? `Catalog ${fieldLabel(session.kind)}` : "Catalog item";
@@ -16498,7 +20533,7 @@ function workspaceBadges(session) {
   const agentSession = currentAgentSession();
   const assistant = agentSession
     && attachedWorkspaceIds(agentSession.id).includes(session.id)
-    ? `<span class="tag" title="This named Assistant conversation can use the Workspace files.">${escapeHtml(workspaceAssistantAccessLabel(session))}</span>`
+    ? `<span class="tag" title="This named Conversation can use the Workspace files.">${escapeHtml(workspaceAssistantAccessLabel(session))}</span>`
     : "";
   return `
     <span class="workspace-badges">
@@ -16564,15 +20599,27 @@ function workspaceCatalogStatusFromValues(publications, origin) {
 }
 
 function assistantSessionLabel(session = currentAgentSession()) {
-  const title = String(session && session.title || "Assistant conversation");
+  const title = String(session && session.title || "Conversation");
   if (title === "Main Session") return "Main conversation";
   const generated = title.match(/^Session (\d+)$/);
   return generated ? `Conversation ${generated[1]}` : title;
 }
 
+function assistantSessionStatusLabel(session) {
+  const hydration = agentSessionHydrationState(session);
+  if (hydration.status === "loading") return "Loading";
+  if (hydration.status === "error") return "Load failed";
+  const status = assistantSessionStatus(session);
+  if (status === "awaiting_user_approval") return "Needs approval";
+  if (status === "approval_forwarding_failed") return "Could not continue";
+  if (status === "waiting_for_agent" || status === "running") return "Working";
+  if (status === "error") return "Needs attention";
+  return "Ready";
+}
+
 function workspaceAssistantAccessLabel(session) {
   const agentSession = currentAgentSession();
-  if (!agentSession) return "No Assistant conversation selected";
+  if (!agentSession) return "No Conversation selected";
   return attachedWorkspaceIds(agentSession.id).includes(session && session.id)
     ? `Available to ${assistantSessionLabel(agentSession)}`
     : `Not available to ${assistantSessionLabel(agentSession)}`;
@@ -16580,17 +20627,25 @@ function workspaceAssistantAccessLabel(session) {
 
 function agentSessionCard(session) {
   const attachedCount = attachedWorkspaceIds(session.id).length;
-  const status = assistantSessionStatus(session);
-  const statusLabel = status === "awaiting_user_approval"
-    ? "paused for approval"
-    : status === "approval_forwarding_failed"
-      ? "result send failed"
-      : status && status !== "idle" ? status.replaceAll("_", " ") : "";
+  const statusLabel = assistantSessionStatusLabel(session);
+  const statusVisible = statusLabel !== "Ready";
+  const workspaceLabel = attachedCount
+    ? `${attachedCount} Workspace${attachedCount === 1 ? "" : "s"}`
+    : "";
+  const accessibleDescription = [
+    session.description && session.description !== "New conversation" ? session.description : "",
+    statusVisible ? statusLabel : "",
+    workspaceLabel,
+  ].filter(Boolean).join(". ");
+  const metadata = [
+    statusVisible ? `<span class="agent-session-state">${escapeHtml(statusLabel)}</span>` : "",
+    statusVisible && workspaceLabel ? '<span class="agent-session-separator" aria-hidden="true">&middot;</span>' : "",
+    workspaceLabel ? `<span class="agent-session-workspaces">${escapeHtml(workspaceLabel)}</span>` : "",
+  ].filter(Boolean).join("");
   return `
-    <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button">
-      <strong>${escapeHtml(assistantSessionLabel(session))}</strong>
-      <span>${escapeHtml(session.description || "Conversation")}</span>
-      <span class="path-text">${attachedCount} Workspace${attachedCount === 1 ? "" : "s"} available${statusLabel ? ` - ${escapeHtml(statusLabel)}` : ""}</span>
+    <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button" aria-label="${escapeHtml(`${assistantSessionLabel(session)}. ${accessibleDescription}`)}">
+      <strong class="agent-session-title">${escapeHtml(assistantSessionLabel(session))}</strong>
+      ${metadata ? `<span class="agent-session-meta">${metadata}</span>` : ""}
     </button>
   `;
 }
@@ -16745,7 +20800,7 @@ function compatList(pairs, target) {
       <div class="compat-item compatible">
         <div class="compat-item-header">
           <strong>${escapeHtml(item.label)}</strong>
-          <button class="ghost-button compact-action" data-build-study-index="${index}" type="button">Use in Study</button>
+          <button class="ghost-button compact-action" data-build-study-index="${index}" type="button">Configure Study</button>
         </div>
         <span class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
       </div>
@@ -16772,16 +20827,21 @@ function runRow(run) {
   const bestTitle = best.available
     ? `Best comparable Candidate ${best.label}: ${String(best.value)}`
     : runOverviewBestReason(best.reason);
+  const loading = rowKey === state.selectedRunId
+    && state.runDetailLoadingVisible
+    && state.runDetailLoadingRunId === rowKey;
+  const updated = formatRealmTime(run.updated_at || run.created_at) || "Time unavailable";
   return `
-    <button class="run-row ${rowKey === state.selectedRunId ? "selected" : ""}" data-run-id="${escapeHtml(rowKey)}" type="button">
+    <button class="run-row ${rowKey === state.selectedRunId ? "selected" : ""} ${loading ? "loading" : ""}" data-run-id="${escapeHtml(rowKey)}" type="button" aria-current="${rowKey === state.selectedRunId ? "true" : "false"}">
       <span class="run-row-main">
         <strong title="${escapeHtml(runLabel)}">${escapeHtml(runLabel)}</strong>
         ${showRunId ? `<span class="path-text" title="${escapeHtml(runId)}">${escapeHtml(runId)}</span>` : ""}
       </span>
-      ${statusPill(runStatus(run))}
+      ${loading ? `<span class="run-row-load-status" role="status">Loading…</span>` : statusPill(runStatus(run))}
       <span class="run-row-meta">
         <span title="${escapeHtml(`Planned trials: ${plannedWork}`)}">Trials: ${escapeHtml(plannedWork)}</span>
         <span title="${escapeHtml(bestTitle)}">Best comparable Candidate ${escapeHtml(best.label)}: ${best.available ? formatMetric(best.value) : "not available"}</span>
+        <span title="${escapeHtml(`Last recorded update: ${updated}`)}">Updated ${escapeHtml(updated)}</span>
       </span>
     </button>
   `;
@@ -16815,9 +20875,34 @@ function validationHtml(result) {
   `;
 }
 
-async function getJson(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
+  if (!timeoutMs) return fetch(url, options);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error("Studio did not respond in time. Try again.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+async function getJson(url, options = {}) {
+  const response = await fetchWithTimeout(url, {}, Number(options.timeoutMs || 0));
+  if (!response.ok) {
+    const error = new Error(`${response.status} ${response.statusText}`);
+    error.status = response.status;
+    try {
+      error.payload = await response.clone().json();
+    } catch (payloadError) {
+      // A status code is sufficient for typed recovery when no JSON body exists.
+    }
+    throw error;
+  }
   return response.json();
 }
 
@@ -16826,15 +20911,22 @@ function sleep(milliseconds) {
 }
 
 async function postJson(url, payload, options = {}) {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     keepalive: Boolean(options.keepalive),
-  });
+  }, Number(options.timeoutMs || 0));
   const json = await response.json();
+  if (!response.ok && options.tolerateError && json && typeof json === "object") {
+    Object.defineProperty(json, "__httpStatus", {
+      value: response.status,
+      enumerable: false,
+    });
+  }
   if (!response.ok && !options.tolerateError) {
     const error = new Error(json.error || `${response.status} ${response.statusText}`);
+    error.status = response.status;
     error.payload = json;
     throw error;
   }
