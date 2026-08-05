@@ -89,10 +89,6 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("state.selectedSessionId", current)
         self.assertIn("No Workspace selected", self.source)
         self.assertIn("Workspace ready", self.source)
-        self.assertIn(
-            'class="nav-button shell-primary-destination" data-view="workspace"',
-            self.html,
-        )
         self.assertIn('class="sidebar-workspaces"', self.html)
         self.assertIn('id="sessionList"', self.html)
         self.assertIn(

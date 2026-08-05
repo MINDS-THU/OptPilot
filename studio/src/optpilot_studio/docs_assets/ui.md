@@ -83,7 +83,7 @@ _Captured from the Studio source checkout with `catalog/example_package/` loaded
 
 ## Navigation And Working Surfaces
 
-The left rail separates conversations from the four durable OptPilot
+The left rail separates conversations from the three durable OptPilot
 destinations. You never need to remember which conversation created a Study,
 Run, or Workspace in order to find it again.
 
@@ -93,7 +93,6 @@ Run, or Workspace in order to find it again.
 | Catalog | Browse reusable Environments, Methods, and Resources directly. |
 | Studies | Configure or reopen a Study, then launch a Run. |
 | Runs | Monitor active Runs and inspect retained results. |
-| Workspaces | Open durable editable projects. |
 | Conversations | Return to earlier discussions and their associated work. |
 | Settings | Configure Studio, Assistant, runtime, and local environment values. |
 
@@ -109,14 +108,16 @@ from the first substantive request, and the Assistant can refine it during the
 same turn or after a material change of goal. The rail does not show a total
 Conversation count or repeat “New conversation” on every card.
 
-When **Workspaces** is selected, the Conversation list is replaced by a compact
+When a Workspace is open, the Conversation list is replaced by a compact
 list of editable projects. Read-only Catalog source never appears in that list.
+Use **Manage Workspaces** in the Conversation Workspace panel to open the
+editable Workspace surface at any time.
 
 On the Conversation surface, the right-hand **Workspaces in this conversation**
 panel shows only the editable Workspaces that the current Conversation can use.
-This is not another Workspace collection: each project remains in the global
-**Workspaces** destination, no files are copied, and the Workspace keeps its own
-lifetime. **Add Workspace** makes a project available, **Open Workspace** opens
+This is not another Workspace collection: each project remains a durable
+Workspace with its own lifetime, and no files are copied. **Add Workspace**
+makes a project available, **Open Workspace** opens
 the ordinary editable surface, **Make default** chooses the file and command
 target used when a request does not name one, and **Remove** affects only the
 current Conversation. It never deletes the Workspace or removes it from Catalog.

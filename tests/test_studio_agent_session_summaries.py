@@ -11,6 +11,8 @@ from optpilot_studio.ui.server import (
     _append_agent_message,
     _create_agent_session,
     _list_agent_session_summaries,
+    _list_agent_sessions,
+    _set_agent_session_archived,
 )
 
 
@@ -63,6 +65,42 @@ class StudioAgentSessionSummaryTests(unittest.TestCase):
         self.assertTrue(
             any(message.get("content") == "Compare the available methods." for message in exact["messages"])
         )
+
+
+class StudioAgentSessionArchiveTests(unittest.TestCase):
+    def test_archived_conversations_leave_the_list_but_remain_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            kept = _create_agent_session(state, {"title": "Keep me"})
+            archived = _create_agent_session(state, {"title": "Old exploration"})
+
+            payload = _set_agent_session_archived(state, archived["id"], True)
+
+            summary_ids = [item["id"] for item in _list_agent_session_summaries(state)]
+            full_ids = [item["id"] for item in _list_agent_sessions(state)]
+            exact = _agent_session_by_id(state, archived["id"])
+
+        self.assertTrue(payload["archived"])
+        self.assertTrue(payload["archived_at"])
+        self.assertIn(kept["id"], summary_ids)
+        self.assertNotIn(archived["id"], summary_ids)
+        self.assertNotIn(archived["id"], full_ids)
+        self.assertEqual(exact["title"], "Old exploration")
+        self.assertTrue(exact["archived"])
+
+    def test_unarchiving_restores_the_conversation_to_the_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Take a break"})
+            _set_agent_session_archived(state, session["id"], True)
+
+            restored = _set_agent_session_archived(state, session["id"], False)
+
+            summary_ids = [item["id"] for item in _list_agent_session_summaries(state)]
+
+        self.assertFalse(restored["archived"])
+        self.assertEqual(restored["archived_at"], "")
+        self.assertIn(session["id"], summary_ids)
 
 
 class StudioAgentSessionSummaryStaticTests(unittest.TestCase):
@@ -118,6 +156,18 @@ class StudioAgentSessionSummaryStaticTests(unittest.TestCase):
         self.assertIn("await hydration", select)
         self.assertIn("Array.isArray(session.messages)", merge)
         self.assertIn("state.hydratedAgentSessionIds.add(session.id)", merge)
+
+    def test_archiving_a_conversation_confirms_then_forgets_local_state(self) -> None:
+        card = _function_source(self.source, "agentSessionCard")
+        archive = _function_source(self.source, "archiveAgentSession")
+
+        self.assertIn("data-archive-agent-session-id", card)
+        self.assertIn("window.confirm", archive)
+        self.assertIn("/archive", archive)
+        self.assertIn("{ archived: true }", archive)
+        self.assertLess(archive.index("window.confirm"), archive.index("postJson("))
+        self.assertIn("forgetAgentSessionLocalState(sessionId)", archive)
+        self.assertIn("ensureSelectedAgentSession()", archive)
 
 
 if __name__ == "__main__":

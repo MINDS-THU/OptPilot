@@ -103,7 +103,6 @@ const state = {
   agentSessionCreatePromise: null,
   agentSessionCreateError: "",
   conversationWorkspaceError: "",
-  conversationWorkspaceExpandedBySession: {},
   agentApprovalsBySession: {},
   assistantApprovalKeysBySession: {},
   agentEventsBySession: {},
@@ -384,7 +383,6 @@ function cacheElements() {
     "assistantResizeHandle",
     "closeAssistantButton",
     "conversationWorkspacePanel",
-    "conversationWorkspaceDisclosure",
     "conversationWorkspaceTitle",
     "conversationWorkspaceCount",
     "conversationWorkspaceList",
@@ -673,7 +671,6 @@ function bindEvents() {
   on(els.newWorkspaceButton, "click", () => createBlankSession());
   on(els.openLocalFolderButton, "click", () => openLocalFolderDialog());
   on(els.conversationWorkspacePanel, "click", handleConversationWorkspaceAction);
-  on(els.conversationWorkspaceDisclosure, "toggle", rememberConversationWorkspaceDisclosure);
   on(els.openLocalFolderCancelButton, "click", closeLocalFolderDialog);
   on(els.openLocalFolderSubmitButton, "click", connectLocalFolder);
   on(els.openLocalFolderPath, "keydown", (event) => {
@@ -1183,7 +1180,6 @@ function forgetAgentSessionLocalState(sessionId) {
   delete state.assistantApprovalKeysBySession[sessionId];
   delete state.agentEventsBySession[sessionId];
   delete state.agentSessionHydrationErrors[sessionId];
-  delete state.conversationWorkspaceExpandedBySession[sessionId];
   state.cancellingAgentSessionIds.delete(sessionId);
   state.syncingAgentSessionIds.delete(sessionId);
   state.hydratedAgentSessionIds.delete(sessionId);
@@ -4586,19 +4582,6 @@ function conversationWorkspaceChoice(workspace, duplicateTitles) {
   `;
 }
 
-function rememberConversationWorkspaceDisclosure() {
-  const disclosure = els.conversationWorkspaceDisclosure;
-  const sessionId = String(disclosure && disclosure.dataset.sessionId || "");
-  if (!disclosure || !sessionId) return;
-  const expectedOpen = disclosure.dataset.expectedOpen === "true";
-  // Assigning `details.open` while switching Conversations also emits a
-  // toggle event. Only a user change differs from the state the renderer
-  // expected, so programmatic synchronization must not become a preference.
-  if (disclosure.open === expectedOpen) return;
-  state.conversationWorkspaceExpandedBySession[sessionId] = disclosure.open;
-  disclosure.dataset.expectedOpen = String(disclosure.open);
-}
-
 function renderConversationWorkspaceAccess() {
   if (!els.conversationWorkspacePanel) return;
   const agentSession = currentAgentSession();
@@ -4622,13 +4605,6 @@ function renderConversationWorkspaceAccess() {
   const available = editable.filter((workspace) => !attachedIds.has(workspace.id));
   const duplicateTitles = duplicateWorkspaceTitleKeys(editable);
   const selectedWorkspaceId = state.selectedWorkspaceByAgentSession[agentSession.id] || "";
-  if (els.conversationWorkspaceDisclosure) {
-    const savedExpansion = state.conversationWorkspaceExpandedBySession[agentSession.id];
-    const expanded = typeof savedExpansion === "boolean" ? savedExpansion : attached.length > 0;
-    els.conversationWorkspaceDisclosure.dataset.sessionId = agentSession.id;
-    els.conversationWorkspaceDisclosure.dataset.expectedOpen = String(expanded);
-    els.conversationWorkspaceDisclosure.open = expanded;
-  }
   const signature = stableJsonStringify({
     sessionId: agentSession.id,
     selectedWorkspaceId,
@@ -6613,6 +6589,9 @@ function renderAssistantSessionList() {
     root.querySelectorAll("[data-agent-session-id]").forEach((button) => {
       button.addEventListener("click", () => selectAgentSession(button.dataset.agentSessionId));
     });
+    root.querySelectorAll("[data-archive-agent-session-id]").forEach((button) => {
+      button.addEventListener("click", () => archiveAgentSession(button.dataset.archiveAgentSessionId, button));
+    });
     root.querySelectorAll("[data-conversation-list-retry]").forEach((button) => {
       button.addEventListener("click", () => retryAgentSessionList(button));
     });
@@ -6636,6 +6615,44 @@ async function retryAgentSessionList(button = null) {
     });
   }
   renderAssistant();
+}
+
+async function archiveAgentSession(sessionId, button = null) {
+  const session = state.agentSessions.find((item) => item.id === sessionId);
+  if (!session || sessionId.startsWith("agent-session-")) return;
+  const label = assistantSessionLabel(session);
+  if (!window.confirm(
+    `Archive “${label}”? It leaves the Conversation list. Its messages and files stay on this machine.`,
+  )) return;
+  if (button) button.disabled = true;
+  try {
+    await postJson(
+      `/api/agent-sessions/${encodeURIComponent(sessionId)}/archive`,
+      { archived: true },
+      { timeoutMs: 12000 },
+    );
+  } catch (error) {
+    state.agentSessionsError = boundedPublicActionError(
+      error,
+      "The Conversation could not be archived.",
+    );
+    renderAssistantSessionList();
+    return;
+  }
+  const wasSelected = state.selectedAgentSessionId === sessionId;
+  state.agentSessions = state.agentSessions.filter((item) => item.id !== sessionId);
+  forgetAgentSessionLocalState(sessionId);
+  ensureSelectedAgentSession();
+  if (wasSelected) {
+    restoreAssistantContinuity(state.selectedAgentSessionId);
+    syncStudioRoute();
+    renderAssistant();
+    if (state.selectedAgentSessionId) {
+      await hydrateAgentSessionById(state.selectedAgentSessionId, { force: true, render: false });
+    }
+  }
+  renderAssistantSessionList();
+  if (wasSelected) renderAssistant();
 }
 
 async function openRegistrationMenu() {
@@ -20643,10 +20660,13 @@ function agentSessionCard(session) {
     workspaceLabel ? `<span class="agent-session-workspaces">${escapeHtml(workspaceLabel)}</span>` : "",
   ].filter(Boolean).join("");
   return `
-    <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button" aria-label="${escapeHtml(`${assistantSessionLabel(session)}. ${accessibleDescription}`)}">
-      <strong class="agent-session-title">${escapeHtml(assistantSessionLabel(session))}</strong>
-      ${metadata ? `<span class="agent-session-meta">${metadata}</span>` : ""}
-    </button>
+    <div class="agent-session-row">
+      <button class="agent-session-card ${session.id === state.selectedAgentSessionId ? "active" : ""}" data-agent-session-id="${escapeHtml(session.id)}" type="button" aria-label="${escapeHtml(`${assistantSessionLabel(session)}. ${accessibleDescription}`)}">
+        <strong class="agent-session-title">${escapeHtml(assistantSessionLabel(session))}</strong>
+        ${metadata ? `<span class="agent-session-meta">${metadata}</span>` : ""}
+      </button>
+      <button class="agent-session-archive" type="button" data-archive-agent-session-id="${escapeHtml(session.id)}" title="Archive this Conversation" aria-label="Archive ${escapeHtml(assistantSessionLabel(session))}">Archive</button>
+    </div>
   `;
 }
 

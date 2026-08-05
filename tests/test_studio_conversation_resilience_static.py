@@ -37,33 +37,32 @@ class StudioConversationResilienceStaticTest(unittest.TestCase):
         cls.css = _CSS.read_text(encoding="utf-8")
         cls.server_source = _SERVER.read_text(encoding="utf-8")
 
-    def test_zero_workspace_disclosure_is_not_forced_open(self) -> None:
-        disclosure = re.search(
-            r'<details\s+id="conversationWorkspaceDisclosure"([^>]*)>',
-            self.html,
-        )
-        self.assertIsNotNone(disclosure)
-        self.assertNotRegex(disclosure.group(1), r"\bopen\b")
+    def test_workspace_panel_is_always_expanded(self) -> None:
+        self.assertIn('class="conversation-workspace-shell"', self.html)
+        self.assertNotIn("conversationWorkspaceDisclosure", self.html)
 
         render = _function_source(self.source, "renderConversationWorkspaceAccess")
-        self.assertIn("conversationWorkspaceExpandedBySession", render)
-        self.assertIn("attached.length > 0", render)
-        self.assertIn("dataset.sessionId = agentSession.id", render)
-        self.assertIn(
+        self.assertNotIn("conversationWorkspaceExpandedBySession", render)
+        self.assertNotIn("conversationWorkspaceDisclosure", self.source)
+        self.assertIn(".conversation-workspace-shell", self.css)
+        self.assertNotIn(
             ".conversation-workspace-panel > details:not([open]) > .conversation-workspace-body",
             self.css,
         )
 
-    def test_workspace_disclosure_preference_is_scoped_to_conversation(self) -> None:
-        remember = _function_source(
-            self.source, "rememberConversationWorkspaceDisclosure"
+    def test_workspace_list_scrolls_within_the_panel(self) -> None:
+        body = re.search(
+            r"\.conversation-workspace-body\s*\{([^}]*)\}",
+            self.css,
         )
-        bind = _function_source(self.source, "bindEvents")
-
-        self.assertIn("conversationWorkspaceExpandedBySession[sessionId]", remember)
-        self.assertIn("dataset.expectedOpen", remember)
-        self.assertIn("conversationWorkspaceDisclosure", bind)
-        self.assertIn('"toggle"', bind)
+        listing = re.search(
+            r"\.conversation-workspace-list,\s*\n\.conversation-workspace-choices\s*\{([^}]*)\}",
+            self.css,
+        )
+        self.assertIsNotNone(body)
+        self.assertIsNotNone(listing)
+        self.assertIn("minmax(0, 1fr)", body.group(1))
+        self.assertIn("overflow-y: auto", listing.group(1))
 
     def test_hydration_records_a_public_error_for_the_exact_conversation(self) -> None:
         hydrate = _function_source(self.source, "hydrateAgentSessionById")

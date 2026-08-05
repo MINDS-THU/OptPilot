@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260805k" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260806c" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -77,13 +77,6 @@
             <span class="nav-label">
               <strong>Runs</strong>
               <small aria-hidden="true">Progress and results</small>
-            </span>
-          </button>
-          <button class="nav-button shell-primary-destination" data-view="workspace" type="button">
-            <span class="nav-icon nav-icon-workspaces" aria-hidden="true"></span>
-            <span class="nav-label">
-              <strong>Workspaces</strong>
-              <small aria-hidden="true">Editable projects</small>
             </span>
           </button>
         </nav>
@@ -225,11 +218,11 @@
           <section id="conversationOnboarding" class="conversation-onboarding" aria-label="What OptPilot can do" hidden></section>
           <div id="agentTimeline" class="agent-timeline" role="log" aria-label="Conversation history" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
           <aside id="conversationWorkspacePanel" class="conversation-workspace-panel" aria-labelledby="conversationWorkspaceTitle" hidden>
-            <details id="conversationWorkspaceDisclosure">
-              <summary class="conversation-workspace-summary">
+            <div class="conversation-workspace-shell">
+              <div class="conversation-workspace-summary">
                 <span id="conversationWorkspaceTitle" class="conversation-workspace-title" role="heading" aria-level="3">Workspaces in this conversation</span>
                 <span id="conversationWorkspaceCount" class="conversation-workspace-count">0</span>
-              </summary>
+              </div>
               <div class="conversation-workspace-body">
                 <p class="conversation-workspace-help">Every Workspace listed here is available to OptPilot. The default is used when your request does not name one.</p>
                 <div id="conversationWorkspaceList" class="conversation-workspace-list"></div>
@@ -246,7 +239,7 @@
                   </div>
                 </details>
               </div>
-            </details>
+            </div>
           </aside>
           <div class="composer">
             <textarea id="agentInput" spellcheck="false" aria-label="Message OptPilot"></textarea>
@@ -806,6 +799,6 @@
       </div>
 
     <div id="selectionContentDrawerHost"></div>
-    <script src="/static/app.js?v=studio-20260805k"></script>
+    <script src="/static/app.js?v=studio-20260806c"></script>
   </body>
 </html>

@@ -9156,6 +9156,7 @@ body.shell-v2.shell-content.view-workspace:not(.catalog-source-view) .sidebar-wo
 body.shell-v2 .rail-conversation-cards {
   display: grid;
   align-content: start;
+  grid-auto-rows: max-content;
   min-height: 0;
   overflow: auto;
   border: 1px solid transparent;
@@ -9174,18 +9175,58 @@ body.shell-v2 .composer-context-actions .compact-action {
   font-size: 11px;
 }
 
+body.shell-v2 .rail-conversation-cards .agent-session-row {
+  position: relative;
+  min-width: 0;
+}
+
+body.shell-v2 .rail-conversation-cards .agent-session-row + .agent-session-row {
+  margin-top: 2px;
+}
+
+body.shell-v2 .rail-conversation-cards .agent-session-archive {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: none;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+body.shell-v2 .rail-conversation-cards .agent-session-row:hover .agent-session-archive,
+body.shell-v2 .rail-conversation-cards .agent-session-row:focus-within .agent-session-archive {
+  display: inline-flex;
+  align-items: center;
+}
+
+body.shell-v2 .rail-conversation-cards .agent-session-row:hover .agent-session-card,
+body.shell-v2 .rail-conversation-cards .agent-session-row:focus-within .agent-session-card {
+  padding-right: 66px;
+}
+
+body.shell-v2 .rail-conversation-cards .agent-session-archive:hover {
+  background: #f2f3f5;
+  color: var(--text);
+}
+
 body.shell-v2 .rail-conversation-cards .agent-session-card {
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 4px;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
-  padding: 9px 10px 9px 12px;
+  padding: 10px 10px 10px 12px;
   border: 0;
   border-radius: 7px;
   background: transparent;
-}
-
-body.shell-v2 .rail-conversation-cards .agent-session-card + .agent-session-card {
-  margin-top: 2px;
+  text-align: left;
 }
 
 body.shell-v2 .rail-conversation-cards .agent-session-card:hover {
@@ -9200,28 +9241,32 @@ body.shell-v2 .rail-conversation-cards .agent-session-card.active {
 body.shell-v2 .rail-conversation-cards .agent-session-title {
   display: block;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  line-height: 1.3;
 }
 
 body.shell-v2 .rail-conversation-cards .agent-session-meta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1.25;
   white-space: nowrap;
 }
 
 body.shell-v2 .rail-conversation-cards .agent-session-meta > span {
-  min-width: 0;
+  flex-shrink: 0;
   overflow: hidden;
   color: inherit;
   font-size: inherit;
@@ -9566,10 +9611,8 @@ body.shell-v2.shell-conversation .agent-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 292px;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  width: min(1500px, calc(100% - 32px));
+  width: auto;
   max-width: none;
-  margin-inline: auto;
-  justify-self: center;
   overflow: hidden;
 }
 
@@ -9707,7 +9750,7 @@ body.shell-v2.shell-conversation .conversation-workspace-panel:not([hidden]) {
   background: #f8f9fa;
 }
 
-.conversation-workspace-panel > details {
+.conversation-workspace-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
@@ -9721,15 +9764,8 @@ body.shell-v2.shell-conversation .conversation-workspace-panel:not([hidden]) {
   gap: 10px;
   min-height: 54px;
   padding: 11px 14px;
-  cursor: pointer;
-  list-style-position: inside;
   border-bottom: 1px solid var(--line);
   background: #ffffff;
-}
-
-.conversation-workspace-summary::marker {
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .conversation-workspace-title {
@@ -9759,10 +9795,6 @@ body.shell-v2.shell-conversation .conversation-workspace-panel:not([hidden]) {
   overflow: hidden;
 }
 
-.conversation-workspace-panel > details:not([open]) > .conversation-workspace-body {
-  display: none;
-}
-
 .conversation-workspace-help,
 .conversation-workspace-picker > p {
   margin: 0;
@@ -9777,7 +9809,8 @@ body.shell-v2.shell-conversation .conversation-workspace-panel:not([hidden]) {
   align-content: start;
   gap: 8px;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .conversation-workspace-card {
@@ -10310,7 +10343,7 @@ body.shell-v2.shell-conversation .assistant-ui-card {
     border-bottom: 1px solid var(--line);
   }
 
-  .conversation-workspace-panel > details {
+  .conversation-workspace-shell {
     height: auto;
     max-height: min(320px, 42svh);
   }

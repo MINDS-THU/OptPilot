@@ -5198,6 +5198,16 @@ def _handler_factory(state: UiState):
                     }
                 )
                 return
+            if len(parts) == 5 and parts[4] == "archive":
+                payload = self._read_json_body()
+                self._send_json(
+                    {
+                        "session": _set_agent_session_archived(
+                            state, session_id, bool(payload.get("archived", True))
+                        )
+                    }
+                )
+                return
             if len(parts) == 5 and parts[4] == "cancel":
                 self._send_json({"session": _cancel_agent_session(state, session_id)})
                 return
@@ -19745,12 +19755,17 @@ def _list_agent_session_summaries(state: UiState) -> List[JsonDict]:
     return [
         _decorate_agent_session_status(state, dict(session))
         for session in _normalized_agent_sessions(state)
+        if not session.get("archived")
     ]
 
 
 def _list_agent_sessions(state: UiState) -> List[JsonDict]:
     normalized = _normalized_agent_sessions(state)
-    return [_agent_session_payload(state, session) for session in normalized]
+    return [
+        _agent_session_payload(state, session)
+        for session in normalized
+        if not session.get("archived")
+    ]
 
 
 def _agent_session_by_id(state: UiState, session_id: str) -> Optional[JsonDict]:
@@ -19779,6 +19794,16 @@ def _upsert_agent_session(state: UiState, session: JsonDict) -> JsonDict:
         sessions.append(session)
         _write_agent_session_index(state, sessions)
     return _agent_session_payload(state, session)
+
+
+def _set_agent_session_archived(
+    state: UiState, session_id: str, archived: bool
+) -> JsonDict:
+    session = _require_agent_session(state, session_id)
+    session = dict(session)
+    session["archived"] = bool(archived)
+    session["archived_at"] = _now_iso() if archived else ""
+    return _upsert_agent_session(state, session)
 
 
 def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:

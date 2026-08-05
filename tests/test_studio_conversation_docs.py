@@ -39,7 +39,7 @@ class StudioConversationDocsTest(unittest.TestCase):
         ui = self._source("ui.md")
         for phrase in (
             "Conversation is the default surface",
-            "four durable OptPilot",
+            "three durable OptPilot",
             "Open work",
             "Source Viewer And Workspace Editor",
             "Study",
