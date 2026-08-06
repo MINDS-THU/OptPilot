@@ -12,6 +12,7 @@
     "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
     "environmentConfig": {"type": "string"},
     "methodConfig": {"type": "string"},
+    "inputs": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"},
     "objective": {
       "type": "object",
       "additionalProperties": false,

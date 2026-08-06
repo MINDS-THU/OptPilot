@@ -11,7 +11,7 @@ import copy
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .models import Observation
 from .realm.config import default_realm_root
@@ -42,6 +42,7 @@ class StudyRunner:
         realm_root: Path | None = None,
         operation_id: str | None = None,
         method_request_timeout: float = 10.0,
+        launch_inputs: Optional[Mapping[str, object]] = None,
     ) -> None:
         if not isinstance(study_config_path, Path):
             raise TypeError("study_config_path must be a Path.")
@@ -75,6 +76,9 @@ class StudyRunner:
         ):
             raise ValueError("method_request_timeout must be finite and positive.")
         self.method_request_timeout = float(method_request_timeout)
+        if launch_inputs is not None and not isinstance(launch_inputs, Mapping):
+            raise TypeError("launch_inputs must be a mapping or None.")
+        self.launch_inputs = None if launch_inputs is None else dict(launch_inputs)
 
     def run(self) -> RunSummaryProjection:
         with LocalRealmRuntime.open(realm_root=self.realm_root) as runtime:
@@ -88,6 +92,7 @@ class StudyRunner:
                 # this launch.  The retained service selects only names
                 # declared by the Method; it never inherits this mapping.
                 method_environment=os.environ,
+                launch_inputs=self.launch_inputs,
             )
 
 
@@ -98,6 +103,7 @@ def run_study(
     realm_root: Optional[str] = None,
     operation_id: Optional[str] = None,
     method_request_timeout: float = 10.0,
+    launch_inputs: Optional[Mapping[str, object]] = None,
 ) -> RunSummaryProjection:
     """Run an authored study from one explicit package into the local Realm."""
 
@@ -111,6 +117,7 @@ def run_study(
         ),
         operation_id=operation_id,
         method_request_timeout=method_request_timeout,
+        launch_inputs=launch_inputs,
     )
     return runner.run()
 

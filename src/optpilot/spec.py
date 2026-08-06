@@ -107,7 +107,7 @@ class StudySpec:
             return candidate
         return (self.base_dir / candidate).resolve()
 
-def load_study_spec(path: str) -> StudySpec:
+def load_study_spec(path: str, *, launch_inputs=None) -> StudySpec:
     spec_path = Path(path).resolve()
     with spec_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -115,7 +115,9 @@ def load_study_spec(path: str) -> StudySpec:
         raise ValueError("OptPilot user config must be config 'study'. Expanded StudySpec is internal.")
     from .config import compile_authoring_config
 
-    return study_spec_from_raw(spec_path, compile_authoring_config(spec_path))
+    return study_spec_from_raw(
+        spec_path, compile_authoring_config(spec_path, launch_inputs=launch_inputs)
+    )
 
 
 def load_expanded_study_spec(path: str) -> StudySpec:

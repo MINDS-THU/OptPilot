@@ -633,6 +633,7 @@ class RetainedStudyService:
         study_definition_owner_id: str,
         capture_ttl_seconds: float = 300,
         projection_ttl_seconds: float = 300,
+        launch_inputs: Mapping[str, Any] | None = None,
     ) -> RetainedStudyPreparationReceipt:
         """Seal first, compile from those bytes, then retain one definition."""
 
@@ -675,6 +676,7 @@ class RetainedStudyService:
             seal=seal,
             capture_ttl_seconds=capture_ttl_seconds,
             projection_ttl_seconds=projection_ttl_seconds,
+            launch_inputs=launch_inputs,
         )
 
     def prepare_selected_package(
@@ -808,6 +810,7 @@ class RetainedStudyService:
         seal: TreeSealReceipt | None,
         capture_ttl_seconds: float,
         projection_ttl_seconds: float,
+        launch_inputs: Mapping[str, Any] | None = None,
     ) -> RetainedStudyPreparationReceipt:
         """Verify, project once, compile, and retain one already-owned tree."""
 
@@ -843,6 +846,7 @@ class RetainedStudyService:
             plan = plan_local_study_package(
                 projected_root / study_relative,
                 projected_root,
+                launch_inputs=launch_inputs,
             )
             _validate_projected_authoring_paths(plan)
             _validate_manifest_config_entries(package_manifest, plan)

@@ -722,6 +722,8 @@ def _compiled_trial_workspace_mappings(
 def plan_local_study_package(
     study_config_path: Path,
     package_root: Path,
+    *,
+    launch_inputs: Mapping[str, Any] | None = None,
 ) -> LocalStudyPackagePlan:
     """Validate and compile one caller-declared local study package.
 
@@ -768,7 +770,9 @@ def plan_local_study_package(
         )
 
     try:
-        compiled = compile_authoring_config(study_path)
+        compiled = compile_authoring_config(
+            study_path, launch_inputs=launch_inputs
+        )
         _cross_check_compiled_config_paths(
             compiled,
             study_path=study_path,

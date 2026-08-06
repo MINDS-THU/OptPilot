@@ -15,6 +15,7 @@
       "type": "string",
       "enum": ["generator", "viewer", "template", "reference"]
     },
+    "inputs": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"},
     "interface": {"$ref": "defs/common.schema.json#/definitions/interface"}
   }
 }

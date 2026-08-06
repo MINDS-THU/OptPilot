@@ -85,6 +85,7 @@ def run_local_realm_study(
     method_start_timeout: float = 10.0,
     method_request_timeout: float | None = None,
     method_environment: Mapping[str, str] | None = None,
+    launch_inputs: Mapping[str, object] | None = None,
 ) -> RunSummaryProjection:
     """Freeze and execute one supported local package through Realm only.
 
@@ -120,9 +121,9 @@ def run_local_realm_study(
         raise ValueError(
             "study_config_path must be inside the explicit package_root."
         ) from error
-    method_runtime = load_study_spec(str(study_config_path)).method.get(
-        "runtime", {}
-    )
+    method_runtime = load_study_spec(
+        str(study_config_path), launch_inputs=launch_inputs
+    ).method.get("runtime", {})
     selected_method_request_timeout = method_exchange_timeout_seconds(
         method_runtime,
         override=method_request_timeout,
@@ -137,6 +138,7 @@ def run_local_realm_study(
             if method_environment
             else None
         ),
+        launch_inputs=launch_inputs,
         execution_profile=RunExecutionProfile(
             controller_ttl_seconds=controller_ttl_seconds,
             heartbeat_interval_seconds=heartbeat_interval_seconds,

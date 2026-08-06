@@ -510,6 +510,26 @@ interface:
 omitted, the Catalog labels the entry **Resource**. It never guesses a purpose
 from the resource's name, tags, files, or launch command.
 
+A resource may also declare optional typed `inputs`, using the same parameter
+definition as `candidate.parameters.schema`:
+
+```yaml
+inputs:
+  specification:
+    valueType: string
+    description: Natural-language description of the system to generate.
+  horizon:
+    valueType: int
+    min: 1
+    default: 100
+    unit: steps
+```
+
+`inputs` documents what the resource consumes and is validated like any other
+parameter declaration. Typed inputs are the basis for rendering a simple input
+form for a resource that has no custom interface, and for letting the
+Assistant collect the required values before operating the resource.
+
 The interface declaration is the portable contextual-interface contract for
 grants, resources, readiness, and accepted selections. Current catalog launch
 supports process-declared profiles through Studio's managed authoring runtime

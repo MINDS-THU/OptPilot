@@ -18,20 +18,25 @@ import zipfile
 from pathlib import Path
 
 
+RESEARCH_SCRATCH_PREFIXES = (
+    "catalog/",
+    "design/",
+    "designs/",
+    "resource/",
+)
+
 CORE_FORBIDDEN_SDIST_PREFIXES = (
     ".agents/",
     ".github/",
     ".optpilot-ui/",
-    "catalog/",
-    "designs/",
     "docs/",
-    "resource/",
     "runs/",
     "scripts/",
     "site/",
     "studio/",
     "tests/",
     "workspace/",
+    *RESEARCH_SCRATCH_PREFIXES,
 )
 
 CORE_FORBIDDEN_WHEEL_PREFIXES = (
@@ -39,6 +44,7 @@ CORE_FORBIDDEN_WHEEL_PREFIXES = (
     "optpilot/assistant_assets/",
     "optpilot/docs_assets/",
     "optpilot_studio/",
+    *RESEARCH_SCRATCH_PREFIXES,
 )
 
 CORE_REQUIRED_WHEEL_ENTRIES = {
@@ -216,7 +222,7 @@ def _check_studio_artifacts(dist_dir: Path, version: str) -> list[str]:
             _check_wheel(
                 wheel,
                 required=STUDIO_REQUIRED_WHEEL_ENTRIES,
-                forbidden_prefixes=("optpilot/",),
+                forbidden_prefixes=("optpilot/", *RESEARCH_SCRATCH_PREFIXES),
                 metadata_name="optpilot_studio",
                 version=version,
                 required_entry_points=(
@@ -231,7 +237,7 @@ def _check_studio_artifacts(dist_dir: Path, version: str) -> list[str]:
             _check_sdist(
                 sdist,
                 required=STUDIO_REQUIRED_SDIST_ENTRIES,
-                forbidden_prefixes=("tests/",),
+                forbidden_prefixes=("tests/", *RESEARCH_SCRATCH_PREFIXES),
             )
         )
     return errors

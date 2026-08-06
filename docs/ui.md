@@ -17,7 +17,7 @@ Studio is organized around one working loop:
 4. Operate a simulator or other rich interface in the full main area, or let
    OptPilot run the work in the background.
 5. Return to a Conversation and recover running interfaces and Runs from
-   **Open work**. Durable items remain in Studies, Runs, and Workspaces.
+   **Open work**. Durable items remain in Run setups, Runs, and Workspaces.
 
 Conversation is the default surface, but it is not the only way to use Studio.
 Catalog remains directly browsable, and focused interfaces do not depend on the
@@ -53,7 +53,7 @@ Start with this path:
    components yourself.
 3. Ask to evaluate the bundled job-shop baseline, or find
    `job_shop_rule_parameters_baseline.yaml` in Catalog.
-4. Review the **Study**: Environment, Method, objective, direction, and
+4. Review the **Run setup**: Environment, Method, objective, direction, and
    budget. Expand its detailed configuration only when needed.
 5. Choose **Launch run** explicitly. Starting work is never implied by ordinary
    Assistant prose.
@@ -91,7 +91,7 @@ Run, or Workspace in order to find it again.
 | --- | --- |
 | New conversation | Start a separate problem or line of work. |
 | Catalog | Browse reusable Environments, Methods, and Resources directly. |
-| Studies | Configure or reopen a Study, then launch a Run. |
+| Run setups (Studies) | Configure or reopen a Run setup, then launch a Run. |
 | Runs | Monitor active Runs and inspect retained results. |
 | Conversations | Return to earlier discussions and their associated work. |
 | Settings | Configure Studio, Assistant, runtime, and local environment values. |
@@ -136,8 +136,10 @@ message area.
 The current browser addresses for Catalog entries, Studies, Runs, Candidates,
 Workspaces, and interfaces remain refresh-safe. Existing bookmarks and links
 such as `#/studies/...`, `#/runs/...`, and `#/workspaces/...` continue to open
-the corresponding focused surface. Studio uses **Study** consistently for the
-saved configuration that binds an Environment, Method, objective, and budget.
+the corresponding focused surface. User-facing surfaces present the saved
+configuration that binds an Environment, Method, objective, and budget as a
+**Run setup**; `study` remains the configuration kind name in the YAML schema,
+API routes, and CLI commands.
 
 ## Open Work
 
@@ -153,7 +155,7 @@ Studies, completed Runs, or ordinary Assistant messages.
 
 Select an item to open its normal detailed surface. Leaving that surface does
 not cancel a Run or stop an interface. Completed Runs remain under **Runs**,
-saved Studies remain under **Studies**, Workspaces remain under
+saved Run setups remain under **Run setups**, Workspaces remain under
 **Workspaces**, and Assistant activity remains with its Conversation.
 
 ## Source Viewer And Workspace Editor
@@ -169,18 +171,18 @@ Choose **Edit in Workspace** from a Catalog source only when you actually want
 an editable project. That explicit action creates or reopens the editable
 boundary; merely viewing source does not.
 
-## Assistant Cards And Studies
+## Assistant Cards And Run Setups
 
 The Assistant currently presents three structured card families: published
-Catalog recommendations, Studies, and Runs (including a Run launch while it
+Catalog recommendations, Run setups, and Runs (including a Run launch while it
 is being prepared). A card carries the exact Catalog reference or object
 identity behind the recommendation. Catalog recommendation cards may offer a
-declared interface, and Study cards may open their Workspace; these are
+declared interface, and Run setup cards may open their Workspace; these are
 actions on those cards, not separate interface, Workspace, or output card
 families. Buttons on a card invoke known Studio actions; links or prose generated
 in a chat message do not become privileged actions.
 
-A Study exposes the common choices directly:
+A Run setup exposes the common choices directly:
 
 - Environment and Method
 - objective metric and direction
@@ -218,7 +220,7 @@ Catalog entries may expose these actions:
 | View source | Opens the published version read-only without creating a Workspace. |
 | Edit in Workspace | Creates or reopens one editable Workspace for intentional changes. |
 | Open interface | Starts the declared interface over read-only source and temporary launch storage. Prepared dependencies may be reused. |
-| Configure Study | Choose a compatible Environment or Method and open a Study while preserving the exact Catalog reference. |
+| Configure Run setup | Choose a compatible Environment or Method and open a Run setup while preserving the exact Catalog reference. |
 
 A configured source card is labeled **Local source · Mutable**. **Link local
 folder** connects that existing folder as one editable Workspace without

@@ -59,6 +59,26 @@ def build_parser() -> argparse.ArgumentParser:
             "(increase for external model calls; default: 10)"
         ),
     )
+    run_parser.add_argument(
+        "--input",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        dest="inputs",
+        help=(
+            "Per-launch value for a study-declared input (repeatable). "
+            "Values are parsed as YAML scalars: 30 is an int, true a bool, "
+            "quoted values stay strings."
+        ),
+    )
+    run_parser.add_argument(
+        "--inputs-file",
+        default=None,
+        help=(
+            "YAML file with a mapping of per-launch study input values; "
+            "--input wins on conflicting keys"
+        ),
+    )
     run_parser.set_defaults(handler=_run_command)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an OptPilot public config")
@@ -163,6 +183,41 @@ def main(argv=None) -> int:
         return 1
 
 
+def _parse_launch_inputs(args) -> dict | None:
+    """Merge --inputs-file and repeatable --input into one mapping.
+
+    Returns ``None`` when neither flag was used, so studies without declared
+    inputs launch exactly as before. Values are parsed as YAML scalars.
+    """
+
+    import yaml
+
+    if args.inputs_file is None and args.inputs is None:
+        return None
+    merged: dict = {}
+    if args.inputs_file is not None:
+        with open(args.inputs_file, "r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle)
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict):
+            raise SystemExit(
+                f"--inputs-file {args.inputs_file} must contain a YAML mapping."
+            )
+        merged.update(loaded)
+    for item in args.inputs or []:
+        key, separator, value = item.partition("=")
+        if not separator or not key:
+            raise SystemExit(
+                f"--input {item!r} must use key=value form."
+            )
+        try:
+            merged[key] = yaml.safe_load(value)
+        except yaml.YAMLError as error:
+            raise SystemExit(f"--input {item!r} value is not a YAML scalar: {error}")
+    return merged
+
+
 def _run_command(args) -> int:
     summary = run_study(
         args.spec,
@@ -170,6 +225,7 @@ def _run_command(args) -> int:
         realm_root=args.realm_root,
         operation_id=args.operation_id,
         method_request_timeout=args.method_request_timeout,
+        launch_inputs=_parse_launch_inputs(args),
     )
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
     return 0 if summary.run_status == "succeeded" else 1

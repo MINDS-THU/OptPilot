@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import yaml
 
+from .parameter_values import apply_parameter_defaults, validate_parameter_values
 from .realm.run_closure import InterfaceLaunchProfile
 from .run_execution_profile import MAX_RUN_EXECUTION_CONTROL_SECONDS
 from .schema_validation import require_public_config_schema, validate_public_config_schema
@@ -39,8 +40,20 @@ PARAMETER_VALUE_TYPES = {"float", "int", "categorical", "bool", "string", "array
 RESOURCE_PURPOSES = {"generator", "viewer", "template", "reference"}
 
 
-def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
-    """Compile a public study config into the internal StudySpec dictionary."""
+def compile_authoring_config(
+    path: str | Path,
+    *,
+    launch_inputs: Mapping[str, Any] | None = None,
+    bind_launch_inputs: bool = True,
+) -> Dict[str, Any]:
+    """Compile a public study config into the internal StudySpec dictionary.
+
+    ``launch_inputs`` carries per-launch values for the study's declared
+    ``inputs``. ``None`` means no launch inputs were supplied at all, which is
+    valid only when the study declares no ``inputs`` or every declared input
+    has a ``default``. ``bind_launch_inputs=False`` validates the declaration
+    without requiring launch values (used by static config validation).
+    """
 
     config_path = Path(path).resolve()
     study = _load_and_validate_public_config(config_path, CONFIG_STUDY)
@@ -72,8 +85,29 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
             f"{environment_path or '<inline environment>'} metrics.keys {sorted(metric_keys)!r}."
         )
 
+    resolved_inputs = _resolve_study_launch_inputs(
+        study,
+        config_path,
+        environment=environment,
+        environment_path=environment_path,
+        method=method,
+        method_path=method_path,
+        launch_inputs=launch_inputs,
+        bind_launch_inputs=bind_launch_inputs,
+    )
+
     compiled_method = _compile_method(method, method_path, candidate)
     execution = _compile_execution(study, config_path, environment, environment_path)
+
+    compiled_environment = _compile_environment(environment, environment_path, candidate)
+    if resolved_inputs is not None:
+        adapter = compiled_environment["adapter"]
+        if adapter["type"] == "configured_environment":
+            adapter["config"]["evaluate"]["config"]["inputs"] = deepcopy(resolved_inputs)
+        else:
+            adapter["config"]["inputs"] = deepcopy(resolved_inputs)
+        compiled_method["config"]["inputs"] = deepcopy(resolved_inputs)
+        compiled_method["settings"]["inputs"] = deepcopy(resolved_inputs)
 
     return {
         "apiVersion": "optpilot/v1",
@@ -83,7 +117,7 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
             "description": str(study.get("description", "")),
             "tags": list(study.get("tags", [])),
         },
-        "environment": _compile_environment(environment, environment_path, candidate),
+        "environment": compiled_environment,
         "objective": _compile_objective(study["objective"]),
         "candidate": _compile_candidate_contract(environment, environment_path, candidate),
         "method": compiled_method,
@@ -100,6 +134,16 @@ def compile_authoring_config(path: str | Path) -> Dict[str, Any]:
                 "methodConfigPath": str(method_path) if method_path else None,
                 "environmentId": environment.get("id"),
                 "methodId": method.get("id"),
+                **(
+                    {
+                        "inputs": {
+                            "declaration": deepcopy(study["inputs"]),
+                            "values": deepcopy(resolved_inputs),
+                        }
+                    }
+                    if resolved_inputs is not None
+                    else {}
+                ),
             }
         },
     }
@@ -120,7 +164,7 @@ def validate_authoring_config(path: str | Path) -> Dict[str, Any]:
             }
         config = raw.get("config")
         if config == CONFIG_STUDY:
-            compile_authoring_config(config_path)
+            compile_authoring_config(config_path, bind_launch_inputs=False)
         elif config == CONFIG_ENVIRONMENT:
             _validate_environment_semantics(raw, config_path)
         elif config == CONFIG_METHOD:
@@ -189,6 +233,13 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
         _require_plain_python_import(evaluator["adapter"], f"{location} evaluator.adapter")
     if evaluator.get("command"):
         _require_string_list(evaluator["command"], f"{location} evaluator.command", non_empty=True)
+
+    _validate_declared_settings(
+        evaluator,
+        schema_key="settingsSchema",
+        values_key="settings",
+        location=f"{location} evaluator",
+    )
 
     runtime = environment.get("runtime", {}) or {}
     _validate_runtime(runtime, f"{location} runtime")
@@ -297,12 +348,21 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
             f"{location} interface",
             component_kind="method",
         )
+    _validate_declared_settings(
+        method,
+        schema_key="settingsSchema",
+        values_key="settings",
+        location=location,
+    )
     _validate_runtime(method.get("runtime", {}) or {}, f"{location} runtime")
 
 
 def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) -> None:
     location = str(path or "<inline resource>")
     _require_field(resource, "id", location)
+    inputs = resource.get("inputs")
+    if inputs is not None:
+        _validate_parameter_schema(inputs, location, field="inputs")
     if resource.get("interface") is not None:
         _validate_interface(
             resource["interface"],
@@ -311,9 +371,44 @@ def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) ->
         )
 
 
+def _validate_declared_settings(
+    owner: Dict[str, Any],
+    *,
+    schema_key: str,
+    values_key: str,
+    location: str,
+) -> None:
+    """Validate a typed settings declaration and its sibling values.
+
+    When ``owner[schema_key]`` is declared, each entry must be a valid
+    parameter definition, and ``owner[values_key]`` must conform to it: every
+    declared setting without a ``default`` must be present, no undeclared
+    keys are allowed, and every provided value must match its declared type
+    and bounds. An owner without ``schema_key`` keeps the existing untyped
+    behavior unchanged.
+    """
+
+    schema = owner.get(schema_key)
+    if schema is None:
+        return
+    _validate_parameter_schema(schema, location, field=schema_key)
+    errors = validate_parameter_values(
+        owner.get(values_key),
+        schema,
+        location=f"{location} {values_key}",
+    )
+    if errors:
+        joined = " ".join(errors[:8])
+        if len(errors) > 8:
+            joined += f" (and {len(errors) - 8} more)"
+        raise ValueError(joined)
+
+
 def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     location = str(path)
     _require_field(study, "name", location)
+    if study.get("inputs") is not None:
+        _validate_parameter_schema(study["inputs"], location, field="inputs")
     objective = _require_mapping(study, "objective", location)
     _require_field(objective, "metric", f"{location} objective")
     if objective.get("direction") not in OBJECTIVE_DIRECTIONS:
@@ -331,6 +426,85 @@ def _validate_study_semantics(study: Dict[str, Any], path: Path) -> None:
     evidence = study.get("evidence", {}) or {}
     if evidence.get("level", "standard") not in EVIDENCE_LEVELS:
         raise ValueError(f"{location} evidence.level must be one of {sorted(EVIDENCE_LEVELS)}.")
+
+
+def _resolve_study_launch_inputs(
+    study: Dict[str, Any],
+    config_path: Path,
+    *,
+    environment: Dict[str, Any],
+    environment_path: Path | None,
+    method: Dict[str, Any],
+    method_path: Path | None,
+    launch_inputs: Mapping[str, Any] | None,
+    bind_launch_inputs: bool,
+) -> Dict[str, Any] | None:
+    """Resolve, validate, and return the per-launch inputs mapping.
+
+    Returns ``None`` when the study declares no ``inputs`` or when binding is
+    disabled (static validation). Fails closed before any compilation output
+    is produced: supplying launch inputs to a study that declares none is an
+    error, as is a declared input without a default and without a value.
+    """
+
+    declaration = study.get("inputs")
+    if declaration is None:
+        if launch_inputs is not None:
+            raise ValueError(
+                f"{config_path} declares no inputs, but launch inputs "
+                f"{sorted(launch_inputs)!r} were supplied. Remove --input/"
+                "--inputs-file or declare inputs in the study config."
+            )
+        return None
+
+    if launch_inputs is not None and not isinstance(launch_inputs, Mapping):
+        raise ValueError(f"{config_path} launch inputs must be a mapping.")
+
+    # ``inputs`` is a reserved settings key: the resolved values are delivered
+    # to authored code under evaluator settings["inputs"] and method
+    # settings["inputs"], so an authored top-level "inputs" setting would be
+    # silently shadowed.
+    evaluator_settings = (environment.get("evaluator", {}) or {}).get("settings", {}) or {}
+    if "inputs" in evaluator_settings:
+        raise ValueError(
+            f"{environment_path or '<inline environment>'} evaluator.settings "
+            f"declares a top-level 'inputs' key, which is reserved because "
+            f"{config_path} declares study inputs. Rename the evaluator setting."
+        )
+    method_settings = method.get("settings", {}) or {}
+    if "inputs" in method_settings:
+        raise ValueError(
+            f"{method_path or '<inline method>'} settings declares a top-level "
+            f"'inputs' key, which is reserved because {config_path} declares "
+            "study inputs. Rename the method setting."
+        )
+
+    if not bind_launch_inputs and launch_inputs is None:
+        # Static validation: check declared defaults conform without
+        # requiring launch values for inputs that have no default.
+        defaults = apply_parameter_defaults({}, declaration)
+        subset = {name: declaration[name] for name in defaults}
+        errors = validate_parameter_values(
+            defaults, subset, location=f"{config_path} inputs"
+        )
+        if errors:
+            raise ValueError(_join_input_errors(errors))
+        return None
+
+    resolved = apply_parameter_defaults(dict(launch_inputs or {}), declaration)
+    errors = validate_parameter_values(
+        resolved, declaration, location=f"{config_path} inputs"
+    )
+    if errors:
+        raise ValueError(_join_input_errors(errors))
+    return resolved
+
+
+def _join_input_errors(errors: list) -> str:
+    joined = " ".join(errors[:8])
+    if len(errors) > 8:
+        joined += f" (and {len(errors) - 8} more)"
+    return joined
 
 
 def _validate_method_environment_compatibility(
@@ -424,11 +598,11 @@ def _normalize_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError(f"candidate.format must be one of {sorted(CANDIDATE_FORMATS)}.")
 
 
-def _validate_parameter_schema(schema: Any, location: str) -> None:
+def _validate_parameter_schema(schema: Any, location: str, *, field: str = "candidate.parameters.schema") -> None:
     if not isinstance(schema, dict) or not schema:
-        raise ValueError(f"{location} candidate.parameters.schema must be a non-empty object.")
+        raise ValueError(f"{location} {field} must be a non-empty object.")
     for name, definition in schema.items():
-        _validate_parameter_definition(definition, f"{location} candidate.parameters.schema.{name}")
+        _validate_parameter_definition(definition, f"{location} {field}.{name}")
 
 
 def _validate_parameter_definition(definition: Any, location: str) -> None:

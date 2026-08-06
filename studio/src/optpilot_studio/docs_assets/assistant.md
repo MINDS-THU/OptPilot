@@ -36,7 +36,7 @@ their source of truth:
 - approvals and Assistant execution events
 
 These objects remain usable without the Assistant. **Open work** is a narrow
-process monitor for interfaces, Run preparation, and running Runs. Durable
+process monitor for interfaces, Run setup launches, and running Runs. Durable
 Studies, completed Runs, and editable Workspaces stay in their named
 destinations, while Assistant activity and approvals stay with the
 Conversation. Closing the Conversation view does not stop work.
@@ -52,7 +52,7 @@ and “continue” do not rename a Conversation.
 
 ## Recommendations And Cards
 
-The Assistant may recommend Catalog entries or propose a Study in a
+The Assistant may recommend Catalog entries or propose a Run setup in a
 structured card. Cards are rendered from a bounded Studio presentation contract
 and carry exact object identities. Studio validates card actions against a
 small allowlist before invoking existing launch, open, save, or review flows.
@@ -61,10 +61,11 @@ Ordinary model-authored Markdown is explanatory only. It cannot create a
 privileged Studio action. Starting a Run, writing files, running commands, or
 stopping work remains explicit and approval-aware.
 
-For a Study, the Assistant can propose an Environment, a compatible Method,
+For a Run setup, the Assistant can propose an Environment, a compatible Method,
 an objective, and a budget. Users can edit these values or open the detailed
-Study configuration. The visible UI and the underlying `study` schema, API,
-route, and command-line concept now use the same name.
+Study configuration. The visible UI calls this saved configuration a **Run
+setup**, while the underlying `study` schema, API, route, and command-line
+concept keep the `study` name.
 
 ## Runtime Modes
 

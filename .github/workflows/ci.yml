@@ -52,6 +52,9 @@ jobs:
           raise SystemExit(1 if importlib.util.find_spec("optpilot_studio") else 0)
           PY
 
+      - name: Run core-only unit tests without Studio
+        run: /tmp/optpilot-core-check/bin/python -m unittest discover -s tests/core -p 'test_*.py'
+
       - name: Verify core source distribution and Studio artifact
         run: |
           python -m venv /tmp/optpilot-sdist-check

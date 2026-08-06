@@ -22,7 +22,8 @@
         "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
         "cwd": {"type": "string"},
         "env": {"$ref": "defs/common.schema.json#/definitions/envObject"},
-        "settings": {"type": "object"}
+        "settings": {"type": "object"},
+        "settingsSchema": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"}
       },
       "oneOf": [
         {"required": ["python"]},

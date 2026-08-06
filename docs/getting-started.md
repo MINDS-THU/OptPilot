@@ -40,11 +40,11 @@ uv run optpilot ui --open-browser
 
 The opening **Conversation** explains the available kinds of work. Ask to run
 the fixed job-shop baseline, or open **Catalog** and find the registered
-job-shop Environment and fixed-parameter Method yourself. Catalog, Studies,
+job-shop Environment and fixed-parameter Method yourself. Catalog, Run setups,
 Runs, and Workspaces remain direct destinations; none depends on an Assistant
 recommendation.
 
-Studio presents the binding as a **Study**. Review the Environment, Method,
+Studio presents the binding as a **Run setup**. Review the Environment, Method,
 `normalized_makespan` objective, `minimize` direction, and one-trial budget,
 then choose **Launch run** explicitly. Internally, the setup remains the Study
 configuration listed above.
@@ -55,8 +55,8 @@ opens in the full main area; **Ask from this page** reveals the same Conversatio
 an overlay without recreating the interface. Returning to Conversation does not
 stop the Run or interface.
 
-When the Run finishes, find it under **Runs**. Saved Studies remain under
-**Studies**, and editable projects remain under **Workspaces**. Existing
+When the Run finishes, find it under **Runs**. Saved Run setups remain under
+**Run setups**, and editable projects remain under **Workspaces**. Existing
 refresh-safe links to Studies, Runs, Candidates, Workspaces, and interfaces
 remain valid.
 
@@ -74,6 +74,10 @@ Run it:
 uv run optpilot run catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
   --package-root catalog/example_package
 ```
+
+If a study declares per-launch `inputs`, supply them with repeatable
+`--input key=value` flags (or `--inputs-file inputs.yaml`); this baseline study
+declares none.
 
 The command prints a JSON summary. A successful first run should show:
 

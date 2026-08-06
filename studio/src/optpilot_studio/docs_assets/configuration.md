@@ -390,6 +390,40 @@ before proposing a candidate, expose those environment-owned files through
 model choices, prompts, or assets. This keeps case handling out of OptPilot
 core while preserving a clear environment/method boundary.
 
+### Typed Settings With settingsSchema
+
+`evaluator.settings` stays a free object by default, but an environment may
+declare an optional `evaluator.settingsSchema` that types it. Each entry uses
+the same parameter definition as `candidate.parameters.schema` (`valueType`,
+`min`/`max`, `values`, `default`, `description`, `unit`, `pattern`, and nested
+`items`/`properties`):
+
+```yaml
+evaluator:
+  python: evaluator:evaluate
+  settingsSchema:
+    scenario:
+      valueType: categorical
+      values: [baseline, faults, long_horizon]
+      default: baseline
+      description: Which bundled scenario to simulate.
+    replications:
+      valueType: int
+      min: 1
+      max: 50
+      default: 5
+  settings:
+    scenario: baseline
+```
+
+When `settingsSchema` is declared, validation enforces it: every declared
+setting without a `default` must be present in `settings`, undeclared keys are
+rejected, and each value must match its declared type, bounds, membership, and
+pattern. A config without `settingsSchema` keeps the untyped behavior
+unchanged. Declaring a schema is what lets Studio render a real input form for
+the component instead of falling back to YAML inspection, so prefer it for any
+setting a user is expected to change.
+
 ### Command Placeholders
 
 Command evaluators can use these placeholders:
@@ -565,6 +599,19 @@ entrypoint:
 settings:
   batchSize: 4
 
+# Optional typed declaration for settings. Uses the same parameter
+# definition as candidate.parameters.schema. When declared, settings are
+# validated against it: declared settings without a default are required,
+# undeclared keys are rejected, and values must match types and bounds.
+# Typed settings also let Studio render an input form for this method.
+settingsSchema:
+  batchSize:
+    valueType: int
+    min: 1
+    max: 64
+    default: 4
+    description: Candidates proposed per exchange.
+
 # Required compatibility declaration.
 accepts:
   formats: [parameters]  # list of parameters | files | opaque
@@ -697,6 +744,8 @@ environment needs a scenario, dataset, query, simulator argument set, or
 benchmark case list, put that in the environment config's `evaluator.settings`
 or create another environment config variant. This keeps studies small: they
 choose the environment, method, objective, budget, evidence policy, and seed.
+For values that legitimately change per launch rather than per environment
+variant, declare per-launch `inputs` (see below).
 
 Containerized environment runtime (schema/target; not executable by the current
 retained runner):
@@ -718,6 +767,56 @@ runtime:
 
 Relative `build.context` paths are resolved from the component config file.
 Relative `build.dockerfile` paths are resolved from `build.context`.
+
+### Per-Launch Study Inputs
+
+A study may declare an optional `inputs` map of typed per-launch values. Each
+entry uses the same parameter definition as `candidate.parameters.schema` and
+`settingsSchema` (`valueType`, `min`/`max`, `values`, `default`, `description`,
+`unit`, `pattern`, and nested `items`/`properties`):
+
+```yaml
+inputs:
+  problem:
+    valueType: string
+    description: Natural-language problem statement.
+  budget_hint:
+    valueType: int
+    min: 1
+    default: 60
+```
+
+Values are supplied at launch time with repeatable `--input key=value` flags
+and/or one `--inputs-file` YAML mapping (`--input` wins on conflicting keys).
+Flag values are parsed as YAML scalars, so `30` becomes an int, `true` a bool,
+and a quoted value stays a string:
+
+```bash
+uv run optpilot run studies/my_study.yaml \
+  --package-root . \
+  --input problem="maximize throughput on line 3" \
+  --input budget_hint=30
+```
+
+Validation is fail-closed and happens before anything is retained: a declared
+input without a `default` must be supplied, undeclared keys are rejected, each
+value must match its declared type and bounds, and supplying any launch inputs
+to a study that declares none is an error. A study that declares `inputs` can
+be launched without flags only when every input has a `default`.
+
+The resolved mapping is delivered to authored code under a reserved `inputs`
+settings key: the evaluator reads it as `context["settings"]["inputs"]` and
+the method as `settings["inputs"]`. Because the key is reserved, declaring
+study `inputs` while the environment's `evaluator.settings` or the method's
+`settings` already contain a top-level `inputs` key fails validation.
+
+Per-launch inputs are problem payloads, not secrets. They are compiled into
+the retained Run definition and appear in evidence like any other config, and
+they participate in the definition's content digest, so the same study with
+the same inputs reproduces the identical retained definition while different
+inputs produce a different one. This is the opposite of the method runtime
+`envFromHost` pattern, which exists to keep secret host values out of retained
+evidence; never pass credentials through `inputs`.
 
 ### Environment Variants And Inputs
 

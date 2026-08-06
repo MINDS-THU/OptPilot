@@ -41,6 +41,7 @@
       ]
     },
     "settings": {"type": "object"},
+    "settingsSchema": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"},
     "accepts": {
       "type": "object",
       "additionalProperties": false,

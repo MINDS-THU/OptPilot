@@ -1038,7 +1038,7 @@ async function loadStudyDrafts() {
     if (!coreRequestIsCurrent("studyDrafts", requestSeq)) return;
     state.studyDraftsError = boundedPublicActionError(
       error,
-      "Saved Study drafts could not be refreshed.",
+      "Saved Run setup drafts could not be refreshed.",
     );
   }
 }
@@ -1422,7 +1422,7 @@ function ensureSelectedAgentSession() {
 }
 
 function defaultAssistantMessages() {
-  return [["assistant", "Ready", "Tell me the outcome you need. I can find suitable Catalog items, prepare a Study, launch work with your approval, and use Workspace files you explicitly make available to this Conversation.", {
+  return [["assistant", "Ready", "Tell me the outcome you need. I can find suitable Catalog items, prepare a Run setup, launch work with your approval, and use Workspace files you explicitly make available to this Conversation.", {
     id: "default-ready",
     createdAt: new Date().toISOString(),
     source: "studio_system",
@@ -2199,10 +2199,10 @@ function buildOpenWorkItems() {
       plan_id: String(studyLaunch.planId || ""),
       launch_id: String(studyLaunch.launchId || studyLaunch.launch && studyLaunch.launch.launch_id || ""),
       run_id: String(studyLaunch.launch && studyLaunch.launch.run_id || ""),
-      typeLabel: "Run preparation",
+      typeLabel: failed ? "Run setup" : "Run setup · preparing",
       section: failed ? "Needs attention" : "Running",
-      title: String(studyLaunch.planTitle || "Study"),
-      subtitle: String(studyLaunch.stage || studyLaunch.message || (failed ? "Run preparation needs review" : "Preparing Run")),
+      title: String(studyLaunch.planTitle || "Run setup"),
+      subtitle: String(studyLaunch.stage || studyLaunch.message || (failed ? "Run setup needs review" : "Preparing Run")),
       status: failed ? "failed" : String(studyLaunch.status || "preparing"),
       active: !failed,
       dismissible: failed,
@@ -2312,7 +2312,7 @@ function renderOpenWork() {
       <span>${escapeHtml(item.subtitle)}</span>
     </${tag}>
   `;
-  }).join("") : `<div class="open-work-empty"><strong>No open work</strong><span>Running interfaces and Runs will appear here. Saved work remains in Studies, Runs, and Workspaces.</span></div>`;
+  }).join("") : `<div class="open-work-empty"><strong>No open work</strong><span>Running interfaces and Runs will appear here. Saved work remains in Run setups, Runs, and Workspaces.</span></div>`;
   els.openWorkItems.querySelectorAll("[data-open-work-key]").forEach((button) => {
     button.addEventListener("click", () => openOpenWorkItem(state.openWorkItemsByKey.get(button.dataset.openWorkKey)));
   });
@@ -2499,7 +2499,7 @@ async function openExactOpenWorkStudyLaunch(item) {
       const payload = await getJson(`/api/studies/launches/${encodeURIComponent(launchId)}`);
       launch = payload && payload.launch;
       if (!launch || String(launch.launch_id || "") !== launchId) {
-        throw new Error("This Run preparation is no longer available.");
+        throw new Error("This Run setup launch is no longer available.");
       }
     }
     const runId = String(launch && launch.run_id || item && item.run_id || "");
@@ -2513,10 +2513,10 @@ async function openExactOpenWorkStudyLaunch(item) {
     const planId = String(item && item.plan_id || "");
     const plan = state.plans.find((candidate) => String(candidate.id || "") === planId);
     if (!planId) {
-      throw new Error("This Run preparation no longer identifies its Study.");
+      throw new Error("This launch no longer identifies its Run setup.");
     }
     if (!plan) {
-      throw new Error("The Study used for this Run preparation is no longer available.");
+      throw new Error("The Run setup used for this launch is no longer available.");
     }
     if (active && launchId && activeLaunchId === launchId && launch) {
       active.launch = launch;
@@ -2530,7 +2530,7 @@ async function openExactOpenWorkStudyLaunch(item) {
     if (itemKey) {
       state.openWorkErrors[itemKey] = boundedPublicActionError(
         error,
-        "This Run preparation could not be reopened.",
+        "This Run setup launch could not be reopened.",
       );
       renderOpenWork();
     }
@@ -5083,10 +5083,10 @@ function findAssistantUiCardPlan(coordinate) {
 
 function assistantUiCardPlanLaunchState(plan) {
   if (!plan) {
-    return { eligible: false, reason: "This exact Study revision is no longer available. Open its Workspace and review the current configuration." };
+    return { eligible: false, reason: "This exact Run setup revision is no longer available. Open its Workspace and review the current configuration." };
   }
   if (plan.savePending || plan.launchPending) {
-    return { eligible: false, reason: "This Study is already being prepared." };
+    return { eligible: false, reason: "This Run setup is already being prepared." };
   }
   const active = state.studyLaunch;
   if (active && !studyLaunchIsTerminal(active)) {
@@ -5103,7 +5103,7 @@ function assistantUiCardPlanLaunchState(plan) {
   if (runtimeReason) return { eligible: false, reason: runtimeReason };
   const validation = plan.draft && plan.draft.validation || plan.validation || plan.study && plan.study.validation;
   if (validation && validation.valid === false) {
-    return { eligible: false, reason: "The current Study needs review before it can start." };
+    return { eligible: false, reason: "The current Run setup needs review before it can start." };
   }
   const capability = studyLaunchCapability(plan);
   if (capability && capability.eligible !== true) {
@@ -5151,7 +5151,7 @@ function assistantUiCardCurrentActionState(card, action) {
   if (action.operation === "configure-run") {
     return findAssistantUiCardPlan(coordinate)
       ? { eligible: true, reason: "" }
-      : { eligible: false, reason: "This exact Study revision is no longer loaded. Open its Workspace and review the current configuration." };
+      : { eligible: false, reason: "This exact Run setup revision is no longer loaded. Open its Workspace and review the current configuration." };
   }
   if (action.operation === "open-workspace") {
     return workspaceSessionByBackendId(coordinate.workspace_id)
@@ -5163,7 +5163,7 @@ function assistantUiCardCurrentActionState(card, action) {
       return { eligible: false, reason: "Starting a Run requires an explicit user action." };
     }
     if (coordinate.kind === "workspace") {
-      return { eligible: false, reason: "Open this Workspace and review an exact Study revision before starting." };
+      return { eligible: false, reason: "Open this Workspace and review an exact Run setup revision before starting." };
     }
     return assistantUiCardPlanLaunchState(findAssistantUiCardPlan(coordinate));
   }
@@ -5224,7 +5224,7 @@ function assistantUiCardsHtml(events, options = {}) {
     return true;
   });
   if (!cards.length) return "";
-  const kindLabels = { "catalog-use": "Recommended Catalog item", "run-setup": "Study", run: "Run" };
+  const kindLabels = { "catalog-use": "Recommended Catalog item", "run-setup": "Run setup", run: "Run" };
   return `<div class="assistant-ui-card-stack">${cards.map((card) => {
     const safeCardId = slug(card.id) || "assistant-card";
     return `
@@ -5368,7 +5368,7 @@ async function executeAssistantUiCardAction(card, action) {
   if (operation === "open-catalog") {
     if (coordinate.config_kind === "study") {
       const plan = await resolveAssistantUiCardPlan(coordinate);
-      if (!plan) throw new Error("This Study is no longer available.");
+      if (!plan) throw new Error("This Run setup is no longer available.");
       revealStudyPlan(plan);
       state.selectedPlanId = plan.id;
       openContentSurface("experiments", { history: "push" });
@@ -5383,7 +5383,7 @@ async function executeAssistantUiCardAction(card, action) {
   }
   if (operation === "configure-run") {
     const plan = await resolveAssistantUiCardPlan(coordinate);
-    if (!plan) throw new Error("This exact Study is no longer available.");
+    if (!plan) throw new Error("This exact Run setup is no longer available.");
     revealStudyPlan(plan);
     state.selectedPlanId = plan.id;
     openContentSurface("experiments", { history: "push" });
@@ -5419,18 +5419,18 @@ async function executeAssistantUiCardAction(card, action) {
   }
   if (operation === "start-run") {
     if (action.approval_required !== true) throw new Error("Starting a Run requires an explicit confirmation.");
-    if (coordinate.kind === "workspace") throw new Error("Open this Workspace and review an exact Study revision before starting.");
+    if (coordinate.kind === "workspace") throw new Error("Open this Workspace and review an exact Run setup revision before starting.");
     const plan = await resolveAssistantUiCardPlan(coordinate, { refresh: true });
-    if (!plan) throw new Error("This exact Study is no longer available.");
+    if (!plan) throw new Error("This exact Run setup is no longer available.");
     const launchState = assistantUiCardPlanLaunchState(plan);
-    if (!launchState.eligible) throw new Error(launchState.reason || "This Study needs review.");
+    if (!launchState.eligible) throw new Error(launchState.reason || "This Run setup needs review.");
     revealStudyPlan(plan);
     state.selectedPlanId = plan.id;
     const previousLaunch = state.studyLaunch;
     await launchPlan(plan);
     if (state.studyLaunch === previousLaunch) {
       const detail = plan.actionError && (plan.actionError.message || plan.actionError.title);
-      throw new Error(detail || "This Study could not be started.");
+      throw new Error(detail || "This Run setup could not be started.");
     }
     state.shell.openWorkExpanded = true;
     renderOpenWork();
@@ -5462,7 +5462,7 @@ async function executeAssistantUiCardAction(card, action) {
         return;
       }
       if (anotherLaunchIsTracked) {
-        throw new Error("This launch is still preparing, while another Run preparation is already tracked in Open work.");
+        throw new Error("This launch is still preparing, while another Run setup launch is already tracked in Open work.");
       }
       active = {
         schema: "optpilot.studio-active-study-launch.v1",
@@ -5697,8 +5697,8 @@ function assistantToolActivity(tool, phase = "active") {
     optpilot_compatibility_check: ["Checking compatibility", "Checked compatibility"],
     optpilot_config_discover: ["Finding OptPilot configuration", "Found OptPilot configuration"],
     optpilot_config_validate: ["Checking OptPilot configuration", "Checked OptPilot configuration"],
-    optpilot_study_draft: ["Preparing a Study", "Prepared a Study"],
-    optpilot_study_save: ["Saving a Study", "Saved a Study"],
+    optpilot_study_draft: ["Preparing a Run setup", "Prepared a Run setup"],
+    optpilot_study_save: ["Saving a Run setup", "Saved a Run setup"],
     optpilot_study_launch: ["Starting a Run", "Started a Run"],
     optpilot_run_list: ["Checking Runs", "Checked Runs"],
     optpilot_run_detail: ["Reviewing Run results", "Reviewed Run results"],
@@ -6020,7 +6020,7 @@ function assistantPromptForContext() {
     return "Help me understand this interface, its exact source, status, or saved try result.";
   }
   if (state.view === "catalog") return "Help me inspect this Catalog item or open it as an editable Workspace.";
-  if (state.view === "experiments") return "Help me configure this Study, check it, and prepare it to launch a Run.";
+  if (state.view === "experiments") return "Help me configure this Run setup, check it, and prepare it to launch a Run.";
   const workspace = currentSession();
   const agentSession = currentAgentSession();
   if (
@@ -6046,7 +6046,7 @@ function assistantContextSummary() {
     parts.push(component ? `Catalog item: ${component.entry.label} (${component.kind})` : "No Catalog item selected");
   } else if (state.view === "experiments") {
     const plan = currentPlan();
-    parts.push(plan ? `Study: ${plan.title}` : "No Study selected");
+    parts.push(plan ? `Run setup: ${plan.title}` : "No Run setup selected");
   } else if (state.view === "runs") {
     const run = selectedRunSummary();
     parts.push(run ? `Run: ${run.name || run.id}${run.status ? ` (${run.status})` : ""}` : "No run selected");
@@ -6123,7 +6123,7 @@ function currentViewLabel() {
   return {
     workspace: "Workspaces",
     catalog: "Catalog",
-    experiments: "Studies",
+    experiments: "Run setups",
     runs: "Runs",
     interface: "Interface",
   }[state.view] || "Editor";
@@ -6290,7 +6290,7 @@ function savedStudyDraftPlan(saved) {
     || catalogReference("method", saved.method_ref, config.methodConfig);
   return {
     id: `draft-${saved.draft_id}`,
-    title: saved.title || config.name || "Saved Study draft",
+    title: saved.title || config.name || "Saved Run setup draft",
     source: "Saved draft",
     status: !available
       ? "unavailable"
@@ -9549,7 +9549,7 @@ function renderComponentDetail() {
   els.componentDetail.innerHTML = `
     ${entityHeader(item, component.kind)}
     <div class="action-row">
-      <button class="primary-button component-use-study" type="button" ${pairs.length ? "" : `disabled title="${escapeHtml(studyActionReason)}"`}>Choose ${escapeHtml(counterpartLabel)} for Study</button>
+      <button class="primary-button component-use-study" type="button" ${pairs.length ? "" : `disabled title="${escapeHtml(studyActionReason)}"`}>Choose ${escapeHtml(counterpartLabel)} for Run setup</button>
       <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
       ${editButton}
       ${interfaceAction}
@@ -10860,13 +10860,13 @@ function renderExperiments() {
       <div class="collection-refresh-notice" role="alert">
         <div>
           <strong>Saved drafts could not be refreshed.</strong>
-          <span>${escapeHtml(state.studyDraftsLoaded ? "Showing the last loaded drafts and current built-in Studies." : "Built-in Studies are still available.")}</span>
+          <span>${escapeHtml(state.studyDraftsLoaded ? "Showing the last loaded drafts and current built-in Run setups." : "Built-in Run setups are still available.")}</span>
         </div>
         <button class="ghost-button compact-action retry-study-drafts" type="button">Try again</button>
       </div>
     `
     : "";
-  const emptyMessage = query ? "No Studies match this search." : "No Studies yet.";
+  const emptyMessage = query ? "No Run setups match this search." : "No Run setups yet.";
   els.planList.innerHTML = `${draftNotice}${plans.map(planButton).join("") || emptyInline(emptyMessage)}`;
   els.planList.querySelectorAll("[data-plan-id]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -10958,7 +10958,7 @@ function studyCatalogPublicationSetup(plan) {
   const labels = [...new Set(sources.map((source) => String(source.label || source.package_id || "local package")))];
   const subject = labels.length === 1 ? labels[0] : "the selected local packages";
   return {
-    reason: `Publish ${subject} before saving or launching this Study. Study drafts use checked, immutable Catalog versions.`,
+    reason: `Publish ${subject} before saving or launching this Run setup. Run setup drafts use checked, immutable Catalog versions.`,
     sources,
   };
 }
@@ -11051,7 +11051,7 @@ function studyRuntimeSetupReason(plan) {
 
 function studyPersistencePresentation(plan) {
   if (plan && plan.study && (plan.study.ref || plan.study.uid)) {
-    return { label: "Built-in Study", status: "saved" };
+    return { label: "Built-in Run setup", status: "saved" };
   }
   if (plan && plan.draft && plan.draft.saved_as_draft) {
     return plan.draft.dirty
@@ -11120,8 +11120,8 @@ function renderStudyActionStatus(plan) {
       <section class="study-action-status" role="status" aria-live="polite">
         <strong>${saving ? "Saving changes…" : "Preparing Run…"}</strong>
         <p>${saving
-          ? "Saving this Study draft."
-          : "Stay on this Study while Studio checks the current configuration."}</p>
+          ? "Saving this Run setup draft."
+          : "Stay on this Run setup while Studio checks the current configuration."}</p>
       </section>
     `;
   }
@@ -11129,9 +11129,9 @@ function renderStudyActionStatus(plan) {
   if (!error || !error.message) return "";
   return `
     <section class="study-action-status study-action-failed" role="alert">
-      <strong>${escapeHtml(error.title || "Study action failed")}</strong>
+      <strong>${escapeHtml(error.title || "Run setup action failed")}</strong>
       <p>${escapeHtml(error.message)}</p>
-      <small>${escapeHtml(error.guidance || "Correct the Study if needed, then use the action above to try again.")}</small>
+      <small>${escapeHtml(error.guidance || "Correct the Run setup if needed, then use the action above to try again.")}</small>
     </section>
   `;
 }
@@ -11139,7 +11139,7 @@ function renderStudyActionStatus(plan) {
 function renderPlanDetail() {
   const plan = currentPlan();
   if (!plan) {
-    els.planDetail.innerHTML = emptyState("Select a Study, or create one from Catalog items.");
+    els.planDetail.innerHTML = emptyState("Select a Run setup, or create one from Catalog items.");
     return;
   }
   const draftValid = Boolean(hasCurrentWorkspaceStudyDraft(plan.draft) && (!plan.draft.validation || plan.draft.validation.valid));
@@ -11174,7 +11174,7 @@ function renderPlanDetail() {
     && !runtimeSetupReason
     && (!launchCapability || launchCapability.eligible === true);
   const launchReason = otherLaunchPreparing
-    ? `Another Study (${trackedLaunch.planTitle || "untitled Study"}) is already being prepared. Wait for that request to finish before launching this Study.`
+    ? `Another Run setup (${trackedLaunch.planTitle || "untitled Run setup"}) is already being prepared. Wait for that request to finish before launching this Run setup.`
     : draftUnavailable
     ? publicStudyMessage(plan.draft.unavailableReason || "This saved draft could not be reopened safely.")
     : componentPairReason
@@ -11312,7 +11312,7 @@ function renderStudyLaunchStatus(plan) {
     ? String(failure.message || active.error || "OptPilot could not prepare this Run.")
     : launch.run_id
     ? "The Run is ready. Opening it now…"
-    : active.message || "OptPilot is checking this Study and preparing exact Run inputs. You can leave this page while it prepares.";
+    : active.message || "OptPilot is checking this Run setup and preparing exact Run inputs. You can leave this page while it prepares.";
   const logs = Array.isArray(launch.log_summary) ? launch.log_summary : [];
   const status = failure
     ? "failed"
@@ -11345,7 +11345,7 @@ function studyConfigEditor(plan, locked) {
     <section class="study-card study-config-card study-primary-settings" aria-labelledby="study-primary-settings-heading">
       <header class="study-card-heading study-primary-heading">
         <div>
-          <h3 id="study-primary-settings-heading">Study configuration</h3>
+          <h3 id="study-primary-settings-heading">Run setup configuration</h3>
           <p class="study-card-help">Choose what evaluates Candidates, what proposes them, the goal, and how many trials to run.</p>
         </div>
         <span class="study-card-meta">Required</span>
@@ -11414,12 +11414,12 @@ function studyConfigEditor(plan, locked) {
           ${inputField("Seed", "seed", plan.seed ?? "", "number", locked, "0", "Seed used when components support reproducibility.")}
         </div>
       `)}
-      ${studyAdvancedGroup("Study details", "Optionally change how this Study is named and described.", `
+      ${studyAdvancedGroup("Run setup details", "Optionally change how this Run setup is named and described.", `
         <div class="control-grid">
-          ${inputField("Name", "name", plan.name || planName(plan), "text", locked, "", "Shown in the Studies and Runs lists.")}
+          ${inputField("Name", "name", plan.name || planName(plan), "text", locked, "", "Shown in the Run setups and Runs lists.")}
           ${inputField("Tags", "tags", (plan.tags || []).join(", "), "text", locked, "", "Comma-separated labels for search and grouping.")}
         </div>
-        ${textareaField("Description", "description", plan.description || "", locked, "Explain what this Study is trying to test.")}
+        ${textareaField("Description", "description", plan.description || "", locked, "Explain what this Run setup is trying to test.")}
       `)}
     `)}
   `;
@@ -11455,7 +11455,7 @@ function studyGuidePanel(plan) {
   return `
     <section class="study-guide-panel">
       <div>
-        <span>How this Study works</span>
+        <span>How this Run setup works</span>
         <strong>${escapeHtml(environmentLabel)} + ${escapeHtml(methodLabel)}</strong>
         <p>The Environment evaluates Candidates, and the Method proposes them. Launching starts a Run that records progress and results.</p>
       </div>
@@ -11482,7 +11482,7 @@ function studyCardHeading(title, meta, description = "") {
 
 function studySourceNote(plan) {
   if (plan.study && (plan.study.ref || plan.study.uid)) {
-    return `<p class="source-note">Built-in Study. Changes stay in this form until you save a draft or launch a Run.</p>`;
+    return `<p class="source-note">Built-in Run setup. Changes stay in this form until you save a draft or launch a Run.</p>`;
   }
   if (hasWorkspaceStudyDraft(plan.draft)) {
     if (plan.draft.available === false) {
@@ -11696,7 +11696,7 @@ function refreshPlanPreview(plan) {
 async function discardStudyDraft(plan) {
   const draft = plan && plan.draft;
   if (!draft || !draft.saved_as_draft || !draft.draft_id || !draft.draft_revision) return;
-  if (!window.confirm("Discard this saved Study draft? Existing Runs are not affected.")) return;
+  if (!window.confirm("Discard this saved Run setup draft? Existing Runs are not affected.")) return;
   const result = await postJson(
     `/api/studies/drafts/${encodeURIComponent(draft.draft_id)}/discard`,
     {
@@ -11726,7 +11726,7 @@ function runProjectionNotice(unavailable) {
   const hidden = Number(unavailable.hidden_count || 0);
   const messages = [];
   if (limited > 0) {
-    messages.push(`${limited} older ${limited === 1 ? "Run is" : "Runs are"} shown with limited Study details after this OptPilot upgrade`);
+    messages.push(`${limited} older ${limited === 1 ? "Run is" : "Runs are"} shown with limited Run setup details after this OptPilot upgrade`);
   }
   if (hidden > 0) {
     messages.push(`${hidden} ${hidden === 1 ? "Run could" : "Runs could"} not be shown because saved data could not be verified`);
@@ -11801,7 +11801,7 @@ function renderRuns() {
     ? "No Runs match these filters."
     : state.runsError && !state.runsLoaded
     ? "Run history is temporarily unavailable."
-    : "No Runs yet. Launch one from Studies.";
+    : "No Runs yet. Launch one from Run setups.";
   const list = runs.map(runRow).join("") || emptyInline(emptyMessage);
   els.runsTable.innerHTML = `${notice}${list}`;
   els.runsTable.querySelectorAll(".run-row").forEach((row) => {
@@ -11988,16 +11988,16 @@ function runLineageHtml(lineage, fallbackStudyName = "") {
   const origin = lineage.origin && typeof lineage.origin === "object" ? lineage.origin : {};
   const children = Array.isArray(lineage.re_evaluation_runs) ? lineage.re_evaluation_runs : [];
   const childOrigin = origin.kind === "exact-reevaluation" && origin.parent_run_id;
-  const studyName = origin.study_name || fallbackStudyName || "this Study";
+  const studyName = origin.study_name || fallbackStudyName || "this Run setup";
   return `
     <section class="run-origin-banner" aria-label="Run origin">
       <div>
         <strong>${childOrigin
           ? `Re-evaluation of Candidate ${escapeHtml(origin.candidate_id || "-")} from Run ${escapeHtml(origin.parent_run_id)}`
-          : `Launched from Study ${escapeHtml(studyName)}`}</strong>
+          : `Launched from Run setup ${escapeHtml(studyName)}`}</strong>
         <span>${childOrigin
           ? "This is a separate recorded Run using the source Candidate and the same trial settings."
-          : "This Run records the Study's progress and results."}</span>
+          : "This Run records the Run setup's progress and results."}</span>
       </div>
       ${childOrigin ? `<button class="ghost-button compact-action" data-open-lineage-run="${escapeHtml(origin.parent_run_id)}" data-open-lineage-candidate="${escapeHtml(origin.candidate_id || "")}" type="button">${origin.candidate_id ? "Open source Candidate" : "Open source Run"}</button>` : ""}
       ${children.length ? `
@@ -18651,8 +18651,8 @@ async function generatePlanDraft(plan) {
     setStudyActionError(
       plan,
       "save",
-      "Study could not be saved",
-      error && error.message || "This Study draft could not be saved.",
+      "Run setup could not be saved",
+      error && error.message || "This Run setup draft could not be saved.",
     );
   } finally {
     plan.savePending = false;
@@ -18679,7 +18679,7 @@ async function savePlanDraft(plan, options = {}) {
         result.error,
         {
           code: result.code,
-          guidance: "Your Study was not rejected or changed. Wait briefly, then use the action above to try again.",
+          guidance: "Your Run setup was not rejected or changed. Wait briefly, then use the action above to try again.",
         },
       );
       if (options.render !== false) renderExperiments();
@@ -18694,14 +18694,14 @@ async function savePlanDraft(plan, options = {}) {
     setStudyActionError(
       plan,
       options.errorKind || "save",
-      options.errorKind === "launch" ? "Run could not be prepared" : "Study could not be saved",
+      options.errorKind === "launch" ? "Run could not be prepared" : "Run setup could not be saved",
       result.error,
     );
     if (options.render !== false) renderExperiments();
     return null;
   }
   if (!result || typeof result !== "object") {
-    throw new Error("Studio returned an incomplete Study draft response.");
+    throw new Error("Studio returned an incomplete Run setup draft response.");
   }
   if (plan.actionError && plan.actionError.kind === (options.errorKind || "save")) {
     plan.actionError = null;
@@ -18759,7 +18759,7 @@ async function launchPlan(plan) {
       plan,
       "launch",
       "Another Run is being prepared",
-      `Wait for ${trackedLaunch.planTitle || "the other Study"} to finish preparing before launching this Study.`,
+      `Wait for ${trackedLaunch.planTitle || "the other Run setup"} to finish preparing before launching this Run setup.`,
     );
     renderExperiments();
     return;
@@ -18784,7 +18784,7 @@ async function launchPlan(plan) {
   const knownCapability = studyLaunchCapability(plan);
   if (knownCapability && knownCapability.eligible !== true) {
     failLaunch(
-      "Study launch unavailable",
+      "Run setup launch unavailable",
       publicStudyLaunchReason(knownCapability),
     );
     return;
@@ -18801,7 +18801,7 @@ async function launchPlan(plan) {
     } catch (error) {
       failLaunch(
         "Run could not be prepared",
-        error && error.message || "The current Study could not be prepared for launch.",
+        error && error.message || "The current Run setup could not be prepared for launch.",
       );
       return;
     }
@@ -18811,7 +18811,7 @@ async function launchPlan(plan) {
           plan,
           "launch",
           "Config needs review",
-          "The Study was checked, but validation did not pass, so no Run was launched.",
+          "The Run setup was checked, but validation did not pass, so no Run was launched.",
         );
       }
       plan.launchPending = false;
@@ -18822,15 +18822,15 @@ async function launchPlan(plan) {
   const savedCapability = studyLaunchCapability(plan);
   if (savedCapability && savedCapability.eligible !== true) {
     failLaunch(
-      "Study launch unavailable",
+      "Run setup launch unavailable",
       publicStudyLaunchReason(savedCapability),
     );
     return;
   }
   if (!catalogStudyRef && !hasCurrentWorkspaceStudyDraft(plan.draft)) {
     failLaunch(
-      "Study launch unavailable",
-      "Save or prepare this Study before launching it.",
+      "Run setup launch unavailable",
+      "Save or prepare this Run setup before launching it.",
     );
     return;
   }
@@ -18857,7 +18857,7 @@ async function launchPlan(plan) {
     launchId: "",
     launch: null,
     stage: "Preparing Run",
-    message: "OptPilot is checking this Study and preparing exact Run inputs. You can leave this page while it prepares.",
+    message: "OptPilot is checking this Run setup and preparing exact Run inputs. You can leave this page while it prepares.",
     status: "preparing",
     preparationAccepted: false,
     startedAt: Date.now(),
@@ -18942,11 +18942,11 @@ function studyLaunchPreparationLaunch(payload) {
 
 function applyStudyLaunchPreparationPayload(active, payload) {
   if (!payload || typeof payload !== "object") {
-    throw new Error("Study launch response is incomplete.");
+    throw new Error("Run setup launch response is incomplete.");
   }
   const responseRequestId = studyLaunchPreparationRequestId(payload);
   if (responseRequestId && responseRequestId !== active.requestId) {
-    throw new Error("Study launch response belongs to a different request.");
+    throw new Error("Run setup launch response belongs to a different request.");
   }
   const preparationState = studyLaunchPreparationState(payload);
   const launch = studyLaunchPreparationLaunch(payload);
@@ -18983,7 +18983,7 @@ function applyStudyLaunchPreparationPayload(active, payload) {
     active.stage = payload.stage || active.stage || "Preparing Run";
     active.message = payload.message
       ? publicStudyMessage(payload.message)
-      : active.message || "OptPilot is checking this Study and preparing exact Run inputs. You can leave this page while it prepares.";
+      : active.message || "OptPilot is checking this Run setup and preparing exact Run inputs. You can leave this page while it prepares.";
     active.preparationAccepted = true;
     active.reconnectAttempts = 0;
     return "preparing";
@@ -18998,7 +18998,7 @@ function applyStudyLaunchPreparationPayload(active, payload) {
     return "uncertain";
   }
   if (preparationState === "ready") {
-    throw new Error("Study launch preparation is ready but has no launch record.");
+    throw new Error("Run setup launch preparation is ready but has no launch record.");
   }
   return payload.error ? "legacy_error" : "unknown";
 }
@@ -19015,10 +19015,10 @@ function failStudyLaunchRecovery(active, options = {}) {
     code: options.code || "study_launch_reconnect_failed",
     message: publicStudyMessage(
       options.message
-      || "Studio could not reconnect to this saved Run preparation. Launch the Study again to create a new Run."
+      || "Studio could not reconnect to this saved Run setup launch. Launch the Run setup again to create a new Run."
     ),
   };
-  active.stage = options.stage || "Run preparation unavailable";
+  active.stage = options.stage || "Run setup launch unavailable";
   active.message = active.failure.message;
   active.status = "failed";
   active.stopPending = false;
@@ -19033,21 +19033,21 @@ function handleStudyLaunchReconnectFailure(active, error, options = {}) {
   if ([404, 410].includes(status)) {
     failStudyLaunchRecovery(active, {
       code: "study_launch_no_longer_available",
-      stage: "Run preparation no longer available",
+      stage: "Run setup launch no longer available",
       message: options.missingMessage
-        || "This saved Run preparation is no longer available. Launch the Study again to create a new Run.",
+        || "This saved Run setup launch is no longer available. Launch the Run setup again to create a new Run.",
     });
     return true;
   }
   active.reconnectAttempts = Number(active.reconnectAttempts || 0) + 1;
   if (active.reconnectAttempts >= STUDY_LAUNCH_RECONNECT_LIMIT) {
     failStudyLaunchRecovery(active, {
-      stage: "Could not reconnect to Run preparation",
-      message: "Studio could not reconnect to this saved Run preparation after several attempts. Launch the Study again, or dismiss this notice.",
+      stage: "Could not reconnect to Run setup launch",
+      message: "Studio could not reconnect to this saved Run setup launch after several attempts. Launch the Run setup again, or dismiss this notice.",
     });
     return true;
   }
-  active.stage = options.stage || "Reconnecting to Run preparation";
+  active.stage = options.stage || "Reconnecting to Run setup launch";
   active.message = options.message || "OptPilot is reconnecting to this same launch request.";
   active.stopError = "";
   persistActiveStudyLaunch(active);
@@ -19088,12 +19088,12 @@ async function submitStudyLaunch(active, generation) {
       if (outcome === "legacy_error") {
         const durableRejection = payload.schema === "optpilot.studio-study-launch-response.v1";
         if (!durableRejection && payload.type !== "CoordinationConflict") {
-          const responseError = new Error(payload.error || "Study launch response is incomplete.");
+          const responseError = new Error(payload.error || "Run setup launch response is incomplete.");
           responseError.status = Number(payload.__httpStatus || 0);
           if (handleStudyLaunchReconnectFailure(active, responseError, {
             stage: "Reconciling launch preparation",
             message: "OptPilot is confirming whether this same launch request was accepted.",
-            missingMessage: "This saved Run preparation request is no longer available. Launch the Study again to create a new Run.",
+            missingMessage: "This saved Run setup launch request is no longer available. Launch the Run setup again to create a new Run.",
           })) return;
           await sleep(1200);
           continue;
@@ -19108,7 +19108,7 @@ async function submitStudyLaunch(active, generation) {
         if (state.view === "experiments") renderExperiments();
         return;
       }
-      throw new Error("Study launch response is incomplete.");
+      throw new Error("Run setup launch response is incomplete.");
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
       if (handleStudyLaunchReconnectFailure(active, error, {
@@ -19151,7 +19151,7 @@ async function pollStudyLaunchRequest(active, generation, options = {}) {
         return;
       }
       if (outcome !== "preparing") {
-        throw new Error("Study launch preparation status is incomplete.");
+        throw new Error("Run setup launch preparation status is incomplete.");
       }
       active.stopError = "";
       persistActiveStudyLaunch(active);
@@ -19159,7 +19159,7 @@ async function pollStudyLaunchRequest(active, generation, options = {}) {
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
       if (handleStudyLaunchReconnectFailure(active, error, {
-        missingMessage: "This saved Run preparation request is no longer available. Launch the Study again to create a new Run.",
+        missingMessage: "This saved Run setup launch request is no longer available. Launch the Run setup again to create a new Run.",
       })) return;
       await sleep(1200);
       immediate = true;
@@ -19176,7 +19176,7 @@ async function pollStudyLaunch(active, generation, options = {}) {
       const payload = await getJson(`/api/studies/launches/${encodeURIComponent(active.launchId)}`);
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
       if (!payload || !payload.launch || payload.launch.launch_id !== active.launchId) {
-        throw new Error("Study launch status is incomplete.");
+        throw new Error("Run setup launch status is incomplete.");
       }
       active.launch = payload.launch;
       active.stage = payload.launch.stage || active.stage;
@@ -19187,7 +19187,7 @@ async function pollStudyLaunch(active, generation, options = {}) {
       if (await handoffStudyLaunchIfReady(active, generation)) return;
       if (["failed", "cancelled"].includes(String(payload.launch.status || ""))) {
         active.failure = payload.launch.failure || (payload.launch.status === "cancelled"
-          ? { code: "cancelled", message: "Run preparation was stopped." }
+          ? { code: "cancelled", message: "Run setup launch was stopped." }
           : { code: "study_launch_failed", message: "OptPilot could not prepare this Run." });
         active.status = payload.launch.status;
         persistActiveStudyLaunch(active);
@@ -19197,9 +19197,9 @@ async function pollStudyLaunch(active, generation, options = {}) {
     } catch (error) {
       if (generation !== state.studyLaunchPollGeneration || state.studyLaunch !== active) return;
       if (handleStudyLaunchReconnectFailure(active, error, {
-        stage: "Reconnecting to Run preparation",
-        message: "OptPilot is reconnecting to this saved Run preparation.",
-        missingMessage: "This saved Run preparation can no longer be restored. Launch the Study again to create a new Run.",
+        stage: "Reconnecting to Run setup launch",
+        message: "OptPilot is reconnecting to this saved Run setup launch.",
+        missingMessage: "This saved Run setup launch can no longer be restored. Launch the Run setup again to create a new Run.",
       })) return;
       await sleep(1200);
     }
@@ -20288,7 +20288,7 @@ function studyReadinessPanel(plan) {
       <div class="study-launch-status">
         <div>
           <h3>Launch status</h3>
-          <p>${escapeHtml(blockedReason || "Ready to launch. OptPilot will check the current Study inputs before starting the Run.")}</p>
+          <p>${escapeHtml(blockedReason || "Ready to launch. OptPilot will check the current Run setup inputs before starting the Run.")}</p>
         </div>
         ${labeledStatusPill(
           blockedReason ? publicationReason || runtimeSetupReason ? "Setup needed" : "Needs review" : "Ready to launch",
@@ -20377,7 +20377,7 @@ function publicStudyLaunchReason(capability) {
     return "This Method needs a supported runnable test before it can be used in a Study Run.";
   }
   if (code === "retained_preflight_missing" || code === "retained_preflight_failed") {
-    return "OptPilot could not confirm that this Study can run. Check the Environment and Method, then try again.";
+    return "OptPilot could not confirm that this Run setup can run. Check the Environment and Method, then try again.";
   }
   return publicStudyMessage(
     capability && (capability.reason || capability.code)
@@ -20429,7 +20429,7 @@ function studyReadinessRows(plan) {
     rows.push(["Environment runtime", componentExecutionSummary(plan.environment.raw_config || {}), "ready"]);
     rows.push(["Method runtime", componentExecutionSummary(plan.method.raw_config || {}), "ready"]);
   } else if (plan.study && (plan.study.ref || plan.study.uid)) {
-    rows.push(["Environment and Method", "Defined by this built-in Study.", "ready"]);
+    rows.push(["Environment and Method", "Defined by this built-in Run setup.", "ready"]);
   } else {
     rows.push(["Environment and Method", studyBindingReason(plan), "review"]);
   }
@@ -20437,15 +20437,15 @@ function studyReadinessRows(plan) {
   if (publicationReason) {
     rows.push(["Catalog version", publicationReason, "review"]);
   }
-  rows.push(["Study inputs", "Launching fixes the selected component versions and settings for this Run.", "ready"]);
+  rows.push(["Run setup inputs", "Launching fixes the selected component versions and settings for this Run.", "ready"]);
   rows.push(["Run results", "The Run records Candidates, trials, metrics, and declared outputs.", "ready"]);
   if (plan.study && (plan.study.ref || plan.study.uid)) {
-    rows.push(["Study", "Loaded from a built-in Study. Save a draft if you want to reopen your changes later.", "ready"]);
+    rows.push(["Run setup", "Loaded from a built-in Run setup. Save a draft if you want to reopen your changes later.", "ready"]);
   } else if (plan.draft && plan.draft.validation) {
     const valid = Boolean(plan.draft.validation.valid);
-    rows.push(["Study", valid ? "The saved settings passed validation." : "The saved settings need review.", valid ? "valid" : "review"]);
+    rows.push(["Run setup", valid ? "The saved settings passed validation." : "The saved settings need review.", valid ? "valid" : "review"]);
   } else {
-    rows.push(["Study", "Launch will check these settings before starting the Run.", "ready"]);
+    rows.push(["Run setup", "Launch will check these settings before starting the Run.", "ready"]);
   }
   const launch = studyLaunchCapability(plan);
   if (launch) {
@@ -20820,7 +20820,7 @@ function compatList(pairs, target) {
       <div class="compat-item compatible">
         <div class="compat-item-header">
           <strong>${escapeHtml(item.label)}</strong>
-          <button class="ghost-button compact-action" data-build-study-index="${index}" type="button">Configure Study</button>
+          <button class="ghost-button compact-action" data-build-study-index="${index}" type="button">Configure Run setup</button>
         </div>
         <span class="tag-row">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</span>
       </div>

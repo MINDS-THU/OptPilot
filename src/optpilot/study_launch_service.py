@@ -342,6 +342,7 @@ class RealmStudyLaunchService:
         execution_profile: RunExecutionProfile | None = None,
         method_environment_binding: Mapping[str, Any] | None = None,
         process_environment_binding_revision: str | None = None,
+        launch_inputs: Mapping[str, Any] | None = None,
     ) -> StudyLaunchView:
         """Retain one exact authored package and approve its launch job."""
 
@@ -368,6 +369,7 @@ class RealmStudyLaunchService:
             study_config_path=study_config_path,
             source_owner_id=identities["source_owner_id"],
             study_definition_owner_id=identities["definition_owner_id"],
+            launch_inputs=launch_inputs,
         )
         if (
             method_environment_binding is None
