@@ -35,6 +35,8 @@ from optpilot.retained_batch_worker import (
 )
 from optpilot.retained_study_compiler import compile_retained_process_study
 from tests.core.test_retained_study_compiler import (
+    _capability_study,
+    _command_study,
     _manifest,
     _package,
     _provider,
@@ -1077,6 +1079,412 @@ class Method:
         for forbidden in ("run_dir", "evidence_store", "study_spec_path", "study_spec_raw"):
             self.assertNotIn(forbidden, signature.parameters)
             self.assertNotIn(forbidden, encoded)
+
+
+def _capability_definition():
+    return compile_retained_process_study(
+        _capability_study(),
+        package=_package(),
+        package_manifest=_manifest(),
+        provider=_provider(),
+        target_owner_id="retained-batch-worker-capability-definition",
+    ).run_definition
+
+
+class RetainedCapabilityImportRootTest(unittest.TestCase):
+    """A required capability callable is resolvable without a pythonPath hack (F5)."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.projection = Path(self.temporary.name) / "projection"
+        self.methods = self.projection / "methods"
+        self.environments = self.projection / "environments"
+        self.methods.mkdir(parents=True)
+        self.environments.mkdir(parents=True)
+        (self.methods / "random.yaml").write_text("retained: true\n", encoding="utf-8")
+        for module in ("method_impl", "env_impl"):
+            sys.modules.pop(module, None)
+            self.addCleanup(sys.modules.pop, module, None)
+
+    def test_method_resolves_the_environment_capability_callable(self) -> None:
+        (self.environments / "env_impl.py").write_text(
+            """
+def evaluate(candidate, context):
+    return {"score": 1.0}
+
+def replay_candidate(seed):
+    return {"seed": seed, "trace": "exact"}
+""",
+            encoding="utf-8",
+        )
+        (self.methods / "method_impl.py").write_text(
+            """
+from env_impl import replay_candidate
+
+class Method:
+    def __init__(self, definition, study_spec, rng):
+        capabilities = study_spec.candidate["context"]["capabilities"]
+        self.declared = {
+            item["id"]: item.get("callable") for item in capabilities
+        }
+
+    def propose(self, n_candidates, study_state, evidence_view):
+        replayed = replay_candidate(7)
+        return [{
+            "candidate_id": "capability-candidate",
+            "format": "parameters",
+            "spec": {
+                "declared_callable": self.declared["exact_seed_replay"],
+                "replayed_seed": replayed["seed"],
+                "x": 0.5,
+            },
+        }]
+""",
+            encoding="utf-8",
+        )
+        engine = RetainedPythonBatchEngine(
+            run_definition=_capability_definition(),
+            projection_root=self.projection,
+            scope_roots={"study-package-source": "."},
+        )
+        self.addCleanup(engine.close)
+        response = engine.handle(_propose("capability-proposal"))
+
+        self.assertTrue(response["ok"], response)
+        spec = response["result"]["candidates"][0]["spec"]
+        self.assertEqual(spec["declared_callable"], "env_impl:replay_candidate")
+        self.assertEqual(spec["replayed_seed"], 7)
+
+
+def _command_definition(
+    command: list[str] | None = None,
+    *,
+    exchange_timeout: int | None = None,
+):
+    study = _command_study(command)
+    if exchange_timeout is not None:
+        study.method["runtime"]["exchangeTimeoutSeconds"] = exchange_timeout
+    return compile_retained_process_study(
+        study,
+        package=_package(),
+        package_manifest=_manifest(),
+        provider=_provider(),
+        target_owner_id="retained-command-batch-worker-definition",
+    ).run_definition
+
+
+class RetainedCommandBatchWorkerTest(unittest.TestCase):
+    """Worker-level coverage for command-protocol batch methods (F3)."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.projection = self.root / "projection"
+        self.methods = self.projection / "methods"
+        self.methods.mkdir(parents=True)
+        (self.methods / "random.yaml").write_text("retained: true\n", encoding="utf-8")
+
+    def _write_command_script(self, source: str) -> None:
+        (self.methods / "method_impl.py").write_text(source, encoding="utf-8")
+
+    def _engine(
+        self,
+        command: list[str] | None = None,
+        *,
+        exchange_timeout: int | None = None,
+        **kwargs: Any,
+    ) -> RetainedPythonBatchEngine:
+        engine = RetainedPythonBatchEngine(
+            run_definition=_command_definition(
+                command, exchange_timeout=exchange_timeout
+            ),
+            projection_root=self.projection,
+            scope_roots={"study-package-source": "."},
+            **kwargs,
+        )
+        self.addCleanup(engine.close)
+        return engine
+
+    def test_stdin_stdout_exchange_carries_the_documented_request(self) -> None:
+        self._write_command_script(
+            """
+import json
+import os
+import sys
+
+request = json.load(sys.stdin)
+print("command stderr stays off the protocol", file=sys.stderr)
+json.dump(
+    {
+        "candidates": [
+            {
+                "candidate_id": "cmd-1",
+                "format": "parameters",
+                "spec": {
+                    "protocol": request["protocol"],
+                    "request_id": request["request_id"],
+                    "n_candidates": request["n_candidates"],
+                    "seed": request["seed"],
+                    "objective": request["objective"]["primaryMetric"]["name"],
+                    "study_round": request["study_state"]["round"],
+                    "evidence_round": request["evidence"]["round"],
+                    "has_settings": "settings" in request,
+                    "has_candidate_contract": "schema" in request["candidate"].get("parameters", {}),
+                    "workspace_exists": os.path.isdir(request["runtime_context"]["method_workspace"]),
+                    "cwd_is_workdir": os.getcwd() == os.path.realpath(os.getcwd()) and os.path.basename(os.getcwd()) == "methods",
+                    "pythonpath_has_import_root": any(
+                        os.path.basename(entry) == "methods"
+                        for entry in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+                    ),
+                },
+            }
+        ],
+        "method_events": [{"event": "proposed", "detail": "one"}],
+    },
+    sys.stdout,
+)
+""",
+        )
+        redirected: list[str] = []
+
+        class Sink:
+            def write(self, value: str) -> int:
+                redirected.append(value)
+                return len(value)
+
+            def flush(self) -> None:
+                return None
+
+        engine = self._engine(user_stdout=Sink())
+        request = _propose(
+            "command-proposal-1",
+            evidence={"round": 3},
+            study_state={"round": 9},
+        )
+        response = engine.handle(request)
+        replay = engine.handle(request)
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(replay, response)
+        spec = response["result"]["candidates"][0]["spec"]
+        self.assertEqual(spec["protocol"], "optpilot.method.batch.v1")
+        self.assertEqual(spec["request_id"], "command-proposal-1")
+        self.assertEqual(spec["n_candidates"], 1)
+        self.assertEqual(spec["seed"], 7)
+        self.assertEqual(spec["objective"], "throughput")
+        self.assertEqual(spec["study_round"], 9)
+        self.assertEqual(spec["evidence_round"], 3)
+        self.assertTrue(spec["has_settings"])
+        self.assertTrue(spec["has_candidate_contract"])
+        self.assertTrue(spec["workspace_exists"])
+        self.assertTrue(spec["cwd_is_workdir"])
+        self.assertTrue(spec["pythonpath_has_import_root"])
+        joined = "".join(redirected)
+        self.assertIn("command stderr stays off the protocol", joined)
+        self.assertIn('"event": "proposed"', joined)
+
+    def test_file_placeholder_exchange_reads_request_and_writes_response(self) -> None:
+        self._write_command_script(
+            """
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    request = json.load(handle)
+print("stdout noise is not the protocol in file mode")
+with open(sys.argv[2], "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "candidates": [
+                {
+                    "candidate_id": "cmd-file-1",
+                    "format": "parameters",
+                    "spec": {"request_id": request["request_id"]},
+                }
+            ]
+        },
+        handle,
+    )
+""",
+        )
+        noise: list[str] = []
+
+        class Sink:
+            def write(self, value: str) -> int:
+                noise.append(value)
+                return len(value)
+
+            def flush(self) -> None:
+                return None
+
+        engine = self._engine(
+            ["python", "method_impl.py", "{input_file}", "{output_file}"],
+            user_stdout=Sink(),
+        )
+        response = engine.handle(_propose("command-file-proposal"))
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(
+            response["result"]["candidates"][0]["spec"]["request_id"],
+            "command-file-proposal",
+        )
+        self.assertIn("stdout noise is not the protocol in file mode", "".join(noise))
+
+    def test_command_failure_modes_return_method_failed_with_diagnostics(self) -> None:
+        diagnostics: list[dict[str, Any]] = []
+        cases = (
+            ("exit", "import sys\nsys.exit(3)\n"),
+            ("bad-json", "print('not json')\n"),
+            ("non-object", "print('[1, 2]')\n"),
+        )
+        for label, source in cases:
+            with self.subTest(case=label):
+                self._write_command_script(source)
+                engine = self._engine(diagnostic=diagnostics.append)
+                response = engine.handle(_propose(f"command-{label}"))
+                self.assertFalse(response["ok"])
+                self.assertEqual(response["error"]["code"], "method_failed")
+                engine.close()
+        self.assertEqual(len(diagnostics), len(cases))
+
+    def test_hung_command_times_out_without_wedging_the_worker(self) -> None:
+        self._write_command_script("import time\ntime.sleep(30)\n")
+        engine = self._engine(exchange_timeout=1)
+        response = engine.handle(_propose("command-timeout"))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"]["code"], "method_failed")
+        status = engine.handle(_status("command-status-after-timeout"))
+        self.assertTrue(status["ok"], status)
+
+    def test_overproduced_command_batch_is_rejected(self) -> None:
+        self._write_command_script(
+            """
+import json
+import sys
+
+json.dump(
+    {
+        "candidates": [
+            {"candidate_id": "a", "format": "parameters", "spec": {}},
+            {"candidate_id": "b", "format": "parameters", "spec": {}},
+        ]
+    },
+    sys.stdout,
+)
+""",
+        )
+        engine = self._engine()
+        response = engine.handle(_propose("command-overproduced", n_candidates=1))
+
+        self.assertFalse(response["ok"])
+        self.assertEqual(response["error"]["code"], "batch_overproduced")
+
+    def test_supervised_command_worker_executes_over_the_socket(self) -> None:
+        probe_path = self.root / "socket-probe.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(str(probe_path))
+            except PermissionError as error:
+                if error.errno == 1:
+                    self.skipTest("sandbox denies AF_UNIX bind")
+                raise
+            finally:
+                if probe_path.exists():
+                    probe_path.unlink()
+        self._write_command_script(
+            """
+import json
+import sys
+
+request = json.load(sys.stdin)
+print("private command stderr", file=sys.stderr)
+json.dump(
+    {
+        "candidates": [
+            {
+                "candidate_id": "socket-cmd",
+                "format": "parameters",
+                "spec": {"request_id": request["request_id"]},
+            }
+        ]
+    },
+    sys.stdout,
+)
+""",
+        )
+        socket_path = self.root / "command-subprocess.sock"
+        diagnostic_path = self.root / "command-subprocess.log"
+        initialization = RetainedBatchWorkerInit(
+            run_definition=_command_definition(),
+            projection_root=str(self.projection),
+            scope_roots={"study-package-source": "."},
+            socket_path=str(socket_path),
+            diagnostic_path=str(diagnostic_path),
+        )
+        init_path = self.root / "command-init.json"
+        init_path.write_bytes(initialization.to_bytes())
+        process = subprocess.Popen(
+            [sys.executable, "-m", "optpilot.retained_batch_worker", str(init_path)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(lambda: process.kill() if process.poll() is None else None)
+        deadline = time.monotonic() + 5
+        while (
+            not socket_path.exists()
+            and process.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        self.assertIsNone(process.poll())
+        self.assertTrue(socket_path.exists())
+
+        proposal = unix_batch_worker_request(
+            socket_path, _propose("proposal-command-socket")
+        )
+        shutdown = unix_batch_worker_request(
+            socket_path, _shutdown("shutdown-command-socket")
+        )
+        process.wait(timeout=5)
+
+        self.assertTrue(proposal["ok"], proposal)
+        self.assertEqual(
+            proposal["result"]["candidates"][0]["spec"]["request_id"],
+            "proposal-command-socket",
+        )
+        self.assertTrue(shutdown["result"]["shutdown"])
+        self.assertEqual(process.returncode, 0)
+        self.assertIn(
+            "private command stderr", diagnostic_path.read_text(encoding="utf-8")
+        )
+
+    def test_observations_are_acknowledged_without_invoking_the_command(self) -> None:
+        marker = self.methods / "invoked.marker"
+        self._write_command_script(
+            """
+import json
+import pathlib
+import sys
+
+pathlib.Path("invoked.marker").write_text("ran", encoding="utf-8")
+json.dump({"candidates": []}, sys.stdout)
+""",
+        )
+        engine = self._engine()
+        response = engine.handle(
+            _observe(
+                "command-observe-1",
+                [{"candidate_id": "cmd-1", "status": "completed"}],
+            )
+        )
+
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(response["result"], {"observation_count": 1})
+        self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

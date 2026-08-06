@@ -979,6 +979,53 @@ class StudioRealmRunsTest(unittest.TestCase):
                     {**request, "method_request_timeout_seconds": invalid}
                 )
 
+    def test_http_study_launch_binds_declared_typed_inputs(self) -> None:
+        study_path = _write_package(self.package)
+        study_path.write_text(
+            study_path.read_text(encoding="utf-8")
+            + "inputs:\n  target:\n    valueType: int\n    min: 1\n",
+            encoding="utf-8",
+        )
+        handler, responses = self._handler()
+
+        bound_request = {
+            "schema": "optpilot.studio-study-launch-request.v1",
+            "request_id": "62345678-1234-4234-8234-123456789abc",
+            "study_path": str(study_path),
+            "inputs": {"target": 5},
+        }
+        handler.path = "/api/studies/launch"
+        handler._read_json_body = lambda: bound_request  # type: ignore[method-assign]
+        with mock.patch(
+            "optpilot_studio.ui.server._schedule_study_launch_execution",
+            return_value=True,
+        ):
+            handler.do_POST()
+            ready = self._await_study_launch_request(
+                handler,
+                responses,
+                bound_request["request_id"],
+                terminal_states={"ready"},
+            )
+        self.assertEqual(ready["state"], "ready")
+
+        missing_request = {
+            "schema": "optpilot.studio-study-launch-request.v1",
+            "request_id": "72345678-1234-4234-8234-123456789abc",
+            "study_path": str(study_path),
+        }
+        handler.path = "/api/studies/launch"
+        handler._read_json_body = lambda: missing_request  # type: ignore[method-assign]
+        handler.do_POST()
+        failed = self._await_study_launch_request(
+            handler,
+            responses,
+            missing_request["request_id"],
+            terminal_states={"failed"},
+        )
+        self.assertEqual(failed["state"], "failed")
+        self.assertIn("target", failed["failure"]["message"])
+
     def test_http_study_launch_failure_is_durable_and_replayable(self) -> None:
         study_path = _write_package(self.package, method_protocol="session")
         request = {

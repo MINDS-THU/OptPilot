@@ -133,6 +133,9 @@ const state = {
   catalogWorkspaceRequestIds: {},
   interfaceProfileSelections: {},
   interfaceOutputArgumentDrafts: new Map(),
+  studyLaunchInputDrafts: new Map(),
+  studyLaunchInputErrors: new Map(),
+  startedAgentSessionIds: new Set(),
   planSearch: "",
   selectedPlanId: null,
   selectedRunId: null,
@@ -1182,6 +1185,7 @@ function forgetAgentSessionLocalState(sessionId) {
   delete state.agentSessionHydrationErrors[sessionId];
   state.cancellingAgentSessionIds.delete(sessionId);
   state.syncingAgentSessionIds.delete(sessionId);
+  state.startedAgentSessionIds.delete(sessionId);
   state.hydratedAgentSessionIds.delete(sessionId);
   state.agentSessionHydrationRequests.delete(sessionId);
   state.agentSessionTranscriptVersions.delete(sessionId);
@@ -1821,7 +1825,22 @@ function mergeAgentSessionPayload(session) {
   if (hasEvents) state.agentEventsBySession[session.id] = session.events;
   else if (!state.agentEventsBySession[session.id]) state.agentEventsBySession[session.id] = [];
   if (hasMessages) {
-    state.assistantMessagesBySession[session.id] = session.messages.map(agentMessageFromPayload);
+    // Merge, don't clobber: a concurrent session payload (sync poll,
+    // workspace-attachment event, session create) may have been built before
+    // a just-sent message's append landed on disk. Wholesale replacement
+    // would briefly delete the optimistic local message — flipping the
+    // conversation surface back to onboarding. Keep local unconfirmed
+    // messages that the server list does not contain yet.
+    const serverMessages = session.messages.map(agentMessageFromPayload);
+    const serverKeys = new Set(
+      serverMessages.map((item) => `${item && item[0] || ""} ${item && item[2] || ""}`),
+    );
+    const pendingLocal = (state.assistantMessagesBySession[session.id] || []).filter((item) => {
+      const id = String(item && item[3] && item[3].id || "");
+      if (!id.startsWith("local-")) return false;
+      return !serverKeys.has(`${item && item[0] || ""} ${item && item[2] || ""}`);
+    });
+    state.assistantMessagesBySession[session.id] = [...serverMessages, ...pendingLocal];
   }
   if (hasMessages || hasEvents || hasApprovals) {
     state.agentSessionTranscriptVersions.set(
@@ -4462,7 +4481,14 @@ function bindAgentSessionHydrationActions() {
 
 function conversationHasStarted(session = currentAgentSession()) {
   if (!session) return false;
-  return currentAssistantMessages().some((message) => (message && message[0] || "") === "user");
+  // Sticky per session: a transient transcript refresh (for example a stale
+  // session payload racing a just-sent message) must never flip an active
+  // conversation back to the onboarding surface.
+  if (state.startedAgentSessionIds.has(session.id)) return true;
+  const messages = state.assistantMessagesBySession[session.id] || currentAssistantMessages();
+  const started = messages.some((message) => (message && message[0] || "") === "user");
+  if (started) state.startedAgentSessionIds.add(session.id);
+  return started;
 }
 
 function renderConversationOnboarding(session = currentAgentSession()) {
@@ -11234,6 +11260,7 @@ function renderPlanDetail() {
     <div class="plan-layout">
       <section class="study-config-grid">
         ${studyGuidePanel(plan)}
+        ${studyLaunchInputsPanel(plan)}
         ${studyConfigEditor(plan, locked)}
         ${studyReadinessPanel(plan)}
         ${studyValidationPanel(plan)}
@@ -11260,6 +11287,9 @@ function renderPlanDetail() {
   if (stopLaunchButton) stopLaunchButton.addEventListener("click", stopActiveStudyLaunch);
   const dismissLaunchButton = els.planDetail.querySelector(".study-launch-dismiss");
   if (dismissLaunchButton) dismissLaunchButton.addEventListener("click", dismissActiveStudyLaunch);
+  // Launch inputs are per-Run values, not config edits: keep them editable
+  // even when the saved draft itself is locked.
+  bindStudyLaunchInputControls(plan);
   if (!locked) bindPlanConfigControls(plan);
 }
 
@@ -18834,6 +18864,14 @@ async function launchPlan(plan) {
     );
     return;
   }
+  const launchInputs = collectStudyLaunchInputs(plan);
+  if (launchInputs.errors.length) {
+    failLaunch(
+      "Launch inputs need review",
+      `Fix the highlighted launch inputs before starting this Run: ${launchInputs.errors.join("; ")}`,
+    );
+    return;
+  }
   const requestId = newRequestId();
   const request = catalogStudyRef
     ? {
@@ -18848,6 +18886,7 @@ async function launchPlan(plan) {
         study_relative_path: plan.draft.study_relative_path,
         expected_workspace_revision: plan.draft.workspace_revision,
       };
+  if (launchInputs.values) request.inputs = launchInputs.values;
   const active = {
     schema: "optpilot.studio-active-study-launch.v1",
     planId: plan.id,
@@ -20419,6 +20458,199 @@ function studyLaunchCapability(plan) {
     code: retained.code || "retained_execution_unsupported",
     reason: retained.reason || "Retained execution is unavailable for this study.",
   };
+}
+
+function studyInputsDeclaration(plan) {
+  const validation = plan && plan.draft && plan.draft.validation || plan && plan.validation || plan && plan.study && plan.study.validation;
+  const declared = validation && validation.inputs
+    || plan && plan.study && plan.study.raw_config && plan.study.raw_config.inputs
+    || plan && plan.draft && plan.draft.config && plan.draft.config.inputs;
+  if (!declared || typeof declared !== "object" || Array.isArray(declared)) return null;
+  const names = Object.keys(declared);
+  if (!names.length) return null;
+  return declared;
+}
+
+function studyLaunchInputDraft(plan) {
+  return state.studyLaunchInputDrafts.get(plan.id) || {};
+}
+
+function setStudyLaunchInputDraft(plan, name, rawValue) {
+  const draft = { ...studyLaunchInputDraft(plan), [name]: rawValue };
+  state.studyLaunchInputDrafts.set(plan.id, draft);
+  const errors = state.studyLaunchInputErrors.get(plan.id);
+  if (errors && errors[name]) {
+    const remaining = { ...errors };
+    delete remaining[name];
+    state.studyLaunchInputErrors.set(plan.id, remaining);
+  }
+}
+
+function describeStudyInputDefault(declaration) {
+  if (!("default" in declaration)) return "";
+  const value = declaration.default;
+  if (value === null || typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function studyLaunchInputField(plan, name, declaration, rawValue, error) {
+  const valueType = String(declaration.valueType || "string");
+  const required = !("default" in declaration);
+  const helpParts = [];
+  if (declaration.description) helpParts.push(String(declaration.description));
+  if (declaration.unit) helpParts.push(`Unit: ${declaration.unit}`);
+  if (declaration.min !== undefined || declaration.max !== undefined) {
+    helpParts.push(
+      `Range: ${declaration.min === undefined ? "…" : declaration.min} to ${declaration.max === undefined ? "…" : declaration.max}`,
+    );
+  }
+  const defaultText = describeStudyInputDefault(declaration);
+  if (defaultText) helpParts.push(`Default: ${defaultText}`);
+  if (valueType === "array" || valueType === "object") helpParts.push("Enter JSON.");
+  const label = `${name}${required ? " (required)" : ""}`;
+  const help = helpParts.join(" · ");
+  const dataset = `data-study-launch-input="${escapeHtml(name)}"`;
+  const current = rawValue === undefined ? "" : String(rawValue);
+  const invalidClass = error ? " invalid-input" : "";
+  let control;
+  if (valueType === "categorical") {
+    const values = Array.isArray(declaration.values) ? declaration.values : [];
+    const options = values
+      .map((value) => {
+        const encoded = escapeHtml(String(value));
+        const selected = current === String(value) ? " selected" : "";
+        return `<option value="${encoded}"${selected}>${encoded}</option>`;
+      })
+      .join("");
+    control = `<select class="study-launch-input${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${options}</select>`;
+  } else if (valueType === "bool") {
+    const choice = (value, text) => `<option value="${value}"${current === value ? " selected" : ""}>${text}</option>`;
+    control = `<select class="study-launch-input${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${choice("true", "true")}${choice("false", "false")}</select>`;
+  } else if (valueType === "array" || valueType === "object") {
+    control = `<textarea class="study-launch-input${invalidClass}" rows="3" ${dataset} placeholder="${valueType === "array" ? "[…]" : "{…}"}">${escapeHtml(current)}</textarea>`;
+  } else {
+    const isNumber = valueType === "float" || valueType === "int";
+    const bounds = `${declaration.min !== undefined ? ` min="${escapeHtml(String(declaration.min))}"` : ""}${declaration.max !== undefined ? ` max="${escapeHtml(String(declaration.max))}"` : ""}`;
+    const step = valueType === "int" ? ' step="1"' : valueType === "float" ? ' step="any"' : "";
+    control = `<input class="study-launch-input${invalidClass}" type="${isNumber ? "number" : "text"}"${step}${isNumber ? bounds : ""} ${dataset} value="${escapeHtml(current)}" placeholder="${escapeHtml(defaultText)}">`;
+  }
+  return `
+    <label class="control-field${valueType === "array" || valueType === "object" ? " control-field-wide" : ""}">
+      ${controlLabelHtml(label, help)}
+      ${control}
+      ${error ? `<small class="error-text">${escapeHtml(error)}</small>` : ""}
+    </label>
+  `;
+}
+
+function studyLaunchInputsPanel(plan) {
+  const declaration = studyInputsDeclaration(plan);
+  if (!declaration) return "";
+  const draft = studyLaunchInputDraft(plan);
+  const errors = state.studyLaunchInputErrors.get(plan.id) || {};
+  const fields = Object.entries(declaration)
+    .map(([name, item]) => (
+      item && typeof item === "object"
+        ? studyLaunchInputField(plan, name, item, draft[name], errors[name])
+        : ""
+    ))
+    .join("");
+  return `
+    <details class="study-card study-config-card" open>
+      ${studyCardHeading(
+        "Launch inputs",
+        "per-Run",
+        "This Run setup declares typed inputs. The values you enter here are bound at launch and retained with the Run.",
+      )}
+      <div class="control-grid">${fields}</div>
+    </details>
+  `;
+}
+
+function bindStudyLaunchInputControls(plan) {
+  els.planDetail.querySelectorAll("[data-study-launch-input]").forEach((control) => {
+    const eventName = control.tagName === "SELECT" ? "change" : "input";
+    control.addEventListener(eventName, () => {
+      setStudyLaunchInputDraft(plan, control.dataset.studyLaunchInput, control.value);
+    });
+  });
+}
+
+function parseStudyLaunchInputValue(rawValue, declaration) {
+  const valueType = String(declaration.valueType || "string");
+  const raw = String(rawValue === undefined ? "" : rawValue);
+  if (valueType === "int") {
+    if (!/^-?\d+$/.test(raw.trim())) {
+      return { ok: false, message: "Enter a whole number." };
+    }
+    return { ok: true, value: Number(raw.trim()) };
+  }
+  if (valueType === "float") {
+    const value = Number(raw.trim());
+    if (raw.trim() === "" || !Number.isFinite(value)) {
+      return { ok: false, message: "Enter a number." };
+    }
+    return { ok: true, value };
+  }
+  if (valueType === "bool") {
+    if (raw === "true") return { ok: true, value: true };
+    if (raw === "false") return { ok: true, value: false };
+    return { ok: false, message: "Choose true or false." };
+  }
+  if (valueType === "categorical") {
+    const values = Array.isArray(declaration.values) ? declaration.values : [];
+    const match = values.find((value) => String(value) === raw);
+    if (match === undefined) {
+      return { ok: false, message: "Choose one of the listed values." };
+    }
+    return { ok: true, value: match };
+  }
+  if (valueType === "array" || valueType === "object") {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      return { ok: false, message: "Enter valid JSON." };
+    }
+    const isArray = Array.isArray(parsed);
+    if (valueType === "array" ? !isArray : (isArray || typeof parsed !== "object" || parsed === null)) {
+      return { ok: false, message: valueType === "array" ? "Enter a JSON array." : "Enter a JSON object." };
+    }
+    return { ok: true, value: parsed };
+  }
+  return { ok: true, value: raw };
+}
+
+function collectStudyLaunchInputs(plan) {
+  const declaration = studyInputsDeclaration(plan);
+  if (!declaration) return { values: null, errors: [] };
+  const draft = studyLaunchInputDraft(plan);
+  const values = {};
+  const errors = [];
+  const fieldErrors = {};
+  for (const [name, item] of Object.entries(declaration)) {
+    if (!item || typeof item !== "object") continue;
+    const raw = draft[name];
+    const blank = raw === undefined || String(raw).trim() === "";
+    const required = !("default" in item);
+    if (blank) {
+      if (required) {
+        const message = "This input is required.";
+        errors.push(`${name}: ${message}`);
+        fieldErrors[name] = message;
+      }
+      continue;
+    }
+    const parsed = parseStudyLaunchInputValue(raw, item);
+    if (!parsed.ok) {
+      errors.push(`${name}: ${parsed.message}`);
+      fieldErrors[name] = parsed.message;
+      continue;
+    }
+    values[name] = parsed.value;
+  }
+  state.studyLaunchInputErrors.set(plan.id, fieldErrors);
+  return { values: Object.keys(values).length ? values : null, errors };
 }
 
 function studyReadinessRows(plan) {

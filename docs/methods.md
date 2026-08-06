@@ -113,7 +113,10 @@ class MyMethod:
         return None
 ```
 
-Command methods use the same batch protocol. They receive a JSON request on stdin unless the command includes `{input_file}`. They write JSON to stdout unless the command includes `{output_file}`.
+Command methods use the same batch protocol. The command is executed once per
+proposal exchange. It receives a JSON request on stdin unless the command
+includes `{input_file}`. It writes JSON to stdout unless the command includes
+`{output_file}`.
 
 Method `entrypoint` fragment:
 
@@ -121,7 +124,37 @@ Method `entrypoint` fragment:
 entrypoint:
   command: [python, my_method.py, "{input_file}", "{output_file}"]
   protocol: batch
+  exchangeTimeoutSeconds: 60
 ```
+
+The retained process slice executes command batch methods under the same
+prepared runtime as Python batch methods:
+
+- `command[0]` must be the logical interpreter name `python` or `python3`. The
+  worker maps it to its exact prepared interpreter; arbitrary host executables
+  and absolute host paths are rejected because the worker runs with an
+  explicit, PATH-free environment.
+- The working directory is the projected method config directory, so a
+  relative script such as `my_method.py` resolves next to the method config.
+  Retained package validation checks that a plain `python script.py` script is
+  present in the package.
+- The retained import roots (including any prepared locked dependency layers
+  from `runtime.setup`) are supplied through `PYTHONPATH`.
+- Values named in `runtime.envFromHost` are present in the command's
+  environment.
+- One command invocation is bounded by the method's
+  `exchangeTimeoutSeconds`; a hung command fails that exchange without
+  wedging the worker.
+
+The JSON request carries `protocol`, `request_id`, `n_candidates`,
+`candidate`, `methodContext`, `study_state`, `objective`, `candidate_context`,
+`evidence`, `runtime_context` (including a private scratch
+`method_workspace`), `settings`, `config`, and the study's global `seed`. The
+response must be a JSON object with a `candidates` list; an optional
+`method_events` list is echoed into the worker's private log. Observations are
+not forwarded to the command — each proposal request already contains the
+method-visible evidence projection, so a command method reads `evidence`
+instead of implementing `observe`.
 
 ## Methods That Need Reference Inputs
 
@@ -172,12 +205,14 @@ proposal order after the batch barrier.
 ## Runtime isolation
 
 The current retained method worker is a supervised local process bound to exact
-retained source and durable method-exchange checkpoints. Study execution
-currently supports neither method setup/build nor container/host-secret
-runtime features.
+retained source and durable method-exchange checkpoints. Python batch methods
+run in-process inside that worker; command batch methods run as one bounded
+subprocess per exchange inside the same projection, prepared runtime, and
+declared `envFromHost` surface. Study execution currently supports neither
+method build nor container runtime features.
 
-Container and command runtime fields remain part of the broader authoring
-schema/target. They become executable only after they compile through the same
-path-free bindings, narrow logical scopes, launch authority, reconciliation,
-and cleanup guarantees as the current process slice. They must not receive a
-broad package or Realm mount.
+Container runtime fields remain part of the broader authoring schema/target.
+They become executable only after they compile through the same path-free
+bindings, narrow logical scopes, launch authority, reconciliation, and cleanup
+guarantees as the current process slice. They must not receive a broad package
+or Realm mount.

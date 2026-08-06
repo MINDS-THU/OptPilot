@@ -161,7 +161,7 @@ from optpilot.runtime_binding import (
 )
 from optpilot.schema_validation import validate_public_config_schema
 from optpilot.setup import minimal_host_env, setup_commands_for_step, setup_cwd
-from optpilot.spec import load_study_spec
+from optpilot.spec import study_spec_from_raw
 from optpilot.study_launch_service import (
     METHOD_ENVIRONMENT_BINDING_SCHEMA,
     RealmStudyLaunchService,
@@ -3083,6 +3083,7 @@ class UiState:
         environment_id: Optional[str] = None,
         operation_id: Optional[str] = None,
         method_request_timeout_seconds: float | None = None,
+        launch_inputs: Optional[Mapping[str, Any]] = None,
     ) -> StudyLaunchView:
         selected_operation_id = operation_id or new_local_study_operation_id()
         method_request_timeout = (
@@ -3194,6 +3195,7 @@ class UiState:
                     study_config_relative_path=selected_study_relative_path,
                     source_owner_id=identities["source_owner_id"],
                     study_definition_owner_id=identities["definition_owner_id"],
+                    launch_inputs=launch_inputs,
                 )
                 method_environment_binding = _studio_method_environment_binding(
                     self,
@@ -3231,6 +3233,7 @@ class UiState:
                     ),
                     execution_profile=execution_profile,
                     method_environment_binding=method_environment_binding,
+                    launch_inputs=launch_inputs,
                 )
         finally:
             if source_projection is not None:
@@ -15256,8 +15259,14 @@ def _canonical_study_launch_request(payload: Any) -> Mapping[str, Any]:
         if has_method_timeout
         else None
     )
-    common = {"schema", "request_id"} | (
-        {"method_request_timeout_seconds"} if has_method_timeout else set()
+    has_inputs = "inputs" in payload
+    launch_inputs = (
+        _canonical_study_launch_inputs(payload["inputs"]) if has_inputs else None
+    )
+    common = (
+        {"schema", "request_id"}
+        | ({"method_request_timeout_seconds"} if has_method_timeout else set())
+        | ({"inputs"} if has_inputs else set())
     )
     if "study_ref" in payload:
         _exact_json_object(
@@ -15274,6 +15283,8 @@ def _canonical_study_launch_request(payload: Any) -> Mapping[str, Any]:
         }
         if method_timeout is not None:
             result["method_request_timeout_seconds"] = method_timeout
+        if launch_inputs is not None:
+            result["inputs"] = launch_inputs
         return result
     if "workspace_id" in payload:
         _exact_json_object(
@@ -15304,6 +15315,8 @@ def _canonical_study_launch_request(payload: Any) -> Mapping[str, Any]:
         }
         if method_timeout is not None:
             result["method_request_timeout_seconds"] = method_timeout
+        if launch_inputs is not None:
+            result["inputs"] = launch_inputs
         return result
     if "study_path" in payload:
         _exact_json_object(
@@ -15321,10 +15334,37 @@ def _canonical_study_launch_request(payload: Any) -> Mapping[str, Any]:
         }
         if method_timeout is not None:
             result["method_request_timeout_seconds"] = method_timeout
+        if launch_inputs is not None:
+            result["inputs"] = launch_inputs
         return result
     raise ValueError(
         "Study launch request must name exactly one of study_ref, workspace_id, or study_path."
     )
+
+
+_MAX_STUDY_LAUNCH_INPUT_KEYS = 64
+
+
+def _canonical_study_launch_inputs(value: Any) -> Dict[str, Any]:
+    """Bound one browser-supplied launch-input mapping.
+
+    Typed validation against the study's declared inputs stays in core
+    (``compile_authoring_config``); this only constrains the transport shape.
+    """
+
+    if not isinstance(value, Mapping):
+        raise ValueError("Study launch inputs must be a JSON object.")
+    if len(value) > _MAX_STUDY_LAUNCH_INPUT_KEYS:
+        raise ValueError(
+            "Study launch inputs exceed "
+            f"{_MAX_STUDY_LAUNCH_INPUT_KEYS} keys."
+        )
+    result: Dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key or len(key.encode("utf-8")) > 128:
+            raise ValueError("Study launch input names must be short strings.")
+        result[key] = item
+    return result
 
 
 def _study_launch_intent_source(request: Mapping[str, Any]) -> EntityCoordinate:
@@ -15734,6 +15774,7 @@ def _execute_study_launch_request(
         method_request_timeout_seconds = request.get(
             "method_request_timeout_seconds"
         )
+        launch_inputs = request.get("inputs")
         if "workspace_id" in request:
             launched = state.launch_study(
                 workspace_id=str(request["workspace_id"]),
@@ -15743,12 +15784,14 @@ def _execute_study_launch_request(
                 ),
                 operation_id=intent.core_operation_id,
                 method_request_timeout_seconds=method_request_timeout_seconds,
+                launch_inputs=launch_inputs,
             )
         elif "study_ref" in request:
             launched = state.launch_study(
                 catalog_entry=request["study_ref"],
                 operation_id=intent.core_operation_id,
                 method_request_timeout_seconds=method_request_timeout_seconds,
+                launch_inputs=launch_inputs,
             )
         else:
             assert configured_study_path is not None
@@ -15759,6 +15802,7 @@ def _execute_study_launch_request(
                 environment_id=configured_validation.get("environment_id"),
                 operation_id=intent.core_operation_id,
                 method_request_timeout_seconds=method_request_timeout_seconds,
+                launch_inputs=launch_inputs,
             )
     except ValueError as error:
         error_code = str(
@@ -15822,7 +15866,15 @@ def _validate_study(
                 },
                 "launch": launch,
             }
-        compiled = compile_authoring_config(path)
+        # Static validation must not bind launch inputs: a study whose
+        # declared inputs have no defaults is valid and launchable — the
+        # launch form supplies the values at launch time.
+        compiled = compile_authoring_config(path, bind_launch_inputs=False)
+        with path.open("r", encoding="utf-8") as handle:
+            raw_study = yaml.safe_load(handle) or {}
+        declared_inputs = (
+            raw_study.get("inputs") if isinstance(raw_study, Mapping) else None
+        )
         method = compiled.get("method")
         method_runtime = (
             method.get("runtime") if isinstance(method, Mapping) else None
@@ -15862,7 +15914,7 @@ def _validate_study(
             "missing_names": missing_environment_names,
         }
         try:
-            preflight_retained_process_study(load_study_spec(str(path)))
+            preflight_retained_process_study(study_spec_from_raw(path, compiled))
             retained = {
                 "supported": True,
                 "eligible": True,
@@ -15912,6 +15964,11 @@ def _validate_study(
             "capabilities": {"retained_execution": retained},
             "runtime_environment": runtime_environment,
             "launch": launch,
+            "inputs": (
+                dict(declared_inputs)
+                if isinstance(declared_inputs, Mapping)
+                else None
+            ),
         }
     except Exception as exc:
         launch = {

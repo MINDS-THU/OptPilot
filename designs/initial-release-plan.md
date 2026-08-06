@@ -57,11 +57,77 @@ This is authoring-surface only — no runtime behavior change — so it is low-r
 
 **F3 — Execute command-protocol batch methods (M).** The method schema already constrains `command → batch` and `docs_assets/methods.md` documents the stdin/stdout exchange contract; only `_preflight_first_slice` rejects it. Implementing it removes the "must be importable Python" constraint that research codebases (COOPA's smolagents stack, Factorio's LLM runners) fail. Scope: command batch methods only — command *evaluators* stay validate-only in v1 (nothing in the four integrations needs them; Factorio's evaluator is Python).
 
+> **Status update 2026-08-06: done.** The retained worker
+> (`retained_batch_worker.py`, `_RetainedCommandBatchMethod`) executes one
+> bounded subprocess per proposal exchange — JSON on stdin/stdout or via the
+> `{input_file}`/`{output_file}` placeholders, `exchangeTimeoutSeconds` as the
+> subprocess bound, retained import roots on `PYTHONPATH`, `envFromHost`
+> values in the environment. Because the worker environment is PATH-free,
+> `command[0]` must be `python`/`python3` (mapped to the prepared
+> interpreter); other heads fail preflight with `method_command_unsupported`,
+> and the documented `python script.py` shape is checked for retention
+> (`method_command_unretained`). Observations are acknowledged but not
+> forwarded — proposal requests carry the evidence projection. Package
+> validation reports command batch methods `method_command_unchecked`
+> (smoke-eligible). Command evaluators stay validate-only. Worker-level tests:
+> `tests/core/test_retained_batch_worker.py::RetainedCommandBatchWorkerTest`
+> (incl. a supervised socket-worker case); compiler and capability coverage in
+> `test_retained_study_compiler.py` / `test_package_validation_capabilities.py`.
+
 **F4 — Operable Resource surface (M).** Resources today can only "launch a web UI" or run a pre-registered output action against a reported tree. Generalize `interfaceOutputAction` into declared **resource actions**: named commands with typed inputs (F1) and declared outputs, runnable headless from CLI/Studio/Assistant (approval-gated), without requiring the web presentation. This gives DEVS-Gen a batch "spec → simulator bundle" path and gives any generator/tool Resource a form-able, Assistant-drivable surface — "operate a specialized Resource" (use case 6) stops meaning "only its custom UI".
+
+> **Status update 2026-08-06: core + CLI done.** New top-level
+> `resource.actions` (schema `resourceAction` in `defs/common.schema.json`,
+> ≤16 per resource): id/label/description, `command`, `cwd`, `env`, typed
+> `inputs` (parameterMap), `grants` (envFromHost/secretsFromHost fail-closed;
+> network declared), optional process `runtime` (container fails validation
+> for actions), `timeoutSeconds` ≤ 86400. Typed compile + headless executor
+> in `src/optpilot/resource_actions.py`; validation wired into
+> `_validate_resource_semantics`. Execution contract: validated inputs JSON
+> at `OPTPILOT_RESOURCE_ACTION_INPUTS_FILE`, results under
+> `OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT`, command tokens may name
+> `{inputs_file}`/`{output_root}`/`{input:<key>}` (scalar-only, checked
+> against declarations at validation time); `runtime.setup` steps run in the
+> resource root first (idempotent by convention — the local path does not use
+> Studio's prepared-runtime cache). CLI: `optpilot resource list|run`
+> (`--input`/`--inputs-file`/`--output-dir`/`--skip-setup`). Tests:
+> `tests/core/test_resource_actions.py` (17). Docs: "Resource Actions" in
+> `catalog.md`.
+> Design note from the implementation survey: actions are deliberately **not**
+> built on the interface *output-action* executor — that path is a
+> network-disabled, grant-free container jail bound to a live Studio launch's
+> prepared-runtime lease, which cannot serve generation-type actions needing
+> LLM access. Interface output actions are unchanged. Studio/Assistant
+> approval-gated surfaces consume the same compile (`compile_resource_actions`)
+> and land with U1 forms. Also corrected: `.optpilot/resource_setup` never
+> existed; the real setup mechanism is `interface.runtime.setup`.
 
 **F5 — Formalized environment capabilities (M).** Two conventions used by the trace-aware method today are honored by convention and hacks:
 - `exact_seed_replay`: `method.yaml` reaches across the package via `pythonPath: [., ../../environments/...]` to import the environment's `evaluator.replay_candidate`. Formalize: a capability declaration names the callable; the runner resolves and exposes the environment import root to methods that require the capability. (Cheaper complement: methods consume the evaluator's already-declared `worst_run.db` artifact, category `simulation_trace`, making replay optional.)
 - Policy validation: hardcoded AST checks in `method.py` (entrypoint name/arity, forbidden imports, field lints) become an environment-declared `policyValidation` block (required entrypoint, forbidden import roots, forbidden identifiers, optional lints) that any code-editing method applies generically.
+
+> **Status update 2026-08-06: done (framework side).** Environment capability
+> declarations gain an optional `callable` (`module:object`, validated and
+> required to be source-backed under the retained environment import roots).
+> When a method's `accepts.requires.capabilities` names a capability with a
+> callable, `retained_study_compiler` appends the environment's package
+> import roots to the method runtime (deduped against the method's own
+> roots) — the cross-package `pythonPath` hack is no longer needed; worker
+> test `RetainedCapabilityImportRootTest` proves a hack-free method resolves
+> the callable. New environment `policyValidation` block (entrypoint /
+> forbiddenImports / forbiddenNames / string-constant lints) validated by
+> `src/optpilot/policy_validation.py::validate_policy_declaration`, carried
+> in the candidate context only when declared (existing contracts keep their
+> exact bytes/digests), and applied generically by methods via the new
+> core `validate_policy_sources(sources, policy)` checker (ports the AGV
+> method's hardcoded AST semantics). `production_agv_scheduling`'s
+> `environment_llm.yaml` now declares both (additive; the method's own
+> checks keep working until W2 rebases it onto the block). Tests:
+> `tests/core/test_policy_validation.py` (9), compiler capability cases in
+> `test_retained_study_compiler.py`. Docs: `configuration.md` +
+> `candidate-contracts.md`. W2 remains the consumer-side work: the general
+> method reads `context.policyValidation` and the capability callable
+> instead of its hardcoded copies.
 
 **F6 — Dependency-locking escape hatch, documented (S now, L later).** `_validate_wheel_tags` accepts only pure-Python (`none-any`) wheels; OR-Tools/pymoo/simpy-class stacks therefore can't be locked. Do **not** attempt native-wheel or container execution for this release. Instead: (a) document the supported pattern — a package declares heavy runtimes as *user-provisioned* (host interpreter + documented extras, checked by `optpilot package setup-check`); (b) keep `runtime.sandbox: container` authoring valid so packages are forward-compatible; (c) schedule container evaluator execution as the first post-release framework slice (trust plumbing already exists in `provider_trust_policy.py` / digest-pinned preview approvals to generalize from). COOPA and Factorio-execution adopt pattern (a) in v1.
 
@@ -80,6 +146,30 @@ The shell is done; this is a finishing list, not a rebuild. Ordered.
 2. **Apply-a-method / one-time solve**: the `study.inputs` declaration (F2) renders as the launch form for the saved Run setup.
 3. **Resource actions**: `resource.inputs` (F4) render as the action's form, for both user and Assistant filling.
 Renderer scope for v1: flat + one-level nested parameters, all seven valueTypes, min/max/values/default/description/unit; deeper recursion falls back to the existing YAML inspection path (already the documented behavior).
+
+> **Status update 2026-08-07: item 2 done (study.inputs launch form).**
+> Server: the Studio launch request schema accepts optional typed `inputs`
+> (all three request variants; bounded transport validation in
+> `_canonical_study_launch_inputs`), threaded through
+> `launch_study → prepare_selected_package / plan_local_package`
+> (`prepare_selected_package` gained the `launch_inputs` kwarg in core);
+> the durable intent replay path carries inputs automatically.
+> `_validate_study` now compiles with `bind_launch_inputs=False` — fixing a
+> latent bug where a required-input study reported `study_invalid` — and
+> exposes the declared `inputs` map in the validation payload. Client
+> (`app.js`): a "Launch inputs" card renders one typed field per declared
+> input (number fields with bounds for int/float, dropdowns for
+> bool/categorical, JSON textareas for array/object, defaults as
+> placeholders), values are validated client-side (core stays
+> authoritative), included as `request.inputs`, and persisted/replayed with
+> the stored launch request. Tests: 5 in
+> `test_studio_study_launch_capability.py` (validation exposure, mocked
+> launch threading, malformed-inputs rejection, client-source assertions) +
+> an unmocked HTTP end-to-end in `test_studio_realm_runs.py`
+> (`test_http_study_launch_binds_declared_typed_inputs`). Items 1
+> (candidate-schema Run setup form) and 3 (resource-action forms — greenfield
+> on both server and client; consume `compile_resource_actions` /
+> `run_resource_action`) remain.
 
 **U2 — Finish the "Run setup" rename (S).** Server cards already say "Run setup"; the client still labels the same card kind "Study" (`kindLabels`), the nav says "Studies", and Open work says "Run preparation". Decide the final user-facing wording once — recommendation: **"Run setup"** everywhere user-facing, "Study" retained in docs as the underlying config kind (as the product statement specifies), and unify "Run preparation" → "Run setup · preparing". No schema/API/CLI renames.
 

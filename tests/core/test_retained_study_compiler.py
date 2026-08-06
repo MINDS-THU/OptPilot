@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from optpilot.config import compile_authoring_config
+from optpilot.realm._validation import thaw_json
 from optpilot.realm.owner_derivation import OwnerDerivationManifest, SourceAnchor
 from optpilot.realm.manifests import TreeEntry, TreeManifest
 from optpilot.realm.process_provider import ProcessProviderIdentity
@@ -46,6 +47,36 @@ def _study() -> StudySpec:
         "env_impl:evaluate"
     )
     study.method["implementation"]["callable"] = "method_impl:Method"
+    return study
+
+
+def _command_study(command: list[str] | None = None) -> StudySpec:
+    study = _study()
+    study.method["implementation"] = {
+        "type": "command",
+        "protocol": "optpilot.method.batch.v1",
+        "command": list(command or ["python", "method_impl.py"]),
+    }
+    return study
+
+
+def _capability_study(
+    *,
+    require: bool = True,
+    callable_ref: str | None = "env_impl:replay_candidate",
+) -> StudySpec:
+    study = _study()
+    capability: dict = {"id": "exact_seed_replay", "description": "replay"}
+    if callable_ref:
+        capability["callable"] = callable_ref
+    study.candidate["context"]["capabilities"] = [dict(capability)]
+    study.environment["adapter"]["config"]["context"]["capabilities"] = [
+        dict(capability)
+    ]
+    if require:
+        study.method["compatibility"]["requiredCapabilities"] = [
+            "exact_seed_replay"
+        ]
     return study
 
 
@@ -980,6 +1011,112 @@ class RetainedStudyCompilerTest(unittest.TestCase):
                     ),
                 )
 
+    def test_required_capability_callable_extends_method_import_roots(self) -> None:
+        def compiled_import_roots(study: StudySpec, owner: str):
+            result = compile_retained_process_study(
+                study,
+                package=_package(),
+                package_manifest=_manifest(),
+                provider=_provider(),
+                target_owner_id=owner,
+            )
+            return result.run_definition.prepared_method_runtime.runtime_settings[
+                "import_roots"
+            ]
+
+        method_only = ({"path": "methods", "scope": "study-package-source"},)
+        with_environment = (
+            {"path": "methods", "scope": "study-package-source"},
+            {"path": "environments", "scope": "study-package-source"},
+        )
+
+        self.assertEqual(
+            compiled_import_roots(_capability_study(), "capability-required"),
+            with_environment,
+        )
+        self.assertEqual(
+            compiled_import_roots(
+                _capability_study(require=False), "capability-unrequired"
+            ),
+            method_only,
+        )
+        self.assertEqual(
+            compiled_import_roots(
+                _capability_study(callable_ref=None), "capability-no-callable"
+            ),
+            method_only,
+        )
+
+    def test_capability_callable_must_be_retained_under_environment_roots(self) -> None:
+        study = _capability_study(callable_ref="missing_replay:replay_candidate")
+        self.assert_code(
+            "python_callable_unretained",
+            lambda: compile_retained_process_study(
+                study,
+                package=_package(),
+                package_manifest=_manifest(),
+                provider=_provider(),
+                target_owner_id="capability-unretained",
+            ),
+        )
+
+    def test_policy_validation_declaration_is_retained_in_the_candidate_contract(
+        self,
+    ) -> None:
+        study = _study()
+        policy = {
+            "entrypoint": {
+                "file": "solver.py",
+                "callable": "create_solver",
+                "maxArguments": 0,
+            },
+            "forbiddenImports": ["os", "sys"],
+        }
+        study.candidate["context"]["policyValidation"] = copy.deepcopy(policy)
+        study.environment["adapter"]["config"]["context"]["policyValidation"] = (
+            copy.deepcopy(policy)
+        )
+        result = compile_retained_process_study(
+            study,
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="policy-validation-retained",
+        )
+        contract = result.run_definition.evaluation_closure.environment_revision
+        self.assertEqual(
+            thaw_json(contract.candidate_contract["context"]["policyValidation"]),
+            policy,
+        )
+
+    def test_command_batch_method_compiles_into_the_retained_slice(self) -> None:
+        result = compile_retained_process_study(
+            _command_study(),
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="command-study-definition",
+        )
+        contract = result.run_definition.method_revision.method_contract
+        self.assertEqual(
+            thaw_json(contract["implementation"]),
+            {
+                "type": "command",
+                "protocol": "optpilot.method.batch.v1",
+                "command": ["python", "method_impl.py"],
+            },
+        )
+        other = compile_retained_process_study(
+            _command_study(["python", "method_impl.py", "--iterations", "3"]),
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="command-study-definition",
+        )
+        self.assertNotEqual(
+            result.run_definition.digest, other.run_definition.digest
+        )
+
     def test_first_slice_failures_have_stable_typed_codes(self) -> None:
         base = _study()
 
@@ -996,9 +1133,17 @@ class RetainedStudyCompilerTest(unittest.TestCase):
         study.method["implementation"] = {
             "type": "command",
             "protocol": "optpilot.method.batch.v1",
-            "command": ["python", "method.py"],
+            "command": ["bash", "method.sh"],
         }
-        cases.append(("method_mode_unsupported", study))
+        cases.append(("method_command_unsupported", study))
+
+        study = _copy_study(base)
+        study.method["implementation"] = {
+            "type": "command",
+            "protocol": "optpilot.method.batch.v1",
+            "command": ["python", "missing_method.py"],
+        }
+        cases.append(("method_command_unretained", study))
 
         study = _copy_study(base)
         study.method["implementation"]["protocol"] = "optpilot.method.session.v1"

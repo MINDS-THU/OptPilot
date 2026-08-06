@@ -530,6 +530,69 @@ parameter declaration. Typed inputs are the basis for rendering a simple input
 form for a resource that has no custom interface, and for letting the
 Assistant collect the required values before operating the resource.
 
+## Resource Actions
+
+A resource may declare named **actions** — registered commands with their own
+typed inputs, runnable headlessly without launching the resource's web
+interface. This is how a generator resource exposes a batch mode ("spec file
+in, bundle out") to the CLI and to automation:
+
+```yaml
+actions:
+  - id: generate
+    label: Generate simulator bundle
+    description: Batch generation from a written system specification.
+    command: [python, generate.py, --spec, "{input:specification}"]
+    inputs:
+      specification:
+        valueType: string
+        description: Natural-language description of the system to generate.
+      seed:
+        valueType: int
+        default: 7
+    grants:
+      envFromHost: [DEVS_INTERFACE_MODEL_ID]
+      secretsFromHost: [OPENROUTER_API_KEY]
+    timeoutSeconds: 900
+```
+
+The execution contract:
+
+- Validated input values (declared defaults applied) are written to a JSON
+  file named by `OPTPILOT_RESOURCE_ACTION_INPUTS_FILE`; results belong under
+  the directory named by `OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT`.
+- Command tokens may reference `{inputs_file}`, `{output_root}`, and
+  `{input:<key>}` — the latter substitutes one validated scalar input value
+  as a single argv token. Placeholder references are checked against the
+  declared inputs at validation time; structured (array/object) values are
+  only available through the inputs file.
+- `grants.envFromHost` / `grants.secretsFromHost` name host environment
+  values passed through to the command; a missing name fails the run before
+  anything executes.
+- An optional `runtime` block (process sandbox) may declare `setup` steps;
+  the local headless path runs them in the resource root before the command,
+  so setup scripts should be idempotent. Container runtimes are not
+  executable by this path.
+- One invocation is bounded by the action's `timeoutSeconds` (max one day).
+
+Run actions from the CLI:
+
+```bash
+optpilot resource list path/to/optpilot.resource.yaml
+```
+
+```bash
+optpilot resource run path/to/optpilot.resource.yaml generate --input specification="a barbershop with two barbers" --output-dir ./generated-bundle
+```
+
+`--input` repeats per key (YAML-scalar parsed), `--inputs-file` supplies a
+YAML mapping (`--input` wins on conflicts), and `--output-dir` must be a
+fresh directory — the run summary lists every file the action produced there.
+
+Actions differ from interface `outputs.actions`: an interface output action
+runs against one sealed output tree of a live interface launch, while a
+resource action is a standalone headless operation of the resource itself.
+
 The interface declaration is the portable contextual-interface contract for
 grants, resources, readiness, and accepted selections. Current catalog launch
 supports process-declared profiles through Studio's managed authoring runtime

@@ -13,5 +13,17 @@ MAX_BATCH_EXCHANGE_ITEMS = 4096
 # retain additional headroom below their separate one-megabyte request limit.
 MAX_DURABLE_METHOD_BYTES = 512 * 1024
 
+# The retained process slice launches its method worker with a fully explicit
+# environment (no host PATH), so a command batch method cannot name an
+# arbitrary host executable.  These logical interpreter names are the only
+# supported command heads; the worker maps them to its exact prepared Python
+# runtime, keeping command methods inside the same locked interpreter that
+# runs Python batch methods.
+RETAINED_COMMAND_METHOD_INTERPRETERS = frozenset({"python", "python3"})
 
-__all__ = ["MAX_BATCH_EXCHANGE_ITEMS", "MAX_DURABLE_METHOD_BYTES"]
+
+__all__ = [
+    "MAX_BATCH_EXCHANGE_ITEMS",
+    "MAX_DURABLE_METHOD_BYTES",
+    "RETAINED_COMMAND_METHOD_INTERPRETERS",
+]

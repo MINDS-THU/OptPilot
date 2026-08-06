@@ -110,6 +110,64 @@ def build_parser() -> argparse.ArgumentParser:
     package_smoke_parser.add_argument("--json", action="store_true", help="Print machine-readable smoke output")
     package_smoke_parser.set_defaults(handler=_package_smoke_command)
 
+    resource_parser = subparsers.add_parser(
+        "resource", help="Operate catalog Resources headlessly"
+    )
+    resource_subparsers = resource_parser.add_subparsers(
+        dest="resource_command", required=True
+    )
+    resource_list_parser = resource_subparsers.add_parser(
+        "list", help="List a resource config's declared actions"
+    )
+    resource_list_parser.add_argument(
+        "resource", help="Path to an optpilot resource YAML file"
+    )
+    resource_list_parser.add_argument(
+        "--json", action="store_true", help="Print machine-readable action listing"
+    )
+    resource_list_parser.set_defaults(handler=_resource_list_command)
+    resource_run_parser = resource_subparsers.add_parser(
+        "run", help="Run one declared resource action headlessly"
+    )
+    resource_run_parser.add_argument(
+        "resource", help="Path to an optpilot resource YAML file"
+    )
+    resource_run_parser.add_argument("action", help="Declared action id to run")
+    resource_run_parser.add_argument(
+        "--input",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        dest="inputs",
+        help=(
+            "Value for a declared action input (repeatable). Values are "
+            "parsed as YAML scalars: 30 is an int, true a bool, quoted "
+            "values stay strings."
+        ),
+    )
+    resource_run_parser.add_argument(
+        "--inputs-file",
+        default=None,
+        help=(
+            "YAML file with a mapping of action input values; "
+            "--input wins on conflicting keys"
+        ),
+    )
+    resource_run_parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Fresh directory the action writes its results into",
+    )
+    resource_run_parser.add_argument(
+        "--skip-setup",
+        action="store_true",
+        help="Do not run the action's declared runtime.setup steps first",
+    )
+    resource_run_parser.add_argument(
+        "--json", action="store_true", help="Print the machine-readable run summary"
+    )
+    resource_run_parser.set_defaults(handler=_resource_run_command)
+
     preview_parser = subparsers.add_parser(
         "environment-preview",
         help="Manage local Environment Preview settings",
@@ -229,6 +287,85 @@ def _run_command(args) -> int:
     )
     print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
     return 0 if summary.run_status == "succeeded" else 1
+
+
+def _resource_list_command(args) -> int:
+    import yaml
+
+    from .resource_actions import compile_resource_actions
+
+    resource_path = Path(args.resource).expanduser().resolve()
+    validation = validate_authoring_config(resource_path)
+    if not validation.get("valid"):
+        raise ValueError(
+            f"{resource_path} is not a valid resource config: "
+            + "; ".join(validation.get("errors", []))
+        )
+    with resource_path.open("r", encoding="utf-8") as handle:
+        resource = yaml.safe_load(handle) or {}
+    if resource.get("config") != "resource":
+        raise ValueError(f"{resource_path} is not a resource config.")
+    actions = compile_resource_actions(resource, location=str(resource_path))
+    listing = {
+        "resource": str(resource_path),
+        "resource_id": str(resource.get("id", "")),
+        "actions": [
+            {
+                "id": action.action_id,
+                "label": action.label,
+                "description": action.description,
+                "inputs": dict(action.inputs),
+                "envFromHost": list(action.env_from_host),
+                "secretsFromHost": list(action.secrets_from_host),
+                "timeoutSeconds": action.timeout_seconds,
+            }
+            for action in actions
+        ],
+    }
+    if args.json:
+        print(json.dumps(listing, indent=2, sort_keys=True))
+        return 0
+    print(f"Resource: {listing['resource_id']} ({listing['resource']})")
+    if not actions:
+        print("No declared actions.")
+        return 0
+    for action in actions:
+        print(f"- {action.action_id}: {action.label}")
+        if action.description:
+            print(f"    {action.description}")
+        for name, declaration in action.inputs.items():
+            required = "" if "default" in declaration else " (required)"
+            value_type = declaration.get("valueType", "?")
+            print(f"    input {name}: {value_type}{required}")
+    return 0
+
+
+def _resource_run_command(args) -> int:
+    from .resource_actions import run_resource_action
+
+    summary = run_resource_action(
+        args.resource,
+        args.action,
+        input_values=_parse_launch_inputs(args) or {},
+        output_root=args.output_dir,
+        run_setup=not args.skip_setup,
+    )
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    elif summary["ok"]:
+        print(
+            f"Action {summary['action_id']} succeeded in "
+            f"{summary['duration_seconds']}s; outputs in {summary['output_root']}"
+        )
+        for item in summary["outputs"]:
+            print(f"- {item['path']}")
+    else:
+        print(f"Action {summary['action_id']} failed.")
+        if summary.get("error"):
+            print(summary["error"])
+        if summary.get("stderr_tail"):
+            print(summary["stderr_tail"])
+    return 0 if summary["ok"] else 1
 
 
 def _validate_command(args) -> int:

@@ -84,7 +84,56 @@
         "required": ["id"],
         "properties": {
           "id": {"type": "string"},
-          "description": {"type": "string"}
+          "description": {"type": "string"},
+          "callable": {
+            "description": "Environment-owned Python entry (module:object) that implements this capability. The module resolves against the environment's import roots; the runner exposes those roots to methods that require the capability.",
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "policyValidation": {
+      "description": "Environment-declared static policy contract for generated candidate code. Code-editing methods read this from the candidate context and apply the checks generically before submitting a candidate.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entrypoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file", "callable"],
+          "properties": {
+            "file": {"type": "string", "minLength": 1},
+            "callable": {"type": "string", "minLength": 1},
+            "maxArguments": {"type": "integer", "minimum": 0, "maximum": 16},
+            "allowAsync": {"type": "boolean"}
+          }
+        },
+        "forbiddenImports": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "forbiddenNames": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "lints": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "forbiddenConstant", "message"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "forbiddenConstant": {"type": "string", "minLength": 1},
+              "message": {"type": "string", "minLength": 1}
+            }
+          }
         }
       }
     }

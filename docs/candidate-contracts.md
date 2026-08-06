@@ -230,6 +230,19 @@ Methods can receive three kinds of context.
 
 Static material belongs in `methodContext`. Evaluation outputs created during a run belong in evidence.
 
+Two more environment declarations reach methods through the candidate
+context:
+
+- `context.capabilities` carries the environment's capability declarations.
+  A capability with an environment-owned `callable` (for example
+  `exact_seed_replay: evaluator:replay_candidate`) is resolvable by a method
+  that requires it — the retained runner supplies the environment's import
+  roots to that method's runtime.
+- `context.policyValidation` carries the environment's static policy
+  contract for generated candidate code. Code-editing methods apply it
+  generically with `optpilot.policy_validation.validate_policy_sources`
+  before submitting a candidate.
+
 ## Runtime Path
 
 ```mermaid

@@ -27,21 +27,25 @@ diverges. `designs/pre-release-fix-plan.md` carries per-item status notes.
 
 ## State of the working tree (2026-08-06)
 
-The working tree contains a large body of **uncommitted, fully verified**
-changes (Phase 0 + F1 + F2, described below). Nothing has been git-committed;
-the human owner reviews and commits. Two manual follow-ups are pending for the
-owner:
+Phase 0 + F1 + F2 (described below) are committed at `ab46b0a` ("Release
+prep: Phase 0 hygiene, F1 typed inputs, F2 per-launch Study inputs"); the
+`ci.yml.updated` follow-up was applied by the owner. The working tree now
+contains the **uncommitted, fully verified F3** change set (command-protocol
+batch methods, described below); the human owner reviews and commits.
+Remaining owner follow-ups:
 
-1. `ci.yml.updated` at the repo root must replace `.github/workflows/ci.yml`
-   (workflow files were write-protected for the remote agent). It adds a
-   core-only test step (`discover -s tests/core`) to the clean-venv core-wheel
-   check. Delete `ci.yml.updated` after moving it.
-2. `_to_delete/` at the repo root holds transfer artifacts and can be deleted.
+1. `_to_delete/` at the repo root holds transfer artifacts and stale git
+   index locks and can be deleted.
+2. The public GitHub remote (`MINDS-THU/OptPilot`) is weeks behind local
+   HEAD. Pushing is Phase 0 business and needs the owner.
 
-Also: the public GitHub remote (`MINDS-THU/OptPilot`) is ~5 weeks behind local
-HEAD `82420ea`. Pushing is Phase 0 business and needs the owner.
+Full-suite state on this machine (2026-08-06, with F3 applied): 2,422 tests,
+4 failures — all reproduced identically on a pristine `ab46b0a` worktree
+(three `tests/studio/test_mvp.py` UI-source assertions and one
+`test_realm_study_definition_ledger` migration transaction count), i.e.
+pre-existing and unrelated to F3. Diff failure sets against this baseline.
 
-## Completed so far (verified, uncommitted)
+## Completed so far (verified; F3 uncommitted)
 
 **Phase 0 — hygiene and terminology.**
 - User-facing "Run setup" wording finished across the client
@@ -103,6 +107,84 @@ HEAD `82420ea`. Pushing is Phase 0 business and needs the owner.
   study requiring inputs fails a Studio launch with the core error). Studio
   UI for inputs is **U1** work, not done yet.
 
+**F3 — command-protocol batch methods (retained execution).**
+- The retained worker now executes command batch methods:
+  `_RetainedCommandBatchMethod` in `src/optpilot/retained_batch_worker.py`
+  runs one bounded subprocess per proposal exchange (JSON stdin/stdout or
+  `{input_file}`/`{output_file}`, per `docs_assets/methods.md`). The worker
+  env is PATH-free, so `command[0]` must be `python`/`python3` and is mapped
+  to the worker's prepared interpreter; retained import roots (incl. locked
+  dependency layers) are passed via `PYTHONPATH`; `envFromHost` values reach
+  the subprocess; `exchangeTimeoutSeconds` bounds each invocation. Observe
+  exchanges are acknowledged, not forwarded (evidence rides each proposal).
+- Gates lifted precisely: `_preflight_first_slice` and
+  `_validate_retained_package` (retained_study_compiler),
+  `_validate_batch_definition` (retained_batch_runtime),
+  `_validated_method_contract` (worker), and
+  `_retained_method_execution_capability` (package_validation → new
+  smoke-eligible code `method_command_unchecked`). New typed failure codes:
+  `method_command_unsupported` (non-interpreter head),
+  `method_command_unretained` (missing `python script.py` script). Command
+  *evaluators* stay validate-only. Shared constant:
+  `RETAINED_COMMAND_METHOD_INTERPRETERS` in `method_protocol_limits.py`.
+- Tests: `RetainedCommandBatchWorkerTest` (7, incl. supervised socket
+  worker) in `tests/core/test_retained_batch_worker.py`; compiler positive +
+  failure-code cases; package-validation capability cases. Docs updated in
+  `docs_assets/methods.md` + `configuration.md` and mirrored to `docs/`.
+
+**F4 — operable Resource actions (core + CLI).**
+- New top-level `resource.actions` (schema `resourceAction` in
+  `defs/common.schema.json`): named commands with typed `inputs`
+  (parameterMap), `grants.envFromHost`/`secretsFromHost` (fail-closed),
+  optional process `runtime` with `setup`, `timeoutSeconds` ≤ 86400. Typed
+  `ResourceActionSpec` + `compile_resource_actions` + headless
+  `run_resource_action` in `src/optpilot/resource_actions.py`; validation
+  wired into `_validate_resource_semantics` (config.py imports the module —
+  keep resource_actions free of config imports at module level; the executor
+  lazily imports `validate_authoring_config`).
+- Execution contract: inputs JSON at `OPTPILOT_RESOURCE_ACTION_INPUTS_FILE`,
+  results under `OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT` (must be fresh),
+  command-token placeholders `{inputs_file}`/`{output_root}`/`{input:<key>}`
+  (scalar-only, validated against declarations). `runtime.setup` runs in the
+  resource root before the command unless `--skip-setup`.
+- CLI: `optpilot resource list <resource.yaml>` and `optpilot resource run
+  <resource.yaml> <action> --input k=v --inputs-file f --output-dir d`.
+- Deliberately NOT built on Studio's interface output-action executor (that
+  is a network-disabled container jail bound to a live launch's
+  prepared-runtime lease — wrong shape for generation actions needing LLM
+  access). Interface `outputs.actions` are unchanged. Studio/Assistant
+  surfaces for actions arrive with U1 forms, consuming the same compile.
+- Tests: `tests/core/test_resource_actions.py` (17). Docs: "Resource
+  Actions" in `catalog.md`, mirrored to `docs/`.
+- Correction: `.optpilot/resource_setup` (mentioned in older notes) never
+  existed; the real mechanism is `interface.runtime.setup` /
+  `action.runtime.setup`.
+
+**F5 — formalized environment capabilities (framework side).**
+- Capability declarations (`environment.capabilities[]`) gain optional
+  `callable` (`module:object`; semantic validation + retained source-backed
+  check under environment import roots). When a method requires such a
+  capability, `_capability_environment_roots` in
+  `retained_study_compiler.py` appends the environment package import roots
+  to the method runtime (deduped) — replaces the cross-package `pythonPath`
+  hack. Worker test `RetainedCapabilityImportRootTest` proves the hack-free
+  path.
+- New environment `policyValidation` block (entrypoint, forbiddenImports,
+  forbiddenNames, string-constant lints) — declaration validation and the
+  generic AST checker live in `src/optpilot/policy_validation.py`
+  (`validate_policy_declaration` / `validate_policy_sources`). Carried in
+  candidate context ONLY when declared, so existing candidate contracts and
+  run-definition digests are unchanged. Methods apply it generically; the
+  checker ports the AGV method's `_validate_policy_sources` semantics.
+- `production_agv_scheduling/environments/.../environment_llm.yaml` now
+  declares `callable: evaluator:replay_candidate` and a `policyValidation`
+  block (additive — the method's own hardcoded checks keep working; W2
+  rebases the method onto the declarations).
+- Tests: `tests/core/test_policy_validation.py` (9); capability compile
+  cases + policy retention in `test_retained_study_compiler.py`. Docs:
+  `configuration.md` (environment reference), `candidate-contracts.md`
+  (context table), mirrored to `docs/`.
+
 ## Verification protocol used (keep following it)
 
 - Full suite on the final tree: 2,392 tests, **zero regressions**. 55 failures
@@ -122,27 +204,37 @@ HEAD `82420ea`. Pushing is Phase 0 business and needs the owner.
 
 ## What to do next (in order)
 
-1. **F3 — execute command-protocol batch methods** (plan §3). The schema
-   already constrains `command → batch` and `docs_assets/methods.md`
-   documents the stdin/stdout JSON exchange; only
-   `_preflight_first_slice` in `src/optpilot/retained_study_compiler.py`
-   (~L815–1000, code `method_mode_unsupported`) rejects it. Implement the
-   command exchange in the method worker path
-   (`retained_batch_worker.py` / `method_runtime.py` /
-   `realm/_local_attempt_worker.py` — read how Python batch methods are
-   spawned first), lift the preflight for command+batch methods only
-   (command *evaluators* stay validate-only), and add worker-level tests.
-   COOPA (W3) and Factorio's Direct baseline (W4) depend on this.
-2. **F4 — operable Resource actions** (generalize `interfaceOutputAction`
-   into named commands with typed `inputs`, runnable headless). Unblocks
-   DEVS-Gen headless generation (W1 item 4).
-3. **F5 — formalized environment capabilities** (`exact_seed_replay`
-   resolution, `policyValidation` block). Required by W2.
-4. **U1 — contract-generated forms** in Studio, consuming
-   `settingsSchema` / `resource.inputs` / `study.inputs` (all three now
-   exist in core — build the renderer against real declarations).
-5. Then the Phase 2 integration workstreams W1–W5 per plan §5, and the
-   remaining U-items (U3–U8) per plan §4.
+1. **U1 (remaining) — contract-generated forms.** The `study.inputs` launch
+   form is DONE (see below). Remaining: (a) candidate-parameter-schema form
+   in the Run setup editor (today read-only YAML inspection), and (b) the
+   Studio/Assistant approval-gated surface for resource actions —
+   greenfield on both server and client; reuse `compile_resource_actions` +
+   `run_resource_action` and the new client typed-field helpers
+   (`studyLaunchInputField` / `parseStudyLaunchInputValue` in `app.js` are
+   the renderer seed — generalize rather than duplicate).
+2. Then the Phase 2 integration workstreams W1–W5 per plan §5, and the
+   remaining U-items (U3–U8) per plan §4. Framework primitives F1–F5 are all
+   done: W1 item 4 (DEVS-Gen headless generation) has its F4 vehicle
+   (author a `generate` action on the DEVS-Gen resource); W2 consumes F5
+   (rebase the general method onto `context.policyValidation` +
+   the `exact_seed_replay` callable declaration); W3/W4 consume F3.
+
+**U1 slice — study.inputs launch form (done).**
+- Server: Studio launch request schema accepts optional `inputs` (all three
+  variants; `_canonical_study_launch_inputs` bounds transport shape);
+  threaded `launch_study → prepare_selected_package/plan_local_package`
+  (core `prepare_selected_package` gained `launch_inputs`); durable intent
+  replay carries inputs. `_validate_study` compiles with
+  `bind_launch_inputs=False` (bug fix: required-input studies no longer
+  report `study_invalid`) and exposes `inputs` in the validation payload.
+- Client: "Launch inputs" card on the Run setup detail; typed fields per
+  valueType; client-side parse/validation (core authoritative); values sent
+  as `request.inputs` and persisted with the stored launch request
+  (`state.studyLaunchInputDrafts` / `studyLaunchInputErrors`).
+- Tests: 5 in `test_studio_study_launch_capability.py`, plus unmocked HTTP
+  end-to-end `test_http_study_launch_binds_declared_typed_inputs` in
+  `test_studio_realm_runs.py`. Docs: Studio paragraph in configuration.md's
+  "Per-Launch Study Inputs".
 
 Non-code blockers for the owner (start early, they gate shipping W3/W4):
 COOPA license (`resource/reproduce-COOPA-BC8B/code/coopa/` has no LICENSE) and

@@ -42,6 +42,7 @@ from .locked_python_runtime_contract import (
     PreparedPythonRuntime,
     validate_locked_python_setup_declaration,
 )
+from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 from .method_launch_environment import (
     MethodLaunchEnvironmentError,
     normalize_method_environment_names,
@@ -650,6 +651,50 @@ def _require_source_backed_callable(
         )
 
 
+def _capability_environment_roots(
+    study_spec: StudySpec, package: RetainedStudyPackage
+) -> tuple[str, ...]:
+    """Environment import roots owed to the method by required capabilities.
+
+    A capability that declares an environment-owned ``callable`` promises the
+    method a resolvable environment entry.  When the method requires such a
+    capability, the runner supplies the environment's package import roots to
+    the method runtime — replacing the legacy authoring hack of a method
+    ``pythonPath`` reaching across the package into the environment folder.
+    Roots the method already declares are not repeated.
+    """
+
+    compatibility = _mapping(
+        study_spec.method.get("compatibility"), "method.compatibility"
+    )
+    required = {
+        str(item)
+        for item in _sequence(
+            compatibility.get("requiredCapabilities", ()),
+            "method requiredCapabilities",
+        )
+    }
+    if not required:
+        return ()
+    context = _mapping(study_spec.candidate.get("context"), "candidate.context")
+    needs_environment = any(
+        isinstance(capability, Mapping)
+        and str(capability.get("id")) in required
+        and capability.get("callable")
+        for capability in _sequence(
+            context.get("capabilities", ()), "candidate context capabilities"
+        )
+    )
+    if not needs_environment:
+        return ()
+    declared = set(package.method_python_import_roots)
+    return tuple(
+        path
+        for path in package.environment_python_import_roots
+        if path not in declared
+    )
+
+
 def _validate_retained_package(
     study_spec: StudySpec,
     package: RetainedStudyPackage,
@@ -690,15 +735,54 @@ def _validate_retained_package(
         files=files,
         label="environment evaluator callable",
     )
+    for index, capability in enumerate(
+        _sequence(
+            _mapping(study_spec.candidate.get("context"), "candidate.context").get(
+                "capabilities", ()
+            ),
+            "candidate context capabilities",
+        )
+    ):
+        if not isinstance(capability, Mapping) or not capability.get("callable"):
+            continue
+        _require_source_backed_callable(
+            capability.get("callable"),
+            import_roots=package.environment_python_import_roots,
+            files=files,
+            label=f"environment capability {capability.get('id')!r} callable",
+        )
+
     implementation = _mapping(
         study_spec.method.get("implementation"), "method.implementation"
     )
-    _require_source_backed_callable(
-        implementation.get("callable"),
-        import_roots=package.method_python_import_roots,
-        files=files,
-        label="method callable",
-    )
+    if implementation.get("type") == "command":
+        # A command method has no importable callable to prove.  The one
+        # statically checkable shape is the documented ``python script.py``
+        # form, whose script resolves against the projected method workdir
+        # (the method config's parent directory).
+        command = _sequence(
+            implementation.get("command", ()), "method.implementation.command"
+        )
+        script = str(command[1]) if len(command) > 1 else ""
+        if (
+            script.endswith(".py")
+            and "{input_file}" not in script
+            and "{output_file}" not in script
+        ):
+            method_parent = _config_parent(package.method_config_path)
+            script_path = _join_package_path(method_parent, script)
+            if script_path not in files:
+                _fail(
+                    "method_command_unretained",
+                    "The command method script is absent from the retained package.",
+                )
+    else:
+        _require_source_backed_callable(
+            implementation.get("callable"),
+            import_roots=package.method_python_import_roots,
+            files=files,
+            label="method callable",
+        )
 
     environment_parent = _config_parent(package.environment_config_path)
     interfaces = _sequence(
@@ -839,14 +923,35 @@ def _preflight_first_slice(
 
     method = _mapping(study_spec.method, "method")
     implementation = _mapping(method.get("implementation"), "method.implementation")
+    implementation_type = implementation.get("type")
     if (
-        implementation.get("type") != "python"
+        implementation_type not in {"python", "command"}
         or implementation.get("protocol") != _BATCH_PROTOCOL
     ):
         _fail(
             "method_mode_unsupported",
-            "The retained process-study slice requires a Python optpilot.method.batch.v1 method.",
+            "The retained process-study slice requires a Python or command "
+            "optpilot.method.batch.v1 method.",
         )
+    if implementation_type == "command":
+        command = implementation.get("command")
+        if (
+            isinstance(command, (str, bytes))
+            or not isinstance(command, Sequence)
+            or not command
+            or any(not isinstance(item, str) or not item for item in command)
+        ):
+            _fail(
+                "method_mode_unsupported",
+                "A command batch method must declare a non-empty command string list.",
+            )
+        if command[0] not in RETAINED_COMMAND_METHOD_INTERPRETERS:
+            _fail(
+                "method_command_unsupported",
+                "The retained process slice executes command methods with its "
+                "prepared Python runtime; command[0] must be the logical "
+                "interpreter name python or python3.",
+            )
     compatibility = _mapping(
         method.get("compatibility"), "method.compatibility"
     )
@@ -1354,6 +1459,9 @@ def compile_retained_process_study(
     method_import_roots = tuple(
         ScopePath(_PACKAGE_SCOPE, path)
         for path in package.method_python_import_roots
+    ) + tuple(
+        ScopePath(_PACKAGE_SCOPE, path)
+        for path in _capability_environment_roots(retained_study_spec, package)
     ) + tuple(
         ScopePath(method_prepared_runtime.scope, path)
         for path in (

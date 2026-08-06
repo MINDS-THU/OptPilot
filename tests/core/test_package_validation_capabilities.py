@@ -334,7 +334,14 @@ class Method:
                 {"command": ["python", "method.py"], "protocol": "batch"},
                 "",
                 False,
-                "method_mode_unsupported",
+                "method_command_unchecked",
+            ),
+            (
+                "command-batch-host-executable",
+                {"command": ["bash", "method.sh"], "protocol": "batch"},
+                "",
+                False,
+                "method_command_unsupported",
             ),
             (
                 "legacy-lifecycle",

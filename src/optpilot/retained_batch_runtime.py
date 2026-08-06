@@ -3118,7 +3118,10 @@ def _validate_batch_definition(definition: RunDefinitionManifest) -> None:
     ):
         raise ValueError("retained method protocol/runtime is unsupported.")
     implementation = definition.method_revision.method_contract.get("implementation")
-    if not isinstance(implementation, Mapping) or implementation.get("type") != "python":
+    if not isinstance(implementation, Mapping) or implementation.get("type") not in {
+        "python",
+        "command",
+    }:
         raise ValueError("retained method implementation is unsupported.")
     _definition_candidate_format(definition)
     _required_method_scopes(definition)

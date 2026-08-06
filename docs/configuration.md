@@ -29,7 +29,9 @@ optpilot validate path/to/study.yaml
     supplied to its worker. Studio Runs retain only opaque local value
     revisions; raw values are excluded from the durable process request and Run
     evidence.
-    Command/session methods, command evaluators, containers, and legacy
+    Command batch methods also execute on this slice: the command head must be
+    the logical interpreter name `python`/`python3`, mapped to the prepared
+    method runtime. Session methods, command evaluators, containers, and legacy
     path-backed output declarations may validate as authored schema but are not
     executable by this retained slice. Unsupported studies fail closed.
 
@@ -315,7 +317,42 @@ outputFiles:
 capabilities:
   - id: historical_db_query
     description: Read-only access to a historical SQLite database.
+  - id: exact_seed_replay
+    description: Replays a candidate on an exact evaluation seed.
+    callable: evaluator:replay_candidate
+
+# Optional static policy contract for generated candidate code.
+policyValidation:
+  entrypoint:
+    file: scheduler.py
+    callable: create_scheduler
+    maxArguments: 0
+  forbiddenImports: [os, sys, subprocess]
+  forbiddenNames: [create_controller]
+  lints:
+    - id: battery-field
+      forbiddenConstant: battery
+      message: use 'battery_level' for AGV records.
 ```
+
+A capability may declare an environment-owned `callable` (`module:object`)
+that implements it. The module resolves against the environment's Python
+import roots; when a method's `accepts.requires.capabilities` names such a
+capability, the retained runner adds those environment import roots to the
+method's runtime, so the method can resolve the declared entry without a
+`pythonPath` that reaches across the package. Retained compilation verifies
+the declared callable module is present under the retained environment roots.
+
+`policyValidation` declares the static contract that generated candidate code
+must satisfy: a required entrypoint (one synchronous top-level function with a
+bounded signature that nothing rebinds), forbidden import roots, forbidden
+identifiers, and string-constant lints with authored messages. The block
+travels in the candidate context (`context.policyValidation`), and any
+code-editing method can apply it generically with
+`optpilot.policy_validation.validate_policy_sources(sources, policy)` instead
+of hardcoding per-environment AST checks. These lints give code-generating
+methods early, high-quality feedback; they are not a security boundary —
+candidate code always runs under the evaluator's own isolation.
 
 For the retained local-process slice, each `trialWorkspace.from`
 must resolve to a regular file or directory inside the explicit package root.
@@ -691,8 +728,11 @@ class MyMethod:
 runner rejects it. Live submit/wait/poll semantics are not implemented; OptPilot
 does not execute a session config with degraded batch timing.
 
-The command request/response shape is an authoring target, not a current
-retained execution capability.
+Command batch methods (`entrypoint.command`) execute on the retained slice as
+one bounded subprocess per proposal exchange — see the Methods guide for the
+exact request/response contract and its interpreter constraint. Command
+*evaluators* remain an authoring target, not a current retained execution
+capability.
 
 ## Study Config
 
@@ -786,10 +826,14 @@ inputs:
     default: 60
 ```
 
-Values are supplied at launch time with repeatable `--input key=value` flags
-and/or one `--inputs-file` YAML mapping (`--input` wins on conflicting keys).
-Flag values are parsed as YAML scalars, so `30` becomes an int, `true` a bool,
-and a quoted value stays a string:
+Values are supplied at launch time. In Studio, a Run setup that declares
+inputs shows a **Launch inputs** form on its detail page — one typed field
+per declared input (dropdowns for categorical/bool values, number fields with
+declared bounds, JSON for nested values) — and the entered values are bound
+into the Run when you launch. On the CLI, use repeatable `--input key=value`
+flags and/or one `--inputs-file` YAML mapping (`--input` wins on conflicting
+keys). Flag values are parsed as YAML scalars, so `30` becomes an int, `true`
+a bool, and a quoted value stays a string:
 
 ```bash
 uv run optpilot run studies/my_study.yaml \

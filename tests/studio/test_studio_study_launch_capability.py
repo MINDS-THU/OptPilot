@@ -59,7 +59,11 @@ class StudioStudyLaunchCapabilityTest(unittest.TestCase):
         self.root = Path(temporary.name)
 
     def _write_package(
-        self, *, protocol: str, method_env: tuple[str, ...] = ()
+        self,
+        *,
+        protocol: str,
+        method_env: tuple[str, ...] = (),
+        study_inputs: dict | None = None,
     ) -> tuple[Path, Path, Path]:
         package = self.root / f"package-{protocol}"
         environment_dir = package / "environments" / "toy"
@@ -134,17 +138,20 @@ class StudioStudyLaunchCapabilityTest(unittest.TestCase):
             encoding="utf-8",
         )
         study = studies_dir / "study.yaml"
+        study_config = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "study",
+            "name": f"{protocol}-study",
+            "environmentConfig": "../environments/toy/environment.yaml",
+            "methodConfig": f"../methods/{protocol}/method.yaml",
+            "objective": {"metric": "score", "direction": "maximize"},
+            "budget": {"maxTrials": 1},
+        }
+        if study_inputs is not None:
+            study_config["inputs"] = study_inputs
         study.write_text(
             yaml.safe_dump(
-                {
-                    "apiVersion": "optpilot.io/v1",
-                    "config": "study",
-                    "name": f"{protocol}-study",
-                    "environmentConfig": "../environments/toy/environment.yaml",
-                    "methodConfig": f"../methods/{protocol}/method.yaml",
-                    "objective": {"metric": "score", "direction": "maximize"},
-                    "budget": {"maxTrials": 1},
-                },
+                study_config,
                 sort_keys=False,
             ),
             encoding="utf-8",
@@ -235,6 +242,99 @@ class StudioStudyLaunchCapabilityTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "method_mode_unsupported"):
                 state.launch_study(study)
         popen.assert_not_called()
+
+    def test_declared_launch_inputs_are_static_valid_and_exposed(self) -> None:
+        declaration = {
+            "problem": {"valueType": "string", "description": "Problem text"},
+            "iterations": {"valueType": "int", "min": 1, "default": 3},
+        }
+        _package, study, marker = self._write_package(
+            protocol="batch", study_inputs=declaration
+        )
+
+        validation = _validate_study(study)
+
+        # A required (no-default) input must not fail static validation; the
+        # launch form supplies its value at launch time.
+        self.assertTrue(validation["valid"], validation)
+        self.assertTrue(validation["launch"]["eligible"], validation["launch"])
+        self.assertEqual(validation["inputs"], declaration)
+        self.assertFalse(marker.exists(), "Validate must not import authored Python.")
+
+    def test_study_without_inputs_reports_none(self) -> None:
+        _package, study, _marker = self._write_package(protocol="batch")
+        validation = _validate_study(study)
+        self.assertTrue(validation["valid"], validation)
+        self.assertIsNone(validation["inputs"])
+
+    def test_launch_request_carries_typed_inputs_to_the_core_launch(self) -> None:
+        declaration = {"problem": {"valueType": "string"}}
+        _package, study, _marker = self._write_package(
+            protocol="batch", study_inputs=declaration
+        )
+        state = UiState(cwd=self.root, catalog_roots=[], run_roots=[])
+        self.addCleanup(state.close_coordination)
+        launch_error = ValueError("stop before realm work")
+        with mock.patch.object(
+            state, "launch_study", side_effect=launch_error
+        ) as launch:
+            response, status = _execute_study_launch_request(
+                state,
+                {
+                    "schema": "optpilot.studio-study-launch-request.v1",
+                    "request_id": "42345678-1234-4234-8234-123456789abc",
+                    "study_path": str(study),
+                    "inputs": {"problem": "maximize widget output"},
+                },
+            )
+
+        self.assertEqual(status, HTTPStatus.BAD_REQUEST)
+        launch.assert_called_once()
+        self.assertEqual(
+            launch.call_args.kwargs["launch_inputs"],
+            {"problem": "maximize widget output"},
+        )
+
+    def test_launch_request_rejects_malformed_inputs(self) -> None:
+        _package, study, _marker = self._write_package(protocol="batch")
+        state = UiState(cwd=self.root, catalog_roots=[], run_roots=[])
+        self.addCleanup(state.close_coordination)
+        with mock.patch.object(state, "launch_study") as launch:
+            with self.assertRaisesRegex(ValueError, "JSON object"):
+                _execute_study_launch_request(
+                    state,
+                    {
+                        "schema": "optpilot.studio-study-launch-request.v1",
+                        "request_id": "52345678-1234-4234-8234-123456789abc",
+                        "study_path": str(study),
+                        "inputs": ["not", "a", "mapping"],
+                    },
+                )
+        launch.assert_not_called()
+
+    def test_client_renders_and_submits_launch_input_values(self) -> None:
+        source = _APP_JS.read_text(encoding="utf-8")
+        render = _function_source(
+            source,
+            "function renderPlanDetail()",
+            "function studyConfigEditor(",
+        )
+        launch = _function_source(
+            source,
+            "async function launchPlan(",
+            "function persistActiveStudyLaunch(",
+        )
+        collect = _function_source(
+            source,
+            "function collectStudyLaunchInputs(",
+            "function studyReadinessRows(",
+        )
+
+        self.assertIn("studyLaunchInputsPanel(plan)", render)
+        self.assertIn("bindStudyLaunchInputControls(plan)", render)
+        self.assertIn("collectStudyLaunchInputs(plan)", launch)
+        self.assertIn("request.inputs = launchInputs.values", launch)
+        self.assertIn('"default" in item', collect)
 
     def test_supported_batch_study_is_launchable_without_importing_python(self) -> None:
         _package, study, marker = self._write_package(protocol="batch")

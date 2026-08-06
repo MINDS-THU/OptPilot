@@ -76,3 +76,20 @@ metrics:
 capabilities:
   - id: exact_seed_replay
     description: Replays an executable policy on an exact evaluation seed and produces a bounded SQLite trace.
+    callable: evaluator:replay_candidate
+
+# The static contract generated policies must satisfy. Code-editing methods
+# read this from the candidate context and apply it generically before
+# submitting a candidate (F5); it mirrors the checks the process-aware method
+# currently hardcodes.
+policyValidation:
+  entrypoint:
+    file: scheduler.py
+    callable: create_scheduler
+    maxArguments: 0
+  forbiddenImports: [builtins, evaluator, factory_sim, importlib, os, pathlib, replay, simulation_runner, socket, subprocess, sys]
+  forbiddenNames: [create_controller]
+  lints:
+    - id: agv-battery-field
+      forbiddenConstant: battery
+      message: use 'battery_level' for AGV records; there is no 'battery' snapshot field.

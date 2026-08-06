@@ -1,8 +1,10 @@
-"""Retained, replay-safe Python batch-method worker.
+"""Retained, replay-safe batch-method worker.
 
-This module is the process-runtime slice for ``optpilot.method.batch.v1``.  It
-deliberately does not accept a study file, run directory, or evidence store.
-Semantic initialization comes from one complete typed, path-free run definition;
+This module is the process-runtime slice for ``optpilot.method.batch.v1``,
+covering both Python batch methods (an imported callable) and command batch
+methods (one authored command executed per proposal exchange).  It deliberately
+does not accept a study file, run directory, or evidence store.  Semantic
+initialization comes from one complete typed, path-free run definition;
 the worker derives the method contract and legacy constructor context from it.
 Filesystem authority is limited to explicitly bound logical scopes below one
 provider-owned projection root.  Proposal evidence is carried by each request.
@@ -30,7 +32,9 @@ import shutil
 import socket
 import stat
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -42,7 +46,9 @@ from typing import Any, TextIO
 from .method_protocol_limits import (
     MAX_BATCH_EXCHANGE_ITEMS,
     MAX_DURABLE_METHOD_BYTES,
+    RETAINED_COMMAND_METHOD_INTERPRETERS,
 )
+from .run_execution_profile import method_exchange_timeout_seconds
 from .retained_file_candidates import (
     CANDIDATE_STAGING_QUOTA,
     FileCandidateDraft,
@@ -80,6 +86,10 @@ MAX_UNIX_SOCKET_PATH_BYTES = 100
 _HEADER = struct.Struct("!I")
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+@~-]*$")
 _LOWER_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
+_COMMAND_INPUT_PLACEHOLDER = "{input_file}"
+_COMMAND_OUTPUT_PLACEHOLDER = "{output_file}"
+_MAX_COMMAND_STDERR_ECHO_CHARS = 64 * 1024
 _CALL_CONTEXT_LOCK = threading.RLock()
 _EXCHANGE_CHAIN_DOMAIN = b"optpilot/retained-batch-exchange-chain/v1\0"
 INITIAL_BATCH_EXCHANGE_CHAIN = hashlib.sha256(_EXCHANGE_CHAIN_DOMAIN).hexdigest()
@@ -441,31 +451,63 @@ def _validated_method_contract(value: Mapping[str, Any]) -> dict[str, Any]:
                 f"retained method contract {name} must be a mapping."
             )
     implementation = contract["implementation"]
-    _exact_keys(
-        implementation,
-        {"callable", "protocol", "type"},
-        "retained method implementation",
-    )
-    if implementation["type"] != "python" or implementation["protocol"] != BATCH_PROTOCOL:
-        raise RetainedBatchWorkerConfigurationError(
-            "retained batch worker requires Python optpilot.method.batch.v1."
-        )
-    callable_ref = implementation["callable"]
-    if not isinstance(callable_ref, str):
-        raise RetainedBatchWorkerConfigurationError(
-            "retained method callable must use module:object form."
-        )
-    module_name, separator, attribute_path = callable_ref.partition(":")
+    implementation_type = implementation.get("type")
     if (
-        not separator
-        or not module_name
-        or not attribute_path
-        or any(not item.isidentifier() for item in module_name.split("."))
-        or any(not item.isidentifier() for item in attribute_path.split("."))
+        implementation.get("protocol") != BATCH_PROTOCOL
+        or implementation_type not in {"python", "command"}
     ):
         raise RetainedBatchWorkerConfigurationError(
-            "retained method callable must use module:object form."
+            "retained batch worker requires a Python or command "
+            "optpilot.method.batch.v1 method."
         )
+    if implementation_type == "python":
+        _exact_keys(
+            implementation,
+            {"callable", "protocol", "type"},
+            "retained method implementation",
+        )
+        callable_ref = implementation["callable"]
+        if not isinstance(callable_ref, str):
+            raise RetainedBatchWorkerConfigurationError(
+                "retained method callable must use module:object form."
+            )
+        module_name, separator, attribute_path = callable_ref.partition(":")
+        if (
+            not separator
+            or not module_name
+            or not attribute_path
+            or any(not item.isidentifier() for item in module_name.split("."))
+            or any(not item.isidentifier() for item in attribute_path.split("."))
+        ):
+            raise RetainedBatchWorkerConfigurationError(
+                "retained method callable must use module:object form."
+            )
+    else:
+        _exact_keys(
+            implementation,
+            {"command", "protocol", "type"},
+            "retained method implementation",
+        )
+        command = implementation["command"]
+        if (
+            isinstance(command, (str, bytes))
+            or not isinstance(command, Sequence)
+            or not command
+            or any(not isinstance(item, str) or not item for item in command)
+        ):
+            raise RetainedBatchWorkerConfigurationError(
+                "retained method command must be a non-empty string list."
+            )
+        if command[0] not in RETAINED_COMMAND_METHOD_INTERPRETERS:
+            raise RetainedBatchWorkerConfigurationError(
+                "retained method command must start with the logical "
+                "interpreter name python or python3."
+            )
+        for item in command:
+            if item.startswith(("/", "\\")) or _WINDOWS_ABSOLUTE_PATH_RE.match(item):
+                raise RetainedBatchWorkerConfigurationError(
+                    "retained method command must not contain absolute host paths."
+                )
     formats = contract["compatibility"].get("formats", [])
     if (
         isinstance(formats, (str, bytes))
@@ -971,6 +1013,209 @@ def _validate_method_module_before_import(
     return expected_origin
 
 
+class _RetainedCommandBatchMethod:
+    """Executes the authored command once per proposal exchange.
+
+    The retained slice keeps command batch methods inside the same prepared
+    process runtime as Python batch methods: the command head is a logical
+    interpreter name mapped to the worker's exact interpreter, authored
+    imports resolve through the retained import roots via ``PYTHONPATH``, and
+    the working directory is the projected method config directory.  The
+    exchange follows the documented command batch protocol — one JSON request
+    on stdin unless the command names ``{input_file}``, one JSON response on
+    stdout unless it names ``{output_file}``.  Observations are not forwarded
+    to the command; each proposal request already carries the method-visible
+    evidence projection.
+    """
+
+    def __init__(
+        self,
+        *,
+        definition: Mapping[str, Any],
+        study_spec: StudySpec,
+        import_roots: Sequence[Path],
+        workdir: Path,
+        seed: int,
+        stdout_target: TextIO,
+    ) -> None:
+        self._definition = _json_copy(definition, "method definition")
+        self._command = [
+            str(item) for item in self._definition["implementation"]["command"]
+        ]
+        self._candidate_context = _json_copy(
+            study_spec.candidate.get("context", {}), "candidate context"
+        )
+        self._objective = _json_copy(study_spec.objective, "run objective")
+        self._import_roots = tuple(import_roots)
+        self._workdir = workdir
+        self._seed = seed
+        self._stdout_target = stdout_target
+        self._timeout = method_exchange_timeout_seconds(
+            self._definition.get("runtime", {})
+        )
+
+    def propose(
+        self,
+        n_candidates: int,
+        study_state: Mapping[str, Any],
+        evidence_view: "StaticEvidenceView",
+        *,
+        exchange_id: str,
+        exchange_sequence: int,
+    ) -> list[dict[str, Any]]:
+        call_dir = Path(
+            tempfile.mkdtemp(prefix="optpilot-method-exchange-")
+        )
+        try:
+            input_path = call_dir / "request.json"
+            output_path = call_dir / "response.json"
+            request = self._exchange_request(
+                n_candidates,
+                study_state,
+                evidence_view,
+                exchange_id=exchange_id,
+                exchange_sequence=exchange_sequence,
+                call_dir=call_dir,
+            )
+            request_text = json.dumps(request, sort_keys=True)
+            uses_input_file = any(
+                _COMMAND_INPUT_PLACEHOLDER in item for item in self._command
+            )
+            uses_output_file = any(
+                _COMMAND_OUTPUT_PLACEHOLDER in item for item in self._command
+            )
+            if uses_input_file:
+                input_path.write_text(request_text, encoding="utf-8")
+            argv = [sys.executable]
+            for item in self._command[1:]:
+                argv.append(
+                    item.replace(_COMMAND_INPUT_PLACEHOLDER, str(input_path))
+                    .replace(_COMMAND_OUTPUT_PLACEHOLDER, str(output_path))
+                )
+            try:
+                completed = subprocess.run(
+                    argv,
+                    cwd=str(self._workdir),
+                    env=self._exchange_env(),
+                    input=None if uses_input_file else request_text,
+                    text=True,
+                    capture_output=True,
+                    timeout=self._timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as error:
+                self._echo_command_stderr(error.stderr)
+                raise RuntimeError(
+                    f"method command timed out after {self._timeout:g} seconds."
+                ) from None
+            self._echo_command_stderr(completed.stderr)
+            if uses_output_file:
+                self._echo_command_stderr(completed.stdout)
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "method command failed with exit code "
+                    f"{completed.returncode}: {_text_tail(completed.stderr)}"
+                )
+            if uses_output_file:
+                if not output_path.is_file():
+                    raise RuntimeError(
+                        "method command did not write its {output_file} response."
+                    )
+                response_text = output_path.read_text(encoding="utf-8")
+            else:
+                response_text = completed.stdout
+            try:
+                response = json.loads(response_text or "")
+            except ValueError:
+                raise RuntimeError(
+                    "method command response is not valid JSON."
+                ) from None
+            if not isinstance(response, Mapping):
+                raise RuntimeError(
+                    "method command response must be a JSON object."
+                )
+            for event in response.get("method_events", []) or []:
+                if isinstance(event, Mapping):
+                    self._stdout_target.write(
+                        json.dumps(dict(event), sort_keys=True) + "\n"
+                    )
+            candidates = response.get("candidates", [])
+            if not isinstance(candidates, list):
+                raise RuntimeError(
+                    "method command response candidates must be a list."
+                )
+            return candidates
+        finally:
+            shutil.rmtree(call_dir, ignore_errors=True)
+
+    def _exchange_request(
+        self,
+        n_candidates: int,
+        study_state: Mapping[str, Any],
+        evidence_view: "StaticEvidenceView",
+        *,
+        exchange_id: str,
+        exchange_sequence: int,
+        call_dir: Path,
+    ) -> dict[str, Any]:
+        study_state = _json_copy(study_state, "study state")
+        runtime_context = dict(study_state.get("runtime_context", {}))
+        runtime_context["method_workspace"] = str(call_dir)
+        settings = self._definition.get(
+            "settings", self._definition.get("config", {})
+        )
+        return {
+            "protocol": BATCH_PROTOCOL,
+            "request_id": exchange_id,
+            "exchange_sequence": exchange_sequence,
+            "n_candidates": n_candidates,
+            "candidate": _json_copy(
+                self._candidate_context.get("candidate", {}), "candidate contract"
+            ),
+            "methodContext": _json_copy(
+                self._candidate_context.get("methodContext", {}), "method context"
+            ),
+            "study_state": study_state,
+            "objective": _json_copy(self._objective, "run objective"),
+            "candidate_context": _json_copy(
+                self._candidate_context, "candidate context"
+            ),
+            "evidence": evidence_view.decision_context(),
+            "runtime_context": runtime_context,
+            "settings": _json_copy(settings, "method settings"),
+            "config": _json_copy(
+                self._definition.get("config", {}), "method config"
+            ),
+            "seed": self._seed,
+        }
+
+    def _exchange_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        entries = [str(path) for path in self._import_roots]
+        existing = env.get("PYTHONPATH")
+        if existing:
+            entries.append(existing)
+        if entries:
+            env["PYTHONPATH"] = os.pathsep.join(entries)
+        return env
+
+    def _echo_command_stderr(self, text: Any) -> None:
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        if not isinstance(text, str) or not text:
+            return
+        try:
+            self._stdout_target.write(_text_tail(text))
+        except Exception:
+            pass
+
+
+def _text_tail(text: Any, limit: int = _MAX_COMMAND_STDERR_ECHO_CHARS) -> str:
+    if not isinstance(text, str):
+        return ""
+    return text if len(text) <= limit else text[-limit:]
+
+
 def _create_candidate_exchange_inbox(
     staging_root: Path,
     *,
@@ -1465,28 +1710,38 @@ class RetainedPythonBatchEngine:
             study_spec, self.method_context_root
         )
         seed = run_definition.reproducibility_policy["seedPolicy"]["globalSeed"]
-        try:
-            with _method_call_context(
-                self.import_roots, self.workdir, self._stdout_target
-            ):
-                self._method = _load_method(
-                    str(contract["implementation"]["callable"]),
-                    definition,
-                    study_spec,
-                    random.Random(seed),
-                    self.import_roots,
-                )
-        except RetainedBatchWorkerConfigurationError:
-            raise
-        except Exception as error:
-            self._record_diagnostic("initialize", error)
-            raise RetainedBatchWorkerConfigurationError(
-                "retained method initialization failed."
-            ) from None
-        if not callable(getattr(self._method, "propose", None)):
-            raise RetainedBatchWorkerConfigurationError(
-                "retained Python batch method must implement propose."
+        if contract["implementation"]["type"] == "command":
+            self._method: Any = _RetainedCommandBatchMethod(
+                definition=definition,
+                study_spec=study_spec,
+                import_roots=self.import_roots,
+                workdir=self.workdir,
+                seed=seed,
+                stdout_target=self._stdout_target,
             )
+        else:
+            try:
+                with _method_call_context(
+                    self.import_roots, self.workdir, self._stdout_target
+                ):
+                    self._method = _load_method(
+                        str(contract["implementation"]["callable"]),
+                        definition,
+                        study_spec,
+                        random.Random(seed),
+                        self.import_roots,
+                    )
+            except RetainedBatchWorkerConfigurationError:
+                raise
+            except Exception as error:
+                self._record_diagnostic("initialize", error)
+                raise RetainedBatchWorkerConfigurationError(
+                    "retained method initialization failed."
+                ) from None
+            if not callable(getattr(self._method, "propose", None)):
+                raise RetainedBatchWorkerConfigurationError(
+                    "retained Python batch method must implement propose."
+                )
 
     @property
     def cached_exchange_count(self) -> int:
@@ -1724,24 +1979,33 @@ class RetainedPythonBatchEngine:
             }
         callback = self._method.propose
         try:
-            with _method_call_context(
-                self.import_roots, self.workdir, self._stdout_target
-            ):
-                parameters = inspect.signature(callback).parameters
-                if len(parameters) >= 3:
-                    candidates = callback(
-                        n_candidates,
-                        hydrated_study_state,
-                        evidence_view,
-                    )
-                else:
-                    candidates = callback(
-                        n_candidates, hydrated_study_state
-                    )
+            if isinstance(self._method, _RetainedCommandBatchMethod):
+                candidates = self._method.propose(
+                    n_candidates,
+                    hydrated_study_state,
+                    evidence_view,
+                    exchange_id=exchange_id,
+                    exchange_sequence=exchange_sequence,
+                )
+            else:
+                with _method_call_context(
+                    self.import_roots, self.workdir, self._stdout_target
+                ):
+                    parameters = inspect.signature(callback).parameters
+                    if len(parameters) >= 3:
+                        candidates = callback(
+                            n_candidates,
+                            hydrated_study_state,
+                            evidence_view,
+                        )
+                    else:
+                        candidates = callback(
+                            n_candidates, hydrated_study_state
+                        )
             if not isinstance(candidates, list) or any(
                 not isinstance(candidate, Mapping) for candidate in candidates
             ):
-                raise TypeError("Python batch propose must return a list of mappings.")
+                raise TypeError("batch propose must return a list of mappings.")
             if len(candidates) > n_candidates:
                 raise _RequestError(
                     "batch_overproduced",

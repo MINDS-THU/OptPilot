@@ -15,7 +15,9 @@ from typing import Any, Dict, Iterable, Mapping, Tuple
 import yaml
 
 from .parameter_values import apply_parameter_defaults, validate_parameter_values
+from .policy_validation import validate_policy_declaration
 from .realm.run_closure import InterfaceLaunchProfile
+from .resource_actions import compile_resource_actions
 from .run_execution_profile import MAX_RUN_EXECUTION_CONTROL_SECONDS
 from .schema_validation import require_public_config_schema, validate_public_config_schema
 
@@ -250,6 +252,23 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
             component_kind="environment",
         )
 
+    capability_ids = set()
+    for index, capability in enumerate(environment.get("capabilities", []) or []):
+        if not isinstance(capability, dict) or not isinstance(capability.get("id"), str):
+            raise ValueError(f"{location} capabilities[{index}] must declare an id.")
+        if capability["id"] in capability_ids:
+            raise ValueError(
+                f"{location} capabilities[{index}].id {capability['id']!r} is duplicated."
+            )
+        capability_ids.add(capability["id"])
+        if capability.get("callable") is not None:
+            _require_plain_python_import(
+                capability["callable"],
+                f"{location} capabilities[{index}].callable",
+            )
+    if environment.get("policyValidation") is not None:
+        validate_policy_declaration(environment["policyValidation"], location)
+
     if candidate["format"] == "parameters":
         _validate_parameter_schema(candidate.get("parameters", {}).get("schema", {}), location)
         _validate_parameter_constraints(candidate.get("parameters", {}).get("constraints", []), location)
@@ -363,6 +382,19 @@ def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) ->
     inputs = resource.get("inputs")
     if inputs is not None:
         _validate_parameter_schema(inputs, location, field="inputs")
+    actions = resource.get("actions")
+    if actions is not None:
+        if not isinstance(actions, list):
+            raise ValueError(f"{location} actions must be a list.")
+        for index, action in enumerate(actions):
+            action_inputs = (
+                action.get("inputs") if isinstance(action, dict) else None
+            )
+            if action_inputs is not None:
+                _validate_parameter_schema(
+                    action_inputs, location, field=f"actions[{index}].inputs"
+                )
+        compile_resource_actions(resource, location=location)
     if resource.get("interface") is not None:
         _validate_interface(
             resource["interface"],
@@ -888,6 +920,10 @@ def _build_candidate_context(
         "trialWorkspace": trial_workspace,
         "capabilities": deepcopy(environment.get("capabilities", []) or []),
     }
+    # Declared-only so environments without a policy contract keep their exact
+    # existing candidate-context bytes (and therefore run-definition digests).
+    if environment.get("policyValidation"):
+        context["policyValidation"] = deepcopy(environment["policyValidation"])
     if candidate["format"] == "parameters":
         context["parameters"] = deepcopy(candidate.get("parameters", {}))
     elif candidate["format"] == "files":

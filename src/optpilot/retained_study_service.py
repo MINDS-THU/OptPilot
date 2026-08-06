@@ -690,6 +690,7 @@ class RetainedStudyService:
         study_definition_owner_id: str,
         capture_ttl_seconds: float = 300,
         projection_ttl_seconds: float = 300,
+        launch_inputs: Mapping[str, Any] | None = None,
     ) -> RetainedStudyPreparationReceipt:
         """Compile one exact retained package selection without re-capturing it.
 
@@ -795,6 +796,7 @@ class RetainedStudyService:
             seal=None,
             capture_ttl_seconds=capture_ttl_seconds,
             projection_ttl_seconds=projection_ttl_seconds,
+            launch_inputs=launch_inputs,
         )
 
     def _prepare_retained_source(

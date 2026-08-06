@@ -15,6 +15,7 @@ from .locked_python_runtime_contract import (
     LockedPythonRuntimeError,
     validate_locked_python_setup_declaration,
 )
+from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 from .package_index import PackageEntry, index_package
 from .retained_study_compiler import (
     RetainedStudyCompileError,
@@ -184,8 +185,8 @@ def _retained_method_execution_capability(
 
     Authoring validity and retained execution eligibility are deliberately
     separate.  The public schema describes future protocol targets too, while
-    the retained process-study compiler currently accepts only Python batch
-    methods whose constructed object implements ``propose``.
+    the retained process-study compiler accepts Python and command batch
+    methods.
     """
 
     entrypoint = (
@@ -194,14 +195,17 @@ def _retained_method_execution_capability(
         else {}
     )
     protocol = str(entrypoint.get("protocol") or "batch")
-    if not isinstance(entrypoint.get("python"), str):
+    is_command = isinstance(entrypoint.get("command"), list) and not isinstance(
+        entrypoint.get("python"), str
+    )
+    if not is_command and not isinstance(entrypoint.get("python"), str):
         return _execution_capability(
             supported=False,
             eligible=False,
             code="method_mode_unsupported",
             reason=(
-                "The retained process-study runner requires a Python batch "
-                "method; command methods are not supported by this execution slice."
+                "The retained process-study runner requires a Python or "
+                "command batch method entrypoint."
             ),
         )
     if protocol != "batch":
@@ -211,9 +215,22 @@ def _retained_method_execution_capability(
             code="method_mode_unsupported",
             reason=(
                 f"The retained process-study runner does not support method "
-                f"protocol {protocol!r}; use a Python batch method for this execution slice."
+                f"protocol {protocol!r}; use a batch method for this execution slice."
             ),
         )
+    if is_command:
+        command = [str(item) for item in entrypoint.get("command", [])]
+        if not command or command[0] not in RETAINED_COMMAND_METHOD_INTERPRETERS:
+            return _execution_capability(
+                supported=False,
+                eligible=False,
+                code="method_command_unsupported",
+                reason=(
+                    "The retained process slice executes command methods with "
+                    "its prepared Python runtime; command[0] must be the "
+                    "logical interpreter name python or python3."
+                ),
+            )
     runtime = (
         entry.raw.get("runtime", {})
         if isinstance(entry.raw.get("runtime"), dict)
@@ -237,7 +254,17 @@ def _retained_method_execution_capability(
             reason=(
                 "Static checks accepted this Method's exact prepared dependency "
                 "declaration. Run a retained Study test to prepare the locked "
-                "layer and verify the callable in its real execution runtime."
+                "layer and verify the method in its real execution runtime."
+            ),
+        )
+    if is_command:
+        return _execution_capability(
+            supported=True,
+            eligible=False,
+            code="method_command_unchecked",
+            reason=(
+                "Static validation does not execute commands; run the explicit "
+                "package smoke to verify the command batch method exchange."
             ),
         )
     if not check_imports:
@@ -430,6 +457,7 @@ def _package_capabilities(
 _SMOKE_VERIFIED_CAPABILITY_CODES = frozenset(
     {
         "method_callable_unchecked",
+        "method_command_unchecked",
         "method_factory_requires_smoke",
         "runtime_verification_required",
         "study_required",
