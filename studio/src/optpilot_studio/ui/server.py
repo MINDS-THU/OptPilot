@@ -62,6 +62,11 @@ from optpilot.config import (
     compile_interface_launch_profiles,
     validate_authoring_config,
 )
+from optpilot.resource_actions import (
+    compile_resource_actions,
+    find_resource_action,
+    run_resource_action,
+)
 from optpilot.package_validation import (
     retained_execution_blocks_smoke,
     uses_locked_python_runtime_setup,
@@ -3062,6 +3067,10 @@ class UiState:
         # One process-local duplicate guard serves every canonical run origin.
         # Core owns plans, controller fences, recovery, and terminal state.
         self._run_execution_threads: Dict[str, threading.Thread] = {}
+        # Headless resource actions (F4) are local operations with no durable
+        # job record yet; results live for the Studio process lifetime only.
+        self._resource_action_runs: Dict[str, JsonDict] = {}
+        self._resource_action_threads: Dict[str, threading.Thread] = {}
         # Closing Studio stops new process-local scheduling and joins these
         # tracked reconcilers before coordination/Realm storage is closed.
         self._background_execution_closing = threading.Event()
@@ -4423,6 +4432,21 @@ def _handler_factory(state: UiState):
                         "true",
                         "yes",
                     }
+                    archived_only = str(
+                        (query.get("archived") or [""])[0]
+                    ).lower() in {"1", "true", "yes"}
+                    if archived_only:
+                        # Archived Conversations are summaries only: restoring
+                        # one returns it to the main list, which is the path
+                        # for opening it again.
+                        self._send_json(
+                            {
+                                "sessions": _list_archived_agent_session_summaries(
+                                    state
+                                )
+                            }
+                        )
+                        return
                     self._send_json(
                         {
                             "sessions": (
@@ -4539,6 +4563,20 @@ def _handler_factory(state: UiState):
                     return
                 if path.startswith("/api/operator-jobs/"):
                     self._handle_operator_job_get(path)
+                    return
+                if path.startswith("/api/resource-actions/"):
+                    parts = path.split("/")
+                    if len(parts) != 4 or not parts[3]:
+                        raise ValueError("Invalid resource action status path.")
+                    try:
+                        self._send_json(
+                            _resource_action_run_status(state, unquote(parts[3]))
+                        )
+                    except KeyError:
+                        self._send_json(
+                            {"error": "Resource action run was not found."},
+                            status=HTTPStatus.NOT_FOUND,
+                        )
                     return
                 if path == "/api/jobs":
                     jobs = (
@@ -4660,6 +4698,12 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path == "/api/studies/launch":
                     response, status = _submit_study_launch_request(
+                        state, self._read_json_body()
+                    )
+                    self._send_json(response, status=status)
+                    return
+                if parsed.path == "/api/resource-actions/run":
+                    response, status = _start_resource_action_run(
                         state, self._read_json_body()
                     )
                     self._send_json(response, status=status)
@@ -9152,6 +9196,165 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
     finally:
         if source_projection is not None:
             source_projection.close()
+
+
+_MAX_RESOURCE_ACTION_RUNS = 64
+_RESOURCE_ACTION_RUN_SCHEMA = "optpilot.studio-resource-action-run.v1"
+
+
+def _resolve_resource_action_source(state: UiState, resource_uid: str) -> Path:
+    """Resolve one runnable local resource config path from a catalog uid.
+
+    Headless actions run against the live local package folder (a configured
+    catalog root). Published Realm-projection resources are read through
+    short-lived borrowed projections and are not yet runnable here.
+    """
+
+    path = _resolve_catalog_identifier(state, "resource", resource_uid)
+    manifest_path, raw = _resource_manifest(path if path.is_dir() else path.parent)
+    if manifest_path is None or raw.get("config") != "resource":
+        raise FileNotFoundError(
+            "This Resource has no runnable optpilot.resource.yaml manifest."
+        )
+    return manifest_path
+
+
+def _public_resource_action_run(record: JsonDict) -> JsonDict:
+    payload = {
+        "schema": _RESOURCE_ACTION_RUN_SCHEMA,
+        "request_id": record.get("request_id"),
+        "resource_uid": record.get("resource_uid"),
+        "resource_id": record.get("resource_id"),
+        "action_id": record.get("action_id"),
+        "status": record.get("status"),
+        "started_at": record.get("started_at"),
+        "finished_at": record.get("finished_at"),
+        "error": record.get("error"),
+    }
+    summary = record.get("summary")
+    if isinstance(summary, Mapping):
+        payload["result"] = {
+            "ok": summary.get("ok"),
+            "returncode": summary.get("returncode"),
+            "timed_out": summary.get("timed_out"),
+            "duration_seconds": summary.get("duration_seconds"),
+            "outputs": summary.get("outputs"),
+            "output_root": summary.get("output_root"),
+            "stdout_tail": str(summary.get("stdout_tail") or "")[-4000:],
+            "stderr_tail": str(summary.get("stderr_tail") or "")[-4000:],
+            "error": summary.get("error"),
+        }
+    return payload
+
+
+def _start_resource_action_run(
+    state: UiState, payload: Any
+) -> tuple[JsonDict, HTTPStatus]:
+    if not isinstance(payload, Mapping):
+        raise ValueError("Resource action request must be a JSON object.")
+    request_id = _canonical_request_uuid(payload.get("request_id"))
+    resource_uid = str(payload.get("resource_uid") or "").strip()
+    action_id = str(payload.get("action_id") or "").strip()
+    inputs = payload.get("inputs")
+    if not resource_uid or not action_id:
+        raise ValueError("resource_uid and action_id are required.")
+    if inputs is not None and not isinstance(inputs, Mapping):
+        raise ValueError("Resource action inputs must be a JSON object.")
+
+    with state._lock:
+        existing = state._resource_action_runs.get(request_id)
+        if existing is not None:
+            return _public_resource_action_run(existing), HTTPStatus.OK
+        if (
+            len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS
+            and not any(
+                record.get("status") in {"succeeded", "failed"}
+                for record in state._resource_action_runs.values()
+            )
+        ):
+            raise ValueError("Too many concurrent resource action runs.")
+
+    manifest_path = _resolve_resource_action_source(state, resource_uid)
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        resource_raw = yaml.safe_load(handle) or {}
+    actions = compile_resource_actions(
+        resource_raw, location=str(manifest_path)
+    )
+    action = find_resource_action(actions, action_id)
+    output_root = (
+        state.runtime_dir
+        / "resource-action-runs"
+        / _safe_artifact_identifier(request_id, "resource action request id")
+    )
+    record: JsonDict = {
+        "request_id": request_id,
+        "resource_uid": resource_uid,
+        "resource_id": str(resource_raw.get("id") or ""),
+        "action_id": action.action_id,
+        "status": "running",
+        "started_at": time.time(),
+        "finished_at": None,
+        "summary": None,
+        "error": None,
+    }
+
+    def execute() -> None:
+        try:
+            summary = run_resource_action(
+                manifest_path,
+                action.action_id,
+                input_values=dict(inputs or {}),
+                output_root=output_root,
+            )
+            record["summary"] = summary
+            record["status"] = "succeeded" if summary.get("ok") else "failed"
+            if not summary.get("ok") and summary.get("error"):
+                record["error"] = str(summary["error"])
+        except Exception as error:  # surfaced verbatim: local authored action
+            record["status"] = "failed"
+            record["error"] = str(error)
+        finally:
+            record["finished_at"] = time.time()
+            with state._lock:
+                if (
+                    state._resource_action_threads.get(request_id)
+                    is threading.current_thread()
+                ):
+                    state._resource_action_threads.pop(request_id, None)
+
+    with state._lock:
+        if request_id in state._resource_action_runs:
+            return (
+                _public_resource_action_run(
+                    state._resource_action_runs[request_id]
+                ),
+                HTTPStatus.OK,
+            )
+        if len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS:
+            for stale_id in [
+                key
+                for key, value in state._resource_action_runs.items()
+                if value.get("status") in {"succeeded", "failed"}
+            ][: max(1, len(state._resource_action_runs) - _MAX_RESOURCE_ACTION_RUNS + 1)]:
+                state._resource_action_runs.pop(stale_id, None)
+        state._resource_action_runs[request_id] = record
+        thread = threading.Thread(
+            target=execute,
+            name=f"optpilot-resource-action-{request_id[:18]}",
+            daemon=True,
+        )
+        state._resource_action_threads[request_id] = thread
+        thread.start()
+    return _public_resource_action_run(record), HTTPStatus.ACCEPTED
+
+
+def _resource_action_run_status(state: UiState, request_id: str) -> JsonDict:
+    request_id = _canonical_request_uuid(request_id)
+    with state._lock:
+        record = state._resource_action_runs.get(request_id)
+    if record is None:
+        raise KeyError(request_id)
+    return _public_resource_action_run(record)
 
 
 def _catalog_index_entry_for_source(
@@ -19814,6 +20017,19 @@ def _list_agent_session_summaries(state: UiState) -> List[JsonDict]:
         for session in _normalized_agent_sessions(state)
         if not session.get("archived")
     ]
+
+
+def _list_archived_agent_session_summaries(state: UiState) -> List[JsonDict]:
+    archived = [
+        _decorate_agent_session_status(state, dict(session))
+        for session in _normalized_agent_sessions(state)
+        if session.get("archived")
+    ]
+    return sorted(
+        archived,
+        key=lambda session: str(session.get("archived_at") or ""),
+        reverse=True,
+    )
 
 
 def _list_agent_sessions(state: UiState) -> List[JsonDict]:

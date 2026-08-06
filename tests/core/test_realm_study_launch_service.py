@@ -22,6 +22,7 @@ from optpilot.realm.operator_job_records import (
     OperatorJobResult,
     OperatorJobState,
     OperatorJobTerminalStatus,
+    _canonical_digest,
 )
 from optpilot.realm.refs import request_digest
 from optpilot.realm_retained_batch_run_driver import (
@@ -426,6 +427,65 @@ class RealmStudyLaunchServiceTest(unittest.TestCase):
         reconcilable = self.runtime.study_launches.list_reconcilable(page_size=1)
 
         self.assertEqual([view.launch_id for view in reconcilable], [older.launch_id])
+
+    def test_listing_skips_older_incompatible_records_without_hiding_the_rest(
+        self,
+    ) -> None:
+        """One v2-era launch record must not take down listing or adoption.
+
+        Regression: an old, already-succeeded record whose retained input
+        facts predate ``method_environment_binding`` used to raise from
+        ``to_dict()``/``list_reconcilable()`` — failing the whole Runs
+        listing and, worse, startup reconciliation, which left live runs
+        orphaned after a Studio restart.
+        """
+
+        healthy = self.plan("healthy-modern")
+        record = self.runtime.operator_jobs.read(job_id=healthy.launch_id)
+        old_facts = dict(record.plan.input_facts)
+        old_facts.pop("method_environment_binding")
+        old_facts["schema"] = "optpilot.study-launch-input.v2"
+        old_plan = replace(
+            record.plan,
+            input_facts=old_facts,
+            input_facts_digest=_canonical_digest(thaw_json(old_facts)),
+        )
+        old_record = replace(
+            record,
+            job_id=record.job_id[:-4] + "old0",
+            plan=old_plan,
+            plan_digest=old_plan.digest,
+            approval=(
+                None
+                if record.approval is None
+                else replace(
+                    record.approval,
+                    job_id=record.job_id[:-4] + "old0",
+                    plan_digest=old_plan.digest,
+                )
+            ),
+        )
+
+        with mock.patch.object(
+            self.runtime.ledger,
+            "list_operator_jobs_for_actor",
+            return_value=[old_record, record],
+        ):
+            views = self.runtime.study_launches.list()
+        self.assertEqual([view.launch_id for view in views], [healthy.launch_id])
+        for view in views:
+            view.to_dict()
+
+        page = mock.Mock(items=[old_record, record], next_cursor=None)
+        with mock.patch.object(
+            self.runtime.ledger,
+            "list_operator_jobs_for_actor_page",
+            return_value=page,
+        ):
+            reconcilable = self.runtime.study_launches.list_reconcilable()
+        self.assertEqual(
+            [view.launch_id for view in reconcilable], [healthy.launch_id]
+        )
 
     def test_post_handoff_cancel_is_routed_and_finishes_without_method_start(self) -> None:
         planned = self.plan("cancel-after")

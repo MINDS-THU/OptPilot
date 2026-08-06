@@ -204,14 +204,40 @@ pre-existing and unrelated to F3. Diff failure sets against this baseline.
 
 ## What to do next (in order)
 
-1. **U1 (remaining) — contract-generated forms.** The `study.inputs` launch
-   form is DONE (see below). Remaining: (a) candidate-parameter-schema form
-   in the Run setup editor (today read-only YAML inspection), and (b) the
-   Studio/Assistant approval-gated surface for resource actions —
-   greenfield on both server and client; reuse `compile_resource_actions` +
-   `run_resource_action` and the new client typed-field helpers
-   (`studyLaunchInputField` / `parseStudyLaunchInputValue` in `app.js` are
-   the renderer seed — generalize rather than duplicate).
+1. **U1 — contract-generated forms: DONE (2026-08-07).**
+   (a) `study.inputs` launch form (see below). (b) Candidate-parameter
+   "Search space" card in the Run setup detail (`studySearchSpacePanel` in
+   app.js, typed rows from `environment.raw_config.candidate.parameters.
+   schema`, flat + one nesting level). (c) Resource actions in Studio:
+   `POST /api/resource-actions/run` + `GET /api/resource-actions/<id>`
+   (in-process run registry `state._resource_action_runs`, executes
+   `run_resource_action` in a thread against the configured-catalog resource
+   folder; published-projection resources not yet runnable), client Actions
+   panel on the resource detail (`resourceActionsPanel` + generalized
+   `typedDeclarationField`), tests in
+   `tests/studio/test_studio_resource_actions.py` (5). Follow-up: an
+   Assistant tool for filling/running resource actions (approval-gated, like
+   `optpilot_study_launch`) is not wired yet.
+   Run detail (2026-08-07): new trial-centric "Trials" map on the Run page
+   (`runTrialMapHtml`/`runTrialNodes`/`bindRunTrialMap` in app.js) — one chip
+   per accepted trial in order (status-colored, live-updating, ★ best so
+   far, dashed ghosts for planned budget), click opens an inline inspector
+   (status, result, candidate, attempts) with jump buttons into the
+   Candidate/Attempts/Observations views. Chip values come from the loaded
+   candidate page only; deeper pages still need Load more. Remaining UI
+   work noted from the owner's review: an Assistant quality pass on the
+   welcome-page intents (responses read as confusing; exercise each intent
+   live and improve prompt/tool guidance), and the Assistant-side resource
+   action tool.
+   Bug fixes shipped alongside: tolerant Study-launch listing
+   (`_tolerant_views` in `study_launch_service.py` — one v2-era record no
+   longer kills `/api/jobs` and, critically, startup reconciliation, which
+   had left a live run orphaned after a Studio restart; regression test in
+   `test_realm_study_launch_service.py`), archived-Conversations browser
+   (`GET /api/agent-sessions?archived=1` + restore UI at the bottom of the
+   conversation list), and the onboarding-flash fix (transcript merge +
+   sticky conversation-started in app.js,
+   `tests/studio/test_studio_assistant_transcript.py`).
 2. Then the Phase 2 integration workstreams W1–W5 per plan §5, and the
    remaining U-items (U3–U8) per plan §4. Framework primitives F1–F5 are all
    done: W1 item 4 (DEVS-Gen headless generation) has its F4 vehicle

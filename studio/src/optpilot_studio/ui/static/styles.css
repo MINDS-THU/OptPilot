@@ -9719,6 +9719,246 @@ body.shell-v2.shell-conversation .timeline-item {
   .run-detail-loading-indicator { animation: none; }
 }
 
+.conversation-archived-section {
+  margin: 10px 10px 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.conversation-archived-section > button {
+  color: var(--muted);
+}
+
+.conversation-archived-row {
+  width: 100%;
+  align-items: center;
+}
+
+.conversation-archived-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 2px;
+}
+
+.conversation-archived-state {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+
+.search-space-grid {
+  display: grid;
+  gap: 4px;
+  padding: 4px 2px 8px;
+}
+
+.search-space-row {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) auto minmax(90px, auto) minmax(90px, auto) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.search-space-row:nth-child(odd) {
+  background: rgba(0, 0, 0, 0.025);
+}
+
+.search-space-row-nested {
+  margin-left: 18px;
+}
+
+.search-space-name {
+  font-weight: 600;
+}
+
+.search-space-constraint,
+.search-space-default,
+.search-space-description {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.resource-actions-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.resource-action-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.resource-action-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.resource-action-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.resource-action-status pre {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 8px;
+  border-radius: 6px;
+}
+
+.resource-action-failed {
+  color: #a33c34;
+}
+
+.resource-action-outputs {
+  margin: 4px 0 0 16px;
+  padding: 0;
+}
+
+.run-trial-map-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 12px 0;
+  display: grid;
+  gap: 10px;
+}
+
+.run-trial-map-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.run-trial-map {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  row-gap: 10px;
+}
+
+.run-trial-node {
+  display: inline-grid;
+  justify-items: center;
+  gap: 1px;
+  min-width: 52px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  border: 1.5px solid var(--line);
+  background: #ffffff;
+  font-size: 11px;
+  cursor: pointer;
+  position: relative;
+}
+
+.run-trial-node .run-trial-index {
+  font-weight: 700;
+}
+
+.run-trial-node .run-trial-value {
+  color: var(--muted);
+  min-height: 13px;
+}
+
+.run-trial-succeeded { border-color: #7fbf9a; background: #f3faf6; }
+.run-trial-failed { border-color: #d99a93; background: #fdf6f5; }
+.run-trial-running {
+  border-color: var(--accent);
+  background: #f7f4fb;
+}
+
+.run-trial-running .run-trial-index::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: conversation-load-spin 1.2s linear infinite, run-trial-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes run-trial-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.run-trial-planned {
+  border-style: dashed;
+  color: var(--muted);
+  cursor: default;
+}
+
+.run-trial-node.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.run-trial-node.best .run-trial-best {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  font-size: 12px;
+  color: #b8860b;
+}
+
+.run-trial-connector {
+  width: 14px;
+  height: 2px;
+  background: var(--line);
+  flex: none;
+}
+
+.run-trial-inspector {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.run-trial-inspector-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+}
+
+.run-trial-inspector-facts span {
+  display: block;
+  color: var(--muted);
+}
+
+.run-trial-inspector-candidate strong {
+  max-width: 340px;
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-trial-running .run-trial-index::after { animation: none; }
+}
+
 body.shell-v2.shell-conversation .composer {
   grid-column: 1;
   grid-row: 3;

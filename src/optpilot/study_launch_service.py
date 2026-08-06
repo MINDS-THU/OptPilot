@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 from .method_launch_environment import (
     MethodLaunchEnvironment,
@@ -709,7 +709,33 @@ class RealmStudyLaunchService:
             job_kind=STUDY_LAUNCH_JOB_KIND,
             limit=limit,
         )
-        return tuple(self._view(record) for record in records)
+        return tuple(self._tolerant_views(records))
+
+    def _tolerant_views(
+        self, records: Iterable[OperatorJobRecord]
+    ) -> list[StudyLaunchView]:
+        """Project records, skipping ones whose retained facts are unreadable.
+
+        An older or damaged retained launch record must not make every other
+        launch unreadable — one incompatible row would otherwise take down the
+        whole listing and, worse, startup reconciliation, leaving live runs
+        orphaned. The incompatible record is skipped without interpreting or
+        migrating it; any Run it produced remains independently retained Core
+        evidence reachable through the run listing.
+        """
+
+        views: list[StudyLaunchView] = []
+        for record in records:
+            try:
+                # Validate the retained facts eagerly: StudyLaunchView is
+                # lazy, so without this a v2-era record would only fail later
+                # inside to_dict()/execution_profile — after the listing has
+                # already committed to including it.
+                _plan_context(record)
+                views.append(self._view(record))
+            except RealmIntegrityError:
+                continue
+        return views
 
     def list_reconcilable(
         self, *, page_size: int = 200
@@ -736,12 +762,10 @@ class RealmStudyLaunchService:
         scan_jobs(states=tuple(state for state in OperatorJobState if not state.terminal))
         scan_jobs(cleanup_states=(OperatorJobCleanupState.PENDING,))
 
-        views: dict[str, StudyLaunchView] = {
-            job_id: self._view(record) for job_id, record in records.items()
-        }
+        views = self._tolerant_views(records.values())
         return tuple(
             sorted(
-                views.values(),
+                views,
                 key=lambda view: (-view.job.updated_at, view.launch_id),
             )
         )

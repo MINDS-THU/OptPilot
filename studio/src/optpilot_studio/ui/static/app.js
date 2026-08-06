@@ -136,6 +136,14 @@ const state = {
   studyLaunchInputDrafts: new Map(),
   studyLaunchInputErrors: new Map(),
   startedAgentSessionIds: new Set(),
+  archivedAgentSessions: [],
+  archivedAgentSessionsOpen: false,
+  archivedAgentSessionsLoaded: false,
+  archivedAgentSessionsError: "",
+  resourceActionDrafts: new Map(),
+  resourceActionRuns: new Map(),
+  resourceActionErrors: new Map(),
+  selectedRunTrialIds: {},
   planSearch: "",
   selectedPlanId: null,
   selectedRunId: null,
@@ -6589,7 +6597,7 @@ function renderAssistantSessionList() {
         </section>
       `
       : "";
-  const html = `${listState}${cards || (state.agentSessionsLoaded ? emptyInline("No Conversations yet.") : "")}`;
+  const html = `${listState}${cards || (state.agentSessionsLoaded ? emptyInline("No Conversations yet.") : "")}${archivedConversationsSection()}`;
   const signature = stableJsonStringify({
     selected: state.selectedAgentSessionId || "",
     loaded: state.agentSessionsLoaded,
@@ -6602,6 +6610,10 @@ function renderAssistantSessionList() {
       approvals: Number(session.pending_approval_count || 0),
       workspaces: (state.agentWorkspaceAttachments[session.id] || []).length,
     })),
+    archivedOpen: state.archivedAgentSessionsOpen,
+    archivedLoaded: state.archivedAgentSessionsLoaded,
+    archivedError: state.archivedAgentSessionsError,
+    archived: state.archivedAgentSessions.map((session) => session.id),
   });
   [els.assistantSessionCards, els.legacyAssistantSessionCards].filter(Boolean).forEach((root) => {
     if (root.dataset.sessionListSignature === signature) return;
@@ -6620,6 +6632,13 @@ function renderAssistantSessionList() {
     });
     root.querySelectorAll("[data-conversation-list-retry]").forEach((button) => {
       button.addEventListener("click", () => retryAgentSessionList(button));
+    });
+    const archivedToggle = root.querySelector("[data-archived-conversations-toggle]");
+    if (archivedToggle) {
+      archivedToggle.addEventListener("click", () => toggleArchivedConversations());
+    }
+    root.querySelectorAll("[data-restore-agent-session-id]").forEach((button) => {
+      button.addEventListener("click", () => restoreAgentSession(button.dataset.restoreAgentSessionId, button));
     });
     if (focusedSessionId) {
       const restored = [...root.querySelectorAll("[data-agent-session-id]")]
@@ -6641,6 +6660,78 @@ async function retryAgentSessionList(button = null) {
     });
   }
   renderAssistant();
+}
+
+function archivedConversationsSection() {
+  const open = state.archivedAgentSessionsOpen;
+  const body = !open
+    ? ""
+    : state.archivedAgentSessionsError
+      ? `<p class="error-text">${escapeHtml(state.archivedAgentSessionsError)}</p>`
+      : !state.archivedAgentSessionsLoaded
+        ? `<p class="conversation-archived-state">Loading archived Conversations…</p>`
+        : state.archivedAgentSessions.length
+          ? state.archivedAgentSessions.map((session) => `
+              <div class="agent-session-row conversation-archived-row">
+                <span class="conversation-archived-title" title="${escapeHtml(assistantSessionLabel(session))}">${escapeHtml(assistantSessionLabel(session))}</span>
+                <button class="agent-session-archive" type="button" data-restore-agent-session-id="${escapeHtml(session.id)}" title="Restore this Conversation to the list" aria-label="Restore ${escapeHtml(assistantSessionLabel(session))}">Restore</button>
+              </div>
+            `).join("")
+          : `<p class="conversation-archived-state">No archived Conversations.</p>`;
+  return `
+    <section class="conversation-archived-section">
+      <button class="ghost-button compact-action" data-archived-conversations-toggle type="button" aria-expanded="${open ? "true" : "false"}">
+        ${open ? "Hide archived" : "Archived conversations…"}
+      </button>
+      ${body}
+    </section>
+  `;
+}
+
+async function toggleArchivedConversations() {
+  state.archivedAgentSessionsOpen = !state.archivedAgentSessionsOpen;
+  renderAssistantSessionList();
+  if (!state.archivedAgentSessionsOpen) return;
+  await refreshArchivedAgentSessions();
+}
+
+async function refreshArchivedAgentSessions() {
+  state.archivedAgentSessionsError = "";
+  try {
+    const payload = await getJson("/api/agent-sessions?archived=1", { timeoutMs: 12000 });
+    state.archivedAgentSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+    state.archivedAgentSessionsLoaded = true;
+  } catch (error) {
+    state.archivedAgentSessionsError = boundedPublicActionError(
+      error,
+      "Archived Conversations could not be loaded.",
+    );
+  }
+  renderAssistantSessionList();
+}
+
+async function restoreAgentSession(sessionId, button = null) {
+  if (!sessionId) return;
+  if (button) button.disabled = true;
+  try {
+    await postJson(
+      `/api/agent-sessions/${encodeURIComponent(sessionId)}/archive`,
+      { archived: false },
+      { timeoutMs: 12000 },
+    );
+  } catch (error) {
+    state.archivedAgentSessionsError = boundedPublicActionError(
+      error,
+      "The Conversation could not be restored.",
+    );
+    renderAssistantSessionList();
+    return;
+  }
+  state.archivedAgentSessions = state.archivedAgentSessions.filter(
+    (session) => session.id !== sessionId,
+  );
+  await refreshAgentSessionSummaries();
+  renderAssistantSessionList();
 }
 
 async function archiveAgentSession(sessionId, button = null) {
@@ -6677,6 +6768,7 @@ async function archiveAgentSession(sessionId, button = null) {
       await hydrateAgentSessionById(state.selectedAgentSessionId, { force: true, render: false });
     }
   }
+  if (state.archivedAgentSessionsOpen) await refreshArchivedAgentSessions();
   renderAssistantSessionList();
   if (wasSelected) renderAssistant();
 }
@@ -9555,6 +9647,7 @@ function renderComponentDetail() {
           ["Interface", hasInterface ? `${activeProfiles.length} profile${activeProfiles.length === 1 ? "" : "s"}; port ${activeInterface.presentation.port}` : "not declared"],
         ])}
       </div>
+      ${resourceActionsPanel(item)}
       ${componentGuidePanel(component)}
       ${componentEnvRequirementsPanel(item.raw_config || {})}
     `;
@@ -9562,6 +9655,7 @@ function renderComponentDetail() {
     els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openCatalogEditableWorkspace(component));
     const launchButton = els.componentDetail.querySelector(".component-launch-interface");
     if (launchButton) launchButton.addEventListener("click", () => openComponentInterface(component));
+    bindResourceActionControls(item);
     bindComponentReadOnlyControls();
     return;
   }
@@ -11261,6 +11355,7 @@ function renderPlanDetail() {
       <section class="study-config-grid">
         ${studyGuidePanel(plan)}
         ${studyLaunchInputsPanel(plan)}
+        ${studySearchSpacePanel(plan)}
         ${studyConfigEditor(plan, locked)}
         ${studyReadinessPanel(plan)}
         ${studyValidationPanel(plan)}
@@ -11472,6 +11567,75 @@ function studyConfigSection(title, meta, description, body) {
     <details class="study-card study-config-card">
       <summary>${studyCardHeading(title, meta, description)}</summary>
       <div class="study-card-body">${body}</div>
+    </details>
+  `;
+}
+
+function candidateParameterConstraint(declaration) {
+  const parts = [];
+  if (declaration.min !== undefined || declaration.max !== undefined) {
+    parts.push(
+      `${declaration.min === undefined ? "…" : declaration.min} to ${declaration.max === undefined ? "…" : declaration.max}`,
+    );
+  }
+  if (Array.isArray(declaration.values) && declaration.values.length) {
+    parts.push(declaration.values.map((value) => String(value)).join(" | "));
+  }
+  if (declaration.unit) parts.push(String(declaration.unit));
+  if (declaration.pattern) parts.push(`pattern ${declaration.pattern}`);
+  return parts.join(" · ");
+}
+
+function candidateParameterRow(name, declaration, depth = 0) {
+  if (!declaration || typeof declaration !== "object") return "";
+  const valueType = String(declaration.valueType || "?");
+  const constraint = candidateParameterConstraint(declaration);
+  const hasDefault = "default" in declaration;
+  const defaultText = hasDefault
+    ? (declaration.default === null || typeof declaration.default === "object"
+      ? JSON.stringify(declaration.default)
+      : String(declaration.default))
+    : "";
+  const rows = [`
+    <div class="search-space-row${depth ? " search-space-row-nested" : ""}">
+      <code class="search-space-name">${escapeHtml(name)}</code>
+      <span class="tag">${escapeHtml(valueType)}</span>
+      <span class="search-space-constraint">${escapeHtml(constraint)}</span>
+      <span class="search-space-default">${hasDefault ? `default ${escapeHtml(defaultText)}` : ""}</span>
+      <span class="search-space-description">${escapeHtml(String(declaration.description || ""))}</span>
+    </div>
+  `];
+  // One nesting level per the documented renderer scope; deeper structures
+  // stay on the YAML inspection path.
+  if (depth === 0 && valueType === "object" && declaration.properties && typeof declaration.properties === "object") {
+    for (const [child, childDeclaration] of Object.entries(declaration.properties)) {
+      rows.push(candidateParameterRow(`${name}.${child}`, childDeclaration, 1));
+    }
+  }
+  if (depth === 0 && valueType === "array" && declaration.items && typeof declaration.items === "object") {
+    rows.push(candidateParameterRow(`${name}[]`, declaration.items, 1));
+  }
+  return rows.join("");
+}
+
+function studySearchSpacePanel(plan) {
+  const raw = plan.environment && plan.environment.raw_config;
+  const candidate = raw && raw.candidate;
+  if (!candidate || candidate.format !== "parameters") return "";
+  const schema = candidate.parameters && candidate.parameters.schema;
+  if (!schema || typeof schema !== "object" || !Object.keys(schema).length) return "";
+  const rows = Object.entries(schema)
+    .map(([name, declaration]) => candidateParameterRow(name, declaration))
+    .join("");
+  const count = Object.keys(schema).length;
+  return `
+    <details class="study-card study-config-card">
+      ${studyCardHeading(
+        "Search space",
+        `${count} parameter${count === 1 ? "" : "s"}`,
+        "The Environment's candidate contract. The Method proposes values inside these bounds; every submitted Candidate is validated against them.",
+      )}
+      <div class="search-space-grid">${rows}</div>
     </details>
   `;
 }
@@ -12318,6 +12482,7 @@ function renderRunDetail() {
     </div>
     ${completionMessage ? `<p class="muted-text run-stop-code">${escapeHtml(completionMessage)}</p>` : ""}
     ${progressGuidance}
+    ${runTrialMapHtml(detail)}
     <div class="tabs" ${runWorkbenchTabs(detail).some(([tab]) => tab === state.activeRunTab) ? 'role="tablist" aria-orientation="horizontal"' : ""} aria-label="Run result sections" data-run-tablist>
       ${runWorkbenchTabs(detail).map(([tab, label]) => runTabButtonHtml(tab, label, detail)).join("")}
     </div>
@@ -12352,6 +12517,7 @@ function renderRunDetail() {
   if (stopRunButton) {
     stopRunButton.addEventListener("click", () => openRunStopConfirmation(run, stopRunButton));
   }
+  bindRunTrialMap(runId);
   els.runDetail.querySelectorAll("[data-run-page-more]").forEach((button) => {
     button.addEventListener("click", () => loadMoreRunPage(button.dataset.runPageMore));
   });
@@ -12370,6 +12536,154 @@ function renderRunDetail() {
   if (staleCandidateTrySelectionId) {
     restoreFocusedCandidateTryFocus(staleCandidateTrySelectionId, "notice");
   }
+}
+
+function runTrialNodes(detail) {
+  const trials = workbenchPage(detail, "logical_trial").items || [];
+  const candidateValues = new Map();
+  (workbenchPage(detail, "candidate").items || []).forEach((item) => {
+    const value = item && item.data && item.data.result && item.data.result.aggregate
+      && item.data.result.aggregate.value;
+    if (item && item.id !== undefined && typeof value === "number") {
+      candidateValues.set(String(item.id), value);
+    }
+  });
+  const nodes = trials.map((item) => {
+    const data = item && item.data || {};
+    const terminal = String(data.state || "") === "terminal";
+    const status = !terminal
+      ? "running"
+      : String(data.outcome || "") === "success"
+        ? "succeeded"
+        : "failed";
+    const candidateId = String(data.candidate_id || "");
+    return {
+      id: String(item.id || ""),
+      sequence: Number(data.accepted_sequence || 0),
+      status,
+      candidateId,
+      value: candidateValues.has(candidateId) ? candidateValues.get(candidateId) : null,
+      code: data.code ? String(data.code) : "",
+      attemptCount: Number(data.attempt_count || 0),
+    };
+  });
+  nodes.sort((left, right) => left.sequence - right.sequence);
+  // accepted_sequence is a ledger coordinate, not a human ordinal; number
+  // the chips by their position in the accepted order instead.
+  nodes.forEach((node, index) => {
+    node.ordinal = index + 1;
+  });
+  return nodes;
+}
+
+function runTrialMapHtml(detail) {
+  const summary = detail.workbench.summary || detail.run || {};
+  const runId = canonicalRunId(detail.run) || summary.run_id;
+  const nodes = runTrialNodes(detail);
+  const planned = Number((summary.budget || {}).max_trials || 0);
+  if (!nodes.length && !planned) return "";
+  const direction = String(runObjective(summary).direction || "maximize");
+  let best = null;
+  nodes.forEach((node) => {
+    if (typeof node.value !== "number") return;
+    if (
+      best === null
+      || (direction === "minimize" ? node.value < best.value : node.value > best.value)
+    ) {
+      best = node;
+    }
+  });
+  const selectedId = state.selectedRunTrialIds[runId] || "";
+  const chips = nodes.map((node) => {
+    const isBest = best && node.id === best.id;
+    const label = node.ordinal || "?";
+    const valueText = typeof node.value === "number" ? formatMetricNumber(node.value) : "";
+    return `
+      <button
+        class="run-trial-node run-trial-${node.status}${node.id === selectedId ? " selected" : ""}${isBest ? " best" : ""}"
+        type="button"
+        data-run-trial-id="${escapeHtml(node.id)}"
+        title="Trial ${escapeHtml(String(label))} · ${escapeHtml(node.status)}${valueText ? ` · ${escapeHtml(valueText)}` : ""}"
+        aria-pressed="${node.id === selectedId ? "true" : "false"}"
+      >
+        <span class="run-trial-index">${escapeHtml(String(label))}</span>
+        <span class="run-trial-value">${escapeHtml(valueText || (node.status === "running" ? "…" : ""))}</span>
+        ${isBest ? '<span class="run-trial-best" aria-label="Best so far">★</span>' : ""}
+      </button>
+    `;
+  });
+  const ghostCount = Math.max(0, planned - nodes.length);
+  const ghosts = Array.from({ length: Math.min(ghostCount, 64) }, (_, index) => `
+    <span class="run-trial-node run-trial-planned" title="Planned trial">
+      <span class="run-trial-index">${nodes.length + index + 1}</span>
+    </span>
+  `);
+  const selected = nodes.find((node) => node.id === selectedId) || null;
+  return `
+    <section class="run-trial-map-panel">
+      <div class="run-trial-map-heading">
+        <strong>Trials</strong>
+        <span class="study-card-help">Each chip is one trial in order. Click a trial to inspect its Candidate and result${best ? "; ★ marks the best result so far" : ""}.</span>
+      </div>
+      <div class="run-trial-map" role="group" aria-label="Trial progress map">
+        ${chips.join('<span class="run-trial-connector" aria-hidden="true"></span>')}
+        ${ghosts.length ? `<span class="run-trial-connector" aria-hidden="true"></span>${ghosts.join('<span class="run-trial-connector" aria-hidden="true"></span>')}` : ""}
+      </div>
+      ${selected ? runTrialInspectorHtml(detail, selected) : ""}
+    </section>
+  `;
+}
+
+function runTrialInspectorHtml(detail, node) {
+  const statusLabel = node.status === "running"
+    ? "Running"
+    : node.status === "succeeded"
+      ? "Succeeded"
+      : `Failed${node.code ? ` (${node.code})` : ""}`;
+  return `
+    <div class="run-trial-inspector">
+      <div class="run-trial-inspector-facts">
+        <div><span>Trial</span><strong>#${escapeHtml(String(node.ordinal))}</strong></div>
+        <div><span>Status</span><strong>${escapeHtml(statusLabel)}</strong></div>
+        <div><span>Result</span><strong>${escapeHtml(typeof node.value === "number" ? formatMetricNumber(node.value) : "not reported yet")}</strong></div>
+        <div><span>Attempts</span><strong>${escapeHtml(String(node.attemptCount || 1))}</strong></div>
+        <div class="run-trial-inspector-candidate"><span>Candidate</span><strong title="${escapeHtml(node.candidateId)}">${escapeHtml(node.candidateId || "-")}</strong></div>
+      </div>
+      <div class="action-row">
+        <button class="ghost-button compact-action" type="button" data-run-trial-open-candidate="${escapeHtml(node.candidateId)}">Open Candidate details</button>
+        <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="attempt">Attempts</button>
+        <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="observation">Observations</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindRunTrialMap(runId) {
+  els.runDetail.querySelectorAll("[data-run-trial-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const trialId = button.dataset.runTrialId;
+      state.selectedRunTrialIds[runId] = state.selectedRunTrialIds[runId] === trialId ? "" : trialId;
+      renderRunDetail();
+    });
+  });
+  els.runDetail.querySelectorAll("[data-run-trial-open-candidate]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.routedCandidateId = button.dataset.runTrialOpenCandidate || null;
+      activateRunTab("candidate", { restoreFocus: false });
+    });
+  });
+  els.runDetail.querySelectorAll("[data-run-trial-open-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activateRunTab(button.dataset.runTrialOpenTab, { restoreFocus: false });
+    });
+  });
+}
+
+function formatMetricNumber(value) {
+  if (!Number.isFinite(value)) return String(value);
+  if (Math.abs(value) >= 1000) return value.toFixed(0);
+  if (Math.abs(value) >= 1) return value.toFixed(2).replace(/\.?0+$/, "");
+  return value.toPrecision(3);
 }
 
 function selectRunActionContext(runId) {
@@ -20494,6 +20808,17 @@ function describeStudyInputDefault(declaration) {
 }
 
 function studyLaunchInputField(plan, name, declaration, rawValue, error) {
+  return typedDeclarationField(
+    name,
+    declaration,
+    rawValue,
+    error,
+    `data-study-launch-input="${escapeHtml(name)}"`,
+    "study-launch-input",
+  );
+}
+
+function typedDeclarationField(name, declaration, rawValue, error, dataset, controlClass) {
   const valueType = String(declaration.valueType || "string");
   const required = !("default" in declaration);
   const helpParts = [];
@@ -20509,7 +20834,6 @@ function studyLaunchInputField(plan, name, declaration, rawValue, error) {
   if (valueType === "array" || valueType === "object") helpParts.push("Enter JSON.");
   const label = `${name}${required ? " (required)" : ""}`;
   const help = helpParts.join(" · ");
-  const dataset = `data-study-launch-input="${escapeHtml(name)}"`;
   const current = rawValue === undefined ? "" : String(rawValue);
   const invalidClass = error ? " invalid-input" : "";
   let control;
@@ -20522,17 +20846,17 @@ function studyLaunchInputField(plan, name, declaration, rawValue, error) {
         return `<option value="${encoded}"${selected}>${encoded}</option>`;
       })
       .join("");
-    control = `<select class="study-launch-input${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${options}</select>`;
+    control = `<select class="${controlClass}${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${options}</select>`;
   } else if (valueType === "bool") {
     const choice = (value, text) => `<option value="${value}"${current === value ? " selected" : ""}>${text}</option>`;
-    control = `<select class="study-launch-input${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${choice("true", "true")}${choice("false", "false")}</select>`;
+    control = `<select class="${controlClass}${invalidClass}" ${dataset}><option value=""${current === "" ? " selected" : ""}>${required ? "Select…" : "Use default"}</option>${choice("true", "true")}${choice("false", "false")}</select>`;
   } else if (valueType === "array" || valueType === "object") {
-    control = `<textarea class="study-launch-input${invalidClass}" rows="3" ${dataset} placeholder="${valueType === "array" ? "[…]" : "{…}"}">${escapeHtml(current)}</textarea>`;
+    control = `<textarea class="${controlClass}${invalidClass}" rows="3" ${dataset} placeholder="${valueType === "array" ? "[…]" : "{…}"}">${escapeHtml(current)}</textarea>`;
   } else {
     const isNumber = valueType === "float" || valueType === "int";
     const bounds = `${declaration.min !== undefined ? ` min="${escapeHtml(String(declaration.min))}"` : ""}${declaration.max !== undefined ? ` max="${escapeHtml(String(declaration.max))}"` : ""}`;
     const step = valueType === "int" ? ' step="1"' : valueType === "float" ? ' step="any"' : "";
-    control = `<input class="study-launch-input${invalidClass}" type="${isNumber ? "number" : "text"}"${step}${isNumber ? bounds : ""} ${dataset} value="${escapeHtml(current)}" placeholder="${escapeHtml(defaultText)}">`;
+    control = `<input class="${controlClass}${invalidClass}" type="${isNumber ? "number" : "text"}"${step}${isNumber ? bounds : ""} ${dataset} value="${escapeHtml(current)}" placeholder="${escapeHtml(defaultText)}">`;
   }
   return `
     <label class="control-field${valueType === "array" || valueType === "object" ? " control-field-wide" : ""}">
@@ -20931,6 +21255,189 @@ function componentButton(component) {
 function catalogKindLabel(kind, item) {
   if (kind === "resource") return resourcePurposeLabel(item);
   return kind;
+}
+
+function resourceActionKey(uid, actionId) {
+  return `${uid}::${actionId}`;
+}
+
+function resourceActionRunStatusHtml(run) {
+  if (!run) return "";
+  if (run.status === "running") {
+    return `<p class="resource-action-status" role="status">Running… started ${new Date((run.started_at || 0) * 1000).toLocaleTimeString()}</p>`;
+  }
+  const result = run.result || {};
+  if (run.status === "succeeded") {
+    const outputs = Array.isArray(result.outputs) ? result.outputs : [];
+    return `
+      <div class="resource-action-status resource-action-succeeded">
+        <p><strong>Succeeded</strong> in ${escapeHtml(String(result.duration_seconds ?? "?"))}s · ${outputs.length} output file${outputs.length === 1 ? "" : "s"} in <code>${escapeHtml(String(result.output_root || ""))}</code></p>
+        ${outputs.length ? `<ul class="resource-action-outputs">${outputs.slice(0, 12).map((file) => `<li><code>${escapeHtml(String(file.path))}</code></li>`).join("")}</ul>` : ""}
+        ${result.stdout_tail ? `<details><summary>Output log</summary><pre>${escapeHtml(String(result.stdout_tail))}</pre></details>` : ""}
+      </div>
+    `;
+  }
+  return `
+    <div class="resource-action-status resource-action-failed" role="alert">
+      <p><strong>Failed.</strong> ${escapeHtml(String(run.error || result.error || "The action did not complete."))}</p>
+      ${result.stderr_tail ? `<details><summary>Error log</summary><pre>${escapeHtml(String(result.stderr_tail))}</pre></details>` : ""}
+    </div>
+  `;
+}
+
+function resourceActionsPanel(item) {
+  const actions = item.raw_config && Array.isArray(item.raw_config.actions)
+    ? item.raw_config.actions
+    : [];
+  if (!actions.length) return "";
+  const uid = String(item.uid || item.id || "");
+  const cards = actions.map((action) => {
+    if (!action || typeof action !== "object" || !action.id) return "";
+    const key = resourceActionKey(uid, action.id);
+    const draft = state.resourceActionDrafts.get(key) || {};
+    const errors = state.resourceActionErrors.get(key) || {};
+    const run = state.resourceActionRuns.get(key);
+    const inputs = action.inputs && typeof action.inputs === "object" ? action.inputs : {};
+    const fields = Object.entries(inputs)
+      .map(([name, declaration]) => (
+        declaration && typeof declaration === "object"
+          ? typedDeclarationField(
+              name,
+              declaration,
+              draft[name],
+              errors[name],
+              `data-resource-action-input="${escapeHtml(action.id)}" data-input-name="${escapeHtml(name)}"`,
+              "resource-action-input",
+            )
+          : ""
+      ))
+      .join("");
+    const running = Boolean(run && run.status === "running");
+    return `
+      <article class="resource-action-card">
+        <div class="resource-action-heading">
+          <div>
+            <strong>${escapeHtml(String(action.label || action.id))}</strong>
+            ${action.description ? `<p class="study-card-help">${escapeHtml(String(action.description))}</p>` : ""}
+          </div>
+          <button class="primary-button resource-action-run" type="button" data-run-resource-action="${escapeHtml(action.id)}" ${running ? "disabled" : ""}>${running ? "Running…" : "Run action"}</button>
+        </div>
+        ${fields ? `<div class="control-grid">${fields}</div>` : `<p class="study-card-help">This action takes no inputs.</p>`}
+        ${resourceActionRunStatusHtml(run)}
+      </article>
+    `;
+  }).join("");
+  return `
+    <section class="detail-panel resource-actions-panel">
+      <h3>Actions</h3>
+      <p class="study-card-help">Registered operations of this Resource, runnable without its interface. Results are written to a fresh folder and listed here.</p>
+      ${cards}
+    </section>
+  `;
+}
+
+function bindResourceActionControls(item) {
+  const uid = String(item.uid || item.id || "");
+  els.componentDetail.querySelectorAll("[data-resource-action-input]").forEach((control) => {
+    const eventName = control.tagName === "SELECT" ? "change" : "input";
+    control.addEventListener(eventName, () => {
+      const key = resourceActionKey(uid, control.dataset.resourceActionInput);
+      const draft = { ...(state.resourceActionDrafts.get(key) || {}) };
+      draft[control.dataset.inputName] = control.value;
+      state.resourceActionDrafts.set(key, draft);
+      const errors = { ...(state.resourceActionErrors.get(key) || {}) };
+      delete errors[control.dataset.inputName];
+      state.resourceActionErrors.set(key, errors);
+    });
+  });
+  els.componentDetail.querySelectorAll("[data-run-resource-action]").forEach((button) => {
+    button.addEventListener("click", () => runResourceActionFromCatalog(item, button.dataset.runResourceAction));
+  });
+}
+
+function collectResourceActionInputs(item, action) {
+  const uid = String(item.uid || item.id || "");
+  const key = resourceActionKey(uid, action.id);
+  const draft = state.resourceActionDrafts.get(key) || {};
+  const declarationMap = action.inputs && typeof action.inputs === "object" ? action.inputs : {};
+  const values = {};
+  const errors = [];
+  const fieldErrors = {};
+  for (const [name, declaration] of Object.entries(declarationMap)) {
+    if (!declaration || typeof declaration !== "object") continue;
+    const raw = draft[name];
+    const blank = raw === undefined || String(raw).trim() === "";
+    if (blank) {
+      if (!("default" in declaration)) {
+        fieldErrors[name] = "This input is required.";
+        errors.push(`${name}: required`);
+      }
+      continue;
+    }
+    const parsed = parseStudyLaunchInputValue(raw, declaration);
+    if (!parsed.ok) {
+      fieldErrors[name] = parsed.message;
+      errors.push(`${name}: ${parsed.message}`);
+      continue;
+    }
+    values[name] = parsed.value;
+  }
+  state.resourceActionErrors.set(key, fieldErrors);
+  return { values, errors };
+}
+
+async function runResourceActionFromCatalog(item, actionId) {
+  const uid = String(item.uid || item.id || "");
+  const key = resourceActionKey(uid, actionId);
+  const action = (item.raw_config.actions || []).find((entry) => entry && entry.id === actionId);
+  if (!action) return;
+  const collected = collectResourceActionInputs(item, action);
+  if (collected.errors.length) {
+    renderCatalog();
+    return;
+  }
+  const requestId = newRequestId();
+  state.resourceActionRuns.set(key, { status: "running", started_at: Date.now() / 1000, request_id: requestId });
+  renderCatalog();
+  let payload;
+  try {
+    payload = await postJson("/api/resource-actions/run", {
+      request_id: requestId,
+      resource_uid: uid,
+      action_id: actionId,
+      inputs: collected.values,
+    }, { timeoutMs: 20000 });
+  } catch (error) {
+    state.resourceActionRuns.set(key, {
+      status: "failed",
+      error: boundedPublicActionError(error, "The action could not be started."),
+    });
+    renderCatalog();
+    return;
+  }
+  state.resourceActionRuns.set(key, payload);
+  renderCatalog();
+  pollResourceActionRun(key, requestId);
+}
+
+async function pollResourceActionRun(key, requestId) {
+  for (let attempt = 0; attempt < 43200; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const current = state.resourceActionRuns.get(key);
+    if (!current || current.request_id !== requestId) return;
+    let payload;
+    try {
+      payload = await getJson(`/api/resource-actions/${encodeURIComponent(requestId)}`, { timeoutMs: 12000 });
+    } catch (error) {
+      continue;
+    }
+    state.resourceActionRuns.set(key, payload);
+    if (payload.status !== "running") {
+      renderCatalog();
+      return;
+    }
+    renderCatalog();
+  }
 }
 
 function resourcePurposeLabel(item) {

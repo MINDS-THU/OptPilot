@@ -4,8 +4,8 @@
     {
       "name": "optpilot-studio",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "optpilot-studio", "--port", "8765"],
-      "port": 8765
+      "runtimeArgs": ["run", "optpilot-studio", "--port", "8866"],
+      "port": 8866
     }
   ]
 }
