@@ -1196,6 +1196,7 @@ class OpenHandsAdapter:
             ignored_event_ids=ignored_event_ids,
             ignored_response_texts=ignored_response_texts,
             poll_seconds=poll_seconds,
+            allow_silent_finish=True,
         )
         if paused_approval_id:
             return {
@@ -1318,6 +1319,7 @@ class OpenHandsAdapter:
         ignored_event_ids: Optional[set[str]] = None,
         ignored_response_texts: Optional[set[str]] = None,
         poll_seconds: float = 75.0,
+        allow_silent_finish: bool = False,
     ) -> tuple[str, List[JsonDict], str, str]:
         search_url = f"{conversations_url}/{conversation_id}/events/search?limit=50&sort_order=TIMESTAMP_DESC"
         deadline = time.monotonic() + max(float(poll_seconds), 0.1)
@@ -1373,35 +1375,58 @@ class OpenHandsAdapter:
                 final_text = self._best_final_message_text(
                     events, ignored_events, ignored_texts
                 )
-                return (
-                    final_text
-                    or (
+                if final_text:
+                    return final_text, tool_events, "", ""
+                if allow_silent_finish:
+                    return (
                         "The Assistant finished this turn without a closing "
                         "message. Open Technical details to see the steps it "
-                        "took, or send a follow-up message."
-                    ),
-                    tool_events,
-                    "",
-                    "",
-                )
+                        "took, or send a follow-up message.",
+                        tool_events,
+                        "",
+                        "",
+                    )
             time.sleep(2.0)
         return "", tool_events, "", ""
 
     def _execution_finished(self, events: Any) -> bool:
         # Events arrive newest-first; only the newest execution_status update
         # counts. An older "finished" from before a client-tool resume must
-        # not settle a conversation that is running again.
+        # not settle a conversation that is running again — and a "finished"
+        # left over from the PREVIOUS turn must not close a turn whose user
+        # message was only just posted, so the status update also has to be
+        # newer than the latest user message event.
         source_events = events if isinstance(events, list) else []
+        newest_status: Optional[JsonDict] = None
+        newest_user: Optional[JsonDict] = None
         for event in source_events:
             if not isinstance(event, dict):
                 continue
             kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
-            if kind != "ConversationStateUpdateEvent":
-                continue
-            if str(event.get("key") or "") != "execution_status":
-                continue
-            return str(event.get("value") or "").lower() == "finished"
-        return False
+            if (
+                newest_status is None
+                and kind == "ConversationStateUpdateEvent"
+                and str(event.get("key") or "") == "execution_status"
+            ):
+                newest_status = event
+            if (
+                newest_user is None
+                and kind == "MessageEvent"
+                and str(event.get("source") or "") == "user"
+            ):
+                newest_user = event
+            if newest_status is not None and newest_user is not None:
+                break
+        if newest_status is None:
+            return False
+        if str(newest_status.get("value") or "").lower() != "finished":
+            return False
+        if newest_user is not None:
+            status_at = str(newest_status.get("timestamp") or "")
+            user_at = str(newest_user.get("timestamp") or "")
+            if status_at and user_at and status_at <= user_at:
+                return False
+        return True
 
     def _best_final_message_text(
         self, events: Any, ignored_events: set[str], ignored_texts: set[str]

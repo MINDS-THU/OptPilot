@@ -29,7 +29,11 @@ const PLATFORM_STATUS_TIMEOUT_MS = 12_000;
 const RUNS_REQUEST_TIMEOUT_MS = 15_000;
 const RUN_DETAIL_REQUEST_TIMEOUT_MS = 20_000;
 const STUDY_LAUNCH_RECONNECT_LIMIT = 8;
-const ASSISTANT_MUTATION_TIMEOUT_MS = 15_000;
+// Message dispatch can legitimately take tens of seconds: the server's
+// initial dispatch window may execute Catalog/tool calls inline before it
+// responds. A short timeout here made healthy sends surface as "Studio did
+// not respond in time" (and invited duplicate resends).
+const ASSISTANT_MUTATION_TIMEOUT_MS = 60_000;
 const INTERFACE_LAUNCH_RECONNECT_LIMIT = 5;
 const INTERFACE_LAUNCH_POLL_TIMEOUT_MS = 10_000;
 
