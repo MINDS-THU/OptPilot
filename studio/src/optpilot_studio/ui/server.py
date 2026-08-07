@@ -8674,10 +8674,21 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
         if isinstance(payload.get("openhands"), dict)
         else payload
     )
-    openhands["enabled"] = bool(incoming.get("enabled"))
-    openhands["base_url"] = str(incoming.get("base_url") or "").strip().rstrip("/")
-    openhands["session_endpoint"] = str(incoming.get("session_endpoint") or "").strip()
-    openhands["model"] = str(incoming.get("model") or "").strip()
+    # Only touch the OpenHands connection fields the caller actually sent.
+    # A partial save (e.g. environment variables only) must not silently
+    # disable the Assistant or clear its base_url/model.
+    if "enabled" in incoming:
+        openhands["enabled"] = bool(incoming.get("enabled"))
+    if "base_url" in incoming:
+        openhands["base_url"] = (
+            str(incoming.get("base_url") or "").strip().rstrip("/")
+        )
+    if "session_endpoint" in incoming:
+        openhands["session_endpoint"] = str(
+            incoming.get("session_endpoint") or ""
+        ).strip()
+    if "model" in incoming:
+        openhands["model"] = str(incoming.get("model") or "").strip()
     if isinstance(incoming.get("native_tools"), list):
         openhands["native_tools"] = list(
             sanitize_openhands_native_tools(incoming.get("native_tools"))
