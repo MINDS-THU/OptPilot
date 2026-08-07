@@ -1,0 +1,59 @@
+apiVersion: optpilot.io/v1
+config: method
+id: coopa-solver
+description: >-
+  Solves one natural-language OR problem per Run using the COOPA pipeline:
+  confidence-scored formulation extraction, routing to a mathematical /
+  combinatorial / metaheuristic / general optimizer agent, LLM-generated
+  solver code executed locally, and a numeric answer. Requires a
+  user-provisioned COOPA checkout (COOPA_HOME) and its pruned runtime
+  dependencies; COOPA is not redistributed with this package.
+tags: [llm, operations-research, one-time-solve, command-method]
+
+entrypoint:
+  command: [python, coopa_solver.py]
+  protocol: batch
+  # One solve can include formulation refinement plus agent tool loops.
+  exchangeTimeoutSeconds: 900
+
+runtime:
+  sandbox: process
+  envFromHost: [OPENROUTER_API_KEY, COOPA_HOME]
+
+settingsSchema:
+  batchSize:
+    valueType: int
+    min: 1
+    max: 1
+    default: 1
+    description: One-shot solve; exactly one proposal per Run.
+  model:
+    valueType: string
+    default: openrouter/qwen/qwen3-coder
+    description: litellm model id used for formulation and all agents.
+  agentMode:
+    valueType: categorical
+    values: [manager, mathematical-only]
+    default: manager
+    description: >-
+      manager routes across all four optimizer agents; mathematical-only
+      runs the Pyomo-based mathematical agent directly (covers most
+      benchmark dispatches and needs no combinatorial/metaheuristic extras).
+  skipFormulation:
+    valueType: bool
+    default: false
+    description: Skip Phase 0 formulation extraction and prompt with raw text.
+  maxRefinementIterations:
+    valueType: int
+    min: 1
+    max: 5
+    default: 2
+    description: Formulation refinement iterations (confidence max-min pick).
+
+settings:
+  batchSize: 1
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]

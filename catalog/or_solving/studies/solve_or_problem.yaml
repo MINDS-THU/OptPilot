@@ -1,0 +1,33 @@
+apiVersion: optpilot.io/v1
+config: study
+name: solve-or-problem
+description: >-
+  Solve one natural-language operations-research problem with the COOPA
+  multi-agent pipeline. Enter the problem statement at launch; the Run
+  retains the full solution artifact (formulation, confidence, routing,
+  generated solver code, numeric answer) for auditing.
+tags: [operations-research, one-time-solve, llm]
+
+environmentConfig: ../environments/or_problem/environment.yaml
+methodConfig: ../methods/coopa_solver/method.yaml
+
+inputs:
+  problem:
+    valueType: string
+    description: >-
+      The operations-research problem in plain language (objective,
+      decisions, constraints, and the numbers that matter).
+
+objective:
+  metric: solved
+  direction: maximize
+
+budget:
+  maxTrials: 1
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 1200
+
+reproducibility:
+  seed: 7

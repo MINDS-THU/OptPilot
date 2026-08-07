@@ -1,0 +1,34 @@
+apiVersion: optpilot.io/v1
+config: study
+name: solve-or-problem-mock
+description: >-
+  Smoke-test twin of solve-or-problem using the explicitly labeled mock
+  solver: identical per-launch input, exchange, and artifact machinery, but
+  no COOPA checkout, no network, and no API keys. Artifacts are marked
+  mode=mock and its answers are placeholders, never real solutions.
+tags: [mock, smoke, operations-research]
+
+environmentConfig: ../environments/or_problem/environment.yaml
+methodConfig: ../methods/coopa_solver/method_mock.yaml
+
+inputs:
+  problem:
+    valueType: string
+    default: >-
+      Maximize 40a + 30b subject to 2a + b <= 100 with a, b >= 0
+      (smoke placeholder problem).
+    description: The problem statement (placeholder default for smoke runs).
+
+objective:
+  metric: solved
+  direction: maximize
+
+budget:
+  maxTrials: 1
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

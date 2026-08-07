@@ -1,0 +1,37 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: or-problem
+description: >-
+  Accepts one natural-language operations-research problem per launch
+  (study input `problem`) and validates the well-formedness of the returned
+  solution artifact. It does not re-solve the problem; the retained artifact
+  (formulation, confidence, routing, generated code, numeric answer) is the
+  auditable evidence.
+tags: [operations-research, one-time-solve, llm]
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: [.]
+  settings: {}
+
+candidate:
+  format: parameters
+  description: One solution artifact produced by a solver method.
+  parameters:
+    schema:
+      objective_value:
+        valueType: float
+        description: The reported objective value (0.0 when no answer was found).
+      answer_found:
+        valueType: bool
+        description: Whether the solver produced a numeric answer.
+      report_json:
+        valueType: string
+        description: >-
+          The full solution artifact as JSON text (schema
+          optpilot.or-solving-report.v1) — formulation, confidence,
+          routing, generated code, and raw agent response.
+
+metrics:
+  source: return
+  keys: [solved, objective_value, artifact_bytes]

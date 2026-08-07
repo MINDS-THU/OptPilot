@@ -1,0 +1,25 @@
+# Pruned COOPA runtime for the coopa-solver method (plan §5.3 item 1).
+# This is the ~10-package subset the paper pipeline actually uses, extracted
+# from the 40+-pin research requirements; the retrieval/KB/web tail
+# (crawl4ai, gradio, langchain, e2b, docker-py, serpapi) is deliberately
+# dropped — the shim never imports COOPA's web or knowledge agents.
+#
+# Install into the SAME Python environment that runs `optpilot` / Studio:
+#   uv pip install -r catalog/or_solving/methods/coopa_solver/requirements-pruned.txt
+#
+# Solver backends are user-provisioned extras: `ortools` and `pymoo` below
+# are pip-installable; GLPK and IPOPT binaries come from your system package
+# manager (e.g. `brew install glpk ipopt`). Without them, use
+# agentMode: mathematical-only where Pyomo + GLPK suffice.
+
+smolagents
+litellm
+instructor
+pydantic
+pyomo
+ortools
+pymoo
+numpy
+scipy
+tenacity
+python-dotenv

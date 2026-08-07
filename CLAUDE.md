@@ -308,10 +308,16 @@ and inline status notes mark what is already built.
    through the `exact_seed_replay` capability callable (the runner already
    supplies the environment import roots — drop the cross-package
    `pythonPath` hack from method.yaml).
-3. **W3 — COOPA or_solving package** (plan §5.3). Command batch method via
-   F3; per-launch problem via F2 `study.inputs` (the Studio launch form
-   renders it already). **Blocked on the license** (below) — build against
-   the configured-source ingress path until resolved.
+3. **W3 — COOPA or_solving package** (plan §5.3). Items 1–3 DONE
+   (2026-08-07): `catalog/or_solving` ships OptPilot-original code only —
+   COOPA stays user-provisioned via `COOPA_HOME` (license blocker applies to
+   bundling COOPA, not to this package). `coopa-solver` F3 command method +
+   pruned shim (no web/knowledge agents), `or-problem` artifact-validating
+   environment, `solve-or-problem` with `inputs.problem`, and an explicitly
+   labeled mock twin verified end-to-end through the retained runner.
+   Remaining: real-pipeline exercise with an actual COOPA checkout + key,
+   item 4 (`or_benchmark` dataset environment reusing
+   `checks/score_results.py` logic), item 5 license resolution.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
    Direct baseline is a Python batch method; **confirm canonical target
    rates** (below) before publishing numbers.

@@ -218,6 +218,29 @@ Register as package `or_solving` with two registrations sharing one pruned runti
 4. **Benchmark registration.** Environment `or_benchmark`: dataset (ComplexLP/IndustryOR/BWOR JSONL via `methodContext.references` or evaluator settings), file-candidate solution per problem, evaluator scores |pred − gold| ≤ 0.1 (reusing `checks/score_results.py` logic); Studies compare COOPA configs/backbones or future methods; `budget.maxTrials` = #problems, sequential.
 5. **Blockers to clear before shipping (non-code).** `code/coopa/` has **no license file** — resolve with the authors before any redistribution (worst case: register as user-fetched external source via the configured-package ingress path, like other external codebases). Anti-blocker note: LLM-generated solver code executes locally; ship with the method's runtime documented as trusted-local-code and revisit under the container slice.
 
+> **Status update 2026-08-07: items 1–3 done (`catalog/or_solving`).**
+> Package ships OptPilot-original code only — COOPA is user-provisioned via
+> `COOPA_HOME` (no redistribution; license blocker stands for bundling COOPA
+> itself, not for this package). `or-problem` environment validates solution
+> artifacts (schema `optpilot.or-solving-report.v1`; metrics solved /
+> objective_value / artifact_bytes); `coopa-solver` is an F3 command batch
+> method (`envFromHost: [OPENROUTER_API_KEY, COOPA_HOME]`,
+> `exchangeTimeoutSeconds: 900`, settingsSchema for model / agentMode
+> (manager | mathematical-only) / skipFormulation / refinement iterations);
+> `methods/coopa_solver/coopa_shim.py` assembles the pruned manager (four
+> optimizer agents + manager_curation prompt, no web/knowledge agents) and
+> `requirements-pruned.txt` carries the ~10-package runtime (item 1).
+> `solve-or-problem` declares `inputs.problem` (F2) — the Studio launch form
+> renders it, and Studio gates the launch on the missing host values
+> (`runtime_environment_missing`) until configured. An explicitly labeled
+> mock twin (`coopa-solver-mock` / `solve-or-problem-mock`) smoke-tests the
+> identical machinery with no LLM/network/COOPA; verified end-to-end through
+> the retained runner: `optpilot run … --input problem="…"` → succeeded run,
+> artifact retained with the launch input inside, evaluator metrics scored.
+> Real-pipeline execution is not yet exercised (needs a COOPA checkout +
+> pruned deps + key). Remaining: item 4 (`or_benchmark` dataset
+> environment + scoring) and the license resolution (item 5).
+
 ### 5.4 Factorio Design Benchmark
 
 Register as package `factorio_design_benchmark`, static-validation-first:
