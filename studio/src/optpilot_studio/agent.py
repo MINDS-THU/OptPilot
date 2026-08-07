@@ -1357,9 +1357,72 @@ class OpenHandsAdapter:
                 if paused_approval_id:
                     return "", tool_events, "", paused_approval_id
                 if new_tool_events:
+                    # Client-tool results were just forwarded; the agent will
+                    # resume, so a "finished" state from before the forward is
+                    # stale. Keep polling.
                     continue
+            if self._execution_finished(events):
+                # An agent may end its turn with a plain final message instead
+                # of a finish tool call; the conversation then flips
+                # execution_status to "finished" with no FinishAction event.
+                # Without this, the session would show "Working…" forever
+                # while the finished answer sits unread in the event stream.
+                # This check runs only after any pending client-tool results
+                # were forwarded, so a mid-turn tool dispatch is not mistaken
+                # for the closing answer.
+                final_text = self._best_final_message_text(
+                    events, ignored_events, ignored_texts
+                )
+                return (
+                    final_text
+                    or (
+                        "The Assistant finished this turn without a closing "
+                        "message. Open Technical details to see the steps it "
+                        "took, or send a follow-up message."
+                    ),
+                    tool_events,
+                    "",
+                    "",
+                )
             time.sleep(2.0)
         return "", tool_events, "", ""
+
+    def _execution_finished(self, events: Any) -> bool:
+        # Events arrive newest-first; only the newest execution_status update
+        # counts. An older "finished" from before a client-tool resume must
+        # not settle a conversation that is running again.
+        source_events = events if isinstance(events, list) else []
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+            if kind != "ConversationStateUpdateEvent":
+                continue
+            if str(event.get("key") or "") != "execution_status":
+                continue
+            return str(event.get("value") or "").lower() == "finished"
+        return False
+
+    def _best_final_message_text(
+        self, events: Any, ignored_events: set[str], ignored_texts: set[str]
+    ) -> str:
+        # Events arrive newest-first; the first agent-authored message with
+        # user-facing text is the closing answer for the finished turn.
+        source_events = events if isinstance(events, list) else []
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            event_id = self._openhands_event_id(event)
+            if event_id and event_id in ignored_events:
+                continue
+            kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+            if kind != "MessageEvent" or str(event.get("source") or "") != "agent":
+                continue
+            text = self._event_assistant_text(event)
+            normalized = self._normalize_response_text(text)
+            if text and normalized and normalized not in ignored_texts:
+                return text
+        return ""
 
     def _best_finish_text(self, events: Any, ignored_events: set[str], ignored_texts: set[str]) -> str:
         source_events = events if isinstance(events, list) else []

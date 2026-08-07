@@ -224,10 +224,26 @@ pre-existing and unrelated to F3. Diff failure sets against this baseline.
    far, dashed ghosts for planned budget), click opens an inline inspector
    (status, result, candidate, attempts) with jump buttons into the
    Candidate/Attempts/Observations views. Chip values come from the loaded
-   candidate page only; deeper pages still need Load more. Remaining UI
-   work noted from the owner's review: an Assistant quality pass on the
-   welcome-page intents (responses read as confusing; exercise each intent
-   live and improve prompt/tool guidance), and the Assistant-side resource
+   candidate page only; deeper pages still need Load more.
+   Assistant quality pass (2026-08-07): root causes of the "confusing
+   responses" on welcome-page intents were (1) a stale OpenHands
+   agent-server holding an outdated cached OptPilot tool schema — every
+   message errored with "restart the OpenHands agent server" until the
+   server process was restarted (operational note: restart `agent-server`
+   after tool-schema changes), (2) sessions orphaned by service restarts
+   sitting in `waiting_for_agent` forever until the next sync marks them
+   "Assistant restarted" (sync heals them; the client only syncs busy
+   sessions while polling), and (3) response behavior: for a broad intent
+   like "open and explore a simulator", the agent (driven by OpenHands'
+   native software-agent prompt; OptPilot guidance is only a
+   system_message_suffix from `assistant_assets/prompts/system.md`) dives
+   into Workspace creation and multi-minute tool loops before any reply.
+   Added an "Opening moves for broad goals" section to system.md: answer
+   after at most a Catalog inspection, 1–3 fitting entries, exactly one
+   proposed next action, no Workspaces/package plans on a broad opening, no
+   internals jargon. Re-verify adherence per configured backbone; further
+   candidates: collapse assistant-initiated `workspace_attached` banners in
+   the timeline (noise before substance), and an Assistant-side resource
    action tool.
    Bug fixes shipped alongside: tolerant Study-launch listing
    (`_tolerant_views` in `study_launch_service.py` — one v2-era record no
