@@ -25,27 +25,30 @@ scratch), and it defines:
 Do not re-derive the design; follow the plan and update it when reality
 diverges. `designs/pre-release-fix-plan.md` carries per-item status notes.
 
-## State of the working tree (2026-08-06)
+## State of the branch (2026-08-07)
 
-Phase 0 + F1 + F2 (described below) are committed at `ab46b0a` ("Release
-prep: Phase 0 hygiene, F1 typed inputs, F2 per-launch Study inputs"); the
-`ci.yml.updated` follow-up was applied by the owner. The working tree now
-contains the **uncommitted, fully verified F3** change set (command-protocol
-batch methods, described below); the human owner reviews and commits.
-Remaining owner follow-ups:
+Everything below is committed and pushed on the
+**`phase-1-release-prep`** branch of `MINDS-THU/OptPilot`:
 
-1. `_to_delete/` at the repo root holds transfer artifacts and stale git
-   index locks and can be deleted.
-2. The public GitHub remote (`MINDS-THU/OptPilot`) is weeks behind local
-   HEAD. Pushing is Phase 0 business and needs the owner.
+- `ab46b0a` — Phase 0 hygiene, F1 typed inputs, F2 per-launch Study inputs
+- `5dce81d` — F3 command methods, F4 resource actions, F5 capabilities,
+  U1 launch-input forms
+- `98b8bb3` — remaining U1 forms, Studio reliability fixes, Run trial map
+- `727ddbc` — Assistant quality pass
+- `25ad874` — Assistant dispatch fixes (send timeout, stale-finished guard)
 
-Full-suite state on this machine (2026-08-06, with F3 applied): 2,422 tests,
-4 failures — all reproduced identically on a pristine `ab46b0a` worktree
-(three `tests/studio/test_mvp.py` UI-source assertions and one
-`test_realm_study_definition_ledger` migration transaction count), i.e.
-pre-existing and unrelated to F3. Diff failure sets against this baseline.
+Phase 2 starts from this branch. Remaining owner chore: `_to_delete/` at the
+repo root holds transfer artifacts and stale git index locks; delete it.
 
-## Completed so far (verified; F3 uncommitted)
+Full-suite state on the owner's machine (2026-08-07): ~2,460 tests with 4
+known pre-existing, environment-dependent failures — all reproduced
+identically on a pristine `ab46b0a` worktree (three
+`tests/studio/test_mvp.py` UI-source assertions and one
+`test_realm_study_definition_ledger` migration transaction count). Run the
+full suite once before changing anything to establish YOUR baseline, and
+diff failure sets rather than eyeballing counts.
+
+## Completed so far (all verified and pushed)
 
 **Phase 0 — hygiene and terminology.**
 - User-facing "Run setup" wording finished across the client
@@ -185,26 +188,10 @@ pre-existing and unrelated to F3. Diff failure sets against this baseline.
   `configuration.md` (environment reference), `candidate-contracts.md`
   (context table), mirrored to `docs/`.
 
-## Verification protocol used (keep following it)
 
-- Full suite on the final tree: 2,392 tests, **zero regressions**. 55 failures
-  are pre-existing and environment-dependent — they fail identically on the
-  untouched baseline in the cloud container (realm timing/subprocess-worker
-  tests, Studio tests needing code-server/OpenHands, dependency verticals).
-  On a proper dev machine (`uv sync --all-packages`), most should pass; run
-  the full suite once before changing anything to establish YOUR baseline,
-  and diff failure sets rather than eyeballing counts.
-- Docs under `docs/` must stay **byte-identical** to
-  `studio/src/optpilot_studio/docs_assets/` (a studio test asserts this).
-  Edit in `docs_assets/`, then copy.
-- Bundled packages must stay green:
-  `optpilot package validate catalog/example_package` and
-  `catalog/production_agv_scheduling`.
-- After JS edits: `node --check studio/src/optpilot_studio/ui/static/app.js`.
+**Studio completion sprint (2026-08-07, commits 98b8bb3..25ad874).**
+**U1 — contract-generated forms (all three consumers done).**
 
-## What to do next (in order)
-
-1. **U1 — contract-generated forms: DONE (2026-08-07).**
    (a) `study.inputs` launch form (see below). (b) Candidate-parameter
    "Search space" card in the Run setup detail (`studySearchSpacePanel` in
    app.js, typed rows from `environment.raw_config.candidate.parameters.
@@ -254,12 +241,6 @@ pre-existing and unrelated to F3. Diff failure sets against this baseline.
    conversation list), and the onboarding-flash fix (transcript merge +
    sticky conversation-started in app.js,
    `tests/studio/test_studio_assistant_transcript.py`).
-2. Then the Phase 2 integration workstreams W1–W5 per plan §5, and the
-   remaining U-items (U3–U8) per plan §4. Framework primitives F1–F5 are all
-   done: W1 item 4 (DEVS-Gen headless generation) has its F4 vehicle
-   (author a `generate` action on the DEVS-Gen resource); W2 consumes F5
-   (rebase the general method onto `context.policyValidation` +
-   the `exact_seed_replay` callable declaration); W3/W4 consume F3.
 
 **U1 slice — study.inputs launch form (done).**
 - Server: Studio launch request schema accepts optional `inputs` (all three
@@ -277,6 +258,85 @@ pre-existing and unrelated to F3. Diff failure sets against this baseline.
   end-to-end `test_http_study_launch_binds_declared_typed_inputs` in
   `test_studio_realm_runs.py`. Docs: Studio paragraph in configuration.md's
   "Per-Launch Study Inputs".
+
+**Assistant dispatch fixes (25ad874).** Client message timeout 15s→60s
+(healthy dispatches execute Catalog tools inline and measured 23s; the
+old timeout surfaced them as "Studio did not respond in time").
+Completion detection settles turns that end with a plain final
+MessageEvent (newest execution_status=finished, required to be newer
+than the latest user message; silent-finish fallback only in the sync
+path).
+
+## Verification protocol used (keep following it)
+
+- Full suite on the final tree: 2,392 tests, **zero regressions**. 55 failures
+  are pre-existing and environment-dependent — they fail identically on the
+  untouched baseline in the cloud container (realm timing/subprocess-worker
+  tests, Studio tests needing code-server/OpenHands, dependency verticals).
+  On a proper dev machine (`uv sync --all-packages`), most should pass; run
+  the full suite once before changing anything to establish YOUR baseline,
+  and diff failure sets rather than eyeballing counts.
+- Docs under `docs/` must stay **byte-identical** to
+  `studio/src/optpilot_studio/docs_assets/` (a studio test asserts this).
+  Edit in `docs_assets/`, then copy.
+- Bundled packages must stay green:
+  `optpilot package validate catalog/example_package` and
+  `catalog/production_agv_scheduling`.
+- After JS edits: `node --check studio/src/optpilot_studio/ui/static/app.js`.
+
+## What to do next: Phase 2 (in priority order)
+
+Framework primitives F1–F5 and the U1 forms are all done (see "Completed so
+far"). Phase 2 is the integration workstreams of plan §5 plus the remaining
+Studio items of plan §4. Read `designs/initial-release-plan.md` §5–§9 before
+starting any item; per-item scope, risks, and acceptance criteria live there,
+and inline status notes mark what is already built.
+
+1. **W1 — DEVS-Gen flagship** (plan §5.1, 5 items). Highest value first:
+   close the metrics gap (`devs.simulation.v2` with declared metric keys →
+   launch-ready generated environments); register 2–3 gallery simulators as
+   catalog Environments; trace-conformance smoke checks; headless
+   generation as an F4 resource action (author a `generate` action on
+   `catalog/example_package/resources/devs-gen-interface` — core executor,
+   CLI, and the Studio Actions panel already exist); hygiene.
+2. **W2 — trace-aware LLM policy search generalization** (plan §5.2).
+   Split `production_agv_scheduling/methods/process_aware_llm` into a
+   general `llm_policy_search` method + DES environment template. The F5
+   contracts to consume are already declared by the AGV environment:
+   read AST rules from `context.policyValidation` (apply them with core
+   `optpilot.policy_validation.validate_policy_sources`) and resolve replay
+   through the `exact_seed_replay` capability callable (the runner already
+   supplies the environment import roots — drop the cross-package
+   `pythonPath` hack from method.yaml).
+3. **W3 — COOPA or_solving package** (plan §5.3). Command batch method via
+   F3; per-launch problem via F2 `study.inputs` (the Studio launch form
+   renders it already). **Blocked on the license** (below) — build against
+   the configured-source ingress path until resolved.
+4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
+   Direct baseline is a Python batch method; **confirm canonical target
+   rates** (below) before publishing numbers.
+5. **W5 — DEVS-Gen × policy-search joint workstream** (plan §5.5), after
+   W1/W2.
+6. **Remaining U-items** (plan §4): U2 finish the "Run setup" client-side
+   rename; U3 Open work completeness; U5 interface context; U6 dynamic
+   onboarding; U7 legacy-shell removal (last); U8 optional.
+7. **Studio follow-ups queued from the 2026-08-07 review** (small, good
+   first tasks): an approval-gated Assistant tool for filling/running F4
+   resource actions (mirror `optpilot_study_launch` in
+   `_execute_agent_tool`); collapse assistant-initiated
+   `workspace_attached` banners in the conversation timeline (noise before
+   substance); resource actions for published-projection (non-configured)
+   catalog resources; re-verify Assistant prompt adherence ("Opening moves"
+   section of `assistant_assets/prompts/system.md`) whenever the configured
+   backbone model changes; trial-map chips only show values from the loaded
+   candidate page (deeper pages need Load more).
+
+Operational notes for Phase 2 development:
+- Restart the OpenHands `agent-server` process after any OptPilot
+  tool-schema change; it caches the schema per process and every message
+  errors until restarted.
+- `.claude/launch.json` boots Studio on port 8866 (`optpilot-studio`);
+  one Studio process supervises a project's workspace runtimes at a time.
 
 Non-code blockers for the owner (start early, they gate shipping W3/W4):
 COOPA license (`resource/reproduce-COOPA-BC8B/code/coopa/` has no LICENSE) and
