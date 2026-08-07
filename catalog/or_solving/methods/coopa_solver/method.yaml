@@ -29,7 +29,7 @@ settingsSchema:
     description: One-shot solve; exactly one proposal per Run.
   model:
     valueType: string
-    default: openrouter/qwen/qwen3-coder
+    default: openrouter/deepseek/deepseek-v4-pro
     description: litellm model id used for formulation and all agents.
   agentMode:
     valueType: categorical

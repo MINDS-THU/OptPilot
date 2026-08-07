@@ -237,9 +237,21 @@ Register as package `or_solving` with two registrations sharing one pruned runti
 > identical machinery with no LLM/network/COOPA; verified end-to-end through
 > the retained runner: `optpilot run … --input problem="…"` → succeeded run,
 > artifact retained with the launch input inside, evaluator metrics scored.
-> Real-pipeline execution is not yet exercised (needs a COOPA checkout +
-> pruned deps + key). Remaining: item 4 (`or_benchmark` dataset
-> environment + scoring) and the license resolution (item 5).
+> Real-pipeline execution verified 2026-08-07 through Studio's retained
+> runner: LP test problem solved with predicted = 36.0 (exact optimum),
+> solved = 1.0, full 8.9 KB artifact retained (manager routing,
+> deepseek-v4-pro via OpenRouter). Two worker-environment fixes were
+> required and are part of the package: `coopa_shim.solve_problem` sets
+> fallback `PATH`/workspace-`HOME` via `setdefault` before COOPA imports
+> (the retained worker env is deliberately PATH- and HOME-free; COOPA's
+> import closure reads PATH at import time and Pyomo discovers solvers via
+> PATH), and `coopa_solver.py` protects stdout at the fd level
+> (`_protect_stdout`: dup real stdout, point fd 1 at stderr) because the
+> worker parses the whole stdout as JSON while COOPA agents and generated
+> solver subprocesses print to fd 1. The shim also wraps COOPA's
+> `build_model` allowlist with a `LiteLLMModel` fallback so any
+> litellm-routable model id works. Remaining: item 4 (`or_benchmark`
+> dataset environment + scoring) and the license resolution (item 5).
 
 ### 5.4 Factorio Design Benchmark
 

@@ -16,10 +16,27 @@ the evidence retained for auditing.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 REPORT_SCHEMA = "optpilot.or-solving-report.v1"
 MAX_REPORT_BYTES = 200_000
+
+
+def _protect_stdout():
+    """Reserve the real stdout for the JSON response only.
+
+    The retained worker parses this process's entire stdout as JSON, but the
+    COOPA pipeline prints agent logs to stdout and executes generated solver
+    code in child processes that inherit fd 1. Duplicate the true stdout to a
+    private handle and point fd 1 at stderr so every stray print — Python or
+    subprocess — lands in the worker diagnostics instead of the response.
+    """
+
+    real_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return os.fdopen(real_fd, "w", encoding="utf-8")
 
 
 def bounded_report_json(report: dict) -> str:
@@ -57,6 +74,7 @@ def mock_report(problem: str) -> dict:
 
 
 def main() -> int:
+    response_stream = _protect_stdout()
     request = json.load(sys.stdin)
     settings = request.get("settings") or {}
     inputs = settings.get("inputs") or {}
@@ -97,7 +115,8 @@ def main() -> int:
             "report_json": bounded_report_json(report),
         },
     }
-    json.dump({"candidates": [candidate]}, sys.stdout)
+    json.dump({"candidates": [candidate]}, response_stream)
+    response_stream.flush()
     return 0
 
 

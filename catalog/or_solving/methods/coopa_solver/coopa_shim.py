@@ -50,6 +50,18 @@ def solve_problem(
     max_refinement_iterations: int,
     work_dir: str,
 ) -> dict:
+    workspace = Path(work_dir)
+    workspace.mkdir(parents=True, exist_ok=True)
+    # The retained worker env is deliberately PATH- and HOME-free. COOPA's
+    # import closure reads PATH at import time (pydub), Pyomo discovers solver
+    # binaries via PATH, and litellm/huggingface expect a writable HOME — so
+    # give the subprocess sane defaults without overriding anything the host
+    # granted explicitly.
+    os.environ.setdefault(
+        "PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    )
+    os.environ.setdefault("HOME", str(workspace))
+
     home = _coopa_home()
     if str(home) not in sys.path:
         sys.path.insert(0, str(home))
@@ -69,8 +81,7 @@ def solve_problem(
             "environment."
         ) from error
 
-    workspace = Path(work_dir)
-    workspace.mkdir(parents=True, exist_ok=True)
+    _install_flexible_model_builder()
 
     formulation_payload = None
     confidence_payload = None
@@ -137,6 +148,45 @@ def solve_problem(
         "refinement_iterations": refinement_iterations,
         "generated_files": _collect_generated_files(workspace),
     }
+
+
+def _install_flexible_model_builder() -> None:
+    """Let any litellm-routable model id drive COOPA's agents.
+
+    COOPA's ``build_model`` allowlists the paper's model families
+    (gpt/gemini/o3/o4/thinking) and raises for everything else — including
+    ``openrouter/...`` ids that litellm routes fine (COOPA's own formulation
+    client already accepts them). Wrap it with a fallback to a plain
+    ``LiteLLMModel`` and rebind the wrapper on every agent module that
+    imported the original name.
+    """
+
+    import importlib
+
+    from smolagents import LiteLLMModel
+    from apps.operations_research import model_utils
+
+    original = model_utils.build_model
+    if getattr(original, "_optpilot_flexible", False):
+        return
+
+    def flexible_build_model(model_name):
+        try:
+            return original(model_name)
+        except ValueError:
+            return LiteLLMModel(model_id=model_name)
+
+    flexible_build_model._optpilot_flexible = True
+    model_utils.build_model = flexible_build_model
+    for module_name in (
+        "apps.operations_research.or_agents.mathematical_optimizer_agent",
+        "apps.operations_research.or_agents.combinatorial_optimizer_agent",
+        "apps.operations_research.or_agents.metaheuristic_optimizer_agent",
+        "apps.operations_research.or_agents.general_optimizer_agent",
+    ):
+        module = importlib.import_module(module_name)
+        if getattr(module, "build_model", None) is not None:
+            module.build_model = flexible_build_model
 
 
 def _build_pruned_manager(model_id: str, workspace: Path):

@@ -12,9 +12,9 @@
 # manager (e.g. `brew install glpk ipopt`). Without them, use
 # agentMode: mathematical-only where Pyomo + GLPK suffice.
 
-smolagents
+smolagents==1.24.0  # COOPA's own pin; 1.26 drifts agent APIs
 litellm
-instructor
+instructor==1.9.2  # pre-registry instructor; 1.15+ rejects COOPA's OPENROUTER structured-output mode
 pydantic
 pyomo
 ortools
@@ -23,3 +23,19 @@ numpy
 scipy
 tenacity
 python-dotenv
+
+# Import-time closure only: COOPA's optimizer agents import the web-browsing
+# and document-inspection modules at module load, so these light packages
+# must be importable even though the pruned shim never invokes them (the
+# heavy crawl/UI tail — crawl4ai, gradio, langchain, e2b — stays excluded).
+google-search-results
+pathvalidate
+mammoth
+markdownify
+pdfminer.six
+python-pptx
+openpyxl
+puremagic
+pydub
+SpeechRecognition
+youtube-transcript-api

@@ -315,8 +315,16 @@ and inline status notes mark what is already built.
    pruned shim (no web/knowledge agents), `or-problem` artifact-validating
    environment, `solve-or-problem` with `inputs.problem`, and an explicitly
    labeled mock twin verified end-to-end through the retained runner.
-   Remaining: real-pipeline exercise with an actual COOPA checkout + key,
-   item 4 (`or_benchmark` dataset environment reusing
+   Real pipeline ALSO verified end-to-end (2026-08-07): LP test problem
+   through Studio's retained runner → predicted 36.0 (exact optimum),
+   solved=1.0, full artifact retained (manager routing, deepseek via
+   OpenRouter). Worker-env lessons baked into the package (keep them if
+   you touch it): the shim sets fallback PATH + workspace HOME before
+   COOPA imports (the retained worker env is PATH/HOME-free), and
+   `coopa_solver.py::_protect_stdout` dups the real stdout and points
+   fd 1 at stderr — the worker parses the ENTIRE stdout as JSON while
+   COOPA agents and generated solver subprocesses print to fd 1.
+   Remaining: item 4 (`or_benchmark` dataset environment reusing
    `checks/score_results.py` logic), item 5 license resolution.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
    Direct baseline is a Python batch method; **confirm canonical target
@@ -343,6 +351,19 @@ Operational notes for Phase 2 development:
   errors until restarted.
 - `.claude/launch.json` boots Studio on port 8866 (`optpilot-studio`);
   one Studio process supervises a project's workspace runtimes at a time.
+- **Never keep `.venv` inside this repo when it sits on Synology Drive**
+  (or any sync-managed folder). Sync repeatedly corrupted the venv during
+  development (stale NFS file handles reading `*.dist-info`, conflict
+  duplicates like `rich-15.0.0 2.dist-info`, stale directory listings) and
+  one such corruption failed a live retained run. The working setup: the
+  venv lives at `~/.optpilot-venvs/OptPilot-venv` and everything uses
+  `UV_PROJECT_ENVIRONMENT` to point uv at it — `.claude/launch.json`
+  already sets it; export it in your shell too before `uv run`/`uv sync`.
+  Note `uv pip` does NOT honor it — pass
+  `--python ~/.optpilot-venvs/OptPilot-venv/bin/python` explicitly.
+- OpenHands stack pins: `openhands-agent-server/-sdk/-tools/-workspace
+  ==1.40.1` (+ `libtmux`); these are not in the lockfile's default set, so
+  reinstall them after any venv rebuild.
 
 Non-code blockers for the owner (start early, they gate shipping W3/W4):
 COOPA license (`resource/reproduce-COOPA-BC8B/code/coopa/` has no LICENSE) and
