@@ -324,13 +324,18 @@ and inline status notes mark what is already built.
    `coopa_solver.py::_protect_stdout` dups the real stdout and points
    fd 1 at stderr — the worker parses the ENTIRE stdout as JSON while
    COOPA agents and generated solver subprocesses print to fd 1.
-   Human-facing interface (2026-08-07): `resources/or_solver` ships an F4
-   `solve` action (typed inputs incl. `mock`; writes `answer.txt`,
-   `report.json`, `workspace/`) — usable from the CLI (`optpilot resource
-   run`) and the Studio resource Actions panel. Two framework touches came
-   with it: the F4 executor now maps a `python`/`python3` command head to
-   the optpilot interpreter (mirrors F3), and Studio resolves action
-   env/secret grants through Settings variables before the process env.
+   Note (2026-08-07): an `or_solver` resource wrapping the same pipeline
+   in an F4 solve action was built and then removed the same day — wrong
+   ontology (a method's capability re-registered as a resource for UI
+   convenience; plan §2.2 says one-time solving is a *presentation* over
+   the `maxTrials: 1` study, no new entity). Do not reintroduce that
+   pattern. The human path is the `solve-or-problem` Run setup's
+   launch-inputs form; the proper front door is the "Apply a method"
+   presentation (plan §2.2, with U6's dynamic onboarding), still to build.
+   Two framework improvements from that detour were kept: the F4 executor
+   maps a `python`/`python3` command head to the optpilot interpreter
+   (mirrors F3), and Studio resolves action env/secret grants through
+   Settings variables before the process env.
    Remaining: item 4 (`or_benchmark` dataset environment reusing
    `checks/score_results.py` logic), item 5 license resolution.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;

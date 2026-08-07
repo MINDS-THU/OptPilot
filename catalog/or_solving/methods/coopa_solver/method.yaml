@@ -7,10 +7,10 @@ description: >-
   combinatorial / metaheuristic / general optimizer agent, LLM-generated
   solver code executed locally, and a numeric answer. Requires a
   user-provisioned COOPA checkout (COOPA_HOME) and its pruned runtime
-  dependencies; COOPA is not redistributed with this package. To solve a
-  problem interactively without a Run, use the "OR Problem Solver (COOPA)"
-  resource (Catalog > Resources): its Solve action runs the same pipeline
-  from a form and writes the answer and audit artifact to a folder.
+  dependencies; COOPA is not redistributed with this package. To solve one
+  problem as a person, launch the solve-or-problem Run setup and enter the
+  problem in its launch-inputs form; the answer and full audit artifact
+  come back as retained Run evidence.
 tags: [llm, operations-research, one-time-solve, command-method]
 
 entrypoint:
