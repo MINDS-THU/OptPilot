@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Tuple
 
+from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 from .parameter_values import apply_parameter_defaults, validate_parameter_values
 from .realm.run_closure import InterfaceRuntimeSpec
 
@@ -361,6 +362,14 @@ def run_resource_action(
             _substitute_token(token, inputs_file, output_path, bound_inputs)
             for token in action.command
         ]
+        # Mirror the retained command-method contract (F3): a python/python3
+        # head means "the interpreter running optpilot", so actions work
+        # without a python on PATH and see the same user-provisioned
+        # dependencies as the rest of the host installation.
+        if argv and argv[0] in RETAINED_COMMAND_METHOD_INTERPRETERS:
+            import sys
+
+            argv[0] = sys.executable
         run_env = {
             **_minimal_action_env(environment),
             **dict(action.env),

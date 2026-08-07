@@ -250,8 +250,16 @@ Register as package `or_solving` with two registrations sharing one pruned runti
 > worker parses the whole stdout as JSON while COOPA agents and generated
 > solver subprocesses print to fd 1. The shim also wraps COOPA's
 > `build_model` allowlist with a `LiteLLMModel` fallback so any
-> litellm-routable model id works. Remaining: item 4 (`or_benchmark`
-> dataset environment + scoring) and the license resolution (item 5).
+> litellm-routable model id works. A human-facing interface ships as
+> `resources/or_solver`: an F4 `solve` action (typed inputs including a
+> `mock` smoke mode; outputs `answer.txt`, `report.json`, generated solver
+> files under `workspace/`) runnable from the CLI and the Studio resource
+> Actions panel. Framework touches that landed with it: the F4 executor
+> maps a `python`/`python3` command head to the optpilot interpreter
+> (mirroring F3's contract), and Studio's resource-action runner resolves
+> declared env/secret grants through Studio Settings variables before the
+> process environment. Remaining: item 4 (`or_benchmark` dataset
+> environment + scoring) and the license resolution (item 5).
 
 ### 5.4 Factorio Design Benchmark
 

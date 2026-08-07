@@ -566,9 +566,14 @@ The execution contract:
   as a single argv token. Placeholder references are checked against the
   declared inputs at validation time; structured (array/object) values are
   only available through the inputs file.
+- A `python` / `python3` command head means "the interpreter running
+  optpilot" (the same mapping the retained command-method contract uses), so
+  actions work without a python on PATH and see the same user-provisioned
+  dependencies as the host installation.
 - `grants.envFromHost` / `grants.secretsFromHost` name host environment
   values passed through to the command; a missing name fails the run before
-  anything executes.
+  anything executes. In Studio, granted names resolve through Studio
+  Settings environment variables first, then the Studio process environment.
 - An optional `runtime` block (process sandbox) may declare `setup` steps;
   the local headless path runs them in the resource root before the command,
   so setup scripts should be idempotent. Container runtimes are not

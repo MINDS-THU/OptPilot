@@ -9292,6 +9292,15 @@ def _start_resource_action_run(
         resource_raw, location=str(manifest_path)
     )
     action = find_resource_action(actions, action_id)
+    # Resolve declared env/secret grants through Studio Settings (falling back
+    # to the process environment) so actions work when values like API keys
+    # are configured in Settings rather than exported to the Studio process.
+    granted_env = _require_declared_env_from_host(
+        state,
+        (*action.env_from_host, *action.secrets_from_host),
+        action=f"resource action {action.action_id!r}",
+    )
+    action_host_env = {**os.environ, **granted_env}
     output_root = (
         state.runtime_dir
         / "resource-action-runs"
@@ -9316,6 +9325,7 @@ def _start_resource_action_run(
                 action.action_id,
                 input_values=dict(inputs or {}),
                 output_root=output_root,
+                host_env=action_host_env,
             )
             record["summary"] = summary
             record["status"] = "succeeded" if summary.get("ok") else "failed"
