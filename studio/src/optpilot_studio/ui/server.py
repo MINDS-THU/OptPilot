@@ -20015,6 +20015,14 @@ def _normalized_agent_sessions(state: UiState) -> List[JsonDict]:
                 if cleaned_title and cleaned_title != session.get("title"):
                     session["title"] = cleaned_title
                     changed = True
+            if "has_user_message" not in session:
+                session["has_user_message"] = any(
+                    message.get("role") == "user"
+                    for message in _read_agent_messages(
+                        state, str(session.get("id") or "")
+                    )
+                )
+                changed = True
             if _agent_title_origin(session) == "default":
                 for message in _read_agent_messages(
                     state, str(session.get("id") or "")
@@ -20032,11 +20040,68 @@ def _normalized_agent_sessions(state: UiState) -> List[JsonDict]:
         return normalized
 
 
+def _agent_session_is_untouched(session: JsonDict) -> bool:
+    """A conversation the user never wrote to and never attached work to.
+
+    Untouched conversations are kept out of the sidebar list (they only
+    clutter it as "Untitled conversation" entries) and are eventually
+    reaped; the one the user currently has open still works — it simply
+    joins the list with its first message.
+    """
+
+    return (
+        not session.get("has_user_message")
+        and not session.get("attached_workspace_ids")
+        and not session.get("archived")
+    )
+
+
+_UNTOUCHED_AGENT_SESSION_REAP_AGE_SECONDS = 24 * 3600
+
+
+def _parse_iso_timestamp(value: str) -> Optional[float]:
+    try:
+        return calendar.timegm(time.strptime(value, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _reap_untouched_agent_sessions_once(state: UiState) -> None:
+    if getattr(state, "_untouched_agent_sessions_reaped", False):
+        return
+    state._untouched_agent_sessions_reaped = True
+    cutoff = time.time() - _UNTOUCHED_AGENT_SESSION_REAP_AGE_SECONDS
+    with state._agent_session_index_lock:
+        sessions = _read_agent_session_index(state)
+        kept: List[JsonDict] = []
+        reaped: List[str] = []
+        for session in sessions:
+            created = _parse_iso_timestamp(str(session.get("created_at") or ""))
+            if (
+                _agent_session_is_untouched(session)
+                and created is not None
+                and created < cutoff
+            ):
+                reaped.append(str(session.get("id") or ""))
+            else:
+                kept.append(session)
+        if reaped:
+            _write_agent_session_index(state, kept)
+    for session_id in reaped:
+        if not session_id:
+            continue
+        try:
+            shutil.rmtree(_agent_session_dir(state, session_id))
+        except OSError:
+            pass
+
+
 def _list_agent_session_summaries(state: UiState) -> List[JsonDict]:
+    _reap_untouched_agent_sessions_once(state)
     return [
         _decorate_agent_session_status(state, dict(session))
         for session in _normalized_agent_sessions(state)
-        if not session.get("archived")
+        if not session.get("archived") and not _agent_session_is_untouched(session)
     ]
 
 
@@ -20593,6 +20658,7 @@ def _append_agent_message(
         session["status"] = "running"
         session["active_turn_id"] = turn_id
         session["active_turn_started_at"] = turn_started_at
+        session["has_user_message"] = True
         session.pop("openhands_pending_sync", None)
         _upsert_agent_session(state, session)
         _append_agent_event_record(

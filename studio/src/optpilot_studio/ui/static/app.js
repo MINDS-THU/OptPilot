@@ -1089,9 +1089,21 @@ async function refreshAgentSessionSummaries() {
       !sessionIdsAtRequestStart.has(session.id)
       && !incomingIds.has(session.id)
     ));
-    const removedIds = [...sessionIdsAtRequestStart].filter((sessionId) => !incomingIds.has(sessionId));
+    // The server omits untouched conversations (no user message yet) from
+    // the list; the one currently open must survive the merge so a fresh
+    // "New conversation" is not yanked away before the first message.
+    const selectedKept = state.agentSessions.filter((session) => (
+      session.id === state.selectedAgentSessionId
+      && sessionIdsAtRequestStart.has(session.id)
+      && !incomingIds.has(session.id)
+    ));
+    const removedIds = [...sessionIdsAtRequestStart].filter((sessionId) => (
+      !incomingIds.has(sessionId)
+      && sessionId !== state.selectedAgentSessionId
+    ));
     state.agentSessions = [
       ...summaries.map((session) => mergedById.get(session.id)).filter(Boolean),
+      ...selectedKept,
       ...concurrentlyAdded,
     ];
     removedIds.forEach(forgetAgentSessionLocalState);
