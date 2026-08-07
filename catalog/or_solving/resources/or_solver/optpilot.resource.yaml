@@ -9,6 +9,9 @@ description: >-
   LLM-generated solver code — and writes the numeric answer plus the full
   audit artifact to the chosen output folder. Requires a user-provisioned
   COOPA checkout (COOPA_HOME) and an OpenRouter API key; neither is bundled.
+  Use the solve action below (the Actions section of this page); for
+  retained, comparable Runs use the coopa-solver method with the
+  solve-or-problem Run setup instead.
 purpose: generator
 tags: [operations-research, llm, one-time-solve]
 
