@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COOPA Solve Console</title>
+<style>
+  :root {
+    --bg: #f6f5f8; --card: #ffffff; --ink: #201a2b; --muted: #6e6584;
+    --line: #e4e0ec; --accent: #5b3d8f; --accent-soft: #efe9f8;
+    --good: #2e7d4f; --warn: #b26a00; --bad: #b3372e; --code-bg: #1f1a2b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { padding: 14px 22px; background: var(--card); border-bottom: 1px solid var(--line);
+           display: flex; align-items: baseline; gap: 12px; }
+  header h1 { margin: 0; font-size: 19px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  #status-pill { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 999px;
+                 background: var(--accent-soft); color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px;
+         padding: 18px 22px; max-width: 1500px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px 18px; }
+  .card h2 { margin: 0 0 10px; font-size: 15px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px;
+    font: inherit; background: #fff; }
+  textarea { min-height: 120px; resize: vertical; }
+  .mode-row { display: flex; gap: 8px; margin-top: 6px; }
+  .mode-row button { flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: #fff; font: inherit; cursor: pointer; text-align: left; }
+  .mode-row button.selected { border-color: var(--accent); background: var(--accent-soft); }
+  .mode-row b { display: block; font-size: 13px; }
+  .mode-row small { color: var(--muted); font-size: 11px; }
+  .primary { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+             padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer; width: 100%;
+             margin-top: 14px; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .ghost { background: #fff; border: 1px solid var(--line); border-radius: 8px;
+           padding: 9px 14px; font: inherit; cursor: pointer; }
+  details.adv { margin-top: 12px; }
+  details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .steps { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .step { flex: 1; min-width: 110px; padding: 8px 10px; border-radius: 8px; font-size: 12px;
+          border: 1px solid var(--line); color: var(--muted); background: var(--card); }
+  .step.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+                 font-weight: 600; }
+  .step.done { border-color: var(--good); color: var(--good); }
+  .status-note { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent);
+             border-top-color: transparent; border-radius: 50%; margin-right: 6px;
+             animation: spin .8s linear infinite; vertical-align: -2px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .answer { font-size: 34px; font-weight: 700; color: var(--good); }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; }
+  table.f-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+  table.f-table th, table.f-table td { text-align: left; padding: 5px 8px;
+    border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.f-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .prov { color: var(--muted); font-size: 12px; font-style: italic; }
+  .prov::before { content: "“"; } .prov::after { content: "”"; }
+  .conf-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; font-size: 13px; }
+  .conf-row .name { width: 160px; color: var(--muted); }
+  .conf-bar { flex: 1; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .conf-bar i { display: block; height: 100%; border-radius: 4px; }
+  .obj-line { font-size: 16px; margin: 6px 0 10px; }
+  .obj-line .sense { text-transform: uppercase; letter-spacing: .04em; font-size: 12px;
+    color: var(--accent); font-weight: 700; margin-right: 8px; }
+  pre.code { background: var(--code-bg); color: #e8e3f4; border-radius: 8px; padding: 14px;
+             overflow-x: auto; font-size: 12.5px; line-height: 1.45; }
+  details.file { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+  details.file summary { padding: 8px 12px; cursor: pointer; font-family: ui-monospace, monospace;
+    font-size: 13px; }
+  details.file pre { margin: 0; border-radius: 0 0 8px 8px; }
+  .error-box { background: #fdf0ef; border: 1px solid #f0c6c2; color: var(--bad);
+               border-radius: 8px; padding: 10px 14px; font-size: 13px; white-space: pre-wrap; }
+  .notice { background: #fff8ec; border: 1px solid #f0dcb4; color: var(--warn);
+            border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; }
+  .feedback-history { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .json-tree { font-size: 12.5px; font-family: ui-monospace, monospace; white-space: pre-wrap;
+               background: #faf9fc; border: 1px solid var(--line); border-radius: 8px;
+               padding: 10px 12px; max-height: 300px; overflow: auto; }
+  .review-actions { display: flex; gap: 10px; margin-top: 14px; align-items: flex-start; }
+  .review-actions textarea { min-height: 60px; flex: 1; }
+  .review-actions .col { display: flex; flex-direction: column; gap: 8px; }
+  .mock-tag { background: #fff3cd; color: #7a5b00; font-size: 11px; padding: 2px 8px;
+              border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<header>
+  <h1>COOPA Solve Console</h1>
+  <span class="sub">natural-language OR solving with formulation review</span>
+  <span id="status-pill">checking runtime…</span>
+</header>
+<main>
+  <section class="card" id="input-card">
+    <h2>Problem</h2>
+    <textarea id="problem" placeholder="Describe the operations-research problem in natural language, e.g.&#10;&#10;Maximize 3x + 5y subject to: x <= 4, 2y <= 12, 3x + 2y <= 18, x >= 0, y >= 0."></textarea>
+    <label>Mode</label>
+    <div class="mode-row">
+      <button id="mode-interactive" class="selected" type="button">
+        <b>Interactive</b><small>Review and refine the formulation before solving</small>
+      </button>
+      <button id="mode-auto" type="button">
+        <b>Automatic</b><small>Run the whole pipeline unattended</small>
+      </button>
+    </div>
+    <details class="adv">
+      <summary>Advanced options</summary>
+      <label>Model <span class="hint">litellm model id for formulation and all agents</span></label>
+      <input type="text" id="model" placeholder="openrouter/deepseek/deepseek-v4-pro">
+      <label>Agent routing</label>
+      <select id="agentMode">
+        <option value="manager">manager — route across all four optimizer agents</option>
+        <option value="mathematical-only">mathematical-only — Pyomo agent directly</option>
+      </select>
+      <label>Formulation refinement iterations (1–5)</label>
+      <input type="number" id="maxIter" min="1" max="5" value="2">
+      <label><input type="checkbox" id="mock"> Mock run (no COOPA, no network — demo the console)</label>
+    </details>
+    <button class="primary" id="start">Start solving</button>
+    <div id="start-error"></div>
+  </section>
+
+  <section class="card" id="run-card">
+    <h2>Run <span id="mock-indicator"></span></h2>
+    <div class="steps" id="steps"></div>
+    <div class="status-note" id="status-note">Enter a problem and start solving.</div>
+    <div id="stage-content"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+// Studio's interface proxy authenticates via a presentation token. Embedded
+// cross-site iframes may have the proxy's session cookie blocked by the
+// browser, so carry the token from the initial URL on every API request.
+const PRESENTATION_TOKEN = new URLSearchParams(location.search)
+  .get("__optpilot_presentation_token");
+const api = (path) => PRESENTATION_TOKEN
+  ? `${path}${path.includes("?") ? "&" : "?"}__optpilot_presentation_token=${encodeURIComponent(PRESENTATION_TOKEN)}`
+  : path;
+let mode = "interactive";
+let job = null;
+let pollTimer = null;
+
+const esc = (t) => String(t == null ? "" : t)
+  .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;");
+
+$("mode-interactive").onclick = () => setMode("interactive");
+$("mode-auto").onclick = () => setMode("auto");
+function setMode(next) {
+  mode = next;
+  $("mode-interactive").classList.toggle("selected", next === "interactive");
+  $("mode-auto").classList.toggle("selected", next === "auto");
+}
+
+fetch(api("/api/status")).then((r) => r.json()).then((s) => {
+  const pill = $("status-pill");
+  if (s.coopa_ready && s.api_key_configured) {
+    pill.textContent = "COOPA ready";
+  } else if (!s.coopa_ready) {
+    pill.textContent = "COOPA not provisioned — mock only";
+    pill.style.background = "#fff3cd"; pill.style.color = "#7a5b00";
+    $("mock").checked = true;
+  } else {
+    pill.textContent = "API key missing — mock only";
+    pill.style.background = "#fff3cd"; pill.style.color = "#7a5b00";
+    $("mock").checked = true;
+  }
+  if (s.default_model) $("model").placeholder = s.default_model;
+}).catch(() => { $("status-pill").textContent = "status unavailable"; });
+
+$("start").onclick = async () => {
+  $("start-error").innerHTML = "";
+  const body = {
+    problem: $("problem").value,
+    mode,
+    model: $("model").value.trim() || undefined,
+    agentMode: $("agentMode").value,
+    maxRefinementIterations: parseInt($("maxIter").value || "2", 10),
+    mock: $("mock").checked,
+  };
+  $("start").disabled = true;
+  try {
+    const r = await fetch(api("/api/solve"), { method: "POST", body: JSON.stringify(body) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Request failed");
+    job = data;
+    render();
+    poll();
+  } catch (e) {
+    $("start-error").innerHTML = `<div class="error-box" style="margin-top:10px">${esc(e.message)}</div>`;
+    $("start").disabled = false;
+  }
+};
+
+function poll() {
+  clearTimeout(pollTimer);
+  if (!job) return;
+  pollTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(api(`/api/jobs/${job.id}`));
+      if (r.ok) { job = await r.json(); render(); }
+    } catch (e) { /* transient */ }
+    if (job && !["done", "failed", "awaiting_review"].includes(job.phase)) poll();
+  }, 1200);
+}
+
+const STEP_DEFS = [
+  ["formulating", "1 · Formulate"],
+  ["awaiting_review", "2 · Review"],
+  ["solving", "3 · Solve"],
+  ["done", "4 · Result"],
+];
+function stepStates(phase) {
+  const order = ["queued", "formulating", "awaiting_review", "solving", "done"];
+  const at = order.indexOf(phase === "failed" ? "done" : phase);
+  return STEP_DEFS.map(([key, label]) => {
+    const idx = order.indexOf(key);
+    let cls = "step";
+    if (key === phase) cls += " active";
+    else if (idx < at || phase === "done") cls += " done";
+    return `<div class="${cls}">${label}</div>`;
+  }).join("");
+}
+
+function confidenceHtml(conf) {
+  if (!conf || typeof conf !== "object") return "";
+  const rows = [];
+  const walk = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === "number" && v >= 0 && v <= 1) {
+        const pct = Math.round(v * 100);
+        const color = v >= 0.8 ? "var(--good)" : v >= 0.5 ? "var(--warn)" : "var(--bad)";
+        rows.push(`<div class="conf-row"><span class="name">${esc(prefix + k)}</span>
+          <span class="conf-bar"><i style="width:${pct}%;background:${color}"></i></span>
+          <span>${pct}%</span></div>`);
+      } else if (v && typeof v === "object" && !Array.isArray(v)) walk(v, prefix + k + ".");
+    }
+  };
+  walk(conf, "");
+  const extra = Object.entries(conf).filter(([, v]) => typeof v === "string" && v.length < 400);
+  const notes = extra.map(([k, v]) => `<div class="hint"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+  if (!rows.length && !notes) return "";
+  return `<h3 style="font-size:13px;margin:14px 0 6px">Confidence</h3>${rows.join("")}${notes}`;
+}
+
+function provenance(entry) {
+  for (const key of ["source_text", "source", "provenance", "evidence", "quote"]) {
+    if (entry && typeof entry[key] === "string" && entry[key].trim())
+      return `<div class="prov">${esc(entry[key])}</div>`;
+  }
+  return "";
+}
+
+function formulationHtml(f) {
+  if (!f || typeof f !== "object") return "";
+  let html = "";
+  const obj = f.objective || f.objective_function;
+  if (obj && typeof obj === "object") {
+    const sense = obj.sense || obj.direction || "";
+    const expr = obj.expression || obj.formula || obj.description || JSON.stringify(obj);
+    html += `<div class="obj-line"><span class="sense">${esc(sense)}</span>${esc(expr)}</div>`;
+    html += provenance(obj);
+  }
+  const varRows = Array.isArray(f.variables) ? f.variables : [];
+  if (varRows.length) {
+    html += `<h3 style="font-size:13px;margin:14px 0 4px">Variables</h3>
+      <table class="f-table"><tr><th>Name</th><th>Domain / description</th><th>From the problem text</th></tr>`;
+    for (const v of varRows) {
+      const name = v.name || v.symbol || "?";
+      const dom = v.domain || v.type || v.description || "";
+      html += `<tr><td><b>${esc(name)}</b></td><td>${esc(dom)}</td><td>${provenance(v) || ""}</td></tr>`;
+    }
+    html += "</table>";
+  }
+  const cons = Array.isArray(f.constraints) ? f.constraints : [];
+  if (cons.length) {
+    html += `<h3 style="font-size:13px;margin:14px 0 4px">Constraints</h3>
+      <table class="f-table"><tr><th>Constraint</th><th>From the problem text</th></tr>`;
+    for (const c of cons) {
+      const expr = typeof c === "string" ? c : (c.expression || c.formula || c.description || JSON.stringify(c));
+      html += `<tr><td>${esc(expr)}</td><td>${typeof c === "object" ? provenance(c) : ""}</td></tr>`;
+    }
+    html += "</table>";
+  }
+  const shown = new Set(["objective", "objective_function", "variables", "constraints"]);
+  const rest = Object.fromEntries(Object.entries(f).filter(([k]) => !shown.has(k)));
+  if (Object.keys(rest).length) {
+    html += `<details style="margin-top:10px"><summary class="hint" style="cursor:pointer">Full formulation payload</summary>
+      <div class="json-tree">${esc(JSON.stringify(rest, null, 2))}</div></details>`;
+  }
+  return html || `<div class="json-tree">${esc(JSON.stringify(f, null, 2))}</div>`;
+}
+
+function reviewControls() {
+  return `
+    <div class="review-actions">
+      <textarea id="feedback" placeholder="Optional feedback, e.g. 'x must be an integer' or 'the second constraint should be 2y <= 10'."></textarea>
+      <div class="col">
+        <button class="primary" style="margin:0;width:auto" id="approve">Approve &amp; solve</button>
+        <button class="ghost" id="send-feedback">Request revision</button>
+      </div>
+    </div>
+    ${job.feedback_history.length ? `<div class="feedback-history">Earlier feedback: ${job.feedback_history.map(esc).join(" · ")}</div>` : ""}`;
+}
+
+function filesHtml(files) {
+  if (!Array.isArray(files) || !files.length) return "<p class='hint'>No generated files.</p>";
+  return files.map((f, i) => `
+    <details class="file" ${i === 0 ? "open" : ""}>
+      <summary>${esc(f.path)} <span class="hint">(${f.bytes ?? "?"} bytes)</span></summary>
+      ${f.content ? `<pre class="code">${esc(f.content)}</pre>` : "<p class='hint' style='padding:0 12px 10px'>Content not embedded.</p>"}
+    </details>`).join("");
+}
+
+function resultHtml(report) {
+  const predicted = report.predicted;
+  const found = typeof predicted === "number";
+  return `
+    ${found
+      ? `<div class="answer">${esc(predicted)}</div><div class="hint">predicted objective value</div>`
+      : `<div class="notice">No numeric answer was found — inspect the agent response below.</div>`}
+    <dl class="kv" style="margin:14px 0">
+      <dt>Routing</dt><dd>${esc(report.routing)}</dd>
+      <dt>Model</dt><dd>${esc(report.model)}</dd>
+      <dt>Refinement iterations</dt><dd>${esc(report.refinement_iterations)}</dd>
+    </dl>
+    <h3 style="font-size:13px;margin:14px 0 6px">Generated solver files</h3>
+    ${filesHtml(report.generated_files)}
+    <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">Agent response (tail)</summary>
+      <div class="json-tree">${esc(report.agent_response || "")}</div></details>`;
+}
+
+function render() {
+  if (!job) return;
+  $("mock-indicator").innerHTML = job.mock ? '<span class="mock-tag">MOCK</span>' : "";
+  $("steps").innerHTML = stepStates(job.phase);
+  const busy = ["queued", "formulating", "solving"].includes(job.phase);
+  $("status-note").innerHTML = (busy ? '<span class="spinner"></span>' : "") + esc(job.status_note);
+  $("start").disabled = busy || job.phase === "awaiting_review";
+
+  let content = "";
+  if (job.error) content += `<div class="error-box">${esc(job.error)}</div>`;
+  if (job.formulation) {
+    content += `<div class="card" style="margin-bottom:14px"><h2>Formulation</h2>
+      ${formulationHtml(job.formulation)}
+      ${confidenceHtml(job.confidence)}
+      ${job.phase === "awaiting_review" ? reviewControls() : ""}
+    </div>`;
+  }
+  if (job.report) {
+    content += `<div class="card"><h2>Solution</h2>${resultHtml(job.report)}</div>`;
+  }
+  $("stage-content").innerHTML = content;
+  const approve = $("approve");
+  if (approve) approve.onclick = () => act("approve", {});
+  const fb = $("send-feedback");
+  if (fb) fb.onclick = () => {
+    const text = $("feedback").value.trim();
+    if (text) act("feedback", { feedback: text });
+  };
+}
+
+async function act(action, body) {
+  const r = await fetch(api(`/api/jobs/${job.id}/${action}`), { method: "POST", body: JSON.stringify(body) });
+  const data = await r.json();
+  if (r.ok) { job = data; render(); poll(); }
+  else $("status-note").innerHTML = `<span class="error-box">${esc(data.error)}</span>`;
+}
+</script>
+</body>
+</html>

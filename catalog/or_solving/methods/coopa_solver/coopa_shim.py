@@ -25,38 +25,41 @@ _MAX_GENERATED_FILES = 12
 
 
 def _coopa_home() -> Path:
+    """Resolve the user-provisioned COOPA checkout.
+
+    Tries ``COOPA_HOME`` first, then a ``coopa_home/`` folder next to this
+    shim. The fallback matters in containerized interface launches, where a
+    host ``COOPA_HOME`` path does not exist but the method folder (with a
+    local, gitignored checkout copy) is mounted.
+    """
+
+    candidates: list[Path] = []
     raw = os.environ.get("COOPA_HOME", "").strip()
-    if not raw:
-        raise RuntimeError(
-            "COOPA_HOME is not set. This method needs a user-provisioned COOPA "
-            "checkout (the package does not redistribute COOPA; see the "
-            "or_solving README)."
-        )
-    home = Path(raw).expanduser()
-    if not (home / "apps" / "operations_research").is_dir():
-        raise RuntimeError(
-            f"COOPA_HOME={home} does not look like a COOPA checkout "
-            "(apps/operations_research is missing)."
-        )
-    return home
+    if raw:
+        candidates.append(Path(raw).expanduser())
+    candidates.append(Path(__file__).resolve().parent / "coopa_home")
+    for candidate in candidates:
+        if (candidate / "apps" / "operations_research").is_dir():
+            return candidate
+    tried = ", ".join(str(c) for c in candidates)
+    raise RuntimeError(
+        "No usable COOPA checkout was found (the package does not "
+        f"redistribute COOPA). Tried: {tried}. Set COOPA_HOME to a checkout, "
+        "or place one at methods/coopa_solver/coopa_home (gitignored)."
+    )
 
 
-def solve_problem(
-    problem_text: str,
-    *,
-    model_id: str,
-    agent_mode: str,
-    skip_formulation: bool,
-    max_refinement_iterations: int,
-    work_dir: str,
-) -> dict:
-    workspace = Path(work_dir)
+def _ensure_coopa_ready(workspace: Path) -> Path:
+    """Prepare env + imports for COOPA; idempotent. Returns COOPA home.
+
+    The retained worker env is deliberately PATH- and HOME-free. COOPA's
+    import closure reads PATH at import time (pydub), Pyomo discovers solver
+    binaries via PATH, and litellm/huggingface expect a writable HOME — so
+    give the process sane defaults without overriding anything the host
+    granted explicitly.
+    """
+
     workspace.mkdir(parents=True, exist_ok=True)
-    # The retained worker env is deliberately PATH- and HOME-free. COOPA's
-    # import closure reads PATH at import time (pydub), Pyomo discovers solver
-    # binaries via PATH, and litellm/huggingface expect a writable HOME — so
-    # give the subprocess sane defaults without overriding anything the host
-    # granted explicitly.
     os.environ.setdefault(
         "PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
     )
@@ -65,14 +68,8 @@ def solve_problem(
     home = _coopa_home()
     if str(home) not in sys.path:
         sys.path.insert(0, str(home))
-
     try:
-        from apps.operations_research.or_agents.iterative_formulation import (
-            extract_formulation_with_refinement,
-        )
-        from apps.operations_research.or_agents.mathematical_optimizer_agent import (
-            create_mathematical_optimizer_agent,
-        )
+        import apps.operations_research.or_agents.iterative_formulation  # noqa: F401
     except ImportError as error:
         raise RuntimeError(
             "COOPA (or one of its pruned runtime dependencies) is not "
@@ -80,43 +77,93 @@ def solve_problem(
             "methods/coopa_solver/requirements-pruned.txt into this Python "
             "environment."
         ) from error
-
     _install_flexible_model_builder()
+    return home
 
-    formulation_payload = None
-    confidence_payload = None
-    refinement_iterations = 0
-    prompt = (
-        "Delegate the following operations research problem to the correct "
-        f"optimizer agent:\n\n{problem_text}\n\nYou must return only the "
-        "computed objective value (no explanation) as your final answer."
+
+def extract_formulation(
+    problem_text: str,
+    *,
+    model_id: str,
+    max_refinement_iterations: int = 2,
+    feedback: str | None = None,
+    work_dir: str,
+) -> dict:
+    """Phase 1: confidence-scored formulation extraction with refinement.
+
+    ``feedback`` carries user guidance from an earlier review round; it is
+    appended to the problem statement so the extractor incorporates it.
+    Raises on failure — callers decide whether formulation is a gate
+    (interactive console) or an aid (``solve_problem``).
+    """
+
+    _ensure_coopa_ready(Path(work_dir))
+    from apps.operations_research.or_agents.iterative_formulation import (
+        extract_formulation_with_refinement,
     )
-    if not skip_formulation:
-        try:
-            formulation, evaluation, refinement_iterations = (
-                extract_formulation_with_refinement(
-                    problem_text=problem_text,
-                    max_iterations=max_refinement_iterations,
-                    formulation_model=model_id,
-                    evaluation_model=model_id,
-                    verbose=False,
-                )
-            )
-            formulation_payload = formulation.model_dump()
-            confidence_payload = evaluation.model_dump()
-            prompt = (
-                "Delegate the following operations research problem to the "
-                "correct optimizer agent. A structured formulation extracted "
-                "from the problem statement follows as JSON; treat the "
-                "original statement as authoritative where they disagree.\n\n"
-                f"## PROBLEM\n{problem_text}\n\n"
-                "## EXTRACTED FORMULATION (JSON)\n"
-                f"{json.dumps(formulation_payload, indent=2)}\n\n"
-                "You must return only the computed objective value "
-                "(no explanation) as your final answer."
-            )
-        except Exception as error:  # formulation is an aid, not a gate
-            confidence_payload = {"formulation_error": str(error)}
+
+    text = problem_text
+    if feedback and feedback.strip():
+        text = (
+            f"{problem_text}\n\n"
+            "## USER GUIDANCE ON THE FORMULATION\n"
+            "A reviewer examined an earlier formulation of this problem and "
+            "asks for the following to be reflected:\n"
+            f"{feedback.strip()}"
+        )
+    formulation, evaluation, refinement_iterations = (
+        extract_formulation_with_refinement(
+            problem_text=text,
+            max_iterations=max_refinement_iterations,
+            formulation_model=model_id,
+            evaluation_model=model_id,
+            verbose=False,
+        )
+    )
+    return {
+        "formulation": formulation.model_dump(),
+        "confidence": evaluation.model_dump(),
+        "refinement_iterations": refinement_iterations,
+    }
+
+
+def _solve_prompt(problem_text: str, formulation_payload: dict | None) -> str:
+    if formulation_payload is None:
+        return (
+            "Delegate the following operations research problem to the correct "
+            f"optimizer agent:\n\n{problem_text}\n\nYou must return only the "
+            "computed objective value (no explanation) as your final answer."
+        )
+    return (
+        "Delegate the following operations research problem to the "
+        "correct optimizer agent. A structured formulation extracted "
+        "from the problem statement follows as JSON; treat the "
+        "original statement as authoritative where they disagree.\n\n"
+        f"## PROBLEM\n{problem_text}\n\n"
+        "## EXTRACTED FORMULATION (JSON)\n"
+        f"{json.dumps(formulation_payload, indent=2)}\n\n"
+        "You must return only the computed objective value "
+        "(no explanation) as your final answer."
+    )
+
+
+def solve_with_formulation(
+    problem_text: str,
+    formulation_payload: dict | None,
+    *,
+    model_id: str,
+    agent_mode: str,
+    work_dir: str,
+    formulation_confidence: dict | None = None,
+    refinement_iterations: int = 0,
+) -> dict:
+    """Phase 2: route to the optimizer agents and produce the report."""
+
+    workspace = Path(work_dir)
+    _ensure_coopa_ready(workspace)
+    from apps.operations_research.or_agents.mathematical_optimizer_agent import (
+        create_mathematical_optimizer_agent,
+    )
 
     if agent_mode == "mathematical-only":
         agent = create_mathematical_optimizer_agent(
@@ -130,7 +177,9 @@ def solve_problem(
         agent = _build_pruned_manager(model_id, workspace)
         routing = "manager"
 
-    agent_response = agent.run(prompt, reset=True)
+    agent_response = agent.run(
+        _solve_prompt(problem_text, formulation_payload), reset=True
+    )
     response_text = str(agent_response)
     match = _ANSWER_RE.search(response_text)
     predicted = float(match.group()) if match else None
@@ -144,10 +193,47 @@ def solve_problem(
         "agent_response": response_text[-8000:],
         "predicted": predicted,
         "formulation": formulation_payload,
-        "formulation_confidence": confidence_payload,
+        "formulation_confidence": formulation_confidence,
         "refinement_iterations": refinement_iterations,
         "generated_files": _collect_generated_files(workspace),
     }
+
+
+def solve_problem(
+    problem_text: str,
+    *,
+    model_id: str,
+    agent_mode: str,
+    skip_formulation: bool,
+    max_refinement_iterations: int,
+    work_dir: str,
+) -> dict:
+    formulation_payload = None
+    confidence_payload = None
+    refinement_iterations = 0
+    if not skip_formulation:
+        try:
+            extracted = extract_formulation(
+                problem_text,
+                model_id=model_id,
+                max_refinement_iterations=max_refinement_iterations,
+                work_dir=work_dir,
+            )
+            formulation_payload = extracted["formulation"]
+            confidence_payload = extracted["confidence"]
+            refinement_iterations = extracted["refinement_iterations"]
+        except Exception as error:  # formulation is an aid, not a gate
+            confidence_payload = {"formulation_error": str(error)}
+
+    return solve_with_formulation(
+        problem_text,
+        formulation_payload,
+        model_id=model_id,
+        agent_mode=agent_mode,
+        work_dir=work_dir,
+        formulation_confidence=confidence_payload,
+        refinement_iterations=refinement_iterations,
+    )
 
 
 def _install_flexible_model_builder() -> None:

@@ -336,6 +336,23 @@ and inline status notes mark what is already built.
    maps a `python`/`python3` command head to the optpilot interpreter
    (mirrors F3), and Studio resolves action env/secret grants through
    Settings variables before the process env.
+   Human interface (2026-08-07): the coopa-solver METHOD declares an
+   `interface` block — the **COOPA Solve Console**
+   (`methods/coopa_solver/solve_console.py|.html`, `launch_console.sh`) —
+   launched from the method's Catalog page via "Open interface".
+   Interactive mode: formulation review (objective/variables/constraints
+   tables + provenance columns + confidence), user feedback loops
+   (re-extracts with guidance), approve-then-solve; automatic and mock
+   modes included. Verified end-to-end through Studio's containerized
+   interface runtime: product-mix LP → formulation → "make variables
+   integers" feedback → integer revision → approve → manager solve →
+   2160 (exact optimum). Notes: method interfaces needed NO framework
+   changes (the interface grammar is kind-agnostic; docs already said
+   so); inside the launch container host paths don't exist, so the shim
+   falls back to `methods/coopa_solver/coopa_home/` (gitignored,
+   user-provisioned — COOPA is never committed) and the console carries
+   Studio's presentation token on every API call because the embedded
+   iframe's proxy cookie can be blocked as third-party.
    Remaining: item 4 (`or_benchmark` dataset environment reusing
    `checks/score_results.py` logic), item 5 license resolution.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;

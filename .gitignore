@@ -34,3 +34,4 @@ frontier_pid_study.yaml
 workspace/
 .optpilot-ui/
 .venv/
+catalog/or_solving/methods/coopa_solver/coopa_home/

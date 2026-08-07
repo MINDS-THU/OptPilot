@@ -19,6 +19,42 @@ entrypoint:
   # One solve can include formulation refinement plus agent tool loops.
   exchangeTimeoutSeconds: 900
 
+interface:
+  label: COOPA Solve Console
+  description: >-
+    Interactive one-shot solving with formulation review: extract a
+    confidence-scored formulation with element provenance, approve it or
+    request revisions, then watch the optimizer agents generate solver code
+    and the numeric answer. An automatic mode runs the whole pipeline
+    unattended, and a mock mode demos the console without COOPA or network.
+    Inside Studio's launch runtime the host COOPA_HOME path is not visible;
+    place a COOPA checkout at methods/coopa_solver/coopa_home (gitignored,
+    never redistributed) before launching.
+  command: [bash, ./launch_console.sh]
+  cwd: .
+  runtime:
+    sandbox: process
+    setup:
+      cache: prepared
+      timeoutSeconds: 1800
+      steps:
+        - uses: command
+          command: [bash, ./launch_console.sh, --prepare-only]
+  grants:
+    network: enabled
+    envFromHost: [COOPA_HOME]
+    secretsFromHost: [OPENROUTER_API_KEY]
+  resources:
+    cpu: 2
+    memoryMiB: 4096
+    gpus: 0
+  timeoutSeconds: 3600
+  presentation:
+    kind: web
+    port: 8000
+    readyPath: /
+    readyTimeoutSeconds: 120
+
 runtime:
   sandbox: process
   envFromHost: [OPENROUTER_API_KEY, COOPA_HOME]

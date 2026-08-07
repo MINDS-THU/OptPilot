@@ -264,6 +264,17 @@ Register as package `or_solving` with two registrations sharing one pruned runti
 > through Studio Settings variables before the process environment.
 > Remaining: item 4 (`or_benchmark` dataset environment + scoring) and
 > the license resolution (item 5).
+> Update (2026-08-07, later): the human interface returned in the
+> nature-correct shape — the coopa-solver method itself declares an
+> `interface` (the interface grammar was already kind-agnostic across
+> environment/method/resource; no framework change was needed). The
+> COOPA Solve Console offers an interactive mode (formulation review
+> with provenance and confidence, user-feedback re-extraction loops,
+> approve-then-solve) plus automatic and mock modes, and was verified
+> through Studio's containerized interface runtime: product-mix LP →
+> integer-domain revision from user feedback → approved solve → 2160
+> (exact optimum). The in-container COOPA checkout lives at
+> `methods/coopa_solver/coopa_home/` (gitignored, user-provisioned).
 
 ### 5.4 Factorio Design Benchmark
 
