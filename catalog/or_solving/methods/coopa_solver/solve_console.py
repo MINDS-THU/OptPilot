@@ -134,30 +134,65 @@ def _public_job(job: dict) -> dict:
 # ---------------------------------------------------------------- mock data
 
 
+# Mirrors COOPA's OptimizationFormulation / FormulationEvaluation shapes so
+# the mock demos the exact rendering the real pipeline produces.
 _MOCK_FORMULATION = {
-    "problem_type": "linear_program",
-    "objective": {
-        "sense": "maximize",
-        "expression": "3x + 5y",
-        "source_text": "Maximize 3x + 5y",
-    },
+    "question": "MOCK — what mix of x and y maximizes 3x + 5y?",
+    "parameters": [
+        {
+            "name": "profit_x", "data_type": "int", "value": 3, "units": "$/unit",
+            "description": "Objective coefficient of x",
+            "source": {"quote": "Maximize 3x + 5y", "location": "objective", "note": None},
+        },
+        {
+            "name": "profit_y", "data_type": "int", "value": 5, "units": "$/unit",
+            "description": "Objective coefficient of y",
+            "source": {"quote": "Maximize 3x + 5y", "location": "objective", "note": None},
+        },
+    ],
     "variables": [
-        {"name": "x", "domain": "continuous, x >= 0", "source_text": "x >= 0"},
-        {"name": "y", "domain": "continuous, y >= 0", "source_text": "y >= 0"},
+        {
+            "name": "x", "data_type": "continuous", "domain": "x >= 0",
+            "description": "First decision quantity",
+            "source": {"quote": "x >= 0", "location": None, "note": None},
+        },
+        {
+            "name": "y", "data_type": "continuous", "domain": "y >= 0",
+            "description": "Second decision quantity",
+            "source": {"quote": "y >= 0", "location": None, "note": None},
+        },
     ],
+    "objective": {
+        "sense": "maximize", "expression": "3x + 5y",
+        "description": "Maximize total value", "variables_involved": ["x", "y"],
+        "source": {"quote": "Maximize 3x + 5y", "location": None, "note": None},
+    },
     "constraints": [
-        {"expression": "x <= 4", "source_text": "x <= 4"},
-        {"expression": "2y <= 12", "source_text": "2y <= 12"},
-        {"expression": "3x + 2y <= 18", "source_text": "3x + 2y <= 18"},
+        {
+            "name": "cap_x", "sense": "<=", "expression": "x <= 4",
+            "variables_involved": ["x"],
+            "source": {"quote": "x <= 4", "location": None, "note": None},
+        },
+        {
+            "name": "cap_y", "sense": "<=", "expression": "2y <= 12",
+            "variables_involved": ["y"],
+            "source": {"quote": "2y <= 12", "location": None, "note": None},
+        },
+        {
+            "name": "joint_capacity", "sense": "<=", "expression": "3x + 2y <= 18",
+            "variables_involved": ["x", "y"],
+            "source": {"quote": "3x + 2y <= 18", "location": None, "note": None},
+        },
     ],
-    "note": "MOCK formulation — no LLM was consulted.",
 }
 
 _MOCK_CONFIDENCE = {
-    "completeness": 0.95,
-    "consistency": 0.9,
-    "faithfulness": 0.92,
-    "note": "MOCK confidence — placeholder values.",
+    "parameters": {"confidence": 95, "explanation": "MOCK — placeholder score."},
+    "decision_variables": {"confidence": 92, "explanation": "MOCK — placeholder score."},
+    "objective": {"confidence": 96, "explanation": "MOCK — placeholder score."},
+    "constraints": {"confidence": 90, "explanation": "MOCK — placeholder score."},
+    "overall_confidence": 93,
+    "overall_assessment": "MOCK confidence — no LLM was consulted.",
 }
 
 _MOCK_CODE = """# MOCK solver — no LLM generated this.
@@ -333,7 +368,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/" or self.path.startswith("/?"):
-            self._html(_PAGE)
+            # Read per request: the catalog source is bind-mounted into the
+            # launch runtime, so page edits are visible without a relaunch.
+            self._html((ROOT / "solve_console.html").read_text(encoding="utf-8"))
             return
         if self.path == "/api/status":
             home = _resolve_coopa_home()
@@ -431,9 +468,6 @@ def main() -> int:
     sys.stderr.write(f"COOPA Solve Console listening on {host}:{port}\n")
     server.serve_forever()
     return 0
-
-
-_PAGE = (ROOT / "solve_console.html").read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

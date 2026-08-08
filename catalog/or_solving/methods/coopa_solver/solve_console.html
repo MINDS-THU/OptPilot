@@ -233,33 +233,68 @@ function stepStates(phase) {
   }).join("");
 }
 
+function confBar(label, pct, explanation) {
+  const bounded = Math.max(0, Math.min(100, Math.round(pct)));
+  const color = bounded >= 80 ? "var(--good)" : bounded >= 50 ? "var(--warn)" : "var(--bad)";
+  return `<div class="conf-row" ${explanation ? `title="${esc(explanation)}"` : ""}>
+      <span class="name">${esc(label)}</span>
+      <span class="conf-bar"><i style="width:${bounded}%;background:${color}"></i></span>
+      <span>${bounded}%</span></div>
+    ${explanation ? `<div class="hint" style="margin:0 0 6px 170px">${esc(explanation)}</div>` : ""}`;
+}
+
 function confidenceHtml(conf) {
   if (!conf || typeof conf !== "object") return "";
+  // COOPA's FormulationEvaluation: per-component {confidence: 0-100,
+  // explanation} plus overall_confidence and overall_assessment.
   const rows = [];
-  const walk = (obj, prefix) => {
-    for (const [k, v] of Object.entries(obj)) {
-      if (typeof v === "number" && v >= 0 && v <= 1) {
-        const pct = Math.round(v * 100);
-        const color = v >= 0.8 ? "var(--good)" : v >= 0.5 ? "var(--warn)" : "var(--bad)";
-        rows.push(`<div class="conf-row"><span class="name">${esc(prefix + k)}</span>
-          <span class="conf-bar"><i style="width:${pct}%;background:${color}"></i></span>
-          <span>${pct}%</span></div>`);
-      } else if (v && typeof v === "object" && !Array.isArray(v)) walk(v, prefix + k + ".");
-    }
-  };
-  walk(conf, "");
-  const extra = Object.entries(conf).filter(([, v]) => typeof v === "string" && v.length < 400);
-  const notes = extra.map(([k, v]) => `<div class="hint"><b>${esc(k)}:</b> ${esc(v)}</div>`).join("");
+  const componentOrder = ["parameters", "decision_variables", "objective", "constraints"];
+  for (const key of componentOrder) {
+    const comp = conf[key];
+    if (comp && typeof comp === "object" && typeof comp.confidence === "number")
+      rows.push(confBar(key.replaceAll("_", " "), comp.confidence, comp.explanation));
+  }
+  if (typeof conf.overall_confidence === "number")
+    rows.push(confBar("overall", conf.overall_confidence, ""));
+  if (!rows.length) {
+    // Generic fallback for other confidence payload shapes.
+    const walk = (obj, prefix) => {
+      for (const [k, v] of Object.entries(obj)) {
+        if (typeof v === "number" && v >= 0 && v <= 1) rows.push(confBar(prefix + k, v * 100, ""));
+        else if (typeof v === "number" && v > 1 && v <= 100 && /confidence|score/i.test(k))
+          rows.push(confBar(prefix + k, v, ""));
+        else if (v && typeof v === "object" && !Array.isArray(v)) walk(v, prefix + k + ".");
+      }
+    };
+    walk(conf, "");
+  }
+  const notes = Object.entries(conf)
+    .filter(([k, v]) => typeof v === "string" && v.length < 500)
+    .map(([k, v]) => `<div class="hint"><b>${esc(k.replaceAll("_", " "))}:</b> ${esc(v)}</div>`)
+    .join("");
   if (!rows.length && !notes) return "";
   return `<h3 style="font-size:13px;margin:14px 0 6px">Confidence</h3>${rows.join("")}${notes}`;
 }
 
 function provenance(entry) {
-  for (const key of ["source_text", "source", "provenance", "evidence", "quote"]) {
+  // COOPA's formulation models carry `source: {quote, location, note}` on
+  // every parameter, variable, objective, and constraint.
+  const src = entry && entry.source;
+  if (src && typeof src === "object" && typeof src.quote === "string" && src.quote.trim()) {
+    const note = [src.location, src.note].filter((t) => typeof t === "string" && t.trim());
+    return `<div class="prov" ${note.length ? `title="${esc(note.join(" — "))}"` : ""}>${esc(src.quote)}</div>`;
+  }
+  for (const key of ["source_text", "provenance", "evidence", "quote"]) {
     if (entry && typeof entry[key] === "string" && entry[key].trim())
       return `<div class="prov">${esc(entry[key])}</div>`;
   }
+  if (entry && typeof entry.source === "string" && entry.source.trim())
+    return `<div class="prov">${esc(entry.source)}</div>`;
   return "";
+}
+
+function sectionTitle(text) {
+  return `<h3 style="font-size:13px;margin:14px 0 4px">${esc(text)}</h3>`;
 }
 
 function formulationHtml(f) {
@@ -270,30 +305,44 @@ function formulationHtml(f) {
     const sense = obj.sense || obj.direction || "";
     const expr = obj.expression || obj.formula || obj.description || JSON.stringify(obj);
     html += `<div class="obj-line"><span class="sense">${esc(sense)}</span>${esc(expr)}</div>`;
+    if (obj.description && obj.description !== expr)
+      html += `<div class="hint">${esc(obj.description)}</div>`;
     html += provenance(obj);
   }
-  const varRows = Array.isArray(f.variables) ? f.variables : [];
+  const params = Array.isArray(f.parameters) ? f.parameters : [];
+  if (params.length) {
+    html += sectionTitle("Parameters (extracted facts)") + `
+      <table class="f-table"><tr><th>Name</th><th>Value</th><th>Description</th><th>From the problem text</th></tr>`;
+    for (const p of params) {
+      const value = `${p.value ?? ""}${p.units ? " " + p.units : ""}`;
+      html += `<tr><td><b>${esc(p.name ?? "?")}</b></td><td>${esc(value)}</td>
+        <td>${esc(p.description ?? "")}</td><td>${provenance(p)}</td></tr>`;
+    }
+    html += "</table>";
+  }
+  const varRows = Array.isArray(f.variables) ? f.variables : (Array.isArray(f.decision_variables) ? f.decision_variables : []);
   if (varRows.length) {
-    html += `<h3 style="font-size:13px;margin:14px 0 4px">Variables</h3>
-      <table class="f-table"><tr><th>Name</th><th>Domain / description</th><th>From the problem text</th></tr>`;
+    html += sectionTitle("Decision variables") + `
+      <table class="f-table"><tr><th>Name</th><th>Type · domain</th><th>Description</th><th>From the problem text</th></tr>`;
     for (const v of varRows) {
-      const name = v.name || v.symbol || "?";
-      const dom = v.domain || v.type || v.description || "";
-      html += `<tr><td><b>${esc(name)}</b></td><td>${esc(dom)}</td><td>${provenance(v) || ""}</td></tr>`;
+      const dom = [v.data_type, v.domain || v.type].filter(Boolean).join(" · ") || v.description || "";
+      html += `<tr><td><b>${esc(v.name || v.symbol || "?")}</b></td><td>${esc(dom)}</td>
+        <td>${esc(v.description ?? "")}</td><td>${provenance(v)}</td></tr>`;
     }
     html += "</table>";
   }
   const cons = Array.isArray(f.constraints) ? f.constraints : [];
   if (cons.length) {
-    html += `<h3 style="font-size:13px;margin:14px 0 4px">Constraints</h3>
-      <table class="f-table"><tr><th>Constraint</th><th>From the problem text</th></tr>`;
+    html += sectionTitle("Constraints") + `
+      <table class="f-table"><tr><th>Name</th><th>Constraint</th><th>From the problem text</th></tr>`;
     for (const c of cons) {
-      const expr = typeof c === "string" ? c : (c.expression || c.formula || c.description || JSON.stringify(c));
-      html += `<tr><td>${esc(expr)}</td><td>${typeof c === "object" ? provenance(c) : ""}</td></tr>`;
+      if (typeof c === "string") { html += `<tr><td></td><td>${esc(c)}</td><td></td></tr>`; continue; }
+      const expr = c.expression || c.formula || c.description || JSON.stringify(c);
+      html += `<tr><td class="hint">${esc(c.name ?? "")}</td><td>${esc(expr)}</td><td>${provenance(c)}</td></tr>`;
     }
     html += "</table>";
   }
-  const shown = new Set(["objective", "objective_function", "variables", "constraints"]);
+  const shown = new Set(["objective", "objective_function", "variables", "decision_variables", "constraints", "parameters"]);
   const rest = Object.fromEntries(Object.entries(f).filter(([k]) => !shown.has(k)));
   if (Object.keys(rest).length) {
     html += `<details style="margin-top:10px"><summary class="hint" style="cursor:pointer">Full formulation payload</summary>
