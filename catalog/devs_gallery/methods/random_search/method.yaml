@@ -1,0 +1,21 @@
+apiVersion: optpilot.io/v1
+config: method
+id: gallery-random-search
+description: >-
+  Seeded uniform random search over the environment's declared candidate
+  parameter schema. A deliberately simple baseline for exploring the
+  gallery simulators; any parameters-format method can replace it.
+tags: [baseline, random-search, parameters]
+
+entrypoint:
+  python: method:RandomSearch
+  pythonPath: ["."]
+  protocol: batch
+
+settings:
+  batchSize: 1
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]

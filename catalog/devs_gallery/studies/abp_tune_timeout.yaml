@@ -1,0 +1,20 @@
+apiVersion: optpilot.io/v1
+config: study
+name: abp-tune-timeout
+description: >-
+  Tune the Alternating Bit Protocol sender timeout (and peer delays) with
+  random search, minimizing retransmissions while the deterministic lossy
+  channels drop packets. A demo of optimizing a DEVS-Gen generated
+  simulator end to end.
+environmentConfig: ../environments/abp/environment.yaml
+methodConfig: ../methods/random_search/method.yaml
+objective:
+  metric: retransmissions
+  direction: minimize
+budget:
+  maxTrials: 5
+execution:
+  parallelism: 1
+  timeoutSeconds: 120
+reproducibility:
+  seed: 11

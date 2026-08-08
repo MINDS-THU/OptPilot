@@ -1,0 +1,67 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: seird-epidemic
+description: >-
+  DEVS-Gen generated SEIRD epidemic simulator (susceptible-exposed-
+  infective-recovered-deceased compartments, xDEVS quantized integrator).
+  Candidates set the epidemiological parameters; metrics report the final
+  compartment populations after the simulated horizon. The simulator code
+  is unmodified generator output from the DEVS-Gen gallery.
+tags: [devs, simulation, epidemic, generated]
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: ["."]
+  settings:
+    simulationTime: 30.0
+    totalPopulation: 1000
+    dt: 0.1
+
+runtime:
+  sandbox: process
+  setup:
+    cache: prepared
+    timeoutSeconds: 300
+    steps:
+      - uses: python-venv
+        cwd: "."
+        requirements: [runtime_dependencies/requirements.lock]
+
+candidate:
+  format: parameters
+  parameters:
+    schema:
+      transmission_rate:
+        valueType: float
+        min: 0.1
+        max: 10.0
+        default: 2.5
+        description: Basic transmission rate between compartments.
+      mortality:
+        valueType: float
+        min: 0.0
+        max: 100.0
+        default: 10.0
+        description: Percentage of infective individuals who die.
+      incubation_period:
+        valueType: float
+        min: 0.5
+        max: 30.0
+        default: 5.0
+        description: Mean days from exposure to infectiousness.
+      infectivity_period:
+        valueType: float
+        min: 1.0
+        max: 60.0
+        default: 14.0
+        description: Mean days an individual stays infective.
+      initial_infective:
+        valueType: int
+        min: 1
+        max: 500
+        default: 10
+        description: Infective individuals at time zero.
+
+metrics:
+  source: return
+  keys: [deceased, recovered, infective, exposed, susceptible]

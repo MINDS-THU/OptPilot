@@ -216,6 +216,23 @@ Already the strongest integration: the pipeline *describe system → guided/auto
    > (`test_devs_simulation_v2_metrics.py`), plus the untouched v1
    > vertical e2e passing throughout.
 2. **Register gallery simulators as example Environments (S/M).** `resource/devs_gen_gallery` contains 7 generated simulators whose READMEs already document CLI args (candidate parameters) and JSONL trace schemas. Package 2–3 (e.g., barbershop, SEIRD, StratAirlift) as catalog Environments — instant, credible demo content for "open a simulator and understand system behavior" (use case 1) and cheap targets for Methods.
+   > **Status 2026-08-08: DONE — `catalog/devs_gallery`** with SEIRD
+   > (`seird-epidemic`) and ABP (`abp-protocol`). Candidate substitutions
+   > from the audit of all 7: barbershop/IOBS/oft are stdin-driven and
+   > StratAirlift hangs even at tiny horizons (generated-code defect), so
+   > ABP replaced them — sub-second, deterministic (seeded channel noise),
+   > and its sender `timeout` is a genuinely optimizable decision. Each
+   > environment wraps the unmodified generated `devs_project/` with an
+   > OptPilot-authored in-process evaluator returning final-state metrics,
+   > plus a hash-locked vendored `xdevs 3.0.0` wheel (GPL; license and
+   > third-party notice included, mirroring the DEVS interface resource's
+   > precedent — owner may veto). A seeded `gallery-random-search`
+   > baseline method and two 5-trial studies ship with it; both verified
+   > end-to-end through the retained runner (`seird-minimize-deaths` best
+   > deceased 41.0 vs 72.1 at defaults; `abp-tune-timeout` succeeded,
+   > minimizing retransmissions). Gallery bundles predate the v2
+   > manifest/summary contracts, so these wrap models directly rather
+   > than via the registration wizard (noted in the package README).
 3. **Trace-conformance checks as environment smoke tests (M).** The paper's operational-conformance idea (exit-0, schema-valid JSONL trace) becomes a reusable validation helper for generated environments; behavioral checkers stay research-side for v1.
 4. **Headless generation as a Resource action (S, after F4).** "spec file → simulator bundle" without the web UI — the paper's own batch mode, exposed to CLI and Assistant.
 5. **Hygiene (S).** The curated `catalog/example_package/resources/devs-gen-interface` copy is the release base; `resource/devs_display_new` (research monorepo, baselines, Chinese dev notes) and `devs_gen_gallery` remain untracked scratch. Loosen the hardcoded OpenRouter model registry to configured model IDs. Godot/MQTT visualization stays out of v1 (needs broker + Godot runtime; only one gallery example exists) — listed as post-release.

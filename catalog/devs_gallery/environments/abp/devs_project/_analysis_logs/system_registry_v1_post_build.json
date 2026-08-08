@@ -1,0 +1,327 @@
+[
+  {
+    "class_name": "ABP_Sender",
+    "file_path": "abp_model/devs_project/ABP_D1_libs/ABP_Sender.py",
+    "logic_path": "ABP_D1.ABP_Sender",
+    "specification": {
+      "function": "Implements the stop-and-wait Alternating Bit Protocol (ABP) sender. Maintains sender state: next seq_num (starts at 1), current control bit (starts at 0), and whether there is an outstanding packet awaiting a valid ACK. States and Output at the end of the state: IDLE: No outstanding packet and not preparing; if there are remaining packets, it immediately starts PREPARE. PREPARE: Sender is in deterministic preparation delay (sender_delay). When PREPARE ends, it outputs out_data. WAIT_ACK: Sender is waiting for a valid ACK or timeout. When WAIT_ACK ends (timeout), it transitions to PREPARE for a retransmission (no output at the end of WAIT_ACK). DONE: Sender has completed sending total_packets; no further outputs.",
+      "logging": "[{\"log_type\": \"PROCESS\", \"msg\": \"time (float): Absolute simulation time in ms. entity (str): Always \\\"sender\\\". event (str): Always \\\"delay_start\\\". payload (dict): type (str): Always \\\"preparation\\\". duration (float): Preparation duration in ms (equals sender_delay).\", \"description\": \"delay_start\"}, {\"log_type\": \"PROCESS\", \"msg\": \"time (float): Absolute simulation time in ms. entity (str): Always \\\"sender\\\". event (str): Always \\\"packet_sent\\\". payload (dict): seq_num (int): Sequence number of the data packet (>=1). bit (int): Control bit (0 or 1). is_retry (bool): True if this send is a retransmission of the outstanding packet.\", \"description\": \"packet_sent\"}, {\"log_type\": \"PROCESS\", \"msg\": \"time (float): Absolute simulation time in ms. entity (str): Always \\\"sender\\\". event (str): Always \\\"ack_received\\\". payload (dict): ack_bit (int): ACK bit received (0 or 1). is_valid (bool): True iff ack_bit matches the outstanding packet's bit at receipt time.\", \"description\": \"ack_received\"}]",
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "The unique name of the model."
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "the parent model. If None, the model is a root model."
+        },
+        {
+          "name": "total_packets",
+          "type": "int",
+          "structure": "Total number of data packets to deliver reliably; Sender sends seq_num 1..total_packets then stops."
+        },
+        {
+          "name": "timeout",
+          "type": "float",
+          "structure": "Sender timeout duration in ms (time units). Default 20."
+        },
+        {
+          "name": "sender_delay",
+          "type": "float",
+          "structure": "Sender preparation delay in ms (time units) before each send attempt. Default 10."
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "in_total_packets",
+          "type": "int",
+          "structure": "int",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: uses model_init_args.total_packets unless a t=0 injection arrives ; process: if received, overrides total_packets."
+          }
+        },
+        {
+          "name": "in_ack",
+          "type": "dict",
+          "structure": "ack_bit (int): ACK control bit in {0,1}.",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no ACK expected until after first send ; process: log every ACK and validate against outstanding bit."
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "out_data",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number in [1..total_packets]. bit (int): Control bit in {0,1}.",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no initial output ; process: output after preparation delay completes."
+          }
+        }
+      ]
+    }
+  },
+  {
+    "class_name": "ABP_Receiver",
+    "file_path": "abp_model/devs_project/ABP_D1_libs/ABP_Receiver.py",
+    "logic_path": "ABP_D1.ABP_Receiver",
+    "specification": {
+      "function": "Implements the Alternating Bit Protocol (ABP) receiver behavior with a capacity-1 buffer and deterministic processing delay. States and Output at the end of the state: IDLE: Buffer is empty and receiver is ready to accept a new data packet. No output at end of state. BUSY: Receiver is processing the buffered packet for receiver_delay time units. When BUSY ends, the receiver logs packet_received for the buffered packet, outputs an ACK packet on out_ack with the same bit as the buffered packet, and clears the buffer and returns to IDLE",
+      "logging": "[{\"log_type\": \"PROCESS\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"receiver\\\", \\\"event\\\": \\\"delay_start\\\", \\\"payload\\\": {\\\"type\\\": \\\"processing\\\", \\\"duration\\\": float}}\", \"description\": \"Receiver delay_start - logs when a packet processing delay starts. time (float): Absolute simulation time in ms. entity (str): Always \\\"receiver\\\". event (str): Always \\\"delay_start\\\". payload (dict): Event payload. type (str): Always \\\"processing\\\". duration (float): Processing duration in ms (equals receiver_delay).\"}, {\"log_type\": \"PROCESS\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"receiver\\\", \\\"event\\\": \\\"packet_received\\\", \\\"payload\\\": {\\\"seq_num\\\": int, \\\"bit\\\": int}}\", \"description\": \"Receiver packet_received - logs when a packet is received at the end of processing. time (float): Absolute simulation time in ms. entity (str): Always \\\"receiver\\\". event (str): Always \\\"packet_received\\\". payload (dict): Event payload. seq_num (int): Sequence number of the received data packet. bit (int): Control bit of the received data packet (0 or 1).\"}]",
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "The unique name of the model"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "the parent model. If None, the model is a root model."
+        },
+        {
+          "name": "receiver_delay",
+          "type": "float",
+          "structure": "Receiver processing delay in ms (time units) for each accepted packet. Default 10.0."
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "in_data",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number (1, 2, ...). bit (int): Control bit (0 or 1).",
+          "protocol": {
+            "initial_state": "Idle with empty buffer at t=0",
+            "initial_signal": "no",
+            "description": "initialize: Idle with empty buffer at t=0 ; process: if IDLE, buffer first arriving packet and start deterministic processing delay; if BUSY, ignore additional arriving packets."
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "out_ack",
+          "type": "dict",
+          "structure": "ack_bit (int): Acknowledgment bit (0 or 1), equals the buffered packet's bit.",
+          "protocol": {
+            "initial_state": "no pending output at t=0",
+            "initial_signal": "no",
+            "description": "initialize: no pending output at t=0 ; process: emit ACK immediately when processing completes."
+          }
+        }
+      ]
+    }
+  },
+  {
+    "class_name": "DeterministicLossChannel",
+    "file_path": "abp_model/devs_project/ABP_D1_libs/DeterministicLossChannel.py",
+    "logic_path": "ABP_D1.DeterministicLossChannel",
+    "specification": {
+      "function": "Implements a unidirectional subnet/channel with deterministic loss and fixed latency. Maintains an internal deterministic noise state x, initialized from seed at t=0 and updated per arrival: x_new = (17 * x_old + 11) mod 100. On each packet arrival, fate is determined immediately (same simulation time): If x_new < 10, drop (no delivery scheduled); else, pass and schedule delivery exactly channel_delay time units later. States and Output at the end of the state: IDLE: No pending delivery. No output. DELIVER: A passed packet is pending delivery; when DELIVER ends, output the prepared packet on out_deliver.",
+      "logging": "[{\"log_type\": \"PROCESS\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"subnet\\\", \\\"event\\\": \\\"model_created\\\", \\\"payload\\\": {\\\"seed\\\": int, \\\"channel_delay\\\": float, \\\"channel\\\": \\\"forward\\\" or \\\"backward\\\"}}\", \"description\": \"event: Model Created\"}, {\"log_type\": \"PROCESS\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"subnet\\\", \\\"event\\\": \\\"model_initialized\\\", \\\"payload\\\": {\\\"noise_state\\\": int, \\\"channel\\\": \\\"forward\\\" or \\\"backward\\\"}}\", \"description\": \"event: Model Initialized\"}, {\"log_type\": \"PROCESS\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"subnet\\\", \\\"event\\\": \\\"packet_get\\\", \\\"payload\\\": {\\\"behavior\\\": \\\"drop\\\" or \\\"pass\\\", \\\"channel\\\": \\\"forward\\\" or \\\"backward\\\", \\\"noise_value\\\": int}}\", \"description\": \"event: packet_get (Subnet-required event; fate determined immediately on arrival)\"}, {\"log_type\": \"RESULT\", \"msg\": \"{\\\"time\\\": float, \\\"entity\\\": \\\"subnet\\\", \\\"event\\\": \\\"model_finalized\\\", \\\"payload\\\": {\\\"channel\\\": \\\"forward\\\" or \\\"backward\\\", \\\"total_arrivals\\\": int, \\\"total_passed\\\": int, \\\"total_dropped\\\": int}}\", \"description\": \"event: Model Finalized\"}]",
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "The unique name of the model."
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "the parent model. If None, the model is a root model."
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "structure": "Initial noise state x for this subnet instance at t=0."
+        },
+        {
+          "name": "channel_delay",
+          "type": "float",
+          "structure": "Subnet transmission latency in ms (time units) for passed packets."
+        },
+        {
+          "name": "channel_label",
+          "type": "str",
+          "structure": "Channel label used in logs: must be exactly 'forward' or 'backward'."
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "in_packet",
+          "type": "dict",
+          "structure": "seq_num (int): Data packet sequence number (present for data packets only). bit (int): Data packet alternating bit, 0 or 1 (present for data packets only). ack_bit (int): ACK alternating bit, 0 or 1 (present for ACK packets only).",
+          "protocol": {
+            "initial_state": "Noise state x initialized from seed; no queued deliveries at t=0.",
+            "initial_signal": "no",
+            "description": "initialize: Noise state x initialized from seed; no queued deliveries at t=0. ; process: On each arrival, immediately compute noise, log packet_get, and either drop or schedule delivery after channel_delay."
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "out_deliver",
+          "type": "dict",
+          "structure": "seq_num (int): Data packet sequence number (present for data packets only). bit (int): Data packet alternating bit, 0 or 1 (present for data packets only). ack_bit (int): ACK alternating bit, 0 or 1 (present for ACK packets only).",
+          "protocol": {
+            "initial_state": "No pending delivery at t=0.",
+            "initial_signal": "no",
+            "description": "initialize: No pending delivery at t=0. ; process: Emits exactly channel_delay after arrival when behavior='pass'."
+          }
+        }
+      ]
+    }
+  },
+  {
+    "class_name": "ABP_D1",
+    "file_path": "abp_model/devs_project/ABP_D1.py",
+    "logic_path": "ABP_D1",
+    "specification": {
+      "function": "Implements an Alternating Bit Protocol (ABP) communication system as a coupled DEVS model. Composes Sender, Receiver, and two deterministic-loss channels (forward/backward) with fixed latency.",
+      "logging": "[{\"log_type\": \"PROCESS\", \"msg\": \"time (float): Absolute simulation time in ms (from get_current_time()). entity (str): Always \\\"system\\\". event (str): Always \\\"model_created\\\". payload (dict): Model configuration. total_packets (int): Total number of packets to send. seed (int): Initial noise seed for both subnets (each subnet has its own internal state initialized to this seed). timeout (float): Sender timeout in ms. sender_delay (float): Sender preparation delay in ms. receiver_delay (float): Receiver processing delay in ms. channel_delay (float): Channel latency in ms.\", \"description\": \"event: model_created\"}]",
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "The unique name of the model."
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "the parent model. If None, the model is a root model."
+        },
+        {
+          "name": "total_packets",
+          "type": "int",
+          "structure": "Total number of data packets to deliver reliably; Sender sends seq_num 1..total_packets then stops."
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "structure": "Initial noise state x for BOTH subnets (each subnet gets its own x initialized to this value)."
+        },
+        {
+          "name": "timeout",
+          "type": "float",
+          "structure": "Sender timeout duration in ms (time units). Default 20."
+        },
+        {
+          "name": "sender_delay",
+          "type": "float",
+          "structure": "Sender preparation delay in ms (time units) before each send attempt. Default 10."
+        },
+        {
+          "name": "receiver_delay",
+          "type": "float",
+          "structure": "Receiver processing delay in ms (time units) for each accepted packet. Default 10."
+        },
+        {
+          "name": "channel_delay",
+          "type": "float",
+          "structure": "Subnet transmission latency in ms (time units) for passed packets. Default 3."
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "in_total_packets",
+          "type": "int",
+          "structure": "int",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: if injected at t=0, overrides sender's total_packets ; process: ignored/handled by sender logic."
+          }
+        },
+        {
+          "name": "in_from_sender",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number (>=1). bit (int): Alternating control bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no initial signal ; process: forwarded to subnet1_forward.in_packet."
+          }
+        },
+        {
+          "name": "in_from_receiver",
+          "type": "dict",
+          "structure": "ack_bit (int): ACK bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no initial signal ; process: forwarded to subnet2_backward.in_packet."
+          }
+        },
+        {
+          "name": "in_to_receiver",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number (>=1). bit (int): Alternating control bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no initial signal ; process: forwarded to receiver.in_data."
+          }
+        },
+        {
+          "name": "in_to_sender",
+          "type": "dict",
+          "structure": "ack_bit (int): ACK bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no initial signal ; process: forwarded to sender.in_ack."
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "out_to_subnet1",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number (>=1). bit (int): Alternating control bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no output ; process: emitted when sender completes preparation delay."
+          }
+        },
+        {
+          "name": "out_to_subnet2",
+          "type": "dict",
+          "structure": "ack_bit (int): ACK bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no output ; process: emitted when receiver completes processing delay."
+          }
+        },
+        {
+          "name": "out_from_subnet1",
+          "type": "dict",
+          "structure": "seq_num (int): Sequence number (>=1). bit (int): Alternating control bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no output ; process: emitted by subnet1_forward when delivery time occurs."
+          }
+        },
+        {
+          "name": "out_from_subnet2",
+          "type": "dict",
+          "structure": "ack_bit (int): ACK bit (0 or 1).",
+          "protocol": {
+            "initial_state": "no",
+            "initial_signal": "no",
+            "description": "initialize: no output ; process: emitted by subnet2_backward when delivery time occurs."
+          }
+        }
+      ]
+    }
+  }
+]

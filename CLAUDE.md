@@ -299,14 +299,17 @@ and inline status notes mark what is already built.
    `OPTPILOT_METRICS` literal preferred, writer call-site keys as
    fallback); Studio writes a launch-ready enabled `environment.yaml`
    from a v2 bundle (v1 keeps the disabled `score` template; see plan
-   §5.1 status note for details and test locations). Remaining, highest
-   value first: register 2–3 gallery simulators as catalog Environments
-   (note: `resource/devs_gen_gallery` bundles are OLDER-generation — no
-   simulation.json, no summary/trace contracts; regenerate or retrofit
-   runners first); trace-conformance smoke checks; headless generation as
-   an F4 resource action (core executor, CLI, and the Studio Actions
-   panel already exist); hygiene (loosen the hardcoded OpenRouter model
-   registry).
+   §5.1 status note for details and test locations). Item 2 DONE
+   2026-08-08: `catalog/devs_gallery` ships `seird-epidemic` and
+   `abp-protocol` (unmodified generated models + in-process evaluators +
+   hash-locked vendored xdevs 3.0.0 wheel [GPL, notices included] +
+   seeded random-search baseline + two 5-trial studies, both verified
+   through the retained runner). Gallery audit notes: barbershop/IOBS/oft
+   are stdin-driven, StratAirlift hangs (generated-code defect) — that's
+   why ABP. Remaining: trace-conformance smoke checks; headless
+   generation as an F4 resource action (core executor, CLI, and the
+   Studio Actions panel already exist); hygiene (loosen the hardcoded
+   OpenRouter model registry).
 2. **W2 — trace-aware LLM policy search generalization** (plan §5.2).
    Split `production_agv_scheduling/methods/process_aware_llm` into a
    general `llm_policy_search` method + DES environment template. The F5

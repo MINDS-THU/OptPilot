@@ -1,0 +1,19 @@
+apiVersion: optpilot.io/v1
+config: study
+name: seird-minimize-deaths
+description: >-
+  Explore SEIRD epidemic parameters with random search, minimizing the
+  final death toll over the simulated horizon. A demo of optimizing a
+  DEVS-Gen generated simulator end to end.
+environmentConfig: ../environments/seird/environment.yaml
+methodConfig: ../methods/random_search/method.yaml
+objective:
+  metric: deceased
+  direction: minimize
+budget:
+  maxTrials: 5
+execution:
+  parallelism: 1
+  timeoutSeconds: 120
+reproducibility:
+  seed: 7
