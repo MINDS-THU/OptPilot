@@ -292,13 +292,21 @@ Studio items of plan §4. Read `designs/initial-release-plan.md` §5–§9 befor
 starting any item; per-item scope, risks, and acceptance criteria live there,
 and inline status notes mark what is already built.
 
-1. **W1 — DEVS-Gen flagship** (plan §5.1, 5 items). Highest value first:
-   close the metrics gap (`devs.simulation.v2` with declared metric keys →
-   launch-ready generated environments); register 2–3 gallery simulators as
-   catalog Environments; trace-conformance smoke checks; headless
-   generation as an F4 resource action (author a `generate` action on
-   `catalog/example_package/resources/devs-gen-interface` — core executor,
-   CLI, and the Studio Actions panel already exist); hygiene.
+1. **W1 — DEVS-Gen flagship** (plan §5.1, 5 items). Item 1 (metrics gap)
+   DONE 2026-08-08: `devs.simulation.v2` declares metric keys + objective +
+   descriptions, statically extracted from the generated runner
+   (`declared_metrics` in `result_summary_contract.py` — explicit
+   `OPTPILOT_METRICS` literal preferred, writer call-site keys as
+   fallback); Studio writes a launch-ready enabled `environment.yaml`
+   from a v2 bundle (v1 keeps the disabled `score` template; see plan
+   §5.1 status note for details and test locations). Remaining, highest
+   value first: register 2–3 gallery simulators as catalog Environments
+   (note: `resource/devs_gen_gallery` bundles are OLDER-generation — no
+   simulation.json, no summary/trace contracts; regenerate or retrofit
+   runners first); trace-conformance smoke checks; headless generation as
+   an F4 resource action (core executor, CLI, and the Studio Actions
+   panel already exist); hygiene (loosen the hardcoded OpenRouter model
+   registry).
 2. **W2 — trace-aware LLM policy search generalization** (plan §5.2).
    Split `production_agv_scheduling/methods/process_aware_llm` into a
    general `llm_policy_search` method + DES environment template. The F5

@@ -255,6 +255,15 @@ You must construct the script in the following **exact order**.
   object and a clear `metric_note` explaining what model state should be exposed
   before optimization. Do not present an input such as the requested horizon as
   an optimization outcome.
+- When you do emit metrics, also declare them at module scope, directly below
+  `OPTPILOT_RESULT_FILE`, as one literal dict so downstream tools can read the
+  contract without running the simulator:
+  `OPTPILOT_METRICS = {{"<metric_name>": {{"direction": "maximize" | "minimize",
+  "description": "<one short sentence>"}}, ...}}`.
+  Keys must exactly match the keys passed to `write_simulation_summary`; the
+  first entry should be the primary optimization objective; use plain string
+  literals only (no expressions). Omit the declaration entirely when `metrics`
+  is empty.
 
 ## **[Reference Code]**
 Use this code as your strict template. Do not change the logic flow. 

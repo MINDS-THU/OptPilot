@@ -10,6 +10,7 @@ two sides from drifting.
 from __future__ import annotations
 
 import ast
+import re
 
 
 RESULT_FILE = "summary.json"
@@ -20,6 +21,12 @@ RESULT_SCHEMA = "devs.simulation-result.v1"
 TRACE_FILE = "event_trace.jsonl"
 TRACE_HELPER_MODULE = "devs_project.devs_utils.event_trace"
 TRACE_ATTACHER = "attach_event_trace"
+
+METRICS_DECLARATION = "OPTPILOT_METRICS"
+METRIC_DIRECTIONS = ("maximize", "minimize")
+MAX_DECLARED_METRICS = 64
+MAX_METRIC_DESCRIPTION_CHARS = 512
+_METRIC_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 
 class _DirectNameCalls(ast.NodeVisitor):
@@ -282,6 +289,123 @@ def declared_result_files(
     return tuple(results)
 
 
+def _explicit_metric_declarations(tree: ast.Module) -> list[dict[str, str]]:
+    """Read a module-level ``OPTPILOT_METRICS`` literal, strictly or not at all.
+
+    The declaration maps metric names to optional ``direction`` /
+    ``description`` strings. Any malformed key or value discards the whole
+    declaration so a partially hallucinated literal never yields a partially
+    trusted contract.
+    """
+
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == METRICS_DECLARATION
+            for target in targets
+        ):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Dict) or len(value.keys) > MAX_DECLARED_METRICS:
+            return []
+        declared: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for key_node, value_node in zip(value.keys, value.values):
+            if (
+                not isinstance(key_node, ast.Constant)
+                or not isinstance(key_node.value, str)
+                or not _METRIC_NAME_RE.fullmatch(key_node.value)
+                or key_node.value in seen
+            ):
+                return []
+            entry: dict[str, str] = {"name": key_node.value}
+            if isinstance(value_node, ast.Constant) and value_node.value is None:
+                pass
+            elif isinstance(value_node, ast.Dict):
+                for field_node, field_value in zip(value_node.keys, value_node.values):
+                    if (
+                        not isinstance(field_node, ast.Constant)
+                        or field_node.value not in {"direction", "description"}
+                        or not isinstance(field_value, ast.Constant)
+                        or not isinstance(field_value.value, str)
+                    ):
+                        return []
+                    if field_node.value == "direction":
+                        if field_value.value not in METRIC_DIRECTIONS:
+                            return []
+                        entry["direction"] = field_value.value
+                    else:
+                        entry["description"] = field_value.value[
+                            :MAX_METRIC_DESCRIPTION_CHARS
+                        ]
+            else:
+                return []
+            declared.append(entry)
+            seen.add(key_node.value)
+        return declared
+    return []
+
+
+def _call_site_metric_names(tree: ast.Module) -> list[dict[str, str]]:
+    """Collect literal metric names passed to the summary writer."""
+
+    names: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Name)
+            or node.func.id != RESULT_WRITER
+        ):
+            continue
+        metrics_node: ast.AST | None = None
+        if node.args:
+            metrics_node = node.args[0]
+        for keyword in node.keywords:
+            if keyword.arg == "metrics":
+                metrics_node = keyword.value
+        if not isinstance(metrics_node, ast.Dict):
+            continue
+        for key_node in metrics_node.keys:
+            if (
+                isinstance(key_node, ast.Constant)
+                and isinstance(key_node.value, str)
+                and _METRIC_NAME_RE.fullmatch(key_node.value)
+                and key_node.value not in seen
+                and len(names) < MAX_DECLARED_METRICS
+            ):
+                names.append({"name": key_node.value})
+                seen.add(key_node.value)
+    return names
+
+
+def declared_metrics(
+    source: str, *, filename: str = "<generated_runner>"
+) -> tuple[dict[str, str], ...]:
+    """Return statically declared metric names for a generated runner.
+
+    Metrics exist only through the ``summary.json`` writer, so nothing is
+    reported unless the complete summary contract holds. An explicit
+    module-level ``OPTPILOT_METRICS`` literal (name -> optional direction /
+    description) wins; otherwise the literal string keys of the ``metrics``
+    dict at ``write_simulation_summary`` call sites are reported, names only.
+    Purely static — no generated code is imported or executed.
+    """
+
+    try:
+        tree = ast.parse(source, filename=filename)
+    except (SyntaxError, TypeError, ValueError):
+        return ()
+    if not _has_result_summary_contract(tree):
+        return ()
+    explicit = _explicit_metric_declarations(tree)
+    if explicit:
+        return tuple(explicit)
+    return tuple(_call_site_metric_names(tree))
+
+
 def require_result_summary_contract(
     source: str, *, filename: str = "<generated_runner>"
 ) -> None:
@@ -347,6 +471,10 @@ __all__ = [
     "TRACE_ATTACHER",
     "TRACE_FILE",
     "TRACE_HELPER_MODULE",
+    "METRIC_DIRECTIONS",
+    "METRICS_DECLARATION",
+    "MAX_DECLARED_METRICS",
+    "declared_metrics",
     "declared_result_files",
     "require_event_trace_contract",
     "require_result_summary_contract",

@@ -28650,11 +28650,14 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
         raise ValueError(f"Cannot read simulation.json: {exc}") from exc
     if (
         not isinstance(document, dict)
-        or document.get("schema_version") != "devs.simulation.v1"
+        or document.get("schema_version")
+        not in GENERATED_SIMULATION_SCHEMA_VERSIONS
         or document.get("entrypoint") != "run.py"
     ):
         raise ValueError(
-            "simulation.json must use devs.simulation.v1 with entrypoint run.py."
+            "simulation.json must use "
+            + " or ".join(sorted(GENERATED_SIMULATION_SCHEMA_VERSIONS))
+            + " with entrypoint run.py."
         )
     unexpected_top = sorted(
         set(document)
@@ -28664,6 +28667,7 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
             "timeout_seconds",
             "arguments",
             "result_files",
+            "metrics",
             "python_runtime",
         }
     )
@@ -28673,6 +28677,7 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
             + ", ".join(unexpected_top)
             + "."
         )
+    declared_metrics = _validated_simulation_metrics(document)
     runner_path = root / "run.py"
     try:
         runner_metadata = runner_path.lstat()
@@ -29088,8 +29093,8 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
         checked_result_files.append(item)
     if len(set(checked_result_files)) != len(checked_result_files):
         raise ValueError("simulation.json result_files contains duplicate paths.")
-    return {
-        "schema_version": "devs.simulation.v1",
+    handoff = {
+        "schema_version": str(document.get("schema_version")),
         "entrypoint": "run.py",
         "candidate_schema": candidate_schema,
         "parameter_count": len(candidate_schema),
@@ -29099,6 +29104,89 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
             "wheel_count": len(seen_wheels),
         },
     }
+    if declared_metrics is not None:
+        handoff["metrics"] = declared_metrics
+    return handoff
+
+
+GENERATED_SIMULATION_SCHEMA_VERSIONS = frozenset(
+    {"devs.simulation.v1", "devs.simulation.v2"}
+)
+_GENERATED_SIMULATION_METRIC_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+_GENERATED_SIMULATION_MAX_METRICS = 64
+_GENERATED_SIMULATION_MAX_METRIC_DESCRIPTION_CHARS = 512
+
+
+def _validated_simulation_metrics(document: JsonDict) -> Optional[JsonDict]:
+    """Validate the optional devs.simulation.v2 metrics declaration."""
+
+    raw = document.get("metrics")
+    if raw is None:
+        return None
+    if document.get("schema_version") == "devs.simulation.v1":
+        raise ValueError(
+            "simulation.json metrics requires schema_version devs.simulation.v2."
+        )
+    if not isinstance(raw, dict) or not set(raw) <= {
+        "keys",
+        "objective",
+        "descriptions",
+    }:
+        raise ValueError(
+            "simulation.json metrics must contain only keys, objective, and "
+            "descriptions."
+        )
+    keys = raw.get("keys")
+    if (
+        not isinstance(keys, list)
+        or not keys
+        or len(keys) > _GENERATED_SIMULATION_MAX_METRICS
+        or any(
+            not isinstance(key, str)
+            or not _GENERATED_SIMULATION_METRIC_NAME_RE.fullmatch(key)
+            for key in keys
+        )
+        or len(set(keys)) != len(keys)
+    ):
+        raise ValueError(
+            "simulation.json metrics.keys must be a non-empty array of unique "
+            f"metric names (at most {_GENERATED_SIMULATION_MAX_METRICS})."
+        )
+    validated: JsonDict = {"keys": list(keys)}
+    objective = raw.get("objective")
+    if objective is not None:
+        if (
+            not isinstance(objective, dict)
+            or set(objective) != {"metric", "direction"}
+            or objective.get("metric") not in keys
+            or objective.get("direction") not in {"maximize", "minimize"}
+        ):
+            raise ValueError(
+                "simulation.json metrics.objective must name a declared metric "
+                "with direction maximize or minimize."
+            )
+        validated["objective"] = dict(objective)
+    descriptions = raw.get("descriptions")
+    if descriptions is not None:
+        if (
+            not isinstance(descriptions, dict)
+            or not set(descriptions) <= set(keys)
+            or any(
+                not isinstance(text, str)
+                or not text
+                or len(text)
+                > _GENERATED_SIMULATION_MAX_METRIC_DESCRIPTION_CHARS
+                for text in descriptions.values()
+            )
+        ):
+            raise ValueError(
+                "simulation.json metrics.descriptions must map declared metric "
+                "names to non-empty strings of at most "
+                f"{_GENERATED_SIMULATION_MAX_METRIC_DESCRIPTION_CHARS} "
+                "characters."
+            )
+        validated["descriptions"] = dict(descriptions)
+    return validated
 
 
 def _simulation_environment_adapter_starter(
@@ -29927,7 +30015,24 @@ def _configure_workspace_catalog_role(
                 }
             }
         )
-        relative = Path("optpilot_configs/environment.template.yaml.disabled")
+        declared_simulation_metrics = (
+            simulation_handoff.get("metrics") if simulation_handoff else None
+        )
+        metric_keys = (
+            list(declared_simulation_metrics["keys"])
+            if declared_simulation_metrics
+            else ["score"]
+        )
+        # A v2 bundle that declares its metric names produces a launch-ready
+        # Environment: the config is written enabled and Setup can Check it
+        # immediately. Without declared metrics the config stays a disabled
+        # template whose metric keys need human review.
+        launch_ready = bool(declared_simulation_metrics)
+        relative = (
+            Path("optpilot_configs/environment.yaml")
+            if launch_ready
+            else Path("optpilot_configs/environment.template.yaml.disabled")
+        )
         body = yaml.safe_dump(
             {
                 "apiVersion": AUTHORING_API_VERSION,
@@ -29985,15 +30090,22 @@ def _configure_workspace_catalog_role(
                         "schema": detected_schema
                     },
                 },
-                "metrics": {"source": "return", "keys": ["score"]},
+                "metrics": {"source": "return", "keys": metric_keys},
             },
             sort_keys=False,
         )
-        body = (
-            "# Starter only: review the Candidate contract, evaluator, and metrics,\n"
-            "# then rename this file to environment.yaml so Setup can Check it.\n"
-            + body
-        )
+        if launch_ready:
+            body = (
+                "# Generated from simulation.json (devs.simulation.v2): the\n"
+                "# metric keys below were declared by the simulator itself.\n"
+                + body
+            )
+        else:
+            body = (
+                "# Starter only: review the Candidate contract, evaluator, and metrics,\n"
+                "# then rename this file to environment.yaml so Setup can Check it.\n"
+                + body
+            )
         support_files = [
             (
                 Path("optpilot_configs/optpilot_adapter.py"),
@@ -30011,7 +30123,7 @@ def _configure_workspace_catalog_role(
                 ),
             )
         ]
-        needs_editing = True
+        needs_editing = not launch_ready
     else:
         relative = Path("optpilot_configs/method.template.yaml.disabled")
         body = yaml.safe_dump(
@@ -30091,6 +30203,11 @@ def _configure_workspace_catalog_role(
                     ),
                     "python_runtime": deepcopy(
                         simulation_handoff["python_runtime"]
+                    ),
+                    **(
+                        {"metrics": deepcopy(simulation_handoff["metrics"])}
+                        if simulation_handoff.get("metrics")
+                        else {}
                     ),
                 }
                 if simulation_handoff

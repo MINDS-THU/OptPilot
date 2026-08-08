@@ -53,14 +53,22 @@ from default_tools.interface_output_action import (
     OutputActionResult,
 )
 from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+    MAX_DECLARED_METRICS,
+    MAX_METRIC_DESCRIPTION_CHARS,
+    METRIC_DIRECTIONS,
     TRACE_FILE,
+    declared_metrics,
     declared_result_files,
 )
 
 from .interface_outputs import stable_tree_digest
 
 
-SIMULATION_SCHEMA = "devs.simulation.v1"
+SIMULATION_SCHEMA = "devs.simulation.v2"
+SIMULATION_SCHEMA_V1 = "devs.simulation.v1"
+ACCEPTED_SIMULATION_SCHEMAS = frozenset(
+    {SIMULATION_SCHEMA_V1, SIMULATION_SCHEMA}
+)
 SIMULATION_MANIFEST = "simulation.json"
 SIMULATION_ENTRYPOINT = "run.py"
 PYTHON_RUNTIME_FIELD = "python_runtime"
@@ -198,6 +206,8 @@ class _Manifest:
     arguments: tuple[_ArgumentSpec, ...]
     result_files: tuple[str, ...]
     requirements_lock: str
+    schema_version: str = SIMULATION_SCHEMA_V1
+    metrics: dict[str, Any] | None = None
 
 
 @dataclass
@@ -424,6 +434,60 @@ def _derive_result_files(bundle_root: Path) -> list[str]:
         return []
 
     return list(declared_result_files(source, filename=str(resolved)))
+
+
+def _runner_source(bundle_root: Path) -> tuple[str, str] | None:
+    """Read the runner module named by run.py, bounded by the same checks."""
+
+    module = _module_from_entrypoint(bundle_root / SIMULATION_ENTRYPOINT)
+    if not module:
+        return None
+    runner = bundle_root.joinpath(*module.split(".")).with_suffix(".py")
+    try:
+        resolved = runner.resolve(strict=True)
+        resolved.relative_to(bundle_root.resolve(strict=True))
+        metadata = resolved.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+            return None
+        return resolved.read_text(encoding="utf-8"), str(resolved)
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def _derive_metrics(bundle_root: Path) -> dict[str, Any] | None:
+    """Build the optional v2 metrics block from static runner declarations.
+
+    Names come from the runner's own summary contract (an explicit
+    ``OPTPILOT_METRICS`` literal, or the literal keys the runner passes to
+    ``write_simulation_summary``). The objective is the first declared metric
+    that carries a direction. Nothing is imported or executed.
+    """
+
+    read = _runner_source(bundle_root)
+    if read is None:
+        return None
+    source, filename = read
+    declarations = declared_metrics(source, filename=filename)
+    if not declarations:
+        return None
+    block: dict[str, Any] = {
+        "keys": [entry["name"] for entry in declarations]
+    }
+    descriptions = {
+        entry["name"]: entry["description"]
+        for entry in declarations
+        if entry.get("description")
+    }
+    if descriptions:
+        block["descriptions"] = descriptions
+    for entry in declarations:
+        if entry.get("direction"):
+            block["objective"] = {
+                "metric": entry["name"],
+                "direction": entry["direction"],
+            }
+            break
+    return block
 
 
 def _record_digest(payload: bytes) -> str:
@@ -659,6 +723,14 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                     if result not in existing_results:
                         existing_results.append(result)
                 manifest["result_files"] = existing_results
+            if "metrics" not in manifest:
+                # A repaired or regenerated runner may newly declare its
+                # metric names; adopt them (and the v2 grammar that carries
+                # them) without touching an authored metrics declaration.
+                derived_metrics = _derive_metrics(root)
+                if derived_metrics is not None:
+                    manifest["metrics"] = derived_metrics
+                    manifest["schema_version"] = SIMULATION_SCHEMA
         else:
             manifest = {
                 "schema_version": SIMULATION_SCHEMA,
@@ -667,6 +739,9 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                 "arguments": _derive_arguments(root),
                 "result_files": _derive_result_files(root),
             }
+            derived_metrics = _derive_metrics(root)
+            if derived_metrics is not None:
+                manifest["metrics"] = derived_metrics
         declared_runtime = manifest.get(PYTHON_RUNTIME_FIELD)
         expected_runtime = _portable_runtime_declaration()
         if declared_runtime not in (None, expected_runtime):
@@ -700,14 +775,17 @@ def simulation_metadata(
     parsed = _load_manifest(path, maximum_timeout_seconds=maximum_timeout_seconds)
     document = _strict_json_loads(path.read_text(encoding="utf-8"))
     parameters = copy.deepcopy(document.get("arguments", []))
-    return {
-        "schema_version": SIMULATION_SCHEMA,
+    metadata = {
+        "schema_version": parsed.schema_version,
         "entrypoint": SIMULATION_ENTRYPOINT,
         "timeout_seconds": parsed.timeout_seconds,
         "parameters": parameters,
         "result_files": list(parsed.result_files),
         PYTHON_RUNTIME_FIELD: {"requirements_lock": parsed.requirements_lock},
     }
+    if parsed.metrics is not None:
+        metadata["metrics"] = copy.deepcopy(parsed.metrics)
+    return metadata
 
 
 def _read_behavior_text(path: Path, maximum_bytes: int) -> str:
@@ -1246,13 +1324,20 @@ def _load_manifest(
         "timeout_seconds",
         "arguments",
         "result_files",
+        "metrics",
         PYTHON_RUNTIME_FIELD,
     }
     unknown = set(document) - allowed_top
     if unknown:
         raise SimulationManifestError(f"Unknown manifest fields: {', '.join(sorted(unknown))}.")
-    if document.get("schema_version") != SIMULATION_SCHEMA:
-        raise SimulationManifestError(f"schema_version must be {SIMULATION_SCHEMA!r}.")
+    schema_version = document.get("schema_version")
+    if schema_version not in ACCEPTED_SIMULATION_SCHEMAS:
+        raise SimulationManifestError(
+            "schema_version must be one of "
+            + ", ".join(sorted(ACCEPTED_SIMULATION_SCHEMAS))
+            + "."
+        )
+    manifest_metrics = _validated_manifest_metrics(document, schema_version)
     if document.get("entrypoint") != SIMULATION_ENTRYPOINT:
         raise SimulationManifestError(f"entrypoint must be exactly {SIMULATION_ENTRYPOINT!r}.")
     raw_runtime = document.get(PYTHON_RUNTIME_FIELD)
@@ -1361,7 +1446,83 @@ def _load_manifest(
         tuple(arguments),
         tuple(result_files),
         requirements_lock,
+        schema_version=schema_version,
+        metrics=manifest_metrics,
     )
+
+
+_METRIC_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def _validated_manifest_metrics(
+    document: dict[str, Any], schema_version: str
+) -> dict[str, Any] | None:
+    """Validate the optional v2 metrics block strictly and boundedly."""
+
+    raw = document.get("metrics")
+    if raw is None:
+        return None
+    if schema_version == SIMULATION_SCHEMA_V1:
+        raise SimulationManifestError(
+            f"metrics requires schema_version {SIMULATION_SCHEMA!r}."
+        )
+    if not isinstance(raw, dict) or not set(raw) <= {
+        "keys",
+        "objective",
+        "descriptions",
+    }:
+        raise SimulationManifestError(
+            "metrics must contain only keys, objective, and descriptions."
+        )
+    keys = raw.get("keys")
+    if (
+        not isinstance(keys, list)
+        or not keys
+        or len(keys) > MAX_DECLARED_METRICS
+        or any(
+            not isinstance(key, str) or not _METRIC_KEY_RE.fullmatch(key)
+            for key in keys
+        )
+        or len(set(keys)) != len(keys)
+    ):
+        raise SimulationManifestError(
+            "metrics.keys must be a non-empty array of unique metric names "
+            f"(at most {MAX_DECLARED_METRICS})."
+        )
+    validated: dict[str, Any] = {"keys": list(keys)}
+    objective = raw.get("objective")
+    if objective is not None:
+        if (
+            not isinstance(objective, dict)
+            or set(objective) != {"metric", "direction"}
+            or objective.get("metric") not in keys
+            or objective.get("direction") not in METRIC_DIRECTIONS
+        ):
+            raise SimulationManifestError(
+                "metrics.objective must name a declared metric with direction "
+                + " or ".join(METRIC_DIRECTIONS)
+                + "."
+            )
+        validated["objective"] = dict(objective)
+    descriptions = raw.get("descriptions")
+    if descriptions is not None:
+        if (
+            not isinstance(descriptions, dict)
+            or not set(descriptions) <= set(keys)
+            or any(
+                not isinstance(text, str)
+                or not text
+                or len(text) > MAX_METRIC_DESCRIPTION_CHARS
+                for text in descriptions.values()
+            )
+        ):
+            raise SimulationManifestError(
+                "metrics.descriptions must map declared metric names to "
+                f"non-empty strings of at most {MAX_METRIC_DESCRIPTION_CHARS} "
+                "characters."
+            )
+        validated["descriptions"] = dict(descriptions)
+    return validated
 
 
 def _render_arguments(manifest: _Manifest, supplied: Mapping[str, Any] | None) -> tuple[dict[str, Any], tuple[str, ...]]:
@@ -2460,7 +2621,9 @@ __all__ = [
     "ResultFile",
     "SIMULATION_ENTRYPOINT",
     "SIMULATION_MANIFEST",
+    "ACCEPTED_SIMULATION_SCHEMAS",
     "SIMULATION_SCHEMA",
+    "SIMULATION_SCHEMA_V1",
     "SimulationBundleError",
     "SimulationCapacityError",
     "SimulationExecutionError",

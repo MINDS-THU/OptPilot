@@ -194,6 +194,27 @@ Renderer scope for v1: flat + one-level nested parameters, all seven valueTypes,
 Already the strongest integration: the pipeline *describe system → guided/automatic generation in the interface → immutable bundle (`devs.simulation.v1`) published via `interface_outputs.py` → Studio registration wizard detects it → environment starter + hardened `optpilot_adapter.py`* exists and is e2e-tested (`tests/test_generated_devs_student_handoff_vertical_e2e.py`). Remaining work:
 
 1. **Close the metrics gap (M).** The environment starter hardcodes `metrics.keys: [score]` with `needs_editing: true` because the generator never emits a metric declaration — even though the generation pipeline knows the KPIs (logging specs, `kpi_counter`). Extend `simulation.json` (bump to `devs.simulation.v2`, keep v1 accepted) with declared metric keys + objective direction + optional per-metric descriptions, emitted by the generator; the starter then produces a launch-ready environment with no manual editing. This turns "generate a simulator, then optimize it" into a genuinely closed loop and is the single highest-value DEVS-Gen item.
+   > **Status 2026-08-08: DONE.** Audit correction: no structured KPI
+   > knowledge existed at generation time — metric names lived only inside
+   > the generated runner's `write_simulation_summary(...)` call. The
+   > contract is therefore static extraction from the runner source
+   > (`declared_metrics` in `result_summary_contract.py`): an explicit
+   > module-level `OPTPILOT_METRICS` literal (name → direction/description;
+   > now requested by the generation prompts) wins, else the literal keys
+   > at the writer call sites (names only); nothing is reported without
+   > the full summary contract. `simulation.json` bumps to
+   > `devs.simulation.v2` with an optional strict `metrics` block
+   > ({keys, objective {metric, direction}, descriptions}); v1 stays
+   > accepted everywhere, and `ensure_simulation_manifest` upgrades
+   > repaired bundles whose runners newly declare metrics. Studio accepts
+   > both versions; a v2 bundle with declared metrics now writes an
+   > **enabled** `optpilot_configs/environment.yaml` with the real metric
+   > keys (`needs_editing: false`, next action Check) and exposes
+   > `metrics` in `detected_simulation`; v1 keeps the previous disabled
+   > `score` template exactly. Tests: 10 backend
+   > (`test_simulation_metrics_contract.py`), 7 Studio
+   > (`test_devs_simulation_v2_metrics.py`), plus the untouched v1
+   > vertical e2e passing throughout.
 2. **Register gallery simulators as example Environments (S/M).** `resource/devs_gen_gallery` contains 7 generated simulators whose READMEs already document CLI args (candidate parameters) and JSONL trace schemas. Package 2–3 (e.g., barbershop, SEIRD, StratAirlift) as catalog Environments — instant, credible demo content for "open a simulator and understand system behavior" (use case 1) and cheap targets for Methods.
 3. **Trace-conformance checks as environment smoke tests (M).** The paper's operational-conformance idea (exit-0, schema-valid JSONL trace) becomes a reusable validation helper for generated environments; behavioral checkers stay research-side for v1.
 4. **Headless generation as a Resource action (S, after F4).** "spec file → simulator bundle" without the web UI — the paper's own batch mode, exposed to CLI and Assistant.

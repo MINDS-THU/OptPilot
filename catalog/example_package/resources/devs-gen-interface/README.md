@@ -221,8 +221,22 @@ the launch stops. A failed capture remains visible and can be retried explicitly
 while the launch session is active.
 
 The saved result is an ordinary Workspace. To use it in optimization, choose
-**Set up for Catalog** and select **Environment**. When `simulation.json` is
-present, Setup creates these non-publishable starter files:
+**Set up for Catalog** and select **Environment**.
+
+When the bundle's `simulation.json` uses `devs.simulation.v2` and declares its
+metric names (newly generated runners publish them — an explicit
+`OPTPILOT_METRICS` literal or the literal keys passed to
+`write_simulation_summary`), Setup writes a **launch-ready** configuration:
+
+- `optpilot_configs/environment.yaml` (enabled, metric keys prefilled from the
+  simulator's own declaration)
+- `optpilot_configs/optpilot_adapter.py`
+
+Follow **Check** → optional **Test** → **Publish checked version** directly; no
+manual metric editing is needed.
+
+For older `devs.simulation.v1` bundles (no declared metrics), Setup instead
+creates non-publishable starters:
 
 - `optpilot_configs/environment.template.yaml.disabled`
 - `optpilot_configs/optpilot_adapter.py`

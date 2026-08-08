@@ -254,6 +254,15 @@ Initialize `argparse.ArgumentParser`:
   object and a clear `metric_note` explaining what model state should be exposed
   before optimization. The run summary is still useful, but do not pretend an
   input such as the requested horizon is an optimization outcome.
+- When you do emit metrics, also declare them at module scope, directly below
+  `OPTPILOT_RESULT_FILE`, as one literal dict so downstream tools can read the
+  contract without running the simulator:
+  `OPTPILOT_METRICS = {{"<metric_name>": {{"direction": "maximize" | "minimize",
+  "description": "<one short sentence>"}}, ...}}`.
+  Keys must exactly match the keys passed to `write_simulation_summary`; the
+  first entry should be the primary optimization objective; use plain string
+  literals only (no expressions). Omit the declaration entirely when `metrics`
+  is empty.
 - xDEVS 3 ``Port`` objects do not have a singular ``.value`` attribute. Never
   use expressions such as ``model.output[name].value``. A port exposes
   ``.values``, but its transient values may be empty after a simulation step;
