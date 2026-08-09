@@ -1,0 +1,81 @@
+{
+  "schema_version": "devs.simulation.v2",
+  "entrypoint": "run.py",
+  "timeout_seconds": 30,
+  "arguments": [
+    {
+      "name": "shift_duration",
+      "flag": "--shift_duration",
+      "type": "number",
+      "required": false,
+      "default": 8.0,
+      "description": "Total shift duration in hours"
+    },
+    {
+      "name": "inter_arrival_mean",
+      "flag": "--inter_arrival_mean",
+      "type": "number",
+      "required": false,
+      "default": 0.5,
+      "description": "Mean inter-arrival time in hours (exponential distribution)"
+    },
+    {
+      "name": "urgency_probs",
+      "flag": "--urgency_probs",
+      "type": "string",
+      "required": false,
+      "default": "0.5,0.3,0.2",
+      "description": "Comma-separated probability weights for urgency levels 1,2,3"
+    },
+    {
+      "name": "exam_durations",
+      "flag": "--exam_durations",
+      "type": "string",
+      "required": false,
+      "default": "0.25,0.5,1.0",
+      "description": "Comma-separated mean exam durations in hours for each urgency level"
+    },
+    {
+      "name": "simulate_time",
+      "flag": "--simulate_time",
+      "type": "number",
+      "required": false,
+      "default": 8.0,
+      "description": "Simulation duration in hours"
+    },
+    {
+      "name": "seed",
+      "flag": "--seed",
+      "type": "integer",
+      "required": false,
+      "default": 42,
+      "description": "Random seed for a reproducible arrival/exam sequence"
+    }
+  ],
+  "result_files": [
+    "summary.json",
+    "event_trace.jsonl"
+  ],
+  "metrics": {
+    "keys": [
+      "patients_served",
+      "avg_urgency_weighted_waiting_time"
+    ],
+    "descriptions": {
+      "patients_served": "Total number of patients served during the shift",
+      "avg_urgency_weighted_waiting_time": "Average urgency-weighted waiting time across all served patients"
+    },
+    "objective": {
+      "metric": "patients_served",
+      "direction": "maximize"
+    }
+  },
+  "policy": {
+    "file": "devs_project/TriageClinic_libs/ClinicCore_libs/TriagePolicy.py",
+    "entrypoint": "TriagePolicy",
+    "description": "Triage decision logic that selects the next patient when the doctor becomes free"
+  },
+  "python_runtime": {
+    "requirements_lock": "runtime_dependencies/requirements.lock"
+  }
+}

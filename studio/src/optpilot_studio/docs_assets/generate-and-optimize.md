@@ -127,6 +127,22 @@ baseline's worst-seed trace; iterations 2 and 3 explored priority and
 aging variants without beating it (one rediscovered the same rule). Every
 one of the 12 LLM candidates outperformed the baseline.
 
+A second reference run exercises the **class-style** contract on the
+generated triage clinic (`clinic-policy-search`), where the whole
+`TriagePolicy` DEVS component file is the editable candidate under a
+generated editing contract:
+
+| Candidate | mean_total_score | worst_total_score |
+|---|---|---|
+| baseline (generated FIFO component) | −3.75 | −6.63 |
+| best (iteration 2) | **−2.26** | **−3.32** |
+
+All 12 whole-component rewrites were valid — every candidate preserved
+the class name, ports, protocol, and DEVS lifecycle and changed only the
+selection logic; the winner implemented Weighted Shortest Processing
+Time (`exam_duration/urgency`) with a waiting-time aging penalty, a 40%
+reduction in urgency-weighted waiting over FIFO.
+
 ## Where the pieces live
 
 | Piece | Location |

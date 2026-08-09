@@ -336,12 +336,18 @@ Target: a practitioner with *any* DES simulator can adopt the method. Split the 
 > says the path must start with `devs_project/`. Full chain green on
 > that unmodified bundle: manifest emits the component policy block →
 > handoff kind=class → starter emits the editing-contract variant.
-> Known trade-off: whole-file atomic rewrites raise editor failure
-> rates vs the 10-line pure-function candidates; guards are the editing
-> instructions, import bans, replay determinism check, and natural
-> crash-on-protocol-break. Not yet done: a retained search run against
-> a class-style environment (the demo used the function-style
-> dispatch_station).
+> Trade-off measured empirically (2026-08-10): the feared editor
+> failure-rate increase on whole-component rewrites did not materialize.
+> `catalog/llm_policy_search/environments/triage_clinic/` (the fresh
+> class-style generation, finished by hand: --seed knob on the runner,
+> seeds [7,11,23], score = negated avg_urgency_weighted_waiting_time,
+> hand-written editing contract) ran `clinic-policy-search` 13/13
+> through the retained runner: 12/12 whole-component TriagePolicy
+> rewrites valid — zero crashes, zero protocol breaks, zero retries at
+> the attempt level — every candidate preserved class/ports/lifecycle
+> and edited only _select_patient. FIFO baseline −3.75 → best −2.26
+> (WSPT/urgency with aging penalty, iteration 2; ~40% lower weighted
+> waiting). Both hook styles now have green retained reference runs.
 
 ### 5.3 COOPA — natural-language OR solving
 

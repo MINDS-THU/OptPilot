@@ -42,6 +42,29 @@ contract — staging, declared-contract validation, replications, worst-seed
 replay — without any LLM calls. `studies/queue_demo_policy_search.yaml`
 runs the real search and needs `OPENROUTER_API_KEY`.
 
+## Generated-simulator compositions
+
+Two DEVS-Gen generated simulators are included as reference
+compositions, one per policy-hook style (see the "Generate and
+Optimize" docs page):
+
+- `environments/dispatch_station/` — **function style**: the generated
+  simulator delegates its dispatch decision to `devs_project/policy.py`
+  (`create_policy()` factory); the candidate is that 10-line module.
+  Search result: FCFS baseline −7.81 → best −4.53 mean_total_score
+  (SPT-first, found in iteration 1; 12/12 LLM candidates valid).
+- `environments/triage_clinic/` — **class style (declare-don't-extract)**:
+  the deciding DEVS component `TriagePolicy` is itself the editable
+  candidate, guided by a generated editing contract
+  (`policy_instructions.md`). Search result: FIFO baseline −3.75 → best
+  −2.26 mean_total_score (WSPT with an aging penalty, iteration 2;
+  12/12 whole-component rewrites valid, zero protocol breaks).
+
+`studies/dispatch_baseline_smoke.yaml` / `studies/clinic_baseline_smoke.yaml`
+(1 trial, no LLM calls) smoke each contract;
+`studies/dispatch_policy_search.yaml` / `studies/clinic_policy_search.yaml`
+run the real searches and need `OPENROUTER_API_KEY`.
+
 ## Mirroring
 
 `methods/llm_policy_search/` is the source of truth for the shared

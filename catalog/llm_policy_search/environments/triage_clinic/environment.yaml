@@ -1,0 +1,83 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: triage-clinic
+description: >-
+  DEVS-Gen generated walk-in clinic (one doctor, an 8-hour shift,
+  patients arriving randomly with urgency 1-3 and urgency-dependent
+  examination durations) whose triage decision lives inside the
+  generated TriagePolicy component - the simulator declared that
+  component in its devs.simulation.v2 manifest, so the component file
+  itself is the editable candidate. The evaluator runs seeded
+  replications, converts the worst replication's event trace to SQLite,
+  and reports aggregate and worst-seed scores (score = negated average
+  urgency-weighted waiting time, so higher is better).
+tags: [des, devs, triage, healthcare, policy-search, generated]
+
+evaluator:
+  python: optpilot_adapter_policy:evaluate
+  pythonPath: ["."]
+  timeoutSeconds: 900
+  settings:
+    seeds: [7, 11, 23]
+    seedArgument: seed
+    scoreMetric: avg_urgency_weighted_waiting_time
+    scoreDirection: minimize
+    timeoutSeconds: 240
+
+runtime:
+  sandbox: process
+  setup:
+    cache: prepared
+    timeoutSeconds: 300
+    steps:
+      - uses: python-venv
+        cwd: simulator
+        requirements: [runtime_dependencies/requirements.lock]
+
+trialWorkspace:
+  - {from: simulator/run.py, to: simulator/run.py}
+  - {from: simulator/simulation.json, to: simulator/simulation.json}
+  - {from: simulator/devs_project, to: simulator/devs_project}
+
+candidate:
+  format: files
+  materialize:
+    root: candidate
+  files:
+    editable:
+      - path: TriagePolicy.py
+    required: [TriagePolicy.py]
+    allow: [TriagePolicy.py, "provenance/**"]
+    deny: ["**/__pycache__/**", "**/*.pyc"]
+
+methodContext:
+  instructions: [policy_instructions.md]
+  references:
+    - name: TriagePolicy.py
+      type: candidate_template
+      path: simulator/devs_project/TriageClinic_libs/ClinicCore_libs/TriagePolicy.py
+    - name: replay_settings
+      type: json
+      path: settings/replay.json
+
+capabilities:
+  - id: exact_seed_replay
+    description: >-
+      Replays the candidate triage component on an exact evaluation seed
+      and produces a bounded SQLite trace.
+    callable: optpilot_adapter_policy:replay_candidate
+
+# Class-style contract: the deciding component is the candidate, so no
+# function entrypoint pin - the editing contract lives in the
+# instructions, and a candidate that breaks the class name or protocol
+# fails its own replications.
+policyValidation:
+  forbiddenImports:
+    [builtins, importlib, os, pathlib, random, socket, subprocess, sys]
+  forbiddenNames: []
+
+metrics:
+  source: return
+  keys:
+    [mean_total_score, min_total_score, max_total_score, worst_seed,
+     worst_total_score]
