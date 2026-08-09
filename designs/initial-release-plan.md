@@ -260,6 +260,42 @@ Target: a practitioner with *any* DES simulator can adopt the method. Split the 
 3. **Keep `production_agv_scheduling` as the flagship instantiation** (rebased onto the general method; its studies keep working — same evidence, same objective).
 4. **Second instantiation to prove generality (M).** Best candidate: the supply-chain app already present in `resource/autoie-lab` (the original repo's own second domain). A DEVS-Gen-generated simulator as a further instantiation is specified as its own joint workstream in §5.5.
 
+> **Status 2026-08-08 (§5.2): items 1–3 DONE.** The method is fully
+> contract-driven — all six coupling points read the environment's
+> declarations (editable set, `policyValidation` via the shared core
+> checker, entrypoint wording, description-based domain wording,
+> settings-mapped replay metric names, capability-declared
+> `module:function` replay; the cross-package pythonPath hack is gone,
+> and core `_candidate_context_paths` now exposes
+> `policyValidation`/`capabilities` as requirable tokens). New
+> `catalog/llm_policy_search` package: byte-identical method mirror
+> (`tests/core/test_llm_policy_search_mirror.py`; llm_policy_search is
+> the source of truth), `des_replication.py` scaffolding helper, the
+> executable `queue_demo` template instantiation, and a zero-LLM
+> baseline smoke verified through the retained runner. Item 4's second
+> instantiation is the §5.5 demo. Template gotcha: an environment
+> declaring `runtime: {sandbox: process}` fails the first binding slice
+> (runtime_requirements must be empty) — declare no runtime block.
+
+> **Status 2026-08-08 (§5.5): items 2–4 largely DONE; demo pending.**
+> Item 3: `trace_adapter.py` (queue_demo template) converts
+> `devs.event-trace.v2` JSONL into the standard SQLite trace shape,
+> verified on a genuine generated trace. Item 2: generated runners
+> declare `OPTPILOT_POLICY` ({file, entrypoint, description}) mirroring
+> the metrics contract — statically extracted
+> (`declared_policy`), validated into the v2 manifest only when the
+> declared file exists, requested by both generation prompts when the
+> spec names an optimizable decision; Studio's wizard then emits a
+> file-candidate variant starter alongside the parameters one
+> (environment_policy template with prefilled `policyValidation`,
+> `exact_seed_replay` bound to a generated adapter that overlays the
+> candidate policy, runs seeded replications, scores from summary
+> metrics, and converts the worst trace to SQLite; auto-generated
+> policy_instructions.md covers item 4 in starter form; deliberately
+> never launch-ready — seeds and scoring are a human decision). The
+> definition-of-done demo (policy-hooked generated simulator improved
+> over ≥3 iterations in a retained run + walkthrough docs) remains.
+
 ### 5.3 COOPA — natural-language OR solving
 
 Register as package `or_solving` with two registrations sharing one pruned runtime:
