@@ -60,6 +60,7 @@ from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract im
     MAX_METRIC_DESCRIPTION_CHARS,
     METRIC_DIRECTIONS,
     TRACE_FILE,
+    declared_entrypoint_kind,
     declared_metrics,
     declared_policy,
     declared_result_files,
@@ -499,7 +500,10 @@ def _derive_policy(bundle_root: Path) -> dict[str, Any] | None:
     """Build the optional v2 policy block from the runner's declaration.
 
     The declaration is trusted only when the named policy file actually
-    exists inside the bundle as a regular file.
+    exists inside the bundle as a regular file AND defines the declared
+    entrypoint at top level (as a class or function) — a declaration
+    pointing at a missing file or an undefined name is discarded whole,
+    so "declared but unwired" hooks never reach the manifest.
     """
 
     read = _runner_source(bundle_root)
@@ -509,6 +513,14 @@ def _derive_policy(bundle_root: Path) -> dict[str, Any] | None:
     declaration = declared_policy(source, filename=filename)
     if declaration is None:
         return None
+    # LLM-declared paths are sometimes anchored at a build-workspace parent
+    # (e.g. "generated_simulator/devs_project/..."). The project package
+    # root is always "devs_project/", so normalize by dropping anything
+    # before that segment; existence and entrypoint checks below still
+    # gate the result.
+    declared_file = declaration["file"]
+    if not (bundle_root / declared_file).exists() and "devs_project/" in declared_file:
+        declaration["file"] = declared_file[declared_file.index("devs_project/") :]
     policy_path = bundle_root / declaration["file"]
     try:
         resolved = policy_path.resolve(strict=True)
@@ -517,6 +529,12 @@ def _derive_policy(bundle_root: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     if policy_path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        return None
+    try:
+        policy_source = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    if declared_entrypoint_kind(policy_source, declaration["entrypoint"]) is None:
         return None
     return dict(declaration)
 

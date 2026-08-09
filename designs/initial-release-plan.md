@@ -309,6 +309,40 @@ Target: a practitioner with *any* DES simulator can adopt the method. Split the 
 > exchange over 10s (an LLM proposal round) was abandoned as
 > `method_failed`; the default is now None → defer to the declaration.
 
+> **Status 2026-08-09 (§5.5 follow-up): declare-don't-extract policy
+> hook.** Fresh-generation probes (elevator, triage clinic) showed the
+> extract-to-policy.py contract failed systematically: only the
+> runner-writing stage knew about it, so every generation declared
+> `OPTPILOT_POLICY` without creating the module (manifest fail-safe →
+> policy: null). Per owner decision the decision logic now stays inside
+> the deciding DEVS component: prompt §6 declares the component file +
+> top-level class the model actually built (no restructuring), the
+> manifest builder statically verifies the declared entrypoint is
+> defined in the declared file (declared-but-unwired dies at manifest
+> time; new `declared_entrypoint_kind` helper), and the wizard's policy
+> variant branches on entrypoint kind — class style emits the component
+> file as the editable candidate with a generated DEVS editing contract
+> (preserve class/ports/protocol/lifecycle; edit only selection logic),
+> omits the function-only entrypoint pin, and forbids `random`; function
+> style (dispatch_station) is unchanged. Method and core untouched —
+> all coupling points were already declarations. Verified with a FRESH
+> LLM generation under the new prompt (2026-08-10): the generator
+> declared the component it actually built (class TriagePolicy in the
+> deciding component file — no phantom policy.py, genuinely wired into
+> the model), with one near-miss the pipeline now heals: the declared
+> path carried a build-workspace prefix ("generated_simulator/..."), so
+> `_derive_policy` re-anchors declared paths at the `devs_project/`
+> segment (existence + entrypoint gates still apply) and the prompt now
+> says the path must start with `devs_project/`. Full chain green on
+> that unmodified bundle: manifest emits the component policy block →
+> handoff kind=class → starter emits the editing-contract variant.
+> Known trade-off: whole-file atomic rewrites raise editor failure
+> rates vs the 10-line pure-function candidates; guards are the editing
+> instructions, import bans, replay determinism check, and natural
+> crash-on-protocol-break. Not yet done: a retained search run against
+> a class-style environment (the demo used the function-style
+> dispatch_station).
+
 ### 5.3 COOPA — natural-language OR solving
 
 Register as package `or_solving` with two registrations sharing one pruned runtime:

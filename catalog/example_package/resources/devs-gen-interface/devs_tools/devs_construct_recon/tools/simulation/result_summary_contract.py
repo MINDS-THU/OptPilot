@@ -393,15 +393,16 @@ def declared_policy(
     A policy-hooked simulator declares one module-level literal::
 
         OPTPILOT_POLICY = {
-            "file": "devs_project/policy.py",
-            "entrypoint": "create_policy",
+            "file": "devs_project/<...>/DecisionComponent.py",
+            "entrypoint": "DecisionComponent",
             "description": "<one short sentence>",
         }
 
-    meaning the named editable file exposes a zero-argument ``entrypoint``
-    returning the decision-policy object the generated components
-    delegate to. Malformed declarations are discarded whole. Purely
-    static — nothing is imported or executed.
+    naming the file that owns the optimizable decision and the top-level
+    definition inside it — either the deciding component class or a
+    zero-argument policy factory function. The named file is the editable
+    candidate for policy search. Malformed declarations are discarded
+    whole. Purely static — nothing is imported or executed.
     """
 
     try:
@@ -445,6 +446,31 @@ def declared_policy(
                 :MAX_METRIC_DESCRIPTION_CHARS
             ]
         return declared
+    return None
+
+
+def declared_entrypoint_kind(source: str, entrypoint: str) -> str | None:
+    """Classify how a policy file defines the declared entrypoint.
+
+    Returns ``"function"`` when the file defines a top-level function of
+    that name (the delegated policy-factory style), ``"class"`` when it
+    defines a top-level class (the deciding-component style), and ``None``
+    when the file does not define the entrypoint at all — a declaration
+    pointing at nothing, which callers must discard. Purely static.
+    """
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, TypeError, ValueError):
+        return None
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == entrypoint
+        ):
+            return "function"
+        if isinstance(node, ast.ClassDef) and node.name == entrypoint:
+            return "class"
     return None
 
 

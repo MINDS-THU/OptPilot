@@ -269,24 +269,30 @@ You must construct the script in the following **exact order**.
 ### 6. Policy Hook (only when the specification names an optimizable decision)
 - When the user's specification explicitly asks for a tunable/optimizable
   decision policy (for example "the dispatch rule should be improvable" or
-  "expose the routing decision as an editable policy"), factor that one
-  decision out of the atomic components into a separate module
-  `devs_project/policy.py`:
-  - `policy.py` defines exactly one top-level, zero-argument
-    `create_policy()` returning the policy object; the deciding component
-    imports it and calls `policy.run(snapshot)` at each decision point,
-    where `snapshot` is a plain dict of documented, JSON-serializable
-    fields (list the fields in a docstring inside policy.py).
-  - `policy.py` must be deterministic and dependency-free: no imports of
-    simulator internals, os, sys, subprocess, socket, pathlib, importlib,
-    or random.
+  "expose the routing decision as an editable policy"), declare where that
+  decision lives. Do NOT restructure the model or create new modules:
+  locate the already-built component file that owns the decision (the
+  deciding atomic, or the dedicated decision component if one exists).
+  - Ensure that file's docstring documents the editing contract: which
+    method holds the selection logic; every input the decision sees (port
+    names and the fields of their payloads, with types and meanings);
+    every output it must emit and the protocol invariants its peers rely
+    on (for example paired outputs or request/response handshakes). Add
+    or extend the docstring if anything is missing.
+  - The selection logic inside that file must be deterministic: it must
+    not import or use `random`.
   - Declare the hook at module scope in the runner, directly below
     `OPTPILOT_RESULT_FILE`:
-    `OPTPILOT_POLICY = {{"file": "devs_project/policy.py",
-    "entrypoint": "create_policy",
+    `OPTPILOT_POLICY = {{"file": "<that component file's path, which must
+    start with devs_project/ — e.g. devs_project/System_libs/Decider.py>",
+    "entrypoint": "<the top-level class or function name defined in that
+    file that owns the decision>",
     "description": "<one short sentence>"}}`.
-  Omit the module and the declaration entirely when the specification
-  does not ask for an optimizable decision.
+    The declared file must exist and must define the declared entrypoint
+    at top level; the manifest builder statically verifies both and
+    silently drops declarations that point at nothing.
+  Omit the declaration entirely when the specification does not ask for
+  an optimizable decision.
 
 ## **[Reference Code]**
 Use this code as your strict template. Do not change the logic flow. 

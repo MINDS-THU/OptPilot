@@ -39,15 +39,15 @@ optpilot resource run \
 Write the specification so it **names one optimizable decision** — for the
 dispatch station: "when the machine becomes idle, a dispatch decision picks
 which waiting job to serve next; this decision should be optimizable."
-The generator then:
-
-- factors that decision into `devs_project/policy.py` with a zero-argument
-  `create_policy()` entrypoint returning an object with one decision
-  method, and
-- declares the hook in the generated runner (`OPTPILOT_POLICY`) alongside
-  its result metrics (`OPTPILOT_METRICS`), so the
-  `devs.simulation.v2` manifest carries both a `metrics` and a `policy`
-  block.
+The generator builds the model as it normally would — the decision lives
+inside a deciding component — and then **declares where it lives**: the
+runner's `OPTPILOT_POLICY` literal names the component file and its
+top-level class (or, for delegated designs, a `policy.py` module with a
+zero-argument factory function), alongside the result metrics
+(`OPTPILOT_METRICS`). The manifest builder statically verifies that the
+declared file exists and defines the declared entrypoint before emitting
+the `devs.simulation.v2` `policy` block — a declaration pointing at
+nothing is discarded whole.
 
 A spec without an optimizable decision produces a plain simulator with
 metrics only — the policy block is optional.
@@ -58,14 +58,19 @@ When a Studio workspace hands off a v2 bundle **with** a policy block, the
 environment starter emits the file-candidate policy variant instead of the
 plain parameter template:
 
-- `environment.yaml` — file candidates (`policy.py`), `policyValidation`
-  (entrypoint shape and forbidden imports), an `exact_seed_replay`
-  capability, seeded-replication evaluator settings, and declared metric
-  keys;
+- `environment.yaml` — the declared file as the editable candidate,
+  `policyValidation` (forbidden imports, plus the entrypoint pin for the
+  function-style contract), an `exact_seed_replay` capability,
+  seeded-replication evaluator settings, and declared metric keys;
 - `optpilot_adapter_policy.py` — seeded replications of the generated
-  simulator, worst-run selection, JSONL→SQLite trace conversion, and the
-  replay callable;
-- `policy_instructions.md` — the method-facing policy interface contract;
+  simulator (overlaying the candidate file at its declared path),
+  worst-run selection, JSONL→SQLite trace conversion, and the replay
+  callable;
+- `policy_instructions.md` — the method-facing contract. For a
+  component-class hook this is an **editing contract**: preserve the
+  class name, ports, protocol, and DEVS lifecycle verbatim; change only
+  the selection logic. For a `policy.py` function hook it is the snapshot
+  interface contract;
 - `settings/replay.json` — seeds and score metric.
 
 The `dispatch_station` environment in `catalog/llm_policy_search/` is

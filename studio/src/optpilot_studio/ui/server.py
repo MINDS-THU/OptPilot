@@ -29174,7 +29174,41 @@ def _validated_simulation_policy(
         raise ValueError(
             f"simulation.json policy file {file_name!r} must be a regular file."
         )
-    return dict(raw)
+    entrypoint_kind = _policy_entrypoint_kind(resolved, entrypoint)
+    if entrypoint_kind is None:
+        raise ValueError(
+            f"simulation.json policy file {file_name!r} does not define the "
+            f"declared entrypoint {entrypoint!r} at top level."
+        )
+    validated = dict(raw)
+    validated["entrypoint_kind"] = entrypoint_kind
+    return validated
+
+
+def _policy_entrypoint_kind(policy_path: Path, entrypoint: str) -> Optional[str]:
+    """Classify the declared policy entrypoint definition, if it exists.
+
+    ``"function"`` selects the delegated policy-factory contract (a
+    zero-argument factory the components call), ``"class"`` the
+    deciding-component contract (the DEVS component that owns the decision
+    is itself the editable candidate). ``None`` means the declaration
+    points at nothing and must be rejected.
+    """
+
+    try:
+        source = policy_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, UnicodeError, SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == entrypoint
+        ):
+            return "function"
+        if isinstance(node, ast.ClassDef) and node.name == entrypoint:
+            return "class"
+    return None
 
 
 def _validated_simulation_metrics(document: JsonDict) -> Optional[JsonDict]:
@@ -29266,6 +29300,11 @@ def _simulation_policy_variant_starter_files(
     policy_file = str(policy["file"])
     policy_basename = PurePosixPath(policy_file).name
     entrypoint = str(policy["entrypoint"])
+    # "function": the delegated policy-factory contract. "class": the
+    # deciding DEVS component itself is the editable candidate
+    # (declare-don't-extract; the generator names the component that owns
+    # the decision instead of restructuring the model).
+    entrypoint_kind = str(policy.get("entrypoint_kind") or "function")
     metrics = simulation_handoff.get("metrics") or {}
     metric_keys = list(metrics.get("keys") or [])
     objective = metrics.get("objective") or {}
@@ -29288,8 +29327,13 @@ def _simulation_policy_variant_starter_files(
             "id": f"{component_id}-policy",
             "description": (
                 (description or "Generated simulation")
-                + " File-candidate variant: the decision policy "
-                f"({policy_file}) is the editable candidate."
+                + (
+                    " File-candidate variant: the deciding component "
+                    f"({policy_file}) is the editable candidate."
+                    if entrypoint_kind == "class"
+                    else " File-candidate variant: the decision policy "
+                    f"({policy_file}) is the editable candidate."
+                )
             ),
             "evaluator": {
                 "python": "optpilot_adapter_policy:evaluate",
@@ -29341,15 +29385,25 @@ def _simulation_policy_variant_starter_files(
                     "callable": "optpilot_adapter_policy:replay_candidate",
                 }
             ],
+            # The core entrypoint check pins top-level functions only, so
+            # the class-style contract relies on the editing instructions
+            # plus natural evaluation failure (a candidate that renames the
+            # component class crashes its own replications).
             "policyValidation": {
-                "entrypoint": {
-                    "file": policy_basename,
-                    "callable": entrypoint,
-                    "maxArguments": 0,
-                },
+                **(
+                    {
+                        "entrypoint": {
+                            "file": policy_basename,
+                            "callable": entrypoint,
+                            "maxArguments": 0,
+                        }
+                    }
+                    if entrypoint_kind == "function"
+                    else {}
+                ),
                 "forbiddenImports": [
-                    "builtins", "importlib", "os", "pathlib", "socket",
-                    "subprocess", "sys",
+                    "builtins", "importlib", "os", "pathlib", "random",
+                    "socket", "subprocess", "sys",
                 ],
                 "forbiddenNames": [],
             },
@@ -29370,31 +29424,64 @@ def _simulation_policy_variant_starter_files(
         "# generated simulator itself (simulation.json policy block).\n"
         + environment_body
     )
-    instructions = (
-        "# Policy contract\n\n"
-        f"The editable candidate file is `{policy_basename}`. It must define a "
-        f"top-level, zero-argument `{entrypoint}()` returning the policy "
-        "object the simulator's decision components delegate to.\n\n"
-        + (
-            f"Declared purpose: {policy['description']}\n\n"
-            if policy.get("description")
-            else ""
-        )
-        + "Snapshot fields and decision semantics are documented in the "
-        "policy file's docstring inside the generated bundle. The policy "
-        "must stay deterministic and dependency-free (no simulator "
-        "internals, os, sys, subprocess, socket, pathlib, importlib, or "
-        "random).\n\n"
-        + (
-            "Declared simulator metrics: "
-            + ", ".join(metric_keys)
-            + f". The optimization score is `{score_metric}` ({score_direction}d "
-            "per replication; the evaluator aggregates mean/min/max and "
-            "worst-seed values).\n"
-            if metric_keys
-            else ""
-        )
+    declared_purpose = (
+        f"Declared purpose: {policy['description']}\n\n"
+        if policy.get("description")
+        else ""
     )
+    metrics_note = (
+        "Declared simulator metrics: "
+        + ", ".join(metric_keys)
+        + f". The optimization score is `{score_metric}` ({score_direction}d "
+        "per replication; the evaluator aggregates mean/min/max and "
+        "worst-seed values).\n"
+        if metric_keys
+        else ""
+    )
+    if entrypoint_kind == "class":
+        instructions = (
+            "# Editing contract\n\n"
+            f"The editable candidate file is `{policy_basename}` — the DEVS "
+            f"component class `{entrypoint}` that owns the optimizable "
+            "decision. Each candidate is a complete replacement of this "
+            "file, so everything except the selection logic must be "
+            "preserved exactly.\n\n"
+            + declared_purpose
+            + "Preserve verbatim:\n"
+            f"- the top-level class name `{entrypoint}` and its `__init__` "
+            "signature;\n"
+            "- every port registration (names, types, direction) and the "
+            "message protocol with peer components documented in the "
+            "class docstring (paired outputs, request/response handshakes, "
+            "idle/empty edge cases);\n"
+            "- the DEVS lifecycle structure (`deltext`/`deltint`/`lambdaf` "
+            "roles and the sigma/passivate discipline);\n"
+            "- all existing imports and any trace/logging calls.\n\n"
+            "Change only the selection logic — the part of the class that "
+            "chooses among the waiting candidates. Its inputs and the "
+            "decision method are documented in the class docstring. The "
+            "logic must stay deterministic: never import or use random, "
+            "and never add imports of os, sys, subprocess, socket, "
+            "pathlib, importlib, or builtins.\n\n"
+            "A candidate that breaks the class name, ports, or protocol "
+            "will crash or corrupt its own replications and score as a "
+            "failed trial.\n\n"
+            + metrics_note
+        )
+    else:
+        instructions = (
+            "# Policy contract\n\n"
+            f"The editable candidate file is `{policy_basename}`. It must define a "
+            f"top-level, zero-argument `{entrypoint}()` returning the policy "
+            "object the simulator's decision components delegate to.\n\n"
+            + declared_purpose
+            + "Snapshot fields and decision semantics are documented in the "
+            "policy file's docstring inside the generated bundle. The policy "
+            "must stay deterministic and dependency-free (no simulator "
+            "internals, os, sys, subprocess, socket, pathlib, importlib, or "
+            "random).\n\n"
+            + metrics_note
+        )
     replay_settings = json.dumps(
         {
             "seeds": [101, 102, 103],

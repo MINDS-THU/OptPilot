@@ -223,6 +223,12 @@ class PolicyContractTest(unittest.TestCase):
                 'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
             )
             self.assertIsNone(se._derive_policy(root))
+            # A file that exists but never defines the declared entrypoint
+            # is a declared-but-unwired hook: discarded whole.
+            (root / "devs_project" / "policy.py").write_text(
+                "def something_else():\n    return None\n", encoding="utf-8"
+            )
+            self.assertIsNone(se._derive_policy(root))
             (root / "devs_project" / "policy.py").write_text(
                 "def create_policy():\n    return None\n", encoding="utf-8"
             )
@@ -230,6 +236,90 @@ class PolicyContractTest(unittest.TestCase):
                 se._derive_policy(root),
                 {"file": "devs_project/policy.py", "entrypoint": "create_policy"},
             )
+
+    def test_derive_policy_accepts_a_deciding_component_class(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            component_dir = root / "devs_project" / "System_libs"
+            component_dir.mkdir(parents=True)
+            runner = (
+                'OPTPILOT_POLICY = {"file": "devs_project/System_libs/Decider.py", '
+                '"entrypoint": "Decider"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            (component_dir / "Decider.py").write_text(
+                "class Decider:\n    pass\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {
+                    "file": "devs_project/System_libs/Decider.py",
+                    "entrypoint": "Decider",
+                },
+            )
+
+    def test_derive_policy_normalizes_workspace_prefixed_paths(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            component_dir = root / "devs_project" / "System_libs"
+            component_dir.mkdir(parents=True)
+            # LLM declarations sometimes anchor at a build-workspace parent;
+            # the manifest builder re-anchors at the devs_project/ segment.
+            runner = (
+                'OPTPILOT_POLICY = {"file": '
+                '"generated_simulator/devs_project/System_libs/Decider.py", '
+                '"entrypoint": "Decider"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            (component_dir / "Decider.py").write_text(
+                "class Decider:\n    pass\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {
+                    "file": "devs_project/System_libs/Decider.py",
+                    "entrypoint": "Decider",
+                },
+            )
+
+    def test_declared_entrypoint_kind_classifies_definitions(self):
+        from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+            declared_entrypoint_kind,
+        )
+
+        self.assertEqual(
+            declared_entrypoint_kind("def create_policy():\n    pass\n", "create_policy"),
+            "function",
+        )
+        self.assertEqual(
+            declared_entrypoint_kind("class Decider:\n    pass\n", "Decider"),
+            "class",
+        )
+        self.assertIsNone(
+            declared_entrypoint_kind("def other():\n    pass\n", "create_policy")
+        )
+        self.assertIsNone(declared_entrypoint_kind("not python(", "create_policy"))
+        # Nested definitions do not satisfy the top-level requirement.
+        self.assertIsNone(
+            declared_entrypoint_kind(
+                "class Holder:\n    def create_policy(self):\n        pass\n",
+                "create_policy",
+            )
+        )
 
     def test_manifest_policy_validation(self):
         import tempfile

@@ -206,6 +206,93 @@ class DevsSimulationV2MetricsTest(unittest.TestCase):
                 "optpilot_adapter_policy:replay_candidate",
             )
 
+    def test_component_class_policy_emits_the_editing_contract_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            root = tmp_path / "workspace"
+            _write_interface_generated_simulation(root)
+            component_dir = root / "devs_project" / "System_libs"
+            component_dir.mkdir(parents=True, exist_ok=True)
+            (component_dir / "Decider.py").write_text(
+                '"""Owns the dispatch decision; selection logic in select()."""\n'
+                "class Decider:\n"
+                "    def select(self, waiting):\n"
+                "        return waiting[0]\n",
+                encoding="utf-8",
+            )
+            manifest_path = root / "simulation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema_version"] = "devs.simulation.v2"
+            manifest["metrics"] = dict(_METRICS_BLOCK)
+            manifest["policy"] = {
+                "file": "devs_project/System_libs/Decider.py",
+                "entrypoint": "Decider",
+                "description": "Dispatch decisions.",
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            handoff = _workspace_simulation_handoff(root)
+            self.assertEqual(handoff["policy"]["entrypoint_kind"], "class")
+            workspace = _create_ui_workspace(
+                state, {"title": "Component-policy simulator", "root": str(root)}
+            )
+            result = _configure_workspace_catalog_role(
+                state,
+                workspace["id"],
+                {"role": "environment", "id": "generated-sim"},
+            )
+            created = set(result["configuration"]["created_paths"])
+            self.assertIn(
+                "optpilot_configs/environment_policy.template.yaml.disabled",
+                created,
+            )
+            variant = yaml.safe_load(
+                (
+                    root
+                    / "optpilot_configs"
+                    / "environment_policy.template.yaml.disabled"
+                ).read_text(encoding="utf-8")
+            )
+            # The core entrypoint check pins functions only, so the
+            # class-style contract omits the pin and keeps import bans.
+            self.assertNotIn("entrypoint", variant["policyValidation"])
+            self.assertIn(
+                "random", variant["policyValidation"]["forbiddenImports"]
+            )
+            self.assertEqual(
+                variant["candidate"]["files"]["editable"],
+                [{"path": "Decider.py"}],
+            )
+            instructions = (
+                root / "optpilot_configs" / "policy_instructions.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("Editing contract", instructions)
+            self.assertIn("`Decider`", instructions)
+            self.assertIn("Preserve verbatim", instructions)
+
+    def test_unwired_policy_declaration_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = self._bundle(Path(tmp_dir))
+            (root / "devs_project" / "policy.py").write_text(
+                "def something_else():\n    return None\n", encoding="utf-8"
+            )
+            manifest_path = root / "simulation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema_version"] = "devs.simulation.v2"
+            manifest["policy"] = {
+                "file": "devs_project/policy.py",
+                "entrypoint": "create_policy",
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                ValueError, "does not define the declared entrypoint"
+            ):
+                _workspace_simulation_handoff(root)
+
     def test_missing_policy_file_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = self._bundle(Path(tmp_dir))
