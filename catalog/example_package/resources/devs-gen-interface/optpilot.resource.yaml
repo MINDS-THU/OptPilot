@@ -10,6 +10,37 @@ tags:
   - frontend
   - devs
 
+actions:
+  - id: generate
+    label: Generate simulator bundle
+    description: >-
+      Headless batch generation: one written system specification in, one
+      portable simulator bundle out (devs_project sources, run.py,
+      devs.simulation.v2 manifest with declared metrics when the generated
+      runner declares them, vendored runtime lock). The same pipeline the
+      web interface drives, without the UI. Requires the configured
+      generation model IDs and an OpenRouter API key.
+    command: [python, headless_generate.py]
+    inputs:
+      specification:
+        valueType: string
+        description: Natural-language description of the system to generate.
+      rootModelName:
+        valueType: string
+        default: GeneratedSystem
+        pattern: "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+        description: Python-class-safe name for the root coupled model.
+      thorough:
+        valueType: bool
+        default: false
+        description: >-
+          Run the verification and simulation-check stages too (slower;
+          generated-code smoke execution may need a container runtime).
+    grants:
+      envFromHost: [DEVS_INTERFACE_MODEL_ID, DEVS_INTERFACE_STRONG_MODEL_ID]
+      secretsFromHost: [OPENROUTER_API_KEY]
+    timeoutSeconds: 3600
+
 interface:
   label: DEVS Generator
   description: Launch the DEVS generation backend and graphical frontend, then open the Vite UI in Studio Preview.

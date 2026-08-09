@@ -76,30 +76,49 @@ def graph_parse_max_workers() -> int:
     )
 
 
+DEFAULT_MODEL_PRESET_IDS = (
+    "openrouter/deepseek/deepseek-v3.2",
+    "openrouter/z-ai/glm-4.7",
+    "openrouter/openai/gpt-5.4",
+)
+
+
+def _preset_label(model_id: str) -> str:
+    tail = model_id.split("/")[-1].replace("-", " ").replace("_", " ").strip()
+    return tail.title() if tail else model_id
+
+
 def model_presets() -> list[dict[str, str]]:
+    """Model choices served to the frontend.
+
+    ``DEVS_INTERFACE_MODEL_PRESETS`` (comma-separated litellm model ids)
+    replaces the built-in preset list so deployments are not tied to the
+    hardcoded OpenRouter registry; the configured graph model always leads.
+    """
+
     configured_model = visualizer_model_id()
-    return [
+    presets = [
         {
             "provider": "openai",
             "label": "Configured graph model",
             "model": configured_model,
-        },
-        {
-            "provider": "openai",
-            "label": "OpenRouter DeepSeek V3.2",
-            "model": "openrouter/deepseek/deepseek-v3.2",
-        },
-        {
-            "provider": "openai",
-            "label": "OpenRouter GLM 4.7",
-            "model": "openrouter/z-ai/glm-4.7",
-        },
-        {
-            "provider": "openai",
-            "label": "OpenRouter GPT 5.4",
-            "model": "openrouter/openai/gpt-5.4",
-        },
+        }
     ]
+    raw = os.environ.get("DEVS_INTERFACE_MODEL_PRESETS", "")
+    preset_ids = [item.strip() for item in raw.split(",") if item.strip()] or list(
+        DEFAULT_MODEL_PRESET_IDS
+    )
+    for model_id in preset_ids:
+        if model_id == configured_model:
+            continue
+        presets.append(
+            {
+                "provider": "openai",
+                "label": _preset_label(model_id),
+                "model": model_id,
+            }
+        )
+    return presets
 
 
 def first_preset_model(presets: Iterable[dict[str, str]]) -> str:
