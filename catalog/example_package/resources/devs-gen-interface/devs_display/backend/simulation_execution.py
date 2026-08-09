@@ -52,6 +52,9 @@ from default_tools.interface_output_action import (
     OutputActionExecutor,
     OutputActionResult,
 )
+from devs_tools.devs_construct_recon.tools.simulation.event_trace_conformance import (
+    validate_event_trace_lines,
+)
 from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
     MAX_DECLARED_METRICS,
     MAX_METRIC_DESCRIPTION_CHARS,
@@ -1022,6 +1025,30 @@ def _bounded_behavior_component_list(components: set[str]) -> str:
     if len(ordered) > len(shown):
         description += f" (+{len(ordered) - len(shown)} more)"
     return description[:360]
+
+
+def assess_trace_conformance(result_root: str | Path) -> tuple[str, ...]:
+    """Statically validate the smoke run's event trace against its schema.
+
+    Complements :func:`assess_behavior_smoke`, which stays deliberately
+    permissive about trace shape: this check reports exactly how a trace
+    deviates from the generated writer's contract (header row, complete
+    event/state records, monotonic sequence, truthful summary footer).
+    Returns bounded error strings; empty means conformant. A missing trace
+    is not an error — simulators that do not declare the trace contract
+    produce none.
+    """
+
+    trace_path = Path(result_root).resolve() / TRACE_FILE
+    if not trace_path.is_file():
+        return ()
+    try:
+        trace_lines = _read_behavior_text(
+            trace_path, _BEHAVIOR_TRACE_MAX_BYTES
+        ).splitlines()
+    except ValueError as error:
+        return (str(error)[:512],)
+    return validate_event_trace_lines(trace_lines)
 
 
 def assess_behavior_smoke(
@@ -2617,6 +2644,7 @@ class SimulationExecutionService:
 
 __all__ = [
     "ExecutionRecord",
+    "assess_trace_conformance",
     "ExecutionStateError",
     "ResultFile",
     "SIMULATION_ENTRYPOINT",

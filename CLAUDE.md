@@ -306,10 +306,15 @@ and inline status notes mark what is already built.
    seeded random-search baseline + two 5-trial studies, both verified
    through the retained runner). Gallery audit notes: barbershop/IOBS/oft
    are stdin-driven, StratAirlift hangs (generated-code defect) — that's
-   why ABP. Remaining: trace-conformance smoke checks; headless
-   generation as an F4 resource action (core executor, CLI, and the
-   Studio Actions panel already exist); hygiene (loosen the hardcoded
-   OpenRouter model registry).
+   why ABP. Item 3 DONE 2026-08-08: `event_trace_conformance.py`
+   (toolchain) validates traces against the writer's exact schema;
+   backend gains additive `assess_trace_conformance` (the permissive
+   `assess_behavior_smoke` contract is deliberately unchanged — a strict
+   gate there broke its fixtures and was reverted); the generated
+   adapter starter embeds a compact per-trial trace check. Remaining:
+   headless generation as an F4 resource action (core executor, CLI,
+   and the Studio Actions panel already exist); hygiene (loosen the
+   hardcoded OpenRouter model registry).
 2. **W2 — trace-aware LLM policy search generalization** (plan §5.2).
    Split `production_agv_scheduling/methods/process_aware_llm` into a
    general `llm_policy_search` method + DES environment template. The F5

@@ -234,6 +234,20 @@ Already the strongest integration: the pipeline *describe system → guided/auto
    > manifest/summary contracts, so these wrap models directly rather
    > than via the registration wizard (noted in the package README).
 3. **Trace-conformance checks as environment smoke tests (M).** The paper's operational-conformance idea (exit-0, schema-valid JSONL trace) becomes a reusable validation helper for generated environments; behavioral checkers stay research-side for v1.
+   > **Status 2026-08-08: DONE.** Reusable validator
+   > `event_trace_conformance.py` in the devs_construct_recon toolchain
+   > (dependency-free AST-of-JSONL checks: header row, complete
+   > event/state records per the writer's exact shapes, strictly
+   > increasing record_sequence, truthful summary-footer counters;
+   > bounded error list). Consumers: backend
+   > `assess_trace_conformance(result_root)` — additive next to the
+   > deliberately permissive `assess_behavior_smoke`, whose contract is
+   > unchanged — and the generated environment adapter starter, which now
+   > embeds a compact per-trial structural check so a truncated or
+   > corrupt declared trace fails the trial. Tests:
+   > `test_event_trace_conformance.py` (11, including a genuine trace
+   > produced by simulating a minimal model through the real writer and
+   > tamper rejections).
 4. **Headless generation as a Resource action (S, after F4).** "spec file → simulator bundle" without the web UI — the paper's own batch mode, exposed to CLI and Assistant.
 5. **Hygiene (S).** The curated `catalog/example_package/resources/devs-gen-interface` copy is the release base; `resource/devs_display_new` (research monorepo, baselines, Chinese dev notes) and `devs_gen_gallery` remain untracked scratch. Loosen the hardcoded OpenRouter model registry to configured model IDs. Godot/MQTT visualization stays out of v1 (needs broker + Godot runtime; only one gallery example exists) — listed as post-release.
 
