@@ -292,38 +292,47 @@ Studio items of plan §4. Read `designs/initial-release-plan.md` §5–§9 befor
 starting any item; per-item scope, risks, and acceptance criteria live there,
 and inline status notes mark what is already built.
 
-1. **W1 — DEVS-Gen flagship** (plan §5.1, 5 items). Item 1 (metrics gap)
-   DONE 2026-08-08: `devs.simulation.v2` declares metric keys + objective +
-   descriptions, statically extracted from the generated runner
-   (`declared_metrics` in `result_summary_contract.py` — explicit
-   `OPTPILOT_METRICS` literal preferred, writer call-site keys as
-   fallback); Studio writes a launch-ready enabled `environment.yaml`
-   from a v2 bundle (v1 keeps the disabled `score` template; see plan
-   §5.1 status note for details and test locations). Item 2 DONE
-   2026-08-08: `catalog/devs_gallery` ships `seird-epidemic` and
-   `abp-protocol` (unmodified generated models + in-process evaluators +
-   hash-locked vendored xdevs 3.0.0 wheel [GPL, notices included] +
-   seeded random-search baseline + two 5-trial studies, both verified
-   through the retained runner). Gallery audit notes: barbershop/IOBS/oft
-   are stdin-driven, StratAirlift hangs (generated-code defect) — that's
-   why ABP. Item 3 DONE 2026-08-08: `event_trace_conformance.py`
-   (toolchain) validates traces against the writer's exact schema;
-   backend gains additive `assess_trace_conformance` (the permissive
-   `assess_behavior_smoke` contract is deliberately unchanged — a strict
-   gate there broke its fixtures and was reverted); the generated
-   adapter starter embeds a compact per-trial trace check. Remaining:
-   headless generation as an F4 resource action (core executor, CLI,
-   and the Studio Actions panel already exist); hygiene (loosen the
-   hardcoded OpenRouter model registry).
-2. **W2 — trace-aware LLM policy search generalization** (plan §5.2).
-   Split `production_agv_scheduling/methods/process_aware_llm` into a
-   general `llm_policy_search` method + DES environment template. The F5
-   contracts to consume are already declared by the AGV environment:
-   read AST rules from `context.policyValidation` (apply them with core
-   `optpilot.policy_validation.validate_policy_sources`) and resolve replay
-   through the `exact_seed_replay` capability callable (the runner already
-   supplies the environment import roots — drop the cross-package
-   `pythonPath` hack from method.yaml).
+1. **W1 — DEVS-Gen flagship: ALL 5 ITEMS DONE 2026-08-08.** Item 1:
+   `devs.simulation.v2` declares metric keys + objective + descriptions,
+   statically extracted from the generated runner (`declared_metrics` in
+   `result_summary_contract.py` — explicit `OPTPILOT_METRICS` literal
+   preferred, writer call-site keys fallback); Studio writes a
+   launch-ready enabled `environment.yaml` from a v2 bundle (v1 keeps
+   the disabled `score` template). Item 2: `catalog/devs_gallery` ships
+   `seird-epidemic` + `abp-protocol` (unmodified generated models,
+   in-process evaluators, hash-locked vendored xdevs 3.0.0 wheel [GPL,
+   notices included], random-search baseline, two verified studies);
+   audit: barbershop/IOBS/oft stdin-driven, StratAirlift hangs. Item 3:
+   `event_trace_conformance.py` toolchain validator + additive backend
+   `assess_trace_conformance` (behavior smoke's permissive contract
+   unchanged) + per-trial trace check in the adapter starter. Item 4:
+   the devs-gen-interface resource's `generate` F4 action
+   (`headless_generate.py`) — verified with a real run: a one-sentence
+   coffee-shop spec produced a complete v2 bundle whose generated runner
+   declared served/lost/utilization with a maximize-served objective —
+   the closed generate→register→optimize loop. Item 5:
+   `DEVS_INTERFACE_MODEL_PRESETS` env replaces the hardcoded OpenRouter
+   preset registry.
+2. **W2 — trace-aware LLM policy search generalization: DONE
+   2026-08-08** (items 1–3; item 4's second instantiation arrives with
+   W5). `process_aware_llm` is fully contract-driven — all six coupling
+   points parameterized (editable set from `candidate.files.editable`,
+   entrypoint wording from `policyValidation.entrypoint`, AST rules via
+   the core checker, domain wording from the environment description,
+   replay metric names behind settings with the old names as defaults,
+   replay resolved through the capability's declared `module:function`
+   — the pythonPath hack is gone). Core fix: `_candidate_context_paths`
+   now enumerates `policyValidation`/`capabilities` as requirable
+   context tokens. New `catalog/llm_policy_search` package:
+   byte-identical method mirror (enforced by
+   `tests/core/test_llm_policy_search_mirror.py`; llm_policy_search is
+   the source of truth), the `queue_demo` executable BYO-simulator
+   template (`des_replication.py` scaffolding + one `run_once` hook +
+   declared contracts), and a zero-LLM baseline smoke study verified
+   through the retained runner. Template gotcha: an explicit
+   `runtime: {sandbox: process}` on an environment fails the first
+   binding slice (runtime_requirements must be empty) — declare no
+   runtime block.
 3. **W3 — COOPA or_solving package** (plan §5.3). Items 1–3 DONE
    (2026-08-07): `catalog/or_solving` ships OptPilot-original code only —
    COOPA stays user-provisioned via `COOPA_HOME` (license blocker applies to
@@ -374,8 +383,16 @@ and inline status notes mark what is already built.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
    Direct baseline is a Python batch method; **confirm canonical target
    rates** (below) before publishing numbers.
-5. **W5 — DEVS-Gen × policy-search joint workstream** (plan §5.5), after
-   W1/W2.
+5. **W5 — DEVS-Gen × policy-search joint workstream** (plan §5.5): IN
+   PROGRESS 2026-08-08. Done: the JSONL→SQLite trace adapter
+   (`trace_adapter.py` in the queue_demo template, verified against a
+   genuine generated trace) — plan §5.5 item 3. Remaining: the policy
+   hook in generated simulators (§5.5 item 2: generation-prompt +
+   manifest-v2 `policy` block + wizard file-candidate variant),
+   auto-generated methodContext references (item 4), and the
+   definition-of-done demo (a policy-hooked generated simulator
+   improved by llm-policy-search over ≥3 iterations in a retained Run,
+   with a walkthrough docs page).
 6. **Remaining U-items** (plan §4): U2 finish the "Run setup" client-side
    rename; U3 Open work completeness; U5 interface context; U6 dynamic
    onboarding; U7 legacy-shell removal (last); U8 optional.
