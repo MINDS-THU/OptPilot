@@ -82,6 +82,7 @@ nav:
       - OR-Tools CP-SAT Methods: cp-sat-methods.md
       - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
+      - "Generate and Optimize: DEVS-Gen x Policy Search": generate-and-optimize.md
   - OptPilot Studio:
       - OptPilot Studio: ui.md
       - Workspace Management: studio-workspaces.md

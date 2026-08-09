@@ -41,7 +41,7 @@ class StudyRunner:
         package_root: Path,
         realm_root: Path | None = None,
         operation_id: str | None = None,
-        method_request_timeout: float = 10.0,
+        method_request_timeout: float | None = None,
         launch_inputs: Optional[Mapping[str, object]] = None,
     ) -> None:
         if not isinstance(study_config_path, Path):
@@ -68,14 +68,21 @@ class StudyRunner:
             if operation_id is None
             else operation_id
         )
-        if (
+        # ``None`` defers to the Method's declared exchangeTimeoutSeconds
+        # (resolved inside run_local_realm_study); an explicit value is a
+        # launch-time override.
+        if method_request_timeout is not None and (
             isinstance(method_request_timeout, bool)
             or not isinstance(method_request_timeout, (int, float))
             or not math.isfinite(float(method_request_timeout))
             or float(method_request_timeout) <= 0.0
         ):
             raise ValueError("method_request_timeout must be finite and positive.")
-        self.method_request_timeout = float(method_request_timeout)
+        self.method_request_timeout = (
+            None
+            if method_request_timeout is None
+            else float(method_request_timeout)
+        )
         if launch_inputs is not None and not isinstance(launch_inputs, Mapping):
             raise TypeError("launch_inputs must be a mapping or None.")
         self.launch_inputs = None if launch_inputs is None else dict(launch_inputs)
@@ -102,7 +109,7 @@ def run_study(
     package_root: str,
     realm_root: Optional[str] = None,
     operation_id: Optional[str] = None,
-    method_request_timeout: float = 10.0,
+    method_request_timeout: float | None = None,
     launch_inputs: Optional[Mapping[str, object]] = None,
 ) -> RunSummaryProjection:
     """Run an authored study from one explicit package into the local Realm."""

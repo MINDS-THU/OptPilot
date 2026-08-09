@@ -292,9 +292,22 @@ Target: a practitioner with *any* DES simulator can adopt the method. Split the 
 > candidate policy, runs seeded replications, scores from summary
 > metrics, and converts the worst trace to SQLite; auto-generated
 > policy_instructions.md covers item 4 in starter form; deliberately
-> never launch-ready — seeds and scoring are a human decision). The
-> definition-of-done demo (policy-hooked generated simulator improved
-> over ≥3 iterations in a retained run + walkthrough docs) remains.
+> never launch-ready — seeds and scoring are a human decision).
+
+> **Status 2026-08-09 (§5.5): DONE — definition-of-done demo verified.**
+> `catalog/llm_policy_search/environments/dispatch_station/` is the
+> checked-in reference composition (DEVS-Gen generated dispatch station
+> with the declared policy hook + wizard-shaped adapter);
+> `studies/dispatch_policy_search.yaml` ran 13/13 trials through the
+> retained runner: FCFS baseline mean_total_score −7.81 → best LLM
+> candidate −4.53 (42% lower average waiting; the model derived
+> Shortest-Processing-Time-first in iteration 1, and all 12 LLM
+> candidates beat the baseline). Walkthrough docs page:
+> `generate-and-optimize.md`. Framework fix required en route: the CLI's
+> `--method-request-timeout` default (10.0) silently overrode every
+> method's declared `entrypoint.exchangeTimeoutSeconds`, so any retained
+> exchange over 10s (an LLM proposal round) was abandoned as
+> `method_failed`; the default is now None → defer to the declaration.
 
 ### 5.3 COOPA — natural-language OR solving
 

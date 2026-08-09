@@ -53,10 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--method-request-timeout",
         type=float,
-        default=10.0,
+        default=None,
         help=(
-            "Maximum seconds for one retained method callback "
-            "(increase for external model calls; default: 10)"
+            "Maximum seconds for one retained method callback. Default: the "
+            "Method's declared entrypoint.exchangeTimeoutSeconds, else 10."
         ),
     )
     run_parser.add_argument(

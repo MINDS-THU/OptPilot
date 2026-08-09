@@ -105,7 +105,8 @@ class RealmRunnerCutoverTest(unittest.TestCase):
             study_config_path=study.absolute(),
             operation_id="public-run/one",
             method_environment=os.environ,
-            method_request_timeout=10.0,
+            # ``None`` defers to the Method's declared exchangeTimeoutSeconds.
+            method_request_timeout=None,
             launch_inputs=None,
         )
 

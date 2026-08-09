@@ -314,8 +314,8 @@ and inline status notes mark what is already built.
    `DEVS_INTERFACE_MODEL_PRESETS` env replaces the hardcoded OpenRouter
    preset registry.
 2. **W2 — trace-aware LLM policy search generalization: DONE
-   2026-08-08** (items 1–3; item 4's second instantiation arrives with
-   W5). `process_aware_llm` is fully contract-driven — all six coupling
+   2026-08-08** (items 1–3; item 4's second instantiation landed with
+   W5's `dispatch_station` on 2026-08-09). `process_aware_llm` is fully contract-driven — all six coupling
    points parameterized (editable set from `candidate.files.editable`,
    entrypoint wording from `policyValidation.entrypoint`, AST rules via
    the core checker, domain wording from the environment description,
@@ -383,16 +383,24 @@ and inline status notes mark what is already built.
 4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
    Direct baseline is a Python batch method; **confirm canonical target
    rates** (below) before publishing numbers.
-5. **W5 — DEVS-Gen × policy-search joint workstream** (plan §5.5): IN
-   PROGRESS 2026-08-08. Done: the JSONL→SQLite trace adapter
-   (`trace_adapter.py` in the queue_demo template, verified against a
-   genuine generated trace) — plan §5.5 item 3. Remaining: the policy
-   hook in generated simulators (§5.5 item 2: generation-prompt +
-   manifest-v2 `policy` block + wizard file-candidate variant),
-   auto-generated methodContext references (item 4), and the
-   definition-of-done demo (a policy-hooked generated simulator
-   improved by llm-policy-search over ≥3 iterations in a retained Run,
-   with a walkthrough docs page).
+5. **W5 — DEVS-Gen × policy-search joint workstream: DONE 2026-08-09**
+   (plan §5.5, all items + demo). The `dispatch_station` reference
+   composition in `catalog/llm_policy_search/` (generated simulator with
+   declared `OPTPILOT_POLICY` hook + wizard-shaped adapter) ran the
+   full search through the retained runner: 13/13 trials, FCFS baseline
+   −7.81 → best −4.53 mean_total_score (42% lower average waiting; the
+   LLM derived SPT-first in iteration 1; all 12 LLM candidates beat the
+   baseline). Walkthrough docs: `generate-and-optimize.md` (in mkdocs
+   nav under Tutorials). Root-caused framework bug en route: `optpilot
+   run`'s `--method-request-timeout` default of 10.0 always overrode
+   the method's declared `entrypoint.exchangeTimeoutSeconds`, so any
+   exchange over 10s (an LLM proposal round) died as `method_failed`
+   via `worker_request_timeout` abandonment; default is now None →
+   defer to the declaration (cli.py, runner.py; tests in
+   test_realm_runner_cutover.py). Debugging pattern that found it: the
+   ledger's `method_exchange_abandoned` event + the 10.06s gap between
+   prepared/abandoned timestamps in `run_events`; worker diagnostics
+   volumes never saw a traceback because the worker was healthy.
 6. **Remaining U-items** (plan §4): U2 finish the "Run setup" client-side
    rename; U3 Open work completeness; U5 interface context; U6 dynamic
    onboarding; U7 legacy-shell removal (last); U8 optional.
