@@ -1,0 +1,7 @@
+{
+  "scoreDirection": "minimize",
+  "scoreMetric": "average_waiting_time",
+  "seedArgument": "seed",
+  "seeds": [7, 11, 23],
+  "timeoutSeconds": 240
+}

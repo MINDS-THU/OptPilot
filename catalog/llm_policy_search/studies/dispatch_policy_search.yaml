@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: study
+name: dispatch-policy-search
+description: >-
+  The W5 composition demo: improve the DEVS-Gen generated dispatch
+  station's decision policy with trace-aware LLM policy search over
+  three iterations. Requires OPENROUTER_API_KEY.
+environmentConfig: ../environments/dispatch_station/environment.yaml
+methodConfig: ../methods/llm_policy_search/method.yaml
+objective:
+  metric: mean_total_score
+  direction: maximize
+  secondaryMetrics: [min_total_score, worst_total_score]
+budget:
+  maxTrials: 13
+execution:
+  parallelism: 2
+  timeoutSeconds: 900
+evidence:
+  level: full
+reproducibility:
+  seed: 3

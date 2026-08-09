@@ -1,0 +1,19 @@
+apiVersion: optpilot.io/v1
+config: study
+name: dispatch-baseline-smoke
+description: >-
+  Contract smoke for the generated dispatch station: one trial stages the
+  baseline FCFS policy (no LLM calls), runs the seeded replications of
+  the DEVS-Gen simulator, and exercises the worst-seed replay.
+environmentConfig: ../environments/dispatch_station/environment.yaml
+methodConfig: ../methods/llm_policy_search/method.yaml
+objective:
+  metric: mean_total_score
+  direction: maximize
+budget:
+  maxTrials: 1
+execution:
+  parallelism: 1
+  timeoutSeconds: 900
+reproducibility:
+  seed: 3

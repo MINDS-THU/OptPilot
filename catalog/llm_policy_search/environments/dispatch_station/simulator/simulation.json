@@ -1,0 +1,51 @@
+{
+  "schema_version": "devs.simulation.v2",
+  "entrypoint": "run.py",
+  "timeout_seconds": 30,
+  "arguments": [
+    {
+      "name": "seed",
+      "flag": "--seed",
+      "type": "integer",
+      "required": false,
+      "default": 42,
+      "description": "Random seed for reproducible job arrival sequence"
+    },
+    {
+      "name": "simulate_time",
+      "flag": "--simulate_time",
+      "type": "number",
+      "required": false,
+      "default": 480.0,
+      "description": "Simulation duration in minutes (default: 8-hour shift)"
+    }
+  ],
+  "result_files": [
+    "summary.json",
+    "event_trace.jsonl"
+  ],
+  "metrics": {
+    "keys": [
+      "average_waiting_time",
+      "completed_jobs",
+      "machine_utilization"
+    ],
+    "descriptions": {
+      "average_waiting_time": "Average waiting time of completed jobs (minutes)",
+      "completed_jobs": "Number of completed jobs",
+      "machine_utilization": "Fraction of time the machine was busy"
+    },
+    "objective": {
+      "metric": "average_waiting_time",
+      "direction": "minimize"
+    }
+  },
+  "python_runtime": {
+    "requirements_lock": "runtime_dependencies/requirements.lock"
+  },
+  "policy": {
+    "file": "devs_project/policy.py",
+    "entrypoint": "create_policy",
+    "description": "Dispatch policy that selects the next job from the waiting list given a snapshot of waiting jobs and current time."
+  }
+}

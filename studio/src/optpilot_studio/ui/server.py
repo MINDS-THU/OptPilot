@@ -29538,6 +29538,23 @@ def _convert_trace(jsonl_path, database_path, kpis):
 
 def _prepared_simulator(workspace, candidate_dir):
     simulator = workspace / "simulator"
+    if not simulator.is_dir():
+        # Replay contexts run in a bare workspace without the trial
+        # materialization; copy the environment-source simulator tree.
+        source = Path(__file__).resolve().parent / "simulator"
+        shutil.copytree(
+            source,
+            simulator,
+            ignore=shutil.ignore_patterns("__pycache__", "runtime_dependencies"),
+        )
+        # The environment source projection is read-only; the copy must be
+        # writable so the candidate policy can overlay its declared file.
+        import os as _os
+
+        for directory, _subdirs, files in _os.walk(simulator):
+            _os.chmod(directory, 0o755)
+            for name in files:
+                _os.chmod(Path(directory) / name, 0o644)
     policy_target = simulator / _POLICY_FILE
     candidate_policy = candidate_dir / Path(_POLICY_FILE).name
     if not candidate_policy.is_file():
