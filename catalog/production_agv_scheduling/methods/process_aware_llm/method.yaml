@@ -1,12 +1,17 @@
 apiVersion: optpilot.io/v1
 config: method
 id: process-aware-llm-heuristic-design
-description: Uses a manager and parallel code editors to improve AGV scheduling policies from metrics and worst-seed process traces.
-tags: [llm, heuristic-design, agv-scheduling, files]
+description: >-
+  Trace-aware LLM policy search: a manager and parallel code editors
+  iteratively improve executable decision policies from metrics and
+  worst-seed process traces. Fully contract-driven - the editable file
+  set, policy interface, validation rules, domain wording, and replay
+  capability all come from the environment's declarations.
+tags: [llm, heuristic-design, policy-search, files]
 
 entrypoint:
   python: method:ProcessAwareLLMHeuristicMethod
-  pythonPath: [., ../../environments/production_agv_scheduling]
+  pythonPath: [.]
   protocol: batch
   # One exchange can include manager calls, parallel editors, and retries.
   exchangeTimeoutSeconds: 5000
@@ -57,4 +62,5 @@ accepts:
       - candidate.files.allow
       - methodContext.instructions
       - methodContext.references
+      - policyValidation
     capabilities: [exact_seed_replay]

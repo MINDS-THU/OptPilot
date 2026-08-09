@@ -63,7 +63,11 @@ def _bounded_message(error: BaseException, max_characters: int = 1000) -> str:
     return " ".join(str(error).split())[:max_characters]
 
 
-def _run(request: Mapping[str, Any], environment_root: Path) -> Mapping[str, Any]:
+def _run(
+    request: Mapping[str, Any],
+    environment_root: Path,
+    environment_callable: str,
+) -> Mapping[str, Any]:
     candidate_dir = Path(str(request["candidate_dir"])).resolve(strict=True)
     database_path = Path(str(request["database_path"])).resolve(strict=False)
     settings = request["settings"]
@@ -80,10 +84,15 @@ def _run(request: Mapping[str, Any], environment_root: Path) -> Mapping[str, Any
     sys.path.insert(0, str(environment_root))
     # Candidate code should not learn parent adapter paths from argv.
     sys.argv[:] = [str(Path(__file__).name)]
-    evaluator = importlib.import_module("evaluator")
-    replay = getattr(evaluator, "replay_candidate", None)
+    module_name, _, function_name = environment_callable.partition(":")
+    if not module_name or not function_name:
+        raise ValueError("environment callable must be module:function.")
+    module = importlib.import_module(module_name)
+    replay = getattr(module, function_name, None)
     if not callable(replay):
-        raise RuntimeError("Environment does not expose replay_candidate().")
+        raise RuntimeError(
+            f"Environment does not expose {environment_callable}()."
+        )
     result = replay(
         candidate_dir=candidate_dir,
         settings=dict(settings),
@@ -91,13 +100,14 @@ def _run(request: Mapping[str, Any], environment_root: Path) -> Mapping[str, Any
         database_path=database_path,
     )
     if not isinstance(result, Mapping):
-        raise TypeError("replay_candidate() must return a mapping.")
+        raise TypeError("The replay callable must return a mapping.")
     return dict(result)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment-root", required=True)
+    parser.add_argument("--environment-callable", required=True)
     parser.add_argument("--request", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--max-result-bytes", type=int, required=True)
@@ -107,11 +117,21 @@ def main() -> int:
     max_bytes = int(arguments.max_result_bytes)
     try:
         environment_root = Path(arguments.environment_root).resolve(strict=True)
-        evaluator_path = environment_root / "evaluator.py"
-        if evaluator_path.is_symlink() or not evaluator_path.is_file():
-            raise ValueError("environment root does not contain a real evaluator.py.")
+        environment_callable = str(arguments.environment_callable)
+        module_name = environment_callable.partition(":")[0]
+        module_path = environment_root / (
+            module_name.replace(".", "/") + ".py"
+        )
+        if module_path.is_symlink() or not module_path.is_file():
+            raise ValueError(
+                "environment root does not contain the declared capability "
+                f"module {module_name!r}."
+            )
         request = _read_json(Path(arguments.request), max_bytes)
-        payload = {"ok": True, "result": _run(request, environment_root)}
+        payload = {
+            "ok": True,
+            "result": _run(request, environment_root, environment_callable),
+        }
         encoded = _encode_json(payload, max_bytes)
         return_code = 0
     except BaseException as error:  # emit one bounded machine-readable failure

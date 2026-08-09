@@ -39,10 +39,12 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from optpilot.candidate_staging import CandidateBundleStager, CandidateFileMapping
+from optpilot.policy_validation import (
+    validate_policy_sources as validate_declared_policy_sources,
+)
 from optpilot.provenance import build_generator_record
 
 
-TARGET_FILES = ("scheduler.py", "param_estimator.py")
 _SQL_MUTATION_WORDS = re.compile(
     r"\b(attach|detach|insert|update|delete|drop|alter|create|replace|vacuum|reindex|analyze)\b",
     re.IGNORECASE,
@@ -68,21 +70,6 @@ _TRANSIENT_API_ERROR_TYPES = frozenset(
 )
 _PROVENANCE_PATH = "provenance/llm_exchanges.json"
 _PROVENANCE_SCHEMA = "process-aware-llm-exchanges.v1"
-_FORBIDDEN_POLICY_IMPORT_ROOTS = frozenset(
-    {
-        "builtins",
-        "evaluator",
-        "factory_sim",
-        "importlib",
-        "os",
-        "pathlib",
-        "replay",
-        "simulation_runner",
-        "socket",
-        "subprocess",
-        "sys",
-    }
-)
 _PROVIDER_CREDENTIAL_PATTERNS = (
     re.compile(r"(?i)(\bbearer\s+)([^\s,;\"'}\]]+)"),
     re.compile(
@@ -126,11 +113,21 @@ class ProcessAwareLLMHeuristicMethod:
         self.config = dict(definition.get("config", {}))
         self.candidate_context = dict(study_spec.candidate.get("context", {}))
         self.target_files = tuple(_editable_paths(self.candidate_context))
-        if set(self.target_files) != set(TARGET_FILES):
+        if not self.target_files:
             raise ValueError(
-                "ProcessAwareLLMHeuristicMethod requires exactly the editable files "
-                f"{list(TARGET_FILES)!r}; received {list(self.target_files)!r}."
+                "ProcessAwareLLMHeuristicMethod requires a non-empty "
+                "candidate.files.editable declaration."
             )
+        self.policy_validation = self.candidate_context.get("policyValidation")
+        if not isinstance(self.policy_validation, dict) or not self.policy_validation:
+            raise ValueError(
+                "ProcessAwareLLMHeuristicMethod requires the environment to "
+                "declare a policyValidation block (entrypoint, forbidden "
+                "imports/names, lints) in its candidate context."
+            )
+        self.environment_description = str(
+            self.candidate_context.get("description") or "the target system"
+        ).strip() or "the target system"
         self.allowed_paths = tuple(
             str(value)
             for value in self.candidate_context.get("files", {}).get("allow", [])
@@ -148,6 +145,26 @@ class ProcessAwareLLMHeuristicMethod:
         primary = study_spec.objective["primaryMetric"]
         self.primary_metric = str(primary["name"])
         self.primary_direction = str(primary["direction"])
+        self.replay_seed_metric = str(
+            self.config.get("replaySeedMetric", "worst_seed")
+        )
+        self.replay_score_metric = str(
+            self.config.get("replayScoreMetric", "worst_total_score")
+        )
+        raw_score_keys = self.config.get(
+            "replayScoreKeys",
+            ["total_score", "mean_total_score", "total_score_mean"],
+        )
+        if (
+            not isinstance(raw_score_keys, list)
+            or not raw_score_keys
+            or not all(isinstance(item, str) and item for item in raw_score_keys)
+        ):
+            raise ValueError("replayScoreKeys must be a non-empty list of names.")
+        self.replay_score_keys = tuple(raw_score_keys)
+        self.replay_callable = _capability_callable(
+            self.candidate_context, "exact_seed_replay"
+        )
 
         self.candidates_per_iteration = _bounded_int(
             self.config.get("candidatesPerIteration", 4), 1, 4, "candidatesPerIteration"
@@ -272,6 +289,28 @@ class ProcessAwareLLMHeuristicMethod:
         self._prompt_store_lock = threading.Lock()
         self._provenance_lock = threading.Lock()
         self._state_lock = threading.RLock()
+
+    def _entrypoint_contract_line(self) -> str:
+        """Render the preserved-interface instruction from the declaration."""
+
+        entrypoint = self.policy_validation.get("entrypoint") or {}
+        callable_name = str(entrypoint.get("callable") or "").strip()
+        file_name = str(entrypoint.get("file") or "").strip()
+        if not callable_name:
+            return "Preserve the documented policy entrypoint."
+        limit = entrypoint.get("maxArguments")
+        arguments = (
+            " taking no arguments"
+            if limit == 0
+            else f" taking at most {limit} arguments"
+            if isinstance(limit, int)
+            else ""
+        )
+        location = f" in {file_name}" if file_name else ""
+        return (
+            f"Plans must preserve the {callable_name}() entrypoint"
+            f"{location}{arguments}."
+        )
 
     def close(self) -> None:
         """Release the private replay workspace eagerly."""
@@ -473,7 +512,11 @@ class ProcessAwareLLMHeuristicMethod:
             path: self.source_files[path].read_text(encoding="utf-8")
             for path in self.target_files
         }
-        _validate_policy_sources(sources)
+        _validate_policy_sources(
+            sources,
+            editable_files=self.target_files,
+            policy_validation=self.policy_validation,
+        )
         candidate_id = f"{self.definition['id']}-baseline"
         candidate = stager.stage_files(
             [
@@ -622,12 +665,14 @@ class ProcessAwareLLMHeuristicMethod:
             "You are an operations-research manager. Return JSON only.",
         )
         user_sections = [
-            "Design distinct improvements to an AGV scheduling policy.",
+            "Design distinct improvements to the decision policy for "
+            f"{self.environment_description}",
             f"Return exactly {requested_plans} plans when possible.",
             f"Primary objective: {self.primary_metric} ({self.primary_direction}).",
             f"Current incumbent: {self._elite_id} = {self._elite_score}.",
             f"Completed optimization iterations: {self._iteration}.",
-            "Current executable policy:\n" + _render_sources(self._elite_sources or {}),
+            "Current executable policy:\n"
+            + _render_sources(self._elite_sources or {}, self.target_files),
             "Policy interface and snapshot contract:\n" + self.policy_instructions,
             "Recent trial results:\n" + self._render_observations(),
             "Worst-seed trace summary:\n"
@@ -640,7 +685,7 @@ class ProcessAwareLLMHeuristicMethod:
                 "{\"queries\":[],\"plans\":[{\"title\":\"...\",\"rationale\":\"...\","
                 "\"changes\":[\"...\"],\"expected_effect\":\"...\"}]}."
             ),
-            "Plans must preserve create_scheduler() and Scheduler.run(snapshot).",
+            self._entrypoint_contract_line(),
         ]
         return [
             {"role": "system", "content": system},
@@ -744,15 +789,17 @@ class ProcessAwareLLMHeuristicMethod:
                 f"Implement manager plan {plan_index} for optimization iteration {iteration}.",
                 "Plan:\n" + json.dumps(plan, indent=2, sort_keys=True),
                 f"Primary objective: {self.primary_metric} ({self.primary_direction}).",
-                "Incumbent policy:\n" + _render_sources(self._elite_sources or {}),
+                "Incumbent policy:\n"
+                + _render_sources(self._elite_sources or {}, self.target_files),
                 "Policy interface and snapshot contract:\n" + self.policy_instructions,
                 "Environment references:\n" + self._render_references(),
                 "Return JSON only with this shape:\n"
                 + json.dumps(response_shape, indent=2),
                 (
-                    "Each content value is a complete file, not a patch. Preserve "
-                    "create_scheduler() and Scheduler.run(snapshot). Do not import "
-                    "simulator internals; use only the documented snapshot contract."
+                    "Each content value is a complete file, not a patch. "
+                    + self._entrypoint_contract_line()
+                    + " Do not import simulator internals; use only the "
+                    "documented policy contract."
                 ),
             ]
         )
@@ -770,7 +817,11 @@ class ProcessAwareLLMHeuristicMethod:
                 edited = _extract_files(result, self.target_files)
                 sources = dict(self._elite_sources or {})
                 sources.update(edited)
-                _validate_policy_sources(sources)
+                _validate_policy_sources(
+                    sources,
+                    editable_files=self.target_files,
+                    policy_validation=self.policy_validation,
+                )
                 return summary, sources
             except Exception as exc:
                 if isinstance(exc, _LLMRequestError) and not isinstance(
@@ -967,12 +1018,18 @@ class ProcessAwareLLMHeuristicMethod:
 
     def _replay_incumbent(self, observation: Dict[str, Any]) -> None:
         metrics = dict(observation.get("metric_values", {}))
-        worst_seed = metrics.get("worst_seed")
-        worst_score = metrics.get("worst_total_score")
+        worst_seed = metrics.get(self.replay_seed_metric)
+        worst_score = metrics.get(self.replay_score_metric)
         if not isinstance(worst_seed, (int, float)):
-            raise RuntimeError("Successful evaluation did not report numeric worst_seed.")
+            raise RuntimeError(
+                "Successful evaluation did not report numeric "
+                f"{self.replay_seed_metric}."
+            )
         if not isinstance(worst_score, (int, float)):
-            raise RuntimeError("Successful evaluation did not report numeric worst_total_score.")
+            raise RuntimeError(
+                "Successful evaluation did not report numeric "
+                f"{self.replay_score_metric}."
+            )
 
         candidate_dir = Path(self._trace_workspace.name) / "candidate"
         if candidate_dir.exists():
@@ -992,7 +1049,7 @@ class ProcessAwareLLMHeuristicMethod:
         )
         if not self._trace_database.is_file():
             raise RuntimeError("Worst-seed replay did not create the requested SQLite trace.")
-        replay_score = _extract_total_score(result)
+        replay_score = _extract_total_score(result, self.replay_score_keys)
         tolerance = max(1e-6, abs(float(worst_score)) * 1e-6)
         if not math.isclose(replay_score, float(worst_score), rel_tol=0.0, abs_tol=tolerance):
             raise RuntimeError(
@@ -1024,7 +1081,7 @@ class ProcessAwareLLMHeuristicMethod:
     ) -> Dict[str, Any]:
         """Run exact-seed replay outside the API-secret-bearing method process."""
 
-        environment_root = _find_environment_import_root()
+        environment_root = _find_callable_import_root(self.replay_callable)
         worker = Path(__file__).with_name("replay_worker.py").resolve()
         if not worker.is_file():
             raise RuntimeError("The isolated replay worker is unavailable.")
@@ -1050,6 +1107,8 @@ class ProcessAwareLLMHeuristicMethod:
             str(worker),
             "--environment-root",
             str(environment_root),
+            "--environment-callable",
+            self.replay_callable,
             "--request",
             str(request_path),
             "--result",
@@ -1518,94 +1577,27 @@ def _extract_files(payload: Dict[str, Any], allowed_paths: Iterable[str]) -> Dic
     return result
 
 
-def _validate_policy_sources(sources: Mapping[str, str]) -> None:
-    trees: Dict[str, ast.Module] = {}
-    for path in TARGET_FILES:
+def _validate_policy_sources(
+    sources: Mapping[str, str],
+    *,
+    editable_files: Sequence[str],
+    policy_validation: Mapping[str, Any],
+) -> None:
+    """Apply the environment-declared policy contract to candidate sources.
+
+    The rules (entrypoint shape, forbidden imports/names, string lints) come
+    entirely from the environment's ``policyValidation`` declaration (F5) and
+    are checked by the shared core checker; this method carries no
+    domain-specific validation of its own.
+    """
+
+    for path in editable_files:
         if path not in sources:
             raise ValueError(f"Missing required policy file {path!r}.")
-        trees[path] = ast.parse(sources[path], filename=path)
-
-    scheduler_tree = trees["scheduler.py"]
-    scheduler_factories = [
-        node
-        for node in scheduler_tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "create_scheduler"
-    ]
-    if len(scheduler_factories) != 1 or isinstance(
-        scheduler_factories[0], ast.AsyncFunctionDef
-    ):
-        raise ValueError(
-            "scheduler.py must define exactly one synchronous top-level "
-            "create_scheduler()."
-        )
-    scheduler_factory = scheduler_factories[0]
-    factory_arguments = scheduler_factory.args
-    if (
-        factory_arguments.posonlyargs
-        or factory_arguments.args
-        or factory_arguments.vararg is not None
-        or factory_arguments.kwonlyargs
-        or factory_arguments.kwarg is not None
-    ):
-        raise ValueError("create_scheduler() must not accept arguments.")
-    for statement in scheduler_tree.body:
-        if statement is scheduler_factory:
-            continue
-        if any(
-            _ast_binds_name(node, "create_scheduler")
-            for node in ast.walk(statement)
-        ):
-            raise ValueError(
-                "scheduler.py must not rebind or shadow top-level create_scheduler()."
-            )
-
-    for path, tree in trees.items():
-        for node in ast.walk(tree):
-            if _ast_binds_name(node, "create_controller"):
-                raise ValueError(
-                    "Generated policies must use create_scheduler()/run(snapshot); "
-                    "create_controller is reserved for trusted simulation-bound baselines."
-                )
-            imported_root = _imported_module_root(node)
-            if imported_root in _FORBIDDEN_POLICY_IMPORT_ROOTS:
-                raise ValueError(
-                    f"{path} imports forbidden module {imported_root!r}. Generated "
-                    "policies may use only the documented snapshot contract."
-                )
-            if isinstance(node, ast.Constant) and node.value == "battery":
-                raise ValueError(
-                    f"{path} uses unknown snapshot field 'battery'; use "
-                    "'battery_level' for AGV records."
-                )
-
-
-def _ast_binds_name(node: ast.AST, name: str) -> bool:
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return node.name == name
-    if isinstance(node, ast.Name):
-        return node.id == name and isinstance(node.ctx, ast.Store)
-    if isinstance(node, ast.arg):
-        return node.arg == name
-    if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return any(
-            (alias.asname or alias.name.rsplit(".", 1)[-1]) == name
-            for alias in node.names
-        )
-    return False
-
-
-def _imported_module_root(node: ast.AST) -> str | None:
-    if isinstance(node, ast.Import):
-        roots = {alias.name.split(".", 1)[0] for alias in node.names}
-    elif isinstance(node, ast.ImportFrom):
-        roots = {str(node.module or "").split(".", 1)[0]}
-    else:
-        return None
-    forbidden = sorted(
-        root for root in roots if root in _FORBIDDEN_POLICY_IMPORT_ROOTS
-    )
-    return forbidden[0] if forbidden else None
+        ast.parse(sources[path], filename=path)
+    errors = validate_declared_policy_sources(dict(sources), policy_validation)
+    if errors:
+        raise ValueError("; ".join(errors[:5]))
 
 
 def _extract_plans(payload: Dict[str, Any], limit: int) -> List[Dict[str, str]]:
@@ -1637,11 +1629,11 @@ def _extract_plans(payload: Dict[str, Any], limit: int) -> List[Dict[str, str]]:
     return result
 
 
-def _render_sources(sources: Mapping[str, str]) -> str:
+def _render_sources(sources: Mapping[str, str], ordering: Sequence[str] = ()) -> str:
+    ordered = [path for path in ordering if path in sources]
+    ordered += [path for path in sorted(sources) if path not in ordered]
     return "\n\n".join(
-        f"FILE: {path}\n```python\n{sources[path]}\n```"
-        for path in TARGET_FILES
-        if path in sources
+        f"FILE: {path}\n```python\n{sources[path]}\n```" for path in ordered
     )
 
 
@@ -1659,16 +1651,19 @@ def _is_better(candidate: float, incumbent: float, direction: str) -> bool:
     return candidate < incumbent if direction == "minimize" else candidate > incumbent
 
 
-def _extract_total_score(payload: Any) -> float:
+def _extract_total_score(
+    payload: Any,
+    score_keys: Sequence[str] = ("total_score", "mean_total_score", "total_score_mean"),
+) -> float:
     if not isinstance(payload, Mapping):
-        raise RuntimeError("replay_candidate() must return a mapping.")
+        raise RuntimeError("The replay callable must return a mapping.")
     containers = [payload]
     for key in ("metric_values", "metrics", "kpi", "raw_kpis"):
         value = payload.get(key)
         if isinstance(value, Mapping):
             containers.append(value)
     for container in containers:
-        for key in ("total_score", "mean_total_score", "total_score_mean"):
+        for key in score_keys:
             value = container.get(key)
             if isinstance(value, (int, float)) and math.isfinite(float(value)):
                 return float(value)
@@ -2129,20 +2124,42 @@ def _numeric_retry_after(headers: Any) -> float | None:
     return parsed if math.isfinite(parsed) and parsed >= 0.0 else None
 
 
-def _find_environment_import_root() -> Path:
+def _capability_callable(context: Mapping[str, Any], capability_id: str) -> str:
+    """Return the ``module:function`` a declared capability binds to."""
+
+    for entry in context.get("capabilities", []) or []:
+        if isinstance(entry, Mapping) and entry.get("id") == capability_id:
+            spec = str(entry.get("callable") or "").strip()
+            if spec.count(":") == 1 and all(part for part in spec.split(":")):
+                return spec
+            raise ValueError(
+                f"Capability {capability_id!r} does not declare a usable "
+                "module:function callable."
+            )
+    raise ValueError(
+        f"The environment does not declare the {capability_id!r} capability "
+        "this method requires."
+    )
+
+
+def _find_callable_import_root(callable_spec: str) -> Path:
+    """Locate the capability module on the retained method import path."""
+
+    module_name = callable_spec.split(":", 1)[0]
+    module_file = module_name.replace(".", "/") + ".py"
     for raw_root in sys.path:
         try:
             root = Path(raw_root or os.getcwd()).resolve(strict=True)
-            evaluator = root / "evaluator.py"
-            metadata = evaluator.lstat()
+            candidate = root / module_file
+            metadata = candidate.lstat()
         except (OSError, RuntimeError):
             continue
-        if evaluator.is_symlink() or not evaluator.is_file() or metadata.st_size <= 0:
+        if candidate.is_symlink() or not candidate.is_file() or metadata.st_size <= 0:
             continue
         return root
     raise RuntimeError(
-        "The exact-seed replay capability is declared, but evaluator.py is not "
-        "available on the retained method import path."
+        f"The capability module {module_name!r} is not available on the "
+        "retained method import path."
     )
 
 

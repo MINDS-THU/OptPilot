@@ -42,6 +42,40 @@ def create_scheduler():
 """
 ESTIMATOR_SOURCE = "VALUE = 1.0\n"
 
+POLICY_VALIDATION = {
+    "entrypoint": {
+        "file": "scheduler.py",
+        "callable": "create_scheduler",
+        "maxArguments": 0,
+    },
+    "forbiddenImports": [
+        "builtins", "evaluator", "factory_sim", "importlib", "os",
+        "pathlib", "replay", "simulation_runner", "socket", "subprocess",
+        "sys",
+    ],
+    "forbiddenNames": ["create_controller"],
+    "lints": [
+        {
+            "id": "agv-battery-field",
+            "forbiddenConstant": "battery",
+            "message": (
+                "use 'battery_level' for AGV records; there is no 'battery' "
+                "snapshot field."
+            ),
+        }
+    ],
+}
+
+TARGET_FILES = ("scheduler.py", "param_estimator.py")
+
+
+def _validate(sources):
+    return _validate_policy_sources(
+        sources,
+        editable_files=TARGET_FILES,
+        policy_validation=POLICY_VALIDATION,
+    )
+
 
 def _http_response(payload: object) -> io.BytesIO:
     encoded = json.dumps(payload).encode("utf-8")
@@ -73,7 +107,7 @@ def _completion(content: object, *, finish_reason: str = "stop") -> dict:
 
 class ProcessAwareMethodTest(unittest.TestCase):
     def test_generated_policy_contract_accepts_snapshot_scheduler(self) -> None:
-        _validate_policy_sources(
+        _validate(
             {
                 "scheduler.py": SCHEDULER_SOURCE,
                 "param_estimator.py": ESTIMATOR_SOURCE,
@@ -89,8 +123,8 @@ class ProcessAwareMethodTest(unittest.TestCase):
         )
         for scheduler_source in invalid_sources:
             with self.subTest(source=scheduler_source):
-                with self.assertRaisesRegex(ValueError, "create_controller is reserved"):
-                    _validate_policy_sources(
+                with self.assertRaisesRegex(ValueError, "forbidden identifier .create_controller"):
+                    _validate(
                         {
                             "scheduler.py": scheduler_source,
                             "param_estimator.py": ESTIMATOR_SOURCE,
@@ -113,7 +147,7 @@ class ProcessAwareMethodTest(unittest.TestCase):
                     ValueError,
                     "create_scheduler",
                 ):
-                    _validate_policy_sources(
+                    _validate(
                         {
                             "scheduler.py": scheduler_source,
                             "param_estimator.py": ESTIMATOR_SOURCE,
@@ -128,7 +162,7 @@ class ProcessAwareMethodTest(unittest.TestCase):
         ):
             with self.subTest(import_line=import_line):
                 with self.assertRaisesRegex(ValueError, "imports forbidden module"):
-                    _validate_policy_sources(
+                    _validate(
                         {
                             "scheduler.py": import_line + SCHEDULER_SOURCE,
                             "param_estimator.py": ESTIMATOR_SOURCE,
@@ -140,7 +174,7 @@ class ProcessAwareMethodTest(unittest.TestCase):
             "return []", "return snapshot['lines']['line1']['agvs']['AGV_1']['battery']"
         )
         with self.assertRaisesRegex(ValueError, "use 'battery_level'"):
-            _validate_policy_sources(
+            _validate(
                 {
                     "scheduler.py": wrong_field,
                     "param_estimator.py": ESTIMATOR_SOURCE,
@@ -148,7 +182,7 @@ class ProcessAwareMethodTest(unittest.TestCase):
             )
 
         correct_field = wrong_field.replace("['battery']", "['battery_level']")
-        _validate_policy_sources(
+        _validate(
             {
                 "scheduler.py": correct_field,
                 "param_estimator.py": ESTIMATOR_SOURCE,
@@ -967,6 +1001,14 @@ class ProcessAwareMethodTest(unittest.TestCase):
                         "instructions": [str(root / "instructions.md")],
                         "references": references,
                     },
+                    "description": "a test discrete-event system",
+                    "policyValidation": POLICY_VALIDATION,
+                    "capabilities": [
+                        {
+                            "id": "exact_seed_replay",
+                            "callable": "evaluator:replay_candidate",
+                        }
+                    ],
                 }
             },
             objective={

@@ -960,6 +960,12 @@ def _candidate_context_paths(context: Dict[str, Any]) -> set:
     if isinstance(method_context, dict) and method_context:
         paths.add("methodContext")
         _add_nested_paths(paths, "methodContext", method_context)
+    policy_validation = context.get("policyValidation", {})
+    if isinstance(policy_validation, dict) and policy_validation:
+        paths.add("policyValidation")
+        _add_nested_paths(paths, "policyValidation", policy_validation)
+    if context.get("capabilities"):
+        paths.add("capabilities")
     return paths
 
 
