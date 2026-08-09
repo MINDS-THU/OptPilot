@@ -28,6 +28,10 @@ MAX_DECLARED_METRICS = 64
 MAX_METRIC_DESCRIPTION_CHARS = 512
 _METRIC_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
+POLICY_DECLARATION = "OPTPILOT_POLICY"
+_POLICY_FILE_RE = re.compile(r"^[A-Za-z0-9_./-]{1,256}$")
+_POLICY_CALLABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
 
 class _DirectNameCalls(ast.NodeVisitor):
     """Collect plain function calls without treating definitions as execution."""
@@ -381,6 +385,69 @@ def _call_site_metric_names(tree: ast.Module) -> list[dict[str, str]]:
     return names
 
 
+def declared_policy(
+    source: str, *, filename: str = "<generated_runner>"
+) -> dict[str, str] | None:
+    """Return the runner's statically declared policy hook, if any.
+
+    A policy-hooked simulator declares one module-level literal::
+
+        OPTPILOT_POLICY = {
+            "file": "devs_project/policy.py",
+            "entrypoint": "create_policy",
+            "description": "<one short sentence>",
+        }
+
+    meaning the named editable file exposes a zero-argument ``entrypoint``
+    returning the decision-policy object the generated components
+    delegate to. Malformed declarations are discarded whole. Purely
+    static — nothing is imported or executed.
+    """
+
+    try:
+        tree = ast.parse(source, filename=filename)
+    except (SyntaxError, TypeError, ValueError):
+        return None
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == POLICY_DECLARATION
+            for target in targets
+        ):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Dict):
+            return None
+        declared: dict[str, str] = {}
+        for key_node, value_node in zip(value.keys, value.values):
+            if (
+                not isinstance(key_node, ast.Constant)
+                or key_node.value not in {"file", "entrypoint", "description"}
+                or not isinstance(value_node, ast.Constant)
+                or not isinstance(value_node.value, str)
+            ):
+                return None
+            declared[key_node.value] = value_node.value
+        file_name = declared.get("file", "")
+        entrypoint = declared.get("entrypoint", "")
+        if (
+            not _POLICY_FILE_RE.fullmatch(file_name)
+            or not file_name.endswith(".py")
+            or file_name.startswith("/")
+            or ".." in file_name
+            or not _POLICY_CALLABLE_RE.fullmatch(entrypoint)
+        ):
+            return None
+        if "description" in declared:
+            declared["description"] = declared["description"][
+                :MAX_METRIC_DESCRIPTION_CHARS
+            ]
+        return declared
+    return None
+
+
 def declared_metrics(
     source: str, *, filename: str = "<generated_runner>"
 ) -> tuple[dict[str, str], ...]:
@@ -473,6 +540,8 @@ __all__ = [
     "TRACE_HELPER_MODULE",
     "METRIC_DIRECTIONS",
     "METRICS_DECLARATION",
+    "POLICY_DECLARATION",
+    "declared_policy",
     "MAX_DECLARED_METRICS",
     "declared_metrics",
     "declared_result_files",

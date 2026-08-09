@@ -180,5 +180,85 @@ class ManifestMetricsValidationTest(unittest.TestCase):
                 se._load_manifest(path, maximum_timeout_seconds=86400, validate_runtime_files=False)
 
 
+
+
+class PolicyContractTest(unittest.TestCase):
+    def test_declared_policy_extracts_the_literal(self):
+        from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+            declared_policy,
+        )
+
+        runner = (
+            'OPTPILOT_POLICY = {"file": "devs_project/policy.py",\n'
+            '                   "entrypoint": "create_policy",\n'
+            '                   "description": "Dispatch decisions."}\n'
+        )
+        self.assertEqual(
+            declared_policy(runner),
+            {
+                "file": "devs_project/policy.py",
+                "entrypoint": "create_policy",
+                "description": "Dispatch decisions.",
+            },
+        )
+        self.assertIsNone(
+            declared_policy('OPTPILOT_POLICY = {"file": "../x.py", "entrypoint": "p"}')
+        )
+
+    def test_derive_policy_requires_the_file_to_exist(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            (root / "devs_project").mkdir(parents=True)
+            (root / "devs_project" / "__init__.py").write_text("", encoding="utf-8")
+            runner = (
+                'OPTPILOT_POLICY = {"file": "devs_project/policy.py", '
+                '"entrypoint": "create_policy"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            self.assertIsNone(se._derive_policy(root))
+            (root / "devs_project" / "policy.py").write_text(
+                "def create_policy():\n    return None\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {"file": "devs_project/policy.py", "entrypoint": "create_policy"},
+            )
+
+    def test_manifest_policy_validation(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "simulation.json"
+            document = {
+                "schema_version": se.SIMULATION_SCHEMA,
+                "entrypoint": "run.py",
+                "timeout_seconds": 30,
+                "arguments": [],
+                "result_files": [],
+                "policy": {
+                    "file": "devs_project/policy.py",
+                    "entrypoint": "create_policy",
+                },
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            parsed = se._load_manifest(
+                path, maximum_timeout_seconds=86400, validate_runtime_files=False
+            )
+            self.assertEqual(parsed.policy["entrypoint"], "create_policy")
+            document["schema_version"] = se.SIMULATION_SCHEMA_V1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(se.SimulationManifestError):
+                se._load_manifest(
+                    path, maximum_timeout_seconds=86400, validate_runtime_files=False
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

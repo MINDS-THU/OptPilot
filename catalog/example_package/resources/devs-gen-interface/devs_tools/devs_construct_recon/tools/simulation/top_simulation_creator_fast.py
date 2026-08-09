@@ -270,6 +270,29 @@ Initialize `argparse.ArgumentParser`:
   is available, write empty metrics with an honest ``metric_note`` instead of
   guessing a value or inserting zero placeholders.
 
+
+### 6. Policy Hook (only when the specification names an optimizable decision)
+- When the user's specification explicitly asks for a tunable/optimizable
+  decision policy (for example "the dispatch rule should be improvable" or
+  "expose the routing decision as an editable policy"), factor that one
+  decision out of the atomic components into a separate module
+  `devs_project/policy.py`:
+  - `policy.py` defines exactly one top-level, zero-argument
+    `create_policy()` returning the policy object; the deciding component
+    imports it and calls `policy.run(snapshot)` at each decision point,
+    where `snapshot` is a plain dict of documented, JSON-serializable
+    fields (list the fields in a docstring inside policy.py).
+  - `policy.py` must be deterministic and dependency-free: no imports of
+    simulator internals, os, sys, subprocess, socket, pathlib, importlib,
+    or random.
+  - Declare the hook at module scope in the runner, directly below
+    `OPTPILOT_RESULT_FILE`:
+    `OPTPILOT_POLICY = {{"file": "devs_project/policy.py",
+    "entrypoint": "create_policy",
+    "description": "<one short sentence>"}}`.
+  Omit the module and the declaration entirely when the specification
+  does not ask for an optimizable decision.
+
 ## **[Reference Code]**
 Use this code as your strict template. Do not change the logic flow. 
 ```python

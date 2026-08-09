@@ -61,6 +61,7 @@ from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract im
     METRIC_DIRECTIONS,
     TRACE_FILE,
     declared_metrics,
+    declared_policy,
     declared_result_files,
 )
 
@@ -211,6 +212,7 @@ class _Manifest:
     requirements_lock: str
     schema_version: str = SIMULATION_SCHEMA_V1
     metrics: dict[str, Any] | None = None
+    policy: dict[str, Any] | None = None
 
 
 @dataclass
@@ -493,6 +495,32 @@ def _derive_metrics(bundle_root: Path) -> dict[str, Any] | None:
     return block
 
 
+def _derive_policy(bundle_root: Path) -> dict[str, Any] | None:
+    """Build the optional v2 policy block from the runner's declaration.
+
+    The declaration is trusted only when the named policy file actually
+    exists inside the bundle as a regular file.
+    """
+
+    read = _runner_source(bundle_root)
+    if read is None:
+        return None
+    source, filename = read
+    declaration = declared_policy(source, filename=filename)
+    if declaration is None:
+        return None
+    policy_path = bundle_root / declaration["file"]
+    try:
+        resolved = policy_path.resolve(strict=True)
+        resolved.relative_to(bundle_root.resolve(strict=True))
+        metadata = resolved.lstat()
+    except (OSError, ValueError):
+        return None
+    if policy_path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        return None
+    return dict(declaration)
+
+
 def _record_digest(payload: bytes) -> str:
     digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest())
     return digest.rstrip(b"=").decode("ascii")
@@ -734,6 +762,11 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                 if derived_metrics is not None:
                     manifest["metrics"] = derived_metrics
                     manifest["schema_version"] = SIMULATION_SCHEMA
+            if "policy" not in manifest:
+                derived_policy = _derive_policy(root)
+                if derived_policy is not None:
+                    manifest["policy"] = derived_policy
+                    manifest["schema_version"] = SIMULATION_SCHEMA
         else:
             manifest = {
                 "schema_version": SIMULATION_SCHEMA,
@@ -745,6 +778,9 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
             derived_metrics = _derive_metrics(root)
             if derived_metrics is not None:
                 manifest["metrics"] = derived_metrics
+            derived_policy = _derive_policy(root)
+            if derived_policy is not None:
+                manifest["policy"] = derived_policy
         declared_runtime = manifest.get(PYTHON_RUNTIME_FIELD)
         expected_runtime = _portable_runtime_declaration()
         if declared_runtime not in (None, expected_runtime):
@@ -788,6 +824,8 @@ def simulation_metadata(
     }
     if parsed.metrics is not None:
         metadata["metrics"] = copy.deepcopy(parsed.metrics)
+    if parsed.policy is not None:
+        metadata["policy"] = copy.deepcopy(parsed.policy)
     return metadata
 
 
@@ -1352,6 +1390,7 @@ def _load_manifest(
         "arguments",
         "result_files",
         "metrics",
+        "policy",
         PYTHON_RUNTIME_FIELD,
     }
     unknown = set(document) - allowed_top
@@ -1365,6 +1404,7 @@ def _load_manifest(
             + "."
         )
     manifest_metrics = _validated_manifest_metrics(document, schema_version)
+    manifest_policy = _validated_manifest_policy(document, schema_version)
     if document.get("entrypoint") != SIMULATION_ENTRYPOINT:
         raise SimulationManifestError(f"entrypoint must be exactly {SIMULATION_ENTRYPOINT!r}.")
     raw_runtime = document.get(PYTHON_RUNTIME_FIELD)
@@ -1475,10 +1515,51 @@ def _load_manifest(
         requirements_lock,
         schema_version=schema_version,
         metrics=manifest_metrics,
+        policy=manifest_policy,
     )
 
 
 _METRIC_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def _validated_manifest_policy(
+    document: dict[str, Any], schema_version: str
+) -> dict[str, Any] | None:
+    """Validate the optional v2 policy-hook declaration."""
+
+    raw = document.get("policy")
+    if raw is None:
+        return None
+    if schema_version == SIMULATION_SCHEMA_V1:
+        raise SimulationManifestError(
+            f"policy requires schema_version {SIMULATION_SCHEMA!r}."
+        )
+    if not isinstance(raw, dict) or not {"file", "entrypoint"} <= set(raw) or not (
+        set(raw) <= {"file", "entrypoint", "description"}
+    ):
+        raise SimulationManifestError(
+            "policy must declare file and entrypoint (description optional)."
+        )
+    file_name = raw.get("file")
+    entrypoint = raw.get("entrypoint")
+    if (
+        not isinstance(file_name, str)
+        or not file_name.endswith(".py")
+        or file_name.startswith("/")
+        or ".." in file_name
+        or "\\" in file_name
+        or not isinstance(entrypoint, str)
+        or not entrypoint.isidentifier()
+    ):
+        raise SimulationManifestError("policy file or entrypoint is invalid.")
+    description = raw.get("description")
+    if description is not None and (
+        not isinstance(description, str)
+        or not description
+        or len(description) > 512
+    ):
+        raise SimulationManifestError("policy description is invalid.")
+    return dict(raw)
 
 
 def _validated_manifest_metrics(
