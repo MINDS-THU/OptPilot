@@ -1,0 +1,24 @@
+apiVersion: optpilot.io/v1
+config: study
+name: queue-demo-policy-search
+description: >-
+  Improve the queue dispatch policy with trace-aware LLM policy search:
+  manager plans from worst-seed traces, parallel editors, exact-seed
+  replay verification. Requires OPENROUTER_API_KEY.
+environmentConfig: ../environments/queue_demo/environment.yaml
+methodConfig: ../methods/llm_policy_search/method.yaml
+objective:
+  metric: mean_total_score
+  direction: maximize
+  secondaryMetrics:
+    [std_total_score, min_total_score, mean_mean_wait,
+     mean_weighted_lateness]
+budget:
+  maxTrials: 13
+execution:
+  parallelism: 2
+  timeoutSeconds: 600
+evidence:
+  level: full
+reproducibility:
+  seed: 5
