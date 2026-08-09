@@ -28668,6 +28668,7 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
             "arguments",
             "result_files",
             "metrics",
+            "policy",
             "python_runtime",
         }
     )
@@ -28678,6 +28679,7 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
             + "."
         )
     declared_metrics = _validated_simulation_metrics(document)
+    declared_policy = _validated_simulation_policy(document, root)
     runner_path = root / "run.py"
     try:
         runner_metadata = runner_path.lstat()
@@ -29106,6 +29108,8 @@ def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
     }
     if declared_metrics is not None:
         handoff["metrics"] = declared_metrics
+    if declared_policy is not None:
+        handoff["policy"] = declared_policy
     return handoff
 
 
@@ -29115,6 +29119,62 @@ GENERATED_SIMULATION_SCHEMA_VERSIONS = frozenset(
 _GENERATED_SIMULATION_METRIC_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 _GENERATED_SIMULATION_MAX_METRICS = 64
 _GENERATED_SIMULATION_MAX_METRIC_DESCRIPTION_CHARS = 512
+
+
+def _validated_simulation_policy(
+    document: JsonDict, bundle_root: Path
+) -> Optional[JsonDict]:
+    """Validate the optional devs.simulation.v2 policy-hook declaration."""
+
+    raw = document.get("policy")
+    if raw is None:
+        return None
+    if document.get("schema_version") == "devs.simulation.v1":
+        raise ValueError(
+            "simulation.json policy requires schema_version devs.simulation.v2."
+        )
+    if not isinstance(raw, dict) or not {"file", "entrypoint"} <= set(raw) or not (
+        set(raw) <= {"file", "entrypoint", "description"}
+    ):
+        raise ValueError(
+            "simulation.json policy must declare file and entrypoint "
+            "(description optional)."
+        )
+    file_name = raw.get("file")
+    entrypoint = raw.get("entrypoint")
+    if (
+        not isinstance(file_name, str)
+        or not file_name.endswith(".py")
+        or file_name.startswith("/")
+        or ".." in file_name
+        or "\\" in file_name
+        or "\x00" in file_name
+        or not isinstance(entrypoint, str)
+        or not entrypoint.isidentifier()
+    ):
+        raise ValueError("simulation.json policy file or entrypoint is invalid.")
+    description = raw.get("description")
+    if description is not None and (
+        not isinstance(description, str)
+        or not description
+        or len(description) > 512
+    ):
+        raise ValueError("simulation.json policy description is invalid.")
+    policy_path = bundle_root / file_name
+    try:
+        resolved = policy_path.resolve(strict=True)
+        resolved.relative_to(bundle_root.resolve(strict=True))
+        metadata = resolved.lstat()
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"simulation.json declares policy file {file_name!r}, which is "
+            "missing from the bundle."
+        ) from exc
+    if policy_path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(
+            f"simulation.json policy file {file_name!r} must be a regular file."
+        )
+    return dict(raw)
 
 
 def _validated_simulation_metrics(document: JsonDict) -> Optional[JsonDict]:
@@ -29187,6 +29247,380 @@ def _validated_simulation_metrics(document: JsonDict) -> Optional[JsonDict]:
             )
         validated["descriptions"] = dict(descriptions)
     return validated
+
+
+def _simulation_policy_variant_starter_files(
+    component_id: str,
+    description: str,
+    simulation_handoff: JsonDict,
+) -> List[tuple[Path, str]]:
+    """Starter files for the file-candidate (editable policy) variant.
+
+    Emitted alongside the parameters variant when a v2 bundle declares a
+    policy hook. Deliberately a reviewed template (never launch-ready):
+    replication seeds and scoring need a human decision, so the config is
+    written disabled with the declared contract prefilled.
+    """
+
+    policy = simulation_handoff["policy"]
+    policy_file = str(policy["file"])
+    policy_basename = PurePosixPath(policy_file).name
+    entrypoint = str(policy["entrypoint"])
+    metrics = simulation_handoff.get("metrics") or {}
+    metric_keys = list(metrics.get("keys") or [])
+    objective = metrics.get("objective") or {}
+    score_metric = str(objective.get("metric") or (metric_keys[0] if metric_keys else "score"))
+    score_direction = str(objective.get("direction") or "maximize")
+    seed_argument = ""
+    for name, declaration in (simulation_handoff.get("candidate_schema") or {}).items():
+        if (
+            isinstance(declaration, dict)
+            and declaration.get("valueType") == "int"
+            and name.lower() in {"seed", "random_seed", "rng_seed", "noise_seed"}
+        ):
+            seed_argument = name
+            break
+
+    environment_body = yaml.safe_dump(
+        {
+            "apiVersion": AUTHORING_API_VERSION,
+            "config": "environment",
+            "id": f"{component_id}-policy",
+            "description": (
+                (description or "Generated simulation")
+                + " File-candidate variant: the decision policy "
+                f"({policy_file}) is the editable candidate."
+            ),
+            "evaluator": {
+                "python": "optpilot_adapter_policy:evaluate",
+                "pythonPath": ["."],
+                "settings": {
+                    "seeds": [101, 102, 103],
+                    "seedArgument": seed_argument,
+                    "scoreMetric": score_metric,
+                    "scoreDirection": score_direction,
+                },
+            },
+            "trialWorkspace": [
+                {"from": "../run.py", "to": "simulator/run.py"},
+                {"from": "../simulation.json", "to": "simulator/simulation.json"},
+                {"from": "../devs_project", "to": "simulator/devs_project"},
+            ],
+            "candidate": {
+                "format": "files",
+                "materialize": {"root": "candidate"},
+                "files": {
+                    "editable": [{"path": policy_basename}],
+                    "required": [policy_basename],
+                    "allow": [policy_basename, "provenance/**"],
+                    "deny": ["**/__pycache__/**", "**/*.pyc"],
+                },
+            },
+            "methodContext": {
+                "instructions": ["policy_instructions.md"],
+                "references": [
+                    {
+                        "name": policy_basename,
+                        "type": "candidate_template",
+                        "path": f"../{policy_file}",
+                    },
+                    {
+                        "name": "replay_settings",
+                        "type": "json",
+                        "path": "policy_replay_settings.json",
+                    },
+                ],
+            },
+            "capabilities": [
+                {
+                    "id": "exact_seed_replay",
+                    "description": (
+                        "Replays the candidate policy on an exact evaluation "
+                        "seed and produces a bounded SQLite trace."
+                    ),
+                    "callable": "optpilot_adapter_policy:replay_candidate",
+                }
+            ],
+            "policyValidation": {
+                "entrypoint": {
+                    "file": policy_basename,
+                    "callable": entrypoint,
+                    "maxArguments": 0,
+                },
+                "forbiddenImports": [
+                    "builtins", "importlib", "os", "pathlib", "socket",
+                    "subprocess", "sys",
+                ],
+                "forbiddenNames": [],
+            },
+            "metrics": {
+                "source": "return",
+                "keys": [
+                    "mean_total_score", "min_total_score", "max_total_score",
+                    "worst_seed", "worst_total_score",
+                ],
+            },
+        },
+        sort_keys=False,
+    )
+    environment_body = (
+        "# Starter only: review the replication seeds, the seed argument, and\n"
+        "# the scoring below, then rename this file to environment_policy.yaml\n"
+        "# so Setup can Check it. The policy contract was declared by the\n"
+        "# generated simulator itself (simulation.json policy block).\n"
+        + environment_body
+    )
+    instructions = (
+        "# Policy contract\n\n"
+        f"The editable candidate file is `{policy_basename}`. It must define a "
+        f"top-level, zero-argument `{entrypoint}()` returning the policy "
+        "object the simulator's decision components delegate to.\n\n"
+        + (
+            f"Declared purpose: {policy['description']}\n\n"
+            if policy.get("description")
+            else ""
+        )
+        + "Snapshot fields and decision semantics are documented in the "
+        "policy file's docstring inside the generated bundle. The policy "
+        "must stay deterministic and dependency-free (no simulator "
+        "internals, os, sys, subprocess, socket, pathlib, importlib, or "
+        "random).\n\n"
+        + (
+            "Declared simulator metrics: "
+            + ", ".join(metric_keys)
+            + f". The optimization score is `{score_metric}` ({score_direction}d "
+            "per replication; the evaluator aggregates mean/min/max and "
+            "worst-seed values).\n"
+            if metric_keys
+            else ""
+        )
+    )
+    replay_settings = json.dumps(
+        {
+            "seeds": [101, 102, 103],
+            "seedArgument": seed_argument,
+            "scoreMetric": score_metric,
+            "scoreDirection": score_direction,
+        },
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    return [
+        (
+            Path("optpilot_configs/environment_policy.template.yaml.disabled"),
+            environment_body,
+        ),
+        (
+            Path("optpilot_configs/optpilot_adapter_policy.py"),
+            _simulation_policy_adapter_starter(policy_file, entrypoint),
+        ),
+        (Path("optpilot_configs/policy_instructions.md"), instructions),
+        (Path("optpilot_configs/policy_replay_settings.json"), replay_settings),
+    ]
+
+
+def _simulation_policy_adapter_starter(policy_file: str, entrypoint: str) -> str:
+    """Adapter template for policy-candidate evaluation of a generated bundle."""
+
+    return f'''"""Starter adapter: evaluate an editable policy against the generated simulator.
+
+Per candidate: overlay the candidate policy over the bundle's declared
+policy file, run one replication per configured seed, score each from the
+summary metrics, keep the worst replication's converted SQLite trace, and
+report aggregate metric values. Review the seed handling before enabling.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
+
+_POLICY_FILE = {policy_file!r}
+_ENTRYPOINT = {entrypoint!r}
+_MAX_TRACE_ROWS = 200000
+
+
+def _run_replication(simulator, results_dir, settings, seed):
+    results_dir.mkdir(parents=True, exist_ok=True)
+    for stale in results_dir.iterdir():
+        stale.unlink()
+    argv = [sys.executable, "-u", "run.py"]
+    seed_argument = str(settings.get("seedArgument") or "")
+    if seed_argument:
+        argv += [f"--{{seed_argument}}", str(seed)]
+    completed = subprocess.run(
+        argv,
+        cwd=simulator,
+        env={{
+            "PATH": str(Path(sys.executable).parent),
+            "HOME": str(results_dir),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONHASHSEED": str(seed),
+            "OPTPILOT_SIMULATION_RESULTS_DIR": str(results_dir),
+            "DEVS_SIMULATION_RESULTS_DIR": str(results_dir),
+            **(
+                {{"PYTHONPATH": __import__("os").environ["PYTHONPATH"]}}
+                if __import__("os").environ.get("PYTHONPATH")
+                else {{}}
+            ),
+        }},
+        capture_output=True,
+        text=True,
+        timeout=float(settings.get("timeoutSeconds", 300.0)),
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            f"Simulation exited with {{completed.returncode}}: "
+            + completed.stderr[-2000:]
+        )
+    summary = json.loads((results_dir / "summary.json").read_text(encoding="utf-8"))
+    metrics = summary.get("metrics") or {{}}
+    score_metric = str(settings.get("scoreMetric") or "score")
+    if score_metric not in metrics:
+        raise RuntimeError(
+            f"summary.json does not report the score metric {{score_metric!r}}."
+        )
+    value = float(metrics[score_metric])
+    score = value if settings.get("scoreDirection") != "minimize" else -value
+    return score, metrics
+
+
+def _convert_trace(jsonl_path, database_path, kpis):
+    rows = [
+        json.loads(line)
+        for line in jsonl_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            "CREATE TABLE events (sequence INTEGER, record_sequence INTEGER, "
+            "simulation_time REAL, component TEXT, port TEXT, value TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE states (sequence INTEGER, record_sequence INTEGER, "
+            "simulation_time REAL, component TEXT, phase TEXT, sigma REAL)"
+        )
+        connection.execute("CREATE TABLE kpi (name TEXT, value REAL)")
+        for row in rows[1:-1][:_MAX_TRACE_ROWS]:
+            if row.get("record_type") == "event":
+                connection.execute(
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        row.get("sequence"), row.get("record_sequence"),
+                        row.get("simulation_time"), row.get("component"),
+                        row.get("port"), json.dumps(row.get("value"), default=str)[:2000],
+                    ),
+                )
+            elif row.get("record_type") == "state":
+                connection.execute(
+                    "INSERT INTO states VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        row.get("sequence"), row.get("record_sequence"),
+                        row.get("simulation_time"), row.get("component"),
+                        row.get("phase"), row.get("sigma"),
+                    ),
+                )
+        for name, value in sorted((kpis or {{}}).items()):
+            if isinstance(value, (int, float)):
+                connection.execute(
+                    "INSERT INTO kpi VALUES (?, ?)", (str(name), float(value))
+                )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _prepared_simulator(workspace, candidate_dir):
+    simulator = workspace / "simulator"
+    policy_target = simulator / _POLICY_FILE
+    candidate_policy = candidate_dir / Path(_POLICY_FILE).name
+    if not candidate_policy.is_file():
+        raise FileNotFoundError(
+            f"Candidate must provide {{Path(_POLICY_FILE).name}}."
+        )
+    policy_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidate_policy, policy_target)
+    return simulator
+
+
+def evaluate(candidate_runtime, context):
+    workspace = Path(context["workspace"]).resolve()
+    candidate_dir = Path(
+        candidate_runtime.get("candidateRoot") or workspace / "candidate"
+    ).resolve()
+    settings = dict(context.get("settings") or {{}})
+    seeds = settings.get("seeds") or [101, 102, 103]
+    simulator = _prepared_simulator(workspace, candidate_dir)
+
+    records = []
+    for seed in seeds:
+        score, metrics = _run_replication(
+            simulator, workspace / f"results-{{seed}}", settings, int(seed)
+        )
+        records.append((int(seed), score, metrics))
+    worst_seed, worst_score, worst_metrics = min(
+        records, key=lambda record: (record[1], record[0])
+    )
+    database_path = workspace / "worst_run.db"
+    if database_path.exists():
+        database_path.unlink()
+    trace = workspace / f"results-{{worst_seed}}" / "event_trace.jsonl"
+    if trace.is_file():
+        _convert_trace(trace, database_path, worst_metrics)
+    scores = [record[1] for record in records]
+    metric_values = {{
+        "mean_total_score": sum(scores) / len(scores),
+        "min_total_score": min(scores),
+        "max_total_score": max(scores),
+        "worst_seed": float(worst_seed),
+        "worst_total_score": worst_score,
+    }}
+    output_files = []
+    if database_path.is_file():
+        output_files.append(
+            {{
+                "declaration_id": "worst_run",
+                "name": "worst_run",
+                "path": database_path.relative_to(workspace).as_posix(),
+                "kind": "file",
+                "media_type": "application/vnd.sqlite3",
+                "metadata": {{"seed": worst_seed}},
+            }}
+        )
+    return {{
+        "status": "success",
+        "metric_values": metric_values,
+        "output_files": output_files,
+        "event_summary": {{"replications": len(records), "worst_seed": worst_seed}},
+    }}
+
+
+def replay_candidate(*, candidate_dir, settings, seed, database_path):
+    workspace = Path(database_path).resolve().parent
+    simulator = _prepared_simulator(workspace, Path(candidate_dir))
+    results_dir = workspace / f"replay-{{int(seed)}}"
+    score, metrics = _run_replication(
+        simulator, results_dir, dict(settings), int(seed)
+    )
+    trace = results_dir / "event_trace.jsonl"
+    database = Path(database_path)
+    if database.exists():
+        database.unlink()
+    if trace.is_file():
+        _convert_trace(trace, database, metrics)
+    else:
+        _convert_trace_empty = sqlite3.connect(database)
+        _convert_trace_empty.execute("CREATE TABLE kpi (name TEXT, value REAL)")
+        _convert_trace_empty.commit()
+        _convert_trace_empty.close()
+    return {{"total_score": score, "metrics": metrics}}
+'''
 
 
 def _simulation_environment_adapter_starter(
@@ -29820,6 +30254,54 @@ def _argument_vector(manifest, candidate):
     return result
 
 
+def _check_event_trace_structure(path):
+    """Bounded operational-conformance check of a declared event trace.
+
+    Rejects a trace whose header, observation rows, or summary footer are
+    structurally broken (the generated writer produces exactly this shape),
+    so a truncated or corrupt trace fails the trial instead of silently
+    weakening downstream evidence.
+    """
+
+    payload = _read_bounded_regular_file(
+        path, maximum=_MAX_RESULT_FILE_BYTES, label="Event trace"
+    )
+    rows = []
+    for index, raw in enumerate(payload.decode("utf-8", errors="strict").splitlines()):
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            row = json.loads(text)
+        except ValueError:
+            raise RuntimeError(f"Event trace line {index + 1} is not valid JSON.")
+        if not isinstance(row, dict):
+            raise RuntimeError(f"Event trace line {index + 1} is not an object.")
+        rows.append(row)
+    if len(rows) < 2:
+        raise RuntimeError("Event trace must contain a header and a summary footer.")
+    if rows[0].get("record_type") != "header":
+        raise RuntimeError("Event trace must start with its header row.")
+    if rows[-1].get("record_type") != "summary":
+        raise RuntimeError("Event trace must end with its summary footer.")
+    observed = 0
+    previous_sequence = 0
+    for row in rows[1:-1]:
+        if row.get("record_type") not in ("event", "state"):
+            raise RuntimeError("Event trace rows must be event or state records.")
+        observed += 1
+        sequence = row.get("record_sequence")
+        if type(sequence) is int:
+            if sequence <= previous_sequence:
+                raise RuntimeError("Event trace record_sequence went backwards.")
+            previous_sequence = sequence
+    recorded = rows[-1].get("recorded_records")
+    if type(recorded) is int and recorded != observed:
+        raise RuntimeError(
+            f"Event trace footer declares {recorded} records but {observed} are present."
+        )
+
+
 def evaluate(candidate_runtime, context):
     if not isinstance(context, dict) or not isinstance(context.get("workspace"), str):
         raise ValueError("Evaluation context is missing its trial Workspace.")
@@ -29934,6 +30416,8 @@ def evaluate(candidate_runtime, context):
                         f"Simulation results declare metric {name!r} more than once."
                     )
                 metric_values[name] = value
+        if path.name == "event_trace.jsonl":
+            _check_event_trace_structure(path)
     if not metric_values:
         raise NotImplementedError(
             "The simulator runs, but no optimization metric is declared yet. "
@@ -30123,6 +30607,15 @@ def _configure_workspace_catalog_role(
                 ),
             )
         ]
+        if simulation_handoff and simulation_handoff.get("policy"):
+            # The bundle declares an optimizable decision policy: emit the
+            # file-candidate variant alongside the parameters one, as a
+            # reviewed template (seeds and scoring need a human decision).
+            support_files.extend(
+                _simulation_policy_variant_starter_files(
+                    component_id, description, simulation_handoff
+                )
+            )
         needs_editing = not launch_ready
     else:
         relative = Path("optpilot_configs/method.template.yaml.disabled")

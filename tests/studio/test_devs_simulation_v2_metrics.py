@@ -145,6 +145,83 @@ class DevsSimulationV2MetricsTest(unittest.TestCase):
                 {"source": "return", "keys": ["throughput", "queue_length"]},
             )
 
+    def test_policy_bundle_emits_the_file_candidate_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            root = tmp_path / "workspace"
+            _write_interface_generated_simulation(root)
+            (root / "devs_project" / "policy.py").write_text(
+                '"""snapshot: {queue: [...]}"""\n'
+                "def create_policy():\n    return None\n",
+                encoding="utf-8",
+            )
+            manifest_path = root / "simulation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema_version"] = "devs.simulation.v2"
+            manifest["metrics"] = dict(_METRICS_BLOCK)
+            manifest["policy"] = {
+                "file": "devs_project/policy.py",
+                "entrypoint": "create_policy",
+                "description": "Dispatch decisions.",
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            handoff = _workspace_simulation_handoff(root)
+            self.assertEqual(
+                handoff["policy"]["entrypoint"], "create_policy"
+            )
+            workspace = _create_ui_workspace(
+                state, {"title": "Policy simulator", "root": str(root)}
+            )
+            result = _configure_workspace_catalog_role(
+                state,
+                workspace["id"],
+                {"role": "environment", "id": "generated-sim"},
+            )
+            created = set(result["configuration"]["created_paths"])
+            self.assertIn(
+                "optpilot_configs/environment_policy.template.yaml.disabled",
+                created,
+            )
+            self.assertIn(
+                "optpilot_configs/optpilot_adapter_policy.py", created
+            )
+            self.assertIn("optpilot_configs/policy_instructions.md", created)
+            variant = yaml.safe_load(
+                (
+                    root
+                    / "optpilot_configs"
+                    / "environment_policy.template.yaml.disabled"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(variant["candidate"]["format"], "files")
+            self.assertEqual(
+                variant["policyValidation"]["entrypoint"]["callable"],
+                "create_policy",
+            )
+            self.assertEqual(
+                variant["capabilities"][0]["callable"],
+                "optpilot_adapter_policy:replay_candidate",
+            )
+
+    def test_missing_policy_file_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = self._bundle(Path(tmp_dir))
+            manifest_path = root / "simulation.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema_version"] = "devs.simulation.v2"
+            manifest["policy"] = {
+                "file": "devs_project/policy.py",
+                "entrypoint": "create_policy",
+            }
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "missing from the bundle"):
+                _workspace_simulation_handoff(root)
+
     def test_v1_bundle_still_configures_a_disabled_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
