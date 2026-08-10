@@ -14401,7 +14401,14 @@ def _schedule_run_execution(
                         return
                     if state._background_execution_closing.wait(retry_delay):
                         return
-                    retry_delay = min(5.0, max(0.25, retry_delay * 2.0))
+                    # A persistent identical failure (an unrecoverable worker,
+                    # for example) must not hammer the Realm every 5 seconds
+                    # forever — that starves every other Studio request. Let
+                    # the failure streak back off toward 5 minutes; a healthy
+                    # dispatch resets the signature and returns to the fast
+                    # cadence.
+                    ceiling = 300.0 if last_error_signature is not None else 5.0
+                    retry_delay = min(ceiling, max(0.25, retry_delay * 2.0))
             except Exception:
                 # The canonical nonterminal run remains intact and will be
                 # rediscovered through Core. Studio owns no lifecycle mirror.
