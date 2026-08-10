@@ -84,6 +84,19 @@ _SELECTION_METADATA_KEY = "selection_ref"
 # requested view is deliberately very short lived.  The ledger drops this
 # grace atomically when the first consumer is acquired.
 _ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS = 5.0
+# A build proves liveness through its heartbeat cadence, not through the
+# delivered-view TTL.  Cap the build-phase owner/builder term so a builder
+# that dies without releasing its claim (killed process, dropped HTTP handler
+# thread) becomes fenceable within minutes even when the requested consumer
+# view is very long lived; the first consumer acquisition atomically
+# re-extends the owner to the full requested view lifetime.
+_ACTIVE_MATERIALIZATION_LEASE_MAX_SECONDS = 120.0
+# How long a reader waits on someone else's in-flight build before probing
+# for a dead builder, and how often it re-probes.  Probes are fenced by the
+# ledger: they can only retire a build whose owner term has already lapsed,
+# so an actively heartbeating builder is never disturbed.
+_STALE_BUILD_TAKEOVER_GRACE_SECONDS = 1.0
+_STALE_BUILD_TAKEOVER_INTERVAL_SECONDS = 1.0
 
 
 class SelectionProjectionUnavailable(RealmConflict):
@@ -1859,13 +1872,15 @@ class RealmProjectionService:
         semantic_digest: str,
         ttl_seconds: float,
         creation_attempt: int,
+        stale_build_takeover_attempts: int = 2,
     ) -> ProjectionRealizationRecord:
         if isinstance(creation_attempt, bool) or not isinstance(creation_attempt, int):
             raise TypeError("creation_attempt must be an integer.")
         if creation_attempt < 0:
             raise ValueError("creation_attempt must be nonnegative.")
-        materialization_ttl_seconds = max(
-            ttl_seconds, _ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS
+        materialization_ttl_seconds = min(
+            max(ttl_seconds, _ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS),
+            _ACTIVE_MATERIALIZATION_LEASE_MAX_SECONDS,
         )
         root_id = self._root_binding.projection_root_id
         active = self._ledger.find_active_projection_realization(
@@ -1953,9 +1968,39 @@ class RealmProjectionService:
                     ttl_seconds=materialization_ttl_seconds,
                     operation_key=claim_key,
                 )
-        return self._wait_for_ready(
+        waited = self._wait_for_ready(
             actor_principal_id=actor_principal_id,
             realization_id=active.realization_id,
+            stale_build_ttl_seconds=(
+                materialization_ttl_seconds
+                if stale_build_takeover_attempts > 0
+                else None
+            ),
+        )
+        if waited is not None:
+            return waited
+        # The stalled build's lapsed owner term was fenced and its realization
+        # retired.  Rebuild under a takeover-scoped create identity so exact
+        # replay of the original creation cannot resurrect the retired row.
+        takeover_operation = "projection.stale-build.recreate/" + request_digest(
+            {
+                "format": "optpilot.projection-stale-build-takeover.v1",
+                "operation_id": operation_id,
+                "creation_attempt": creation_attempt,
+                "retired_realization_id": active.realization_id,
+            }
+        )
+        return self._ensure_ready_realization(
+            operation_id=takeover_operation,
+            actor_principal_id=actor_principal_id,
+            store=store,
+            spec=spec,
+            roots=roots,
+            resolution=resolution,
+            semantic_digest=semantic_digest,
+            ttl_seconds=ttl_seconds,
+            creation_attempt=0,
+            stale_build_takeover_attempts=stale_build_takeover_attempts - 1,
         )
 
     def _materialize(
@@ -2203,9 +2248,28 @@ class RealmProjectionService:
         return completed.realization
 
     def _wait_for_ready(
-        self, *, actor_principal_id: str, realization_id: str
-    ) -> ProjectionRealizationRecord:
-        deadline = time.monotonic() + self._coordination_timeout_seconds
+        self,
+        *,
+        actor_principal_id: str,
+        realization_id: str,
+        stale_build_ttl_seconds: float | None = None,
+    ) -> ProjectionRealizationRecord | None:
+        """Wait for publication, probing for a dead builder along the way.
+
+        A builder that dies without releasing its claim (killed process,
+        dropped HTTP handler thread) leaves the realization in a creating or
+        materializing state that no surviving process will ever publish.  When
+        ``stale_build_ttl_seconds`` is provided, this wait periodically
+        attempts a fenced retirement of the stalled build; the ledger rejects
+        the attempt while the builder's owner term is still live, so an
+        actively heartbeating builder is never disturbed.  ``None`` is
+        returned only after such a takeover retired the realization, telling
+        the caller to rebuild under a fresh create identity.
+        """
+
+        now = time.monotonic()
+        deadline = now + self._coordination_timeout_seconds
+        next_probe = now + _STALE_BUILD_TAKEOVER_GRACE_SECONDS
         while True:
             record = self._ledger.read_projection_realization(
                 actor_principal_id=actor_principal_id,
@@ -2220,9 +2284,73 @@ class RealmProjectionService:
                 raise RealmConflict(
                     f"Projection realization became {record.state.value} before publication."
                 )
+            now = time.monotonic()
+            if stale_build_ttl_seconds is not None and now >= next_probe:
+                next_probe = now + _STALE_BUILD_TAKEOVER_INTERVAL_SECONDS
+                if self._try_retire_stale_build(
+                    realization_id=realization_id,
+                    ttl_seconds=stale_build_ttl_seconds,
+                ):
+                    return None
             if time.monotonic() >= deadline:
                 raise RealmConflict("Timed out waiting for projection publication.")
             time.sleep(0.01)
+
+    def _try_retire_stale_build(
+        self, *, realization_id: str, ttl_seconds: float
+    ) -> bool:
+        """Fence and retire one dead-builder realization; False while live.
+
+        The maintenance close is the fencing decision: the ledger only allows
+        it once the build's owner term has lapsed, so this can never disturb a
+        heartbeating builder.  After fencing, the ordinary root reconciler
+        retires the physical namespace exactly as private-build recovery does.
+        """
+
+        try:
+            closing = self._ledger.close_projection_realization(
+                operation_id=(
+                    "projection.maintenance.close/"
+                    f"{_cleanup_key(realization_id)}"
+                ),
+                actor_principal_id=self._maintenance_principal_id,
+                realization_id=realization_id,
+                owner_holder_id=None,
+                owner_fencing_token=None,
+            )
+        except (RealmConflict, RealmExpired):
+            return False
+        if (
+            closing.state is ProjectionRealizationState.CLOSING
+            and closing.wrapper_inode is None
+        ):
+            # The builder can die after the row commit but before the first
+            # namespace claim.  Once the lapsed owner is fenced, publishing
+            # the exact empty claim gives cleanup an authenticated object (or
+            # recovers the exact partial wrapper) to retire.
+            create_projection_wrapper(
+                self._root_binding,
+                directory_name=closing.relative_name,
+                realization_id=closing.realization_id,
+                claim_nonce=closing.claim_nonce,
+            )
+        takeover_key = request_digest(
+            {
+                "format": "optpilot.projection-stale-build-reconcile.v1",
+                "projection_root_id": self._root_binding.projection_root_id,
+                "realization_id": realization_id,
+            }
+        )
+        cleaned = self.reconcile_projection(
+            operation_id=f"projection.stale-build.reconcile/{takeover_key}",
+            realization_id=realization_id,
+            ttl_seconds=ttl_seconds,
+        )
+        if cleaned.realization.state is not ProjectionRealizationState.CLEANED:
+            raise RealmIntegrityError(
+                "Stale projection build was not retired before takeover."
+            )
+        return True
 
     def _ensure_registered_root(self, *, require_active: bool = True) -> None:
         validate_projection_root(self._root_binding)

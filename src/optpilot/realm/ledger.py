@@ -16,6 +16,7 @@ import math
 import os
 import sqlite3
 import stat
+import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -1115,6 +1116,32 @@ class ContentCaptureHandle:
         )
 
 
+# SQLite re-parses the entire schema on a new connection's first prepared
+# statement.  The realm schema carries hundreds of guard triggers, so that
+# parse dominates fresh-connection cost by orders of magnitude over the actual
+# queries.  The ledger therefore keeps a small pool of idle connections;
+# beyond this many, released connections really close.
+_CONNECTION_POOL_MAX = 8
+
+
+class _PooledLedgerConnection(sqlite3.Connection):
+    """Ledger connection whose ``close()`` returns it to the ledger's pool.
+
+    Call sites keep their exact acquire/close discipline; only the meaning of
+    ``close()`` changes from "discard" to "hand back for reuse".  ``_release``
+    stays ``None`` until the ledger finishes validating a freshly created
+    connection, so any failure during setup still closes it for real.
+    """
+
+    _release: Optional[Callable[["_PooledLedgerConnection"], bool]] = None
+    _pooled: bool = False
+
+    def close(self) -> None:
+        release = self._release
+        if release is None or not release(self):
+            sqlite3.Connection.close(self)
+
+
 class RealmLedger(
     ReviewCollectionLedgerMixin,
     InterfaceOutputLedgerMixin,
@@ -1149,6 +1176,14 @@ class RealmLedger(
         self._root_fd: Optional[int] = None
         self._database_fd: Optional[int] = None
         self._realm_id: Optional[str] = None
+        # Cross-thread reuse hands one connection to at most one thread at a
+        # time, which additionally requires the sqlite library to be compiled
+        # threadsafe.  Anything less keeps the historical
+        # fresh-connection-per-call behavior.
+        self._connection_pool: list[_PooledLedgerConnection] = []
+        self._connection_pool_lock = threading.Lock()
+        self._connection_pool_closed = sqlite3.threadsafety < 3
+        self._connection_pool_pid = os.getpid()
         self._pin_authority_files()
         connection = self._connect()
         try:
@@ -1241,6 +1276,18 @@ class RealmLedger(
             raise RealmIntegrityError("Realm authority path identity changed.")
 
     def close(self) -> None:
+        lock = getattr(self, "_connection_pool_lock", None)
+        if lock is not None:
+            with lock:
+                self._connection_pool_closed = True
+                drained = list(self._connection_pool)
+                self._connection_pool.clear()
+            for connection in drained:
+                connection._release = None
+                try:
+                    sqlite3.Connection.close(connection)
+                except sqlite3.Error:
+                    pass
         for attribute in ("_database_fd", "_root_fd"):
             descriptor = getattr(self, attribute, None)
             if descriptor is not None:
@@ -1261,13 +1308,33 @@ class RealmLedger(
 
     def _connect(self) -> sqlite3.Connection:
         self._assert_authority_path()
+        with self._connection_pool_lock:
+            if self._connection_pool_pid != os.getpid():
+                # SQLite connections must not cross a fork.  Abandon the
+                # inherited handles without touching them; the parent still
+                # owns the originals.
+                self._connection_pool_pid = os.getpid()
+                for inherited in self._connection_pool:
+                    inherited._release = None
+                    inherited._pooled = False
+                self._connection_pool.clear()
+            if self._connection_pool:
+                pooled = self._connection_pool.pop()
+                pooled._pooled = False
+                return pooled
         uri = f"{self.database_path.as_uri()}?mode=rwc&nofollow=1"
+        pooling = not self._connection_pool_closed
         try:
             connection = sqlite3.connect(
                 uri,
                 uri=True,
                 isolation_level=None,
                 timeout=self.busy_timeout_ms / 1000,
+                # Pooled connections are handed to one thread at a time; the
+                # pool is the serialization proof the module-level check
+                # cannot see.
+                check_same_thread=not pooling,
+                factory=_PooledLedgerConnection,
             )
             connection.row_factory = sqlite3.Row
             connection.create_function(
@@ -1294,11 +1361,42 @@ class RealmLedger(
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms:d}")
             connection.execute("PRAGMA synchronous = FULL")
+            if pooling:
+                connection._release = self._release_connection
             return connection
         except BaseException:
             if "connection" in locals():
+                connection._release = None
                 connection.close()
             raise
+
+    def _release_connection(self, connection: _PooledLedgerConnection) -> bool:
+        """Accept a released connection back into the idle pool.
+
+        Returning ``False`` tells the connection to really close.  A durable
+        authority check is not needed here: every later acquisition re-runs
+        ``_assert_authority_path`` before the connection is handed out again.
+        """
+
+        try:
+            if connection.in_transaction:
+                # A real close would roll an abandoned transaction back;
+                # reuse must not inherit it either.
+                connection.execute("ROLLBACK")
+        except sqlite3.Error:
+            return False
+        with self._connection_pool_lock:
+            if connection._pooled:
+                return True
+            if (
+                self._connection_pool_closed
+                or self._connection_pool_pid != os.getpid()
+                or len(self._connection_pool) >= _CONNECTION_POOL_MAX
+            ):
+                return False
+            connection._pooled = True
+            self._connection_pool.append(connection)
+            return True
 
     def _migrate(self, connection: sqlite3.Connection) -> None:
         migrations = tuple(

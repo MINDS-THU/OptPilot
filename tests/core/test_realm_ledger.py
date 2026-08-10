@@ -1389,5 +1389,111 @@ class RealmLedgerTest(unittest.TestCase):
             )
 
 
+class RealmLedgerConnectionPoolTest(unittest.TestCase):
+    """The ledger reuses idle connections to avoid per-call schema parsing."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.ledger = RealmLedger(Path(self.temporary.name) / "realm.sqlite3")
+
+    def tearDown(self) -> None:
+        self.ledger.close()
+        self.temporary.cleanup()
+
+    def test_connections_are_reused_across_sequential_calls(self) -> None:
+        first = self.ledger._connect()
+        first.close()
+        second = self.ledger._connect()
+        try:
+            self.assertIs(second, first)
+            self.assertEqual(second.execute("SELECT 1").fetchone()[0], 1)
+        finally:
+            second.close()
+
+    def test_release_rolls_back_an_abandoned_transaction(self) -> None:
+        connection = self.ledger._connect()
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TEMP TABLE pool_probe(x)")
+        self.assertTrue(connection.in_transaction)
+        connection.close()
+        reused = self.ledger._connect()
+        try:
+            self.assertIs(reused, connection)
+            self.assertFalse(reused.in_transaction)
+            leftover = reused.execute(
+                "SELECT name FROM temp.sqlite_master WHERE name = 'pool_probe'"
+            ).fetchone()
+            self.assertIsNone(leftover)
+        finally:
+            reused.close()
+
+    def test_pooled_connection_crosses_threads_safely(self) -> None:
+        first = self.ledger._connect()
+        first.close()
+        results = []
+
+        def worker() -> None:
+            connection = self.ledger._connect()
+            try:
+                results.append(
+                    (connection, connection.execute("SELECT 1").fetchone()[0])
+                )
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        self.assertEqual(len(results), 1)
+        self.assertIs(results[0][0], first)
+        self.assertEqual(results[0][1], 1)
+
+    def test_pool_is_bounded_and_ledger_close_closes_idle_connections(
+        self,
+    ) -> None:
+        from optpilot.realm.ledger import _CONNECTION_POOL_MAX
+
+        connections = [
+            self.ledger._connect() for _ in range(_CONNECTION_POOL_MAX + 2)
+        ]
+        self.assertEqual(
+            len({id(connection) for connection in connections}),
+            len(connections),
+        )
+        for connection in connections:
+            connection.close()
+        pooled = list(self.ledger._connection_pool)
+        self.assertEqual(len(pooled), _CONNECTION_POOL_MAX)
+        overflow = [
+            connection
+            for connection in connections
+            if not any(connection is item for item in pooled)
+        ]
+        self.assertEqual(len(overflow), 2)
+        for connection in overflow:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+        self.ledger.close()
+        for connection in connections:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+
+    def test_pool_abandons_connections_inherited_across_a_fork(self) -> None:
+        first = self.ledger._connect()
+        first.close()
+        self.ledger._connection_pool_pid = -1  # simulate a forked child
+        fresh = self.ledger._connect()
+        try:
+            self.assertIsNot(fresh, first)
+        finally:
+            fresh.close()
+        # The inherited handle was abandoned untouched for its owning
+        # process, and closing it now closes it for real.
+        self.assertEqual(first.execute("SELECT 1").fetchone()[0], 1)
+        first.close()
+        with self.assertRaises(sqlite3.ProgrammingError):
+            first.execute("SELECT 1")
+
+
 if __name__ == "__main__":
     unittest.main()

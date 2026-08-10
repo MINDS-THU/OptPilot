@@ -2122,6 +2122,251 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         self.assertFalse(old_wrapper.exists())
         self.projections.append(replacement)
 
+    def test_shared_reader_takes_over_dead_builder_materializing_realization(
+        self,
+    ) -> None:
+        spec = ProjectionSpec(
+            "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
+        )
+        with mock.patch(
+            "optpilot.realm.projection_service."
+            "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
+            0.12,
+        ), mock.patch.object(
+            self.service,
+            "_materialize",
+            side_effect=RuntimeError("builder died mid-copy"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "builder died"):
+                self.service.project_read_only(
+                    operation_id="dead-builder-original",
+                    actor_principal_id="operator",
+                    store_id=self.store.store_id,
+                    spec=spec,
+                    holder_id="dead-builder-holder",
+                    ttl_seconds=0.12,
+                )
+        materializing = self.ledger.list_projection_realizations(
+            actor_principal_id=self.service.maintenance_principal_id,
+            projection_root_id=self.service.root_binding.projection_root_id,
+            states=(ProjectionRealizationState.MATERIALIZING,),
+        )
+        self.assertEqual(len(materializing), 1)
+        old_id = materializing[0].realization_id
+        time.sleep(0.18)
+
+        with mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_GRACE_SECONDS",
+            0.02,
+        ), mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_INTERVAL_SECONDS",
+            0.02,
+        ):
+            replacement = self.service.project_read_only(
+                operation_id="dead-builder-takeover",
+                actor_principal_id="operator",
+                store_id=self.store.store_id,
+                spec=spec,
+                holder_id="takeover-holder",
+                ttl_seconds=60,
+            )
+        self.projections.append(replacement)
+
+        self.assertNotEqual(replacement.realization.realization_id, old_id)
+        self.assertEqual(
+            (replacement.root_path / "payload.txt").read_text(encoding="utf-8"),
+            "ledger projection",
+        )
+        records = self.ledger.list_projection_realizations(
+            actor_principal_id=self.service.maintenance_principal_id,
+            projection_root_id=self.service.root_binding.projection_root_id,
+            states=tuple(ProjectionRealizationState),
+        )
+        by_id = {record.realization_id: record for record in records}
+        self.assertEqual(by_id[old_id].state, ProjectionRealizationState.CLEANED)
+        self.assertEqual(
+            by_id[replacement.realization.realization_id].state,
+            ProjectionRealizationState.READY,
+        )
+
+    def test_reader_takeover_recovers_wrapperless_creating_realization(
+        self,
+    ) -> None:
+        spec = ProjectionSpec(
+            "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
+        )
+        other = RealmProjectionService(
+            self.ledger,
+            local_stores={self.store.store_id: self.store},
+            projection_root=self.root / "projections",
+            coordination_timeout_seconds=0.3,
+        )
+        with mock.patch(
+            "optpilot.realm.projection_service."
+            "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
+            0.12,
+        ), mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_GRACE_SECONDS",
+            0.03,
+        ), mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_INTERVAL_SECONDS",
+            0.03,
+        ), mock.patch.object(
+            self.ledger,
+            "claim_projection_materialization",
+            side_effect=RealmConflict("injected claim loss"),
+        ):
+            # Every claim fails, so each takeover fences the previous lapsed
+            # creating row, recreates, and finally exhausts its budget.
+            with self.assertRaisesRegex(RealmConflict, "Timed out waiting"):
+                other.project_read_only(
+                    operation_id="creating-crash",
+                    actor_principal_id="operator",
+                    store_id=self.store.store_id,
+                    spec=spec,
+                    holder_id="creating-crash-holder",
+                    ttl_seconds=0.12,
+                )
+        time.sleep(0.18)
+
+        with mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_GRACE_SECONDS",
+            0.02,
+        ), mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_INTERVAL_SECONDS",
+            0.02,
+        ):
+            replacement = other.project_read_only(
+                operation_id="creating-takeover",
+                actor_principal_id="operator",
+                store_id=self.store.store_id,
+                spec=spec,
+                holder_id="creating-takeover-holder",
+                ttl_seconds=60,
+            )
+        self.projections.append(replacement)
+
+        self.assertEqual(
+            (replacement.root_path / "payload.txt").read_text(encoding="utf-8"),
+            "ledger projection",
+        )
+        records = self.ledger.list_projection_realizations(
+            actor_principal_id=other.maintenance_principal_id,
+            projection_root_id=other.root_binding.projection_root_id,
+            states=tuple(ProjectionRealizationState),
+        )
+        by_state = {record.realization_id: record.state for record in records}
+        self.assertEqual(
+            by_state[replacement.realization.realization_id],
+            ProjectionRealizationState.READY,
+        )
+        self.assertNotIn(ProjectionRealizationState.CREATING, by_state.values())
+        self.assertNotIn(
+            ProjectionRealizationState.MATERIALIZING, by_state.values()
+        )
+
+    def test_waiting_reader_never_fences_a_live_builder_term(self) -> None:
+        spec = ProjectionSpec(
+            "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
+        )
+        with mock.patch.object(
+            self.service,
+            "_materialize",
+            side_effect=RuntimeError("crash after claim"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "crash after claim"):
+                self.service.project_read_only(
+                    operation_id="live-term-original",
+                    actor_principal_id="operator",
+                    store_id=self.store.store_id,
+                    spec=spec,
+                    holder_id="live-term-holder",
+                    ttl_seconds=60,
+                )
+        materializing = self.ledger.list_projection_realizations(
+            actor_principal_id=self.service.maintenance_principal_id,
+            projection_root_id=self.service.root_binding.projection_root_id,
+            states=(ProjectionRealizationState.MATERIALIZING,),
+        )
+        self.assertEqual(len(materializing), 1)
+        old_id = materializing[0].realization_id
+
+        other = RealmProjectionService(
+            self.ledger,
+            local_stores={self.store.store_id: self.store},
+            projection_root=self.root / "projections",
+            coordination_timeout_seconds=0.3,
+        )
+        with mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_GRACE_SECONDS",
+            0.02,
+        ), mock.patch(
+            "optpilot.realm.projection_service."
+            "_STALE_BUILD_TAKEOVER_INTERVAL_SECONDS",
+            0.02,
+        ):
+            with self.assertRaisesRegex(RealmConflict, "Timed out waiting"):
+                other.project_read_only(
+                    operation_id="live-term-waiter",
+                    actor_principal_id="operator",
+                    store_id=self.store.store_id,
+                    spec=spec,
+                    holder_id="live-term-waiter-holder",
+                    ttl_seconds=60,
+                )
+
+        current = self.ledger.read_projection_realization(
+            actor_principal_id="operator",
+            realization_id=old_id,
+        )
+        self.assertEqual(
+            current.state, ProjectionRealizationState.MATERIALIZING
+        )
+
+    def test_materialization_lease_term_is_capped_for_long_lived_consumers(
+        self,
+    ) -> None:
+        from optpilot.realm.projection_service import (
+            _ACTIVE_MATERIALIZATION_LEASE_MAX_SECONDS,
+        )
+
+        captured: dict[str, float] = {}
+        real_materialize = self.service._materialize
+
+        def capturing(**kwargs):
+            captured["ttl_seconds"] = kwargs["ttl_seconds"]
+            return real_materialize(**kwargs)
+
+        with mock.patch.object(
+            self.service, "_materialize", side_effect=capturing
+        ):
+            projection = self.service.project_read_only(
+                operation_id="capped-materialization",
+                actor_principal_id="operator",
+                store_id=self.store.store_id,
+                spec=ProjectionSpec(
+                    "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
+                ),
+                holder_id="day-long-viewer",
+                ttl_seconds=86400,
+            )
+        self.projections.append(projection)
+
+        self.assertEqual(
+            captured["ttl_seconds"], _ACTIVE_MATERIALIZATION_LEASE_MAX_SECONDS
+        )
+        lease = projection.consumer_lease
+        self.assertAlmostEqual(
+            lease.expires_at - lease.created_at, 86400.0, delta=5.0
+        )
+
     def test_expired_cleanup_worker_is_reclaimed_and_completed(self) -> None:
         projection = self.service.project_read_only(
             operation_id="cleanup-reclaim-source",
