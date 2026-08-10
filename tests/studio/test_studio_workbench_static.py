@@ -569,6 +569,11 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "renderOperatorJobReviewAction",
             "renderOperatorJobInterfaceAction",
         )
+        payload = _function_source(
+            self.source,
+            "reviewCollection",
+            "reviewContainsCandidate",
+        )
         command_draft = _function_source(
             self.source,
             "shortlistCommandDraft",
@@ -623,7 +628,12 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("Delete Shortlist", review)
         self.assertIn('class="review-more"', review)
         self.assertIn("readonly", review)
-        self.assertIn("shortlist_id: draft.collection_id", command_draft)
+        # The renderer consumes the raw Shortlist payload; the legacy
+        # review_collection bridge field must not come back.
+        self.assertIn("detail.shortlist", payload)
+        self.assertIn("collection.cards", review)
+        self.assertNotIn(".review_collection =", self.source)
+        self.assertIn("shortlist_id: draft.shortlist_id", command_draft)
         self.assertIn("expected_revision: draft.expected_revision", command_draft)
         self.assertIn("cards: draft.items.map", command_draft)
         self.assertIn('optpilot.run-shortlist-command.v1', mutation_request)

@@ -5431,12 +5431,16 @@ def _handler_factory(state: UiState):
                     )
                 )
                 export = _query_value(query, "format") == "export"
+                response: JsonDict = {
+                    "schema": REVIEW_COLLECTION_RESPONSE_SCHEMA,
+                    "run_id": run_id,
+                }
                 if export:
                     stored_collection = runtime.review_collections.read_for_run(
                         run_id=run_id,
                         revision=revision,
                     )
-                    collection_payload = (
+                    response["collection"] = (
                         None
                         if stored_collection is None
                         else stored_collection.export_dict()
@@ -5446,23 +5450,15 @@ def _handler_factory(state: UiState):
                         run_id=run_id,
                         revision=revision,
                     )
-                    collection_payload = (
-                        None
-                        if shortlist is None
-                        else _shortlist_legacy_ui_projection(shortlist)
+                    response["shortlist"] = (
+                        None if shortlist is None else shortlist.to_dict()
                     )
                 history = runtime.review_collections.history_for_run(
                     run_id=run_id,
                     before_revision=before_revision,
                 )
-                self._send_json(
-                    {
-                        "schema": REVIEW_COLLECTION_RESPONSE_SCHEMA,
-                        "run_id": run_id,
-                        "collection": collection_payload,
-                        "history": _public_shortlist_history(history),
-                    }
-                )
+                response["history"] = _public_shortlist_history(history)
+                self._send_json(response)
                 return
             if resource == "file":
                 self._send_json(
@@ -12020,39 +12016,6 @@ def _shortlist_draft_from_request(value: Any) -> ShortlistDraft:
     )
 
 
-def _shortlist_card_legacy_ui_projection(card: Any) -> JsonDict:
-    payload = card.to_dict()
-    return {
-        "position": payload["position"],
-        "selection": payload["selection"],
-        "note": payload["note"],
-        "inspection_outcomes": payload["inspection_outcomes"],
-        "evidence": payload["saved_evidence"],
-        "evidence_digest": payload["saved_evidence_digest"],
-        "saved_result_at": payload["saved_result_at"],
-        "first_revision": payload["first_revision"],
-    }
-
-
-def _shortlist_legacy_ui_projection(shortlist: Any) -> JsonDict:
-    """Bridge the new product facade to the current Run renderer.
-
-    The Review Collection remains the one persistence authority.  This bounded
-    adapter can be removed once the renderer consumes ``shortlist`` directly;
-    no second durable record is introduced.
-    """
-
-    return {
-        "collection_id": shortlist.shortlist_id,
-        "revision": shortlist.revision,
-        "revision_digest": shortlist.revision_digest,
-        "title": shortlist.title,
-        "primary_source": {"kind": "run", "id": shortlist.run_id},
-        "items": [_shortlist_card_legacy_ui_projection(card) for card in shortlist.cards],
-        "created_at": shortlist.created_at,
-    }
-
-
 def _public_shortlist_history(history: Any) -> Optional[JsonDict]:
     """Return only the bounded revision navigator needed by the UI."""
 
@@ -12173,9 +12136,6 @@ def _execute_shortlist_command(
             "schema": SHORTLIST_RESPONSE_SCHEMA,
             "run_id": canonical_run_id,
             "shortlist": shortlist.to_dict(),
-            # Temporary renderer bridge; both fields describe the same
-            # immutable Review-backed revision.
-            "collection": _shortlist_legacy_ui_projection(shortlist),
             "history": _public_shortlist_history(
                 runtime.review_collections.history_for_run(
                     run_id=canonical_run_id
@@ -14815,11 +14775,6 @@ def _realm_run_detail(
         "pages": pages,
         "timeline": timeline,
         "shortlist": None if shortlist is None else shortlist.to_dict(),
-        "review_collection": (
-            None
-            if shortlist is None
-            else _shortlist_legacy_ui_projection(shortlist)
-        ),
         "review_collection_history": (
             _public_shortlist_history(review_collection_history)
         ),
