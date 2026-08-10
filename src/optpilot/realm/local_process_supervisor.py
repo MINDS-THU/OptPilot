@@ -51,6 +51,30 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
 
 from ._validation import finite_time, lower_hex_digest, positive_int
 from .errors import RealmConflict, RealmIntegrityError, RealmNotFound
+
+
+class ProcessLaunchUnauthenticatable(Exception):
+    """Marker base: a recorded launch cannot be re-authenticated.
+
+    Raised (via the concrete subclasses below) when the durable process
+    registry row can no longer be matched against its startup coordinates or
+    its on-disk lock identity. Callers holding only the weaker token/binding
+    identity may respond with
+    :meth:`LocalProcessSupervisor.quarantine_unauthenticatable_launch`, which
+    retires such a row only after proving the recorded process is dead.
+    """
+
+
+class ProcessRecoveryCoordinateMismatch(
+    ProcessLaunchUnauthenticatable, RealmConflict
+):
+    """The registry row's startup coordinates differ from reconstruction."""
+
+
+class ProcessLockIdentityError(
+    ProcessLaunchUnauthenticatable, RealmIntegrityError
+):
+    """The recorded process lock file is missing or was replaced."""
 from .refs import canonical_json_bytes, request_digest
 
 
@@ -1177,6 +1201,172 @@ class LocalProcessSupervisor:
             prior_state=prior_state,
         )
 
+    def quarantine_unauthenticatable_launch(
+        self,
+        *,
+        launch_token: str,
+        binding_id: str,
+        timeout: float | None = 10.0,
+    ) -> str:
+        """Retire one unauthenticatable launch after proving its process died.
+
+        Exact terminal reconciliation requires all four startup coordinates
+        and the recorded lock identity. A crashed provider, a moved
+        interpreter, or replaced on-disk artifacts can make both permanently
+        unreconstructable, which previously left the launch row - and every
+        run holding it - in an endless cleanup-retry loop. This method
+        accepts the weaker token/binding identity, but only retires the row
+        after proving the recorded worker process no longer exists:
+
+        - a ``reserved`` row never spawned a process;
+        - otherwise the handshake's recorded ``worker_pid`` must be gone
+          (or provably not ours);
+        - failing that, the recorded liveness lock must still match the
+          registry identity and be free.
+
+        When death cannot be proven the original conflict is preserved and
+        nothing changes. On success the row and its endpoint records are
+        removed and the durable negative seal is installed, so the ordinary
+        terminal reconciliation path converges as ``sealed`` on replay. The
+        launch directory's artifacts are deliberately left for forensics.
+        Returns the prior launch state.
+        """
+
+        launch_token = _safe_id(launch_token, "worker launch token")
+        binding_id = _safe_id(binding_id, "worker binding id")
+        descriptor, _metadata = self._acquire_realization_gate(
+            launch_token=launch_token,
+            exclusive=True,
+            timeout=timeout,
+        )
+        try:
+            row = self._required_row(launch_token)
+            if row.binding_id != binding_id:
+                raise RealmConflict(
+                    "local process launch coordinate differs from provider registry."
+                )
+            if row.retired:
+                return "retired"
+            if row.launch_state != "reserved":
+                self._assert_recorded_process_dead(row)
+            launch_state = row.launch_state
+            self._remove_recorded_sockets_loosely(launch_token)
+            now = float(self._clock())
+            finite_time(now, "process launch quarantine time")
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                current = connection.execute(
+                    "SELECT retired FROM process_launches WHERE launch_token = ?",
+                    (launch_token,),
+                ).fetchone()
+                if current is None:
+                    connection.rollback()
+                    raise RealmConflict(
+                        "local process launch changed during quarantine."
+                    )
+                connection.execute(
+                    "DELETE FROM process_unix_socket_endpoints "
+                    "WHERE launch_token = ?",
+                    (launch_token,),
+                )
+                connection.execute(
+                    "DELETE FROM process_launches WHERE launch_token = ?",
+                    (launch_token,),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO process_launch_seals(
+                        launch_token, binding_id, created_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (launch_token, binding_id, now),
+                )
+                connection.commit()
+            return launch_state
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+    def _assert_recorded_process_dead(self, row: _LaunchRow) -> None:
+        """Prove the recorded worker died; raise the original conflict shape."""
+
+        launch_dir = self._launch_directory(row.coordinate)
+        worker_pid: int | None = None
+        try:
+            payload = json.loads(
+                (launch_dir / "handshake.json").read_text(encoding="utf-8")
+            )
+            candidate = payload.get("worker_pid")
+            if (
+                not isinstance(candidate, bool)
+                and isinstance(candidate, int)
+                and candidate > 1
+            ):
+                worker_pid = candidate
+        except (OSError, ValueError, AttributeError):
+            worker_pid = None
+        if worker_pid is not None:
+            try:
+                os.kill(worker_pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                # A recycled PID owned by another user cannot be our worker.
+                return
+            raise RealmConflict(
+                "local process quarantine refused: the recorded worker PID "
+                "is still running."
+            )
+        # No usable handshake: fall back to the liveness lock. A live worker
+        # holds an exclusive flock on the recorded lock inode for its whole
+        # lifetime, so a free matching lock proves death. Anything less
+        # provable fails closed.
+        lock_path = launch_dir / "liveness.lock"
+        try:
+            lock_fd = self._open_existing_lock(lock_path, row)
+        except RealmIntegrityError as error:
+            raise RealmConflict(
+                "local process quarantine refused: worker death could not "
+                "be proven."
+            ) from error
+        try:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                raise RealmConflict(
+                    "local process quarantine refused: the recorded worker "
+                    "still holds its liveness lock."
+                ) from error
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)
+
+    def _remove_recorded_sockets_loosely(self, launch_token: str) -> None:
+        """Best-effort unlink of recorded endpoint sockets before quarantine.
+
+        Only a path whose current identity still matches the endpoint record
+        (a socket with the recorded device and inode) is removed; anything
+        else is left untouched. Registry rows are deleted transactionally by
+        the caller.
+        """
+
+        for endpoint in self._list_unix_socket_endpoints(launch_token):
+            if endpoint.path is None:
+                continue
+            try:
+                path = self._unix_socket_path(endpoint.path)
+                current = os.lstat(path)
+                if (
+                    stat.S_ISSOCK(current.st_mode)
+                    and current.st_dev == endpoint.socket_device
+                    and current.st_ino == endpoint.socket_inode
+                ):
+                    os.unlink(path)
+            except (OSError, ValueError):
+                continue
+
     def record_unix_socket_endpoint(
         self,
         *,
@@ -2078,7 +2268,7 @@ class LocalProcessSupervisor:
             or row.evidence_fingerprint != evidence_fingerprint
             or row.launch_request_digest != launch_request_digest
         ):
-            raise RealmConflict(
+            raise ProcessRecoveryCoordinateMismatch(
                 "local process recovery coordinates do not match startup intent."
             )
         return row
@@ -3575,7 +3765,9 @@ class LocalProcessSupervisor:
         try:
             descriptor = os.open(path, flags)
         except (FileNotFoundError, OSError) as error:
-            raise RealmIntegrityError("local process lock file is unavailable.") from error
+            raise ProcessLockIdentityError(
+                "local process lock file is unavailable."
+            ) from error
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
@@ -3584,7 +3776,9 @@ class LocalProcessSupervisor:
             or metadata.st_ino != row.lock_inode
         ):
             os.close(descriptor)
-            raise RealmIntegrityError("local process lock file identity changed.")
+            raise ProcessLockIdentityError(
+                "local process lock file identity changed."
+            )
         return descriptor
 
     @staticmethod

@@ -20,8 +20,13 @@ from .method_launch_environment import (
     method_environment_names,
 )
 from .realm._validation import required_text
-from .realm.errors import RealmConflict, RealmIntegrityError, RealmNotFound
-from .realm.operator_job_records import OperatorJobState
+from .realm.errors import (
+    RealmConflict,
+    RealmExpired,
+    RealmIntegrityError,
+    RealmNotFound,
+)
+from .realm.operator_job_records import OperatorJobRecord, OperatorJobState
 from .realm.refs import request_digest
 from .realm.run_child import exact_plan_child_lineage_from_snapshot
 from .realm.run_projection import RunSummaryProjection
@@ -503,9 +508,20 @@ class RealmRunExecutionService:
             job_id=descriptor.study_launch_id
         )
         if current.state is OperatorJobState.STARTING:
-            current = self._runtime.operator_jobs.mark_control_plane_running(
-                job_id=current.job_id
-            )
+            try:
+                current = self._runtime.operator_jobs.mark_control_plane_running(
+                    job_id=current.job_id
+                )
+            except RealmExpired:
+                # The launching control plane's startup window expired before
+                # the run was ever confirmed - the launcher process is gone
+                # (for example a CLI launch that died before execution).
+                # Replaying the intent forever can never confirm it. Finish
+                # the launch terminally, fenced by the controller term this
+                # dispatch just claimed, and request cancellation of the
+                # canonical run so the claimed driver drains it to terminal.
+                self._finish_expired_startup(current, claimed)
+                return
         if current.state is OperatorJobState.RUNNING:
             self._runtime.operator_jobs.confirm_study_launch_controller(
                 job_id=current.job_id,
@@ -518,6 +534,38 @@ class RealmRunExecutionService:
             raise RealmIntegrityError(
                 "Study launch cannot confirm its canonical run controller."
             )
+
+    def _finish_expired_startup(
+        self,
+        record: OperatorJobRecord,
+        claimed: RunLedgerSnapshot,
+    ) -> None:
+        """Cancel one orphaned run whose launch startup window expired.
+
+        A handed-off study launch may only finish through typed controller
+        confirmation, which an expired startup can never provide. The launch
+        record therefore stays in its durable startup state; requesting run
+        cancellation lets the controller term this dispatch just claimed
+        drain the canonical run to ``cancelled``, after which every launch
+        view derives its terminal status from the run summary and no
+        recovery path re-dispatches it.
+        """
+
+        del record
+        try:
+            self._runtime.ledger.request_run_cancellation(
+                operation_id=(
+                    "run-execution/startup-expired/"
+                    f"{claimed.run.run_id}"
+                ),
+                actor_principal_id=self.principal_id,
+                run_id=claimed.run.run_id,
+                reason_code="user_cancelled",
+            )
+        except RealmConflict:
+            # A cancellation request already exists; the claimed driver
+            # consumes it either way.
+            pass
 
 
 __all__ = [

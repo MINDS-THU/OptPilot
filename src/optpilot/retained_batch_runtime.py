@@ -58,6 +58,7 @@ from .realm.local_process_supervisor import (
     ProcessLaunchRequest,
     ProcessLaunchReservation,
     ProcessLaunchSealReceipt,
+    ProcessLaunchUnauthenticatable,
     SupervisedProcess,
     WorkerStarted,
     WorkerTerminalProof,
@@ -345,6 +346,7 @@ class RetainedBatchInactiveReconciliation:
         "already_terminal",
         "never_started",
         "stopped",
+        "quarantined",
     ]
     resources_reconciled: bool
 
@@ -358,6 +360,7 @@ class RetainedBatchInactiveReconciliation:
             "already_terminal",
             "never_started",
             "stopped",
+            "quarantined",
         }:
             raise ValueError("worker_disposition is unsupported.")
         if self.resources_reconciled is not True:
@@ -1172,6 +1175,7 @@ class RetainedBatchRuntimeProvider:
             "already_terminal",
             "never_started",
             "stopped",
+            "quarantined",
         ] = "absent"
         try:
             authorities = {
@@ -1307,6 +1311,7 @@ class RetainedBatchRuntimeProvider:
         "already_terminal",
         "never_started",
         "stopped",
+        "quarantined",
     ]:
         coordinates = _worker_coordinates(
             realm_id=self._ledger.realm_id,
@@ -1459,43 +1464,60 @@ class RetainedBatchRuntimeProvider:
             "already_terminal",
             "never_started",
             "stopped",
+            "quarantined",
         ] = "absent"
         if not launch_seal.sealed:
             if expected_evidence is None or expected_request_digest is None:
                 raise RealmIntegrityError(
                     "existing retained batch launch lacks complete resources."
                 )
-            reconciliation = self._supervisor.reconcile_terminal_launch(
-                launch_token=coordinates.launch_token,
-                binding_id=coordinates.binding_id,
-                evidence_fingerprint=expected_evidence,
-                launch_request_digest=expected_request_digest,
-                grace_period=grace_period,
-                timeout=timeout,
-            )
-            proof = reconciliation.proof
-            if (
-                reconciliation.retired is not True
-                or reconciliation.endpoints_reconciled is not True
-                or reconciliation.launch_token != coordinates.launch_token
-                or reconciliation.binding_id != coordinates.binding_id
-                or reconciliation.evidence_fingerprint != expected_evidence
-                or reconciliation.launch_request_digest
-                != expected_request_digest
-                or proof.launch_token != coordinates.launch_token
-                or proof.binding_id != coordinates.binding_id
-                or proof.evidence_fingerprint != expected_evidence
-                or proof.launch_request_digest != expected_request_digest
-            ):
-                raise RealmIntegrityError(
-                    "retained batch terminal reconciliation differs."
+            try:
+                reconciliation = self._supervisor.reconcile_terminal_launch(
+                    launch_token=coordinates.launch_token,
+                    binding_id=coordinates.binding_id,
+                    evidence_fingerprint=expected_evidence,
+                    launch_request_digest=expected_request_digest,
+                    grace_period=grace_period,
+                    timeout=timeout,
                 )
-            disposition = {
-                "reserved": "never_started",
-                "start_requested": "stopped",
-                "terminal": "already_terminal",
-                "retired": "already_retired",
-            }[reconciliation.prior_state]
+            except ProcessLaunchUnauthenticatable:
+                # The recorded worker can never be re-authenticated (its
+                # startup coordinates or lock identity are permanently
+                # unreconstructable - a crashed provider, a moved
+                # interpreter, replaced artifacts). Quarantine retires the
+                # row only after the supervisor proves the process is dead;
+                # otherwise the original conflict propagates and this
+                # generation stays unreconciled.
+                self._supervisor.quarantine_unauthenticatable_launch(
+                    launch_token=coordinates.launch_token,
+                    binding_id=coordinates.binding_id,
+                    timeout=timeout,
+                )
+                disposition = "quarantined"
+            else:
+                proof = reconciliation.proof
+                if (
+                    reconciliation.retired is not True
+                    or reconciliation.endpoints_reconciled is not True
+                    or reconciliation.launch_token != coordinates.launch_token
+                    or reconciliation.binding_id != coordinates.binding_id
+                    or reconciliation.evidence_fingerprint != expected_evidence
+                    or reconciliation.launch_request_digest
+                    != expected_request_digest
+                    or proof.launch_token != coordinates.launch_token
+                    or proof.binding_id != coordinates.binding_id
+                    or proof.evidence_fingerprint != expected_evidence
+                    or proof.launch_request_digest != expected_request_digest
+                ):
+                    raise RealmIntegrityError(
+                        "retained batch terminal reconciliation differs."
+                    )
+                disposition = {
+                    "reserved": "never_started",
+                    "start_requested": "stopped",
+                    "terminal": "already_terminal",
+                    "retired": "already_retired",
+                }[reconciliation.prior_state]
 
         # The token/binding seal is installed before this second resource read,
         # so a stale realizer cannot fill in a missing resource and reserve the

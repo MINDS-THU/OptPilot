@@ -577,6 +577,7 @@ class RealmRetainedBatchRunDriver:
                 "already_terminal",
                 "never_started",
                 "stopped",
+                "quarantined",
             }
             or getattr(receipt, "resources_reconciled", None) is not True
         ):

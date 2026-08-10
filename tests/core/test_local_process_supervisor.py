@@ -30,6 +30,9 @@ from optpilot.realm.local_process_supervisor import (
     ProcessLaunchPrivateEnvironment,
     ProcessLaunchReservation,
     ProcessLaunchRequest,
+    ProcessLaunchUnauthenticatable,
+    ProcessLockIdentityError,
+    ProcessRecoveryCoordinateMismatch,
     ProcessTerminalReconciliation,
     WorkerStarted,
     WorkerTerminalProof,
@@ -834,6 +837,137 @@ class LocalProcessSupervisorTest(unittest.TestCase):
         )
         self.assertEqual(receipt.proof.disposition, "killed")
         _wait_pid_gone(pid)
+
+    def test_quarantine_refuses_live_worker_then_retires_after_death(
+        self,
+    ) -> None:
+        pid_path = self.base / "quarantine-guard.pid"
+        request = self._request(
+            "import os,time; from pathlib import Path; "
+            f"Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"
+        )
+        supervisor = self._supervisor()
+        reservation = self._reserve(supervisor, request)
+        supervisor.start_reserved(reservation).wait_started(timeout=5.0)
+        _wait_for(pid_path)
+        pid = int(pid_path.read_text(encoding="utf-8"))
+
+        # Permanently drifted coordinates (a moved interpreter, a lost
+        # method-environment binding) are the unauthenticatable shape.
+        with self.assertRaises(ProcessRecoveryCoordinateMismatch):
+            supervisor.reconcile_terminal_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+                evidence_fingerprint="b" * 64,
+                launch_request_digest="b" * 64,
+            )
+
+        # Quarantine must refuse while the recorded worker still runs.
+        with self.assertRaises(RealmConflict):
+            supervisor.quarantine_unauthenticatable_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+            )
+        self.assertTrue(_pid_exists(pid))
+
+        os.kill(pid, signal.SIGKILL)
+        _wait_pid_gone(pid)
+        self.assertEqual(
+            supervisor.quarantine_unauthenticatable_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+            ),
+            "start_requested",
+        )
+
+        # The quarantined coordinate converges through the ordinary seal:
+        # replay reports sealed and any late reservation is rejected.
+        seal = supervisor.seal_launch_if_absent(
+            launch_token=reservation.launch_token,
+            binding_id=reservation.binding_id,
+        )
+        self.assertEqual(seal.prior_state, "sealed")
+        with self.assertRaises(RealmConflict):
+            self._reserve(supervisor, request)
+
+    def test_quarantine_retires_reserved_row_without_process_proof(self) -> None:
+        request = self._request("pass")
+        supervisor = self._supervisor()
+        reservation = self._reserve(supervisor, request)
+        self.assertEqual(
+            supervisor.quarantine_unauthenticatable_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+            ),
+            "reserved",
+        )
+        seal = supervisor.seal_launch_if_absent(
+            launch_token=reservation.launch_token,
+            binding_id=reservation.binding_id,
+        )
+        self.assertEqual(seal.prior_state, "sealed")
+
+    def test_quarantine_requires_the_recorded_binding(self) -> None:
+        request = self._request("pass")
+        supervisor = self._supervisor()
+        reservation = self._reserve(supervisor, request)
+        with self.assertRaises(RealmConflict):
+            supervisor.quarantine_unauthenticatable_launch(
+                launch_token=reservation.launch_token,
+                binding_id="unrelated-binding",
+            )
+        # The untouched row remains exactly reconcilable.
+        receipt = supervisor.reconcile_terminal_launch(
+            launch_token=reservation.launch_token,
+            binding_id=reservation.binding_id,
+            evidence_fingerprint=reservation.evidence_fingerprint,
+            launch_request_digest=reservation.launch_request_digest,
+        )
+        self.assertEqual(receipt.prior_state, "reserved")
+
+    def test_replaced_liveness_lock_is_unauthenticatable_and_quarantinable(
+        self,
+    ) -> None:
+        pid_path = self.base / "lock-replacement.pid"
+        request = self._request(
+            "import os,time; from pathlib import Path; "
+            f"Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"
+        )
+        supervisor = self._supervisor()
+        reservation = self._reserve(supervisor, request)
+        supervisor.start_reserved(reservation).wait_started(timeout=5.0)
+        _wait_for(pid_path)
+        pid = int(pid_path.read_text(encoding="utf-8"))
+        os.kill(pid, signal.SIGKILL)
+        _wait_pid_gone(pid)
+
+        # Replace the recorded lock inode: exact reconciliation is now
+        # permanently unauthenticatable (the production zombie shape).
+        lock_path = self._launch_dir("launch-a") / "liveness.lock"
+        lock_path.unlink()
+        lock_path.write_bytes(b"")
+        with self.assertRaises(ProcessLockIdentityError) as context:
+            supervisor.reconcile_terminal_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+                evidence_fingerprint=reservation.evidence_fingerprint,
+                launch_request_digest=reservation.launch_request_digest,
+            )
+        self.assertIsInstance(
+            context.exception, ProcessLaunchUnauthenticatable
+        )
+        self.assertEqual(
+            supervisor.quarantine_unauthenticatable_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+            ),
+            "start_requested",
+        )
+        seal = supervisor.seal_launch_if_absent(
+            launch_token=reservation.launch_token,
+            binding_id=reservation.binding_id,
+        )
+        self.assertEqual(seal.prior_state, "sealed")
 
     def test_exact_terminal_reconciliation_retires_existing_terminal_proof(
         self,
