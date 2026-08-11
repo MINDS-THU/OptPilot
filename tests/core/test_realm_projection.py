@@ -2860,5 +2860,118 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         )
 
 
+class ProjectionMaterializationAmortizationTest(unittest.TestCase):
+    """Per-file owner-lease revalidation must stay amortized during builds."""
+
+    FILE_COUNT = 40
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.source_root = self.root / "source"
+        self.source_root.mkdir()
+        for index in range(self.FILE_COUNT):
+            subdirectory = self.source_root / f"dir{index % 4}"
+            subdirectory.mkdir(exist_ok=True)
+            (subdirectory / f"file{index:03d}.txt").write_text(
+                f"payload {index}", encoding="utf-8"
+            )
+        self.store = LocalContentStore(self.root / "store", store_id="local-a")
+        self.ledger = RealmLedger(self.root / "realm.sqlite3")
+        self.ledger.register_principal(
+            operation_id="principal", principal_id="operator", kind="human"
+        )
+        self.ledger.register_store(
+            operation_id="store",
+            store_id=self.store.store_id,
+            backend_kind=self.store.BACKEND_KIND,
+            root_marker=self.store.root_marker,
+        )
+        self.ledger.create_owner(
+            operation_id="owner",
+            owner_id="workspace-a",
+            owner_kind="workspace",
+            principal_id="operator",
+        )
+        change = self.ledger.begin_owner_change(
+            operation_id="begin",
+            actor_principal_id="operator",
+            owner_id="workspace-a",
+            expected_owner_revision=0,
+            ttl_seconds=60,
+        )
+        authority = self.ledger.content_capture_handle(
+            actor_principal_id="operator",
+            change_id=change.change_id,
+            store_id=self.store.store_id,
+        )
+        self.receipt = self.store.capture(
+            change_id=change.change_id, authority=authority
+        ).seal_tree(source=AllowedTreeSource(self.source_root))
+        membership = OwnerMembership(
+            self.store.store_id, self.receipt.snapshot_ref, "workspace-base"
+        )
+        self.ledger.hold_owner_content(
+            operation_id="hold",
+            actor_principal_id="operator",
+            change_id=change.change_id,
+            memberships=(membership,),
+        )
+        self.ledger.commit_owner_change(
+            operation_id="commit",
+            actor_principal_id="operator",
+            change_id=change.change_id,
+            expected_owner_revision=0,
+            additions=(membership,),
+        )
+        self.service = RealmProjectionService(
+            self.ledger,
+            local_stores={self.store.store_id: self.store},
+            projection_root=self.root / "projections",
+        )
+        self.projections = []
+
+    def tearDown(self) -> None:
+        for projection in reversed(self.projections):
+            if not projection.closed:
+                projection.close()
+        self.store.close()
+        self.ledger.close()
+        self.temporary.cleanup()
+
+    def test_materialization_amortizes_owner_lease_revalidation(self) -> None:
+        with mock.patch.object(
+            self.ledger,
+            "validate_projection_owner_lease",
+            wraps=self.ledger.validate_projection_owner_lease,
+        ) as validate:
+            projection = self.service.project_read_only(
+                operation_id="amortized-project",
+                actor_principal_id="operator",
+                store_id=self.store.store_id,
+                spec=ProjectionSpec(
+                    owner_id="workspace-a",
+                    mappings=(TreeMapping(self.receipt.snapshot_ref),),
+                ),
+                holder_id="worker-a",
+                ttl_seconds=60,
+            )
+        self.projections.append(projection)
+        # The builder must not revalidate the owner lease per copied file;
+        # fencing at publish and the builder heartbeat carry that duty.
+        self.assertLess(validate.call_count, self.FILE_COUNT)
+        materialized = {
+            path.relative_to(projection.root_path).as_posix()
+            for path in projection.root_path.rglob("*.txt")
+        }
+        self.assertEqual(
+            materialized,
+            {
+                f"dir{index % 4}/file{index:03d}.txt"
+                for index in range(self.FILE_COUNT)
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
