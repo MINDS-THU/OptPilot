@@ -96,6 +96,7 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "description": "An arbitrary setup command. A leading `python` or `python3` is the logical interpreter name rather than a host executable and runs the interpreter running OptPilot, matching command batch methods and Resource actions; any other head is resolved against the setup PATH.",
           "required": ["uses", "command"],
           "properties": {
             "uses": {"const": "command"},
