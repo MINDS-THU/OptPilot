@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
 from .config import validate_authoring_config
+from .dependency_closure import (
+    DEPENDENCY_DECLARED_CODE,
+    DEPENDENCY_HOST_PROVISIONED_CODE,
+    DependencyClosureReport,
+    component_dependency_closure,
+)
 from .locked_python_runtime_contract import (
     LockedPythonRuntimeError,
     validate_locked_python_setup_declaration,
@@ -75,6 +81,7 @@ def validate_package(
     check_imports: bool = False,
     check_source: bool = False,
     check_setup_files: bool = False,
+    check_dependencies: bool = True,
 ) -> JsonDict:
     """Validate all recognized public OptPilot configs in a package folder."""
 
@@ -88,6 +95,7 @@ def validate_package(
                 check_imports=check_imports,
                 check_source=check_source,
                 check_setup_files=check_setup_files,
+                check_dependencies=check_dependencies,
             )
         )
 
@@ -100,10 +108,13 @@ def validate_package(
         "errors": list(index.errors),
         "ignored_yaml": [str(path) for path in index.ignored_yaml],
         "entries": [entry.to_dict() for entry in entries],
-        "capabilities": _package_capabilities(
-            index.entries,
-            entries,
-        ),
+        "capabilities": {
+            **_package_capabilities(
+                index.entries,
+                entries,
+            ),
+            **_package_dependency_closure(entries),
+        },
     }
 
 
@@ -114,6 +125,7 @@ def _validate_entry(
     check_imports: bool,
     check_source: bool,
     check_setup_files: bool,
+    check_dependencies: bool = True,
 ) -> PackageValidationEntry:
     errors: List[str] = []
     warnings: List[str] = []
@@ -140,6 +152,17 @@ def _validate_entry(
         check_imports=check_imports,
         import_errors=import_errors,
     )
+    report = (
+        _entry_dependency_closure(entry, package_root=package_root)
+        if check_dependencies
+        else None
+    )
+    if report is not None:
+        capabilities["dependency_closure"] = report.to_dict()
+        # An undeclared run-time import is a portability defect, not an
+        # authoring error: a component may be legitimately host-provisioned.
+        # It must be reported rather than silently pass as green.
+        warnings.extend(report.warnings())
 
     return PackageValidationEntry(
         path=str(entry.path),
@@ -170,6 +193,89 @@ def _entry_capabilities(
             check_imports=check_imports,
             import_errors=import_errors,
         )
+    }
+
+
+def _entry_dependency_closure(
+    entry: PackageEntry, *, package_root: Path
+) -> DependencyClosureReport | None:
+    """Scan one component's retained sources for host-provisioned imports.
+
+    Nothing here imports authored code, so this runs by default: an undeclared
+    run-time import is otherwise invisible until the package moves to a machine
+    that does not happen to have the dependency installed.
+    """
+
+    if entry.config not in {"environment", "method"}:
+        return None
+    block_name = "evaluator" if entry.config == "environment" else "entrypoint"
+    raw_block = entry.raw.get(block_name)
+    block = raw_block if isinstance(raw_block, dict) else {}
+    return component_dependency_closure(
+        config_kind=entry.config,
+        raw=entry.raw,
+        config_path=entry.path,
+        import_roots=_python_path_roots(entry.path, block.get("pythonPath", []) or []),
+        package_root=package_root,
+    )
+
+
+def _package_dependency_closure(entries: List[PackageValidationEntry]) -> JsonDict:
+    """Summarize which components depend on packages the host happens to have."""
+
+    components = [
+        {
+            "path": entry.path,
+            "config": entry.config,
+            "id": entry.id,
+            # The scanned-file list stays on the entry; the summary carries only
+            # what a reader needs to decide whether to open that entry.
+            **{
+                key: entry.capabilities["dependency_closure"][key]
+                for key in (
+                    "code",
+                    "reason",
+                    "declared",
+                    "scanned_file_count",
+                    "undeclared",
+                    "truncated",
+                )
+            },
+        }
+        for entry in entries
+        if isinstance(entry.capabilities.get("dependency_closure"), dict)
+    ]
+    if not components:
+        return {}
+    host_provisioned = [
+        item
+        for item in components
+        if item.get("code") == DEPENDENCY_HOST_PROVISIONED_CODE
+    ]
+    modules = sorted(
+        {
+            finding["module"]
+            for item in host_provisioned
+            for finding in item.get("undeclared", [])
+        }
+    )
+    return {
+        "dependency_closure": {
+            "declared": not host_provisioned,
+            "code": (
+                DEPENDENCY_HOST_PROVISIONED_CODE
+                if host_provisioned
+                else DEPENDENCY_DECLARED_CODE
+            ),
+            "reason": (
+                "Some components import packages that only the host interpreter "
+                f"provides: {', '.join(modules)}."
+                if host_provisioned
+                else None
+            ),
+            "undeclared_modules": modules,
+            "components": components,
+        }
     }
 
 

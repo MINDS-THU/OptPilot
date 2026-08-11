@@ -178,6 +178,19 @@ Target model (post-v1 direction, with v1 groundwork): **a catalog package is a d
 
 **D3 — Validation gate (S, mostly wiring).** The gate is the ingress outcome model; wire the full existing checks — `optpilot package validate --check-source` semantics plus `setup-check` — into the ingress validation facts, so a `REJECTED` receipt carries machine-readable, per-config failure codes rather than prose. Critical trust rule: validation of imported trees stays **static by default** — no setup steps, no smoke execution, no imports of package code without an explicit, separately-approved action. An imported package is untrusted code; publication makes it *visible and launchable*, and every launch still passes through the normal runtime/approval gates.
 
+> **Status note 2026-08-11 (D3 input, done).** Package validation now carries a
+> static run-time import closure scan (`src/optpilot/dependency_closure.py`,
+> wired into `validate_package` and on by default). It parses the retained
+> Python reachable from a component's declared entry points, subtracts the
+> stdlib, in-package source, the top-level modules of the wheels named by the
+> component's `runtime.setup` requirements lock, and OptPilot's own dependency
+> closure, and reports the remainder under capability code
+> `dependency_host_provisioned` plus a per-entry warning. It never imports
+> authored code, so it satisfies D3's static-by-default trust rule, and it
+> closes the hole that `--check-imports` cannot: a locked component is not
+> exempt, and imports deferred inside `propose` are seen. Remaining D3 wiring:
+> turn the capability into an ingress validation fact.
+
 **D4 — Assistant repair loop (M, post-release; the differentiating feature).** On `REJECTED`: stage the imported tree into an editable Workspace, open (or reuse) a Conversation with the validation receipt's facts attached as bounded read-only context, and let the Assistant do what it already can — read files, propose approval-gated edits, re-run validation, and re-submit the ingress when clean. Every building block exists today (editable Workspaces, approval-gated `file_write`, `optpilot_registration_{prepare,validate,apply}` tools, bounded facts as context); D4 is orchestration plus one new trigger ("ingress rejected → offer to open repair Conversation"), not new machinery. The curation design's warning is the guardrail: the Assistant must fix packages so they are *runnable and reviewable*, not merely structurally valid — so the repair loop's definition of done includes a user-approved smoke run, not just a green validate.
 
 **Implication for the four flagship packages (v1 requirement, not future work).** Each Phase 2 package must be structured to graduate into its own repository: fully self-contained, no cross-package or repo-relative reaches (the `pythonPath: ../../environments/...` hack that F5 removes is exactly the kind of coupling that would break repo extraction), documented entry points, and explicit runtime requirements. The flagship packages then double as the test corpus for D1–D4: "import `factorio_design_benchmark` from its repo URL" becomes both a CI case and a docs walkthrough. Package-id namespacing (e.g., owner-qualified ids) should be decided when D2 lands, before third-party packages can collide.

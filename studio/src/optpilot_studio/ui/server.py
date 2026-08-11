@@ -43,6 +43,7 @@ import yaml
 
 from optpilot.attempts import EvaluationSpec
 from optpilot.container_utils import network_args
+from optpilot.dependency_closure import DEPENDENCY_HOST_PROVISIONED_CODE
 from optpilot.locked_python_runtime_contract import (
     LockedPythonRuntimeError,
     parse_locked_python_wheel_lock,
@@ -32085,6 +32086,19 @@ def _package_plan_readiness(plan: JsonDict, validation: JsonDict) -> str:
 
 def _package_plan_warnings(plan: JsonDict, validation: JsonDict) -> List[str]:
     warnings: List[str] = []
+    dependency_closure = _package_dependency_closure_capability(validation)
+    if (
+        isinstance(dependency_closure, Mapping)
+        and dependency_closure.get("code") == DEPENDENCY_HOST_PROVISIONED_CODE
+    ):
+        # A package whose components import undeclared host packages is not
+        # component-ready anywhere but this machine; say so before registration.
+        warnings.append(
+            str(
+                dependency_closure.get("reason")
+                or "The package imports dependencies only the host provides."
+            )
+        )
     retained_execution = _package_retained_execution_capability(validation)
     if (
         plan.get("classification") in {"environment-plus-method", "method-only"}
@@ -32134,6 +32148,16 @@ def _package_retained_execution_capability(
     if not isinstance(capabilities, Mapping):
         return None
     capability = capabilities.get("retained_execution")
+    return dict(capability) if isinstance(capability, Mapping) else None
+
+
+def _package_dependency_closure_capability(
+    validation: Mapping[str, Any],
+) -> Optional[JsonDict]:
+    capabilities = validation.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        return None
+    capability = capabilities.get("dependency_closure")
     return dict(capability) if isinstance(capability, Mapping) else None
 
 
