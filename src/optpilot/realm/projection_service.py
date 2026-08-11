@@ -110,6 +110,7 @@ class _LedgerProjectionContentCapability(ProjectionContentCapability):
         realization_id: str,
         owner_lease: LeaseRecord,
         snapshot_roots: Tuple[SnapshotRef, ...],
+        revalidation_interval_seconds: float = 0.0,
     ) -> None:
         self._ledger = ledger
         self._actor_principal_id = actor_principal_id
@@ -120,6 +121,8 @@ class _LedgerProjectionContentCapability(ProjectionContentCapability):
         self._allowed_blobs: set[BlobRef] = set()
         self._manifests: dict[SnapshotRef, TreeManifest] = {}
         self._authorized = False
+        self._revalidation_interval = max(0.0, float(revalidation_interval_seconds))
+        self._validated_at: float | None = None
         self._lock = threading.RLock()
 
     @property
@@ -152,12 +155,24 @@ class _LedgerProjectionContentCapability(ProjectionContentCapability):
         self._validate_exact_closure()
         with self._lock:
             self._authorized = True
+            self._validated_at = time.monotonic()
 
     def assert_current(self) -> None:
         self._store._assert_root_identity()
         with self._lock:
             if not self._authorized:
                 raise RealmAuthorizationError("Projection content is unavailable.")
+            # The ledger round-trip is the dominant per-file materialization
+            # cost, while fencing at publish is enforced transactionally by
+            # publish_projection_ready and liveness by the builder heartbeat.
+            # Between those anchors a bounded-staleness check suffices here.
+            if (
+                self._revalidation_interval > 0.0
+                and self._validated_at is not None
+                and time.monotonic() - self._validated_at
+                < self._revalidation_interval
+            ):
+                return
         current = self._ledger.validate_projection_owner_lease(
             actor_principal_id=self._actor_principal_id,
             realization_id=self._realization_id,
@@ -171,6 +186,8 @@ class _LedgerProjectionContentCapability(ProjectionContentCapability):
             or current.audience != "runtime"
         ):
             raise RealmNotFound("Entity not found.")
+        with self._lock:
+            self._validated_at = time.monotonic()
 
     def load_tree(self, snapshot_ref: SnapshotRef) -> TreeManifest:
         if not isinstance(snapshot_ref, SnapshotRef):
@@ -1977,6 +1994,9 @@ class RealmProjectionService:
             realization_id=realization.realization_id,
             owner_lease=claim.owner_lease,
             snapshot_roots=roots,
+            # Match the builder heartbeat cadence: the lease design already
+            # tolerates this much staleness between fencing observations.
+            revalidation_interval_seconds=max(0.001, min(ttl_seconds / 3.0, 30.0)),
         )
         heartbeat = _BuilderHeartbeat(
             ledger=self._ledger,
@@ -2206,6 +2226,10 @@ class RealmProjectionService:
         self, *, actor_principal_id: str, realization_id: str
     ) -> ProjectionRealizationRecord:
         deadline = time.monotonic() + self._coordination_timeout_seconds
+        # Back off while a builder crawls: fixed fast polling multiplies
+        # authority-connection churn per waiting consumer and slows the
+        # materialization every waiter is blocked on.
+        delay = 0.01
         while True:
             record = self._ledger.read_projection_realization(
                 actor_principal_id=actor_principal_id,
@@ -2222,7 +2246,8 @@ class RealmProjectionService:
                 )
             if time.monotonic() >= deadline:
                 raise RealmConflict("Timed out waiting for projection publication.")
-            time.sleep(0.01)
+            time.sleep(delay)
+            delay = min(delay * 1.5, 0.25)
 
     def _ensure_registered_root(self, *, require_active: bool = True) -> None:
         validate_projection_root(self._root_binding)
