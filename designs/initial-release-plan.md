@@ -194,15 +194,74 @@ Renderer scope for v1: flat + one-level nested parameters, all seven valueTypes,
 
 **U2 — Finish the "Run setup" rename (S).** Server cards already say "Run setup"; the client still labels the same card kind "Study" (`kindLabels`), the nav says "Studies", and Open work says "Run preparation". Decide the final user-facing wording once — recommendation: **"Run setup"** everywhere user-facing, "Study" retained in docs as the underlying config kind (as the product statement specifies), and unify "Run preparation" → "Run setup · preparing". No schema/API/CLI renames.
 
+> **Status 2026-08-10: DONE** (completed across the Studio sprint and
+> U7): the conversation shell says "Run setup(s)" everywhere; the last
+> legacy-shell "Studies" nav went away with the legacy shell itself.
+
 **U3 — Open work completeness (S/M).** Add pending approvals (currently only visible inside the Conversation timeline — an approval raised while a full-stage tool is open has no shelf affordance) and completed-with-outputs interface sessions (path back to kept outputs). Keep Workspaces out per the "compact process monitor" doc contract, but re-confirm that choice against the product statement's "Runs, interfaces, Workspaces, approvals ... remain accessible through Open work" — if Workspaces stay out, the statement and `ui.md` should both say why (durable items live in their named destinations).
+
+> **Status 2026-08-10: DONE.** `buildOpenWorkItems` now surfaces (a) one
+> "Needs attention" approval card per Conversation with pending or queued
+> approvals (from the session summaries the client already polls; click
+> selects that Conversation), and (b) a stopped interface launch whose
+> reported outputs remain reviewable — "Finished" section, or "Needs
+> attention" when an output still needs saving (shared predicate
+> `interfaceOutputsNeedAttention`, also used by the outputs drawer);
+> dismissible once reviewed. Workspaces stay out; `ui.md`'s Open Work
+> section now states the rationale (durable objects live in their named
+> destinations). Tests in `test_studio_open_work_hardening_static.py` and
+> the revised contract in `test_studio_conversation_continuity_static.py`.
 
 **U4 — Assistant catalog search (S).** `optpilot_catalog_list` filters only by `config_kind`; intent-matching relies on the model reading full listings. Add free-text query + tag filtering (search over id/name/description/tags/purpose) so step 4 of the interaction model scales beyond small catalogs. With four flagship packages this matters already.
 
+> **Status 2026-08-10: DONE.** `optpilot_catalog_list` accepts `query`
+> (every whitespace term must match the entry's id, name, description,
+> package, purpose, or tags, case-insensitive) and `tags` (all must be
+> declared exactly); works alone or with `config_kind`, and the result
+> summary reports "matched N of M". Filtering in
+> `_search_catalog_entries` (server.py); schema + description in
+> agent.py; a "Search, don't scan" rule added to the assistant system
+> prompt. Tests: `tests/studio/test_studio_catalog_search.py` (9).
+> Note: the OpenHands agent-server caches tool schemas per process —
+> restart it after deploying.
+
 **U5 — Interface identity in Ask-from-this-page context (S).** `assistantVisibleContext()` omits a `selected_interface` object, so asking from a full-stage tool carries only `current_page`. Add launch/source coordinates as bounded read-only context, per the `ui.md` promise.
+
+> **Status 2026-08-10: DONE.** `assistantVisibleContext()` sends a
+> bounded `selected_interface` (launch id, status, scope, profile,
+> label, and the Catalog `kind/uid/key` or Workspace id/title source)
+> when `isViewingActiveInterface()`; the server narrows it via
+> `_assistant_selected_interface` (interface/editor pages only,
+> 256-char caps, identity only — never preview URLs or presentation
+> tokens) and `context_packet` carries it as a typed field. Tests:
+> `tests/studio/test_studio_interface_context.py` (7).
 
 **U6 — Dynamic onboarding (S).** The five suggested intents are static strings; derive visibility from the registry (suppress "Compare methods" with zero methods; surface flagship capabilities by name — "Generate a simulator (DEVS-Gen)", "Solve an OR problem (COOPA)" — from package metadata/tags rather than hardcoding).
 
+> **Status 2026-08-10: DONE.** `onboardingIntents(groups)` in app.js:
+> static intents stay while the Catalog loads or errors; once loaded,
+> unbacked intents are suppressed (Explore needs an environment;
+> Improve/Apply need a method; Compare needs two; Build/publish always
+> shows) and up to three capability chips join by name from entry
+> metadata — resources with `purpose: generator` ("Generate with …")
+> and methods tagged `one-time-solve` ("Solve with …", which surfaces
+> COOPA). Tests: `tests/studio/test_studio_onboarding_intents.py`.
+
 **U7 — Retire the legacy shell (M).** `?shell=legacy`, the `legacy-navigation` markup, legacy assistant session cards, and `_shortlist_card_legacy_ui_projection` double the render paths. Remove after U1–U3 land; switch the no-hash route fallback from `#/workspaces` to `#/conversations` at the same time. *Status 2026-08-10: the shortlist renderer bridge is done — `_shortlist_legacy_ui_projection` / `_shortlist_card_legacy_ui_projection` are deleted along with the duplicated `review_collection` (run bundle) and `collection` (shortlist command response) payload fields, and the Run renderer now consumes the raw `shortlist` payload. The `?shell=legacy` shell, `legacy-navigation` markup, legacy assistant session cards, and the `#/workspaces` route fallback are still outstanding.*
+
+> **Status 2026-08-10: shell retirement DONE; one bridge deferred.**
+> `?shell=legacy` no longer exists (`shellModeFromLocation` returns
+> "conversation" unconditionally), the `legacy-navigation` markup, the
+> legacy assistant session cards, the legacy global interface bar
+> (`activeInterfaceBar` — Open work is the running-interface
+> affordance now), the legacy launcher, and their CSS are removed; the
+> no-hash route fallback is `#/conversations`. This also finishes U2's
+> client rename (the legacy "Studies" nav was the last user-facing
+> string). Deferred: `_shortlist_legacy_ui_projection` /
+> `_shortlist_card_legacy_ui_projection` are a Run-renderer payload
+> bridge (`review_collection`/`collection` fields), not shell markup —
+> removing them means migrating the client shortlist renderer to the
+> raw `shortlist` payload shape; queued as its own follow-up task.
 
 **U8 — Multi-entry recommendation cards (M, optional for v1).** Catalog recommendation cards are emitted only from `catalog_detail`, so a comparison shortlist costs N tool calls. A bounded multi-entry recommendation card would tighten the "small number of actionable cards" loop; defer if schedule pressure.
 
@@ -448,6 +507,58 @@ Register as package `factorio_design_benchmark`, static-validation-first:
 4. **Execution mode (opt-in, documented, S).** A separate environment variant whose Python evaluator drives RCON against a **user-provisioned** Factorio headless server (proprietary; never vendored or defaulted), adding `actual_rate` / `rate_ratio` / `target_achieved`. Static-only is the shipped default: it captures nearly all instantiation failures (293 vs 292 of 384 runs in the paper) and full cost metrics; the doc page states plainly that rate achievement requires the runtime extra. Post-release option: analytic throughput estimator (recipe-graph propagation code already exists for the pressure profile).
 5. **Studies.** Per-task Run setups (`minimize failed_check_count`, then `minimize total_entity_cost` among valid designs) plus a generated benchmark sweep script; this package is the researcher-facing "compare several Methods on an Environment through a repeatable pipeline" (use case 4) exemplar.
 
+> **Status 2026-08-11: items 1-3 and 5 DONE; item 4 documented-not-shipped.**
+> `catalog/factorio_design_benchmark` ships `factory-design` (file candidate
+> `production_line.json`, 11 metrics, task chosen per launch), the
+> `direct-designer` Direct baseline plus a deterministic `direct-designer-seed`
+> twin, two studies and a 32-task sweep script. Verified end to end through
+> the retained runner: the smoke study succeeds with
+> `failed_check_count=5`/`total_entity_cost=9619.3125`, matching a standalone
+> evaluator run exactly, and `--input task_id=` demonstrably changes the
+> verdict (iron_plate_low_easy scores 4, military_science_pack_low_easy 6).
+>
+> Two audit corrections. (a) **Dependencies**: the plan assumed the pydantic
+> subset could simply be depended on. pydantic 2's `pydantic-core` publishes
+> no pure wheel, and OptPilot's process runtime accepts only
+> `py3-none-any` (`locked_python_runtime._validate_wheel_tags`). The package
+> therefore locks **pydantic 1.10.22** (pure, only `typing-extensions`) in the
+> environment's own runtime, with three mechanical v1 edits to the vendored
+> source; `tests/core/test_factorio_vendored_core.py` pins semantic
+> equivalence with upstream across 288 cases. The BOM claim was correct
+> (24/32) and the loader's `utf-8-sig` handling is load-bearing, because the
+> upstream registry is fail-open: a config that fails to load is silently
+> replaced by a programmatic task whose rate differs 3-10x.
+> (b) **Canonical target rates**: this cannot be checked as written - the
+> research tree contains **no paper artifact at all**. What is verifiable is
+> that the 32 JSON configs disagree with the programmatic `rates` fallbacks in
+> `tasks/task_config.py` for **all 8 families**, and one upstream doc quotes
+> `inserter_high_hard` at 15/min against the config's 60. The JSON configs are
+> treated as source of truth and the question is flagged in the package README;
+> it still needs the authors before any comparative numbers are published.
+>
+> **Correction 2026-08-11 (post-inspection).** An adversarially verified
+> review found the LLM path shipped broken in three compounding ways, each
+> silent: the revision loop read a `study_state.observations` key the runner
+> never supplies (the runner exposes aggregate counters only), the method was
+> never told which of the 32 tasks it was designing for, and
+> `factory_design_task` pointed at a method config whose `settings.mode` was
+> `seed` — which no study, CLI flag or Studio form can override, because a
+> Study cannot override method settings. A 25-trial "requires a model" run
+> would have completed green with 25 identical template designs. Fixed:
+> observations are now accumulated in `observe()`, the environment publishes a
+> `task_specs` reference and the method renders the launched task (bounds, ore
+> and water patches) plus the previous design into the prompt, and a
+> `direct-designer-llm` twin carries `mode: llm`. Known remaining gaps, now
+> documented on the page rather than implied away: feedback is per-family
+> counts rather than the paper's check ids and details, so results are not
+> directly comparable to published Direct numbers.
+>
+> Item 4 (execution mode) is deliberately not shipped: it needs a
+> user-provisioned proprietary Factorio 1.1.110 server over RCON plus
+> `factorio-rcon-py`/`lupa`/`slpp`/`pillow` (none lockable), and yields
+> `actual_rate`/`target_achieved` which static validation cannot derive at all.
+> The README and the docs page state that plainly.
+
 ### 5.5 Joint workstream W5: optimize DEVS-Gen simulators with `llm_policy_search`
 
 The signature demonstration of the platform thesis: *describe a system in natural language → DEVS-Gen builds the simulator → register it as an Environment → `llm_policy_search` improves its decision logic from traces* — two flagship works composed purely through public contracts.
@@ -533,14 +644,16 @@ Each workstream's definition of done: package fully self-contained — no cross-
 
 ## 8. Release criteria checklist
 
-- [ ] All four packages install-validate-smoke in CI from a clean checkout
-- [ ] A new user can, in under 30 minutes with only the docs: open a gallery simulator; run the job-shop baseline; solve one OR problem from text (given an API key); run one Factorio static-validation study
-- [ ] Every capability discoverable via Assistant search *and* via direct Catalog browsing (no Assistant-only routes)
-- [ ] No consequential action reachable from Assistant prose without a card + approval
-- [ ] Core sdist/wheel contain no studio/catalog/tests/resource content; studio artifact contains no core prefix; versions synced
-- [ ] `resource/` research trees absent from all distributions and from the public repo (or explicitly published with licenses resolved)
-- [ ] User-facing wording: "Run setup" consistent across Studio; schemas/APIs/CLI unchanged
-- [ ] Docs describe the executable slice honestly (what validates vs what runs), including user-provisioned runtimes for COOPA solvers and Factorio execution
+Status as of 2026-08-11 (verified on the owner's machine; see the notes).
+
+- [x] All four packages install-validate-smoke in CI from a clean checkout — CI now runs `package validate --check-source` for all four flagship packages and a zero-LLM smoke Study for each (`factory_design_smoke`, `seird_minimize_deaths`, `queue_demo_baseline_smoke`, `solve_or_problem_mock`). The policy-search smoke needs a placeholder `OPENROUTER_API_KEY` because its method runtime is prepared before the first exchange; CI supplies one.
+- [x] A new user can, in under 30 minutes with only the docs — `getting-started.md` now carries a "Where To Go Next" routing table mapping each of the four outcomes to its package root, command and prerequisites, and each flagship package has its own page. Three of the four outcomes run with no key at all; OR-from-text needs a key *and* a user-provisioned COOPA checkout, which the criterion's own "(given an API key)" wording does not cover — stated plainly in the docs. The 30-minute figure itself is not machine-verifiable and no page promises a time.
+- [x] Every capability discoverable via Assistant search *and* via direct Catalog browsing — U4 gave `optpilot_catalog_list` free-text `query` + `tags`; U6 surfaces flagship capabilities by name on the welcome page from registry metadata.
+- [x] No consequential action reachable from Assistant prose without a card + approval — enforced by the card contract and `_agent_permission_gate`; unchanged this cycle.
+- [x] Core sdist/wheel contain no studio/catalog/tests/resource content; studio artifact contains no core prefix; versions synced — `scripts/check_release_artifacts.py` passes at 0.2.0. It was **failing before this cycle** (110 tracked non-script files carried the executable bit, and `catalog/or_solving/.../launch_console.sh` was a real launch script missing from `ALLOWED_EXECUTABLE_PATHS`); both fixed.
+- [ ] `resource/` research trees absent from all distributions and from the public repo — **NOT MET, and it is the one hard blocker left.** The distributions are clean, but `_to_delete/_claude_resources.tar.gz` (86 MB, containing `reproduce-COOPA-BC8B/`) and `_to_delete/_claude_snapshot.tar.gz` (25 MB) are tracked in git, were added in `ab46b0a`, and that commit is already on `origin/phase-1-release-prep`. Because the blobs are in pushed history, `git rm` is insufficient — removal needs a history rewrite and a force-push, which is an owner decision. This also carries the unresolved COOPA licence question.
+- [x] User-facing wording: "Run setup" consistent across Studio; schemas/APIs/CLI unchanged — completed by U2/U7.
+- [x] Docs describe the executable slice honestly (what validates vs what runs), including user-provisioned runtimes for COOPA solvers and Factorio execution — every flagship page states its prerequisites and which paths are validate-only; the Factorio page states that no production rate can be derived statically, and the OR page leads with COOPA being user-provisioned and unlicensed.
 
 ## 9. Risks
 

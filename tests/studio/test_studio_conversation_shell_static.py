@@ -46,7 +46,9 @@ class StudioConversationShellStaticTest(unittest.TestCase):
         self.assertIn('state.shell.surface = "conversation"', application)
         self.assertIn("setSelectedAgentSessionState(route.conversationId)", application)
         self.assertIn("shell-v2", self.source)
-        self.assertIn("shell-legacy", self.source)
+        # The legacy shell was retired with U7.
+        self.assertNotIn("shell-legacy", self.source)
+        self.assertNotIn("shell=legacy", self.source)
 
     def test_existing_content_addresses_remain_supported(self) -> None:
         parser = _function_source(self.source, "parseStudioRoute")
@@ -176,13 +178,9 @@ class StudioConversationShellStaticTest(unittest.TestCase):
         nav_end = self.html.index("</nav>", nav_start)
         primary_navigation = self.html[nav_start:nav_end]
         self.assertNotIn('data-view="workspace"', primary_navigation)
-        self.assertIn("legacy-navigation", self.html)
-        legacy_start = self.html.index("legacy-navigation")
-        legacy_end = self.html.index("</nav>", legacy_start)
-        legacy_navigation = self.html[legacy_start:legacy_end]
-        self.assertIn('data-view="experiments"', legacy_navigation)
-        self.assertIn('data-view="runs"', legacy_navigation)
-        self.assertNotIn('data-view="catalog"', legacy_navigation)
+        # The legacy navigation was removed with the legacy shell (U7).
+        self.assertNotIn("legacy-navigation", self.html)
+        self.assertNotIn(">Studies<", self.html)
 
     def test_catalog_configures_studies_before_runs_are_launched(self) -> None:
         detail = _function_source(self.source, "renderComponentDetail")

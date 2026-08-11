@@ -1,0 +1,72 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: factory-design
+description: >-
+  Factorio factory-design synthesis: propose a complete production line as
+  JSON and have it statically validated against 22 executable checks
+  (schema, recipes, map geometry, robot logistics, power, terrain) plus a
+  recipe-based entity cost model. One of 32 benchmark tasks is selected per
+  launch by the task_id input (8 product families x low/high target rate x
+  easy/hard map). Static validation is the shipped default and needs no
+  Factorio game; it is what catches instantiation failures. Rate
+  achievement is NOT evaluated here - no throughput number can be derived
+  statically, it requires the game runtime (see the package README).
+tags: [factorio, factory-design, benchmark, files, static-validation, llm-agent]
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: ["."]
+  timeoutSeconds: 300
+  settings:
+    task_id: iron_gear_low_easy
+  settingsSchema:
+    task_id:
+      valueType: string
+      default: iron_gear_low_easy
+      description: >-
+        Benchmark task selecting target product, target rate, map size, ore
+        and water patches. One of the 32 ids under fd_core/tasks/configs.
+
+runtime:
+  sandbox: process
+  setup:
+    cache: prepared
+    timeoutSeconds: 600
+    steps:
+      - uses: python-venv
+        cwd: "."
+        requirements: [runtime_dependencies/requirements.lock]
+
+candidate:
+  format: files
+  materialize:
+    root: candidate
+  files:
+    editable:
+      - path: production_line.json
+    required: [production_line.json]
+    allow: [production_line.json]
+    deny: ["**/__pycache__/**", "**/*.pyc"]
+
+methodContext:
+  instructions: [prompts/design_system.md]
+  references:
+    - name: production_line.json
+      type: candidate_template
+      path: templates/production_line.json
+    - name: schema_description
+      type: markdown
+      path: prompts/schema_description.md
+    - name: validation_rules
+      type: markdown
+      path: prompts/validation_rules.md
+    - name: task_specs
+      type: json
+      path: templates/task_specs.json
+
+metrics:
+  source: return
+  keys:
+    [static_valid, failed_check_count, warning_count, total_entity_cost,
+     entity_count, failed_schema, failed_recipe, failed_geometry,
+     failed_logistics, failed_power, failed_terrain]

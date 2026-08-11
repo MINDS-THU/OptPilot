@@ -144,14 +144,23 @@ API routes, and CLI commands.
 ## Open Work
 
 **Open work** is a compact process monitor, not a new kind of saved object. It
-contains only work that may continue while you leave its page:
+contains only work that may continue — or is waiting on you — while you leave
+its page:
 
 - an interface that is starting, running, stopping, failed, or needs cleanup
 - a Run that is still being prepared or needs attention
 - a queued, preparing, running, or stopping Run
+- a Conversation with a pending approval (the card returns you to that
+  Conversation to approve or reject; it never creates a new one)
+- a finished interface session whose reported outputs are still reviewable
+  (the card returns you to its outputs; dismiss it once you are done)
 
-It does not contain Conversations, Workspaces, read-only source viewers, saved
-Studies, completed Runs, or ordinary Assistant messages.
+It does not contain Conversations as such, Workspaces, read-only source
+viewers, saved Studies, completed Runs, or ordinary Assistant messages.
+Workspaces stay out deliberately: a Workspace is a durable saved object with
+its own named destination, not a process that finishes — listing it here
+would blur "work in flight" with "work you keep". Durable items live in their
+named destinations and stay reachable from there.
 
 Select an item to open its normal detailed surface. Leaving that surface does
 not cancel a Run or stop an interface. Completed Runs remain under **Runs**,

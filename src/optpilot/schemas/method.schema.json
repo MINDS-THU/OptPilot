@@ -18,7 +18,10 @@
         "python": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
         "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
         "command": {"$ref": "defs/common.schema.json#/definitions/command"},
-        "protocol": {"enum": ["batch", "session"]},
+        "protocol": {
+          "enum": ["batch", "session"],
+          "description": "Exchange protocol. Use 'batch'. 'session' is reserved and EXPERIMENTAL: it validates but the retained runner does not execute it, so a session study fails during retained compilation. See methods.md."
+        },
         "exchangeTimeoutSeconds": {
           "type": "integer",
           "minimum": 1,

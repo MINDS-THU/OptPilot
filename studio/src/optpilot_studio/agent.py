@@ -587,8 +587,12 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_catalog_list",
-        "description": "List reusable catalog environments, methods, resources, plus saved study plans.",
-        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA}),
+        "description": "List reusable catalog environments, methods, resources, plus saved study plans. Prefer a free-text query when matching a user goal: every query term must match the entry's id, name, description, package, purpose, or tags. Optional tags must all be declared on an entry.",
+        "parameters": _tool_schema({
+            "config_kind": CONFIG_KIND_SCHEMA,
+            "query": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        }),
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -953,6 +957,7 @@ class OpenHandsAdapter:
         selected_catalog_entry: Optional[JsonDict] = None,
         selected_study_plan: Optional[JsonDict] = None,
         selected_run: Optional[JsonDict] = None,
+        selected_interface: Optional[JsonDict] = None,
         code_editor: Optional[JsonDict] = None,
         workspace_preview: Optional[JsonDict] = None,
         visible_state: Optional[JsonDict] = None,
@@ -972,6 +977,7 @@ class OpenHandsAdapter:
             "selected_catalog_entry": selected_catalog_entry,
             "selected_study_plan": selected_study_plan,
             "selected_run": selected_run,
+            "selected_interface": selected_interface,
             "code_editor": code_editor,
             "workspace_preview": workspace_preview,
             "visible_state": visible_state or {},

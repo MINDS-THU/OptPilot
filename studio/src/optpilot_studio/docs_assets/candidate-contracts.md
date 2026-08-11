@@ -226,7 +226,7 @@ Methods can receive three kinds of context.
 | --- | --- | --- |
 | `methodContext.instructions` | natural-language instructions or prompt files | `study_state["candidate_context"]` or command request `methodContext` |
 | `methodContext.references` | read-only background files such as docs, CSV files, SQLite databases, data dictionaries, examples | resolved paths plus optional `type`, `description`, `mimeType` |
-| `EvidenceView` | dynamic results from previous trials | `evidence_view.observations(...)`, `records(...)`, `artifacts(...)` |
+| `EvidenceView` | dynamic results from previous trials | Retained runs (the shipped path) pass a **static** view exposing only `evidence_view.decision_context()`. The richer `observations(...)` / `records(...)` / `artifacts(...)` API belongs to the legacy local runner; a method that calls it under the retained runner raises `AttributeError`. |
 
 Static material belongs in `methodContext`. Evaluation outputs created during a run belong in evidence.
 

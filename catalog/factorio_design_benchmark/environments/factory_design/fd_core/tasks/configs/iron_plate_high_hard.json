@@ -1,0 +1,34 @@
+﻿{
+    "task_id":  "iron_plate_high_hard",
+    "level":  1,
+    "target_product":  "iron-plate",
+    "target_rate_per_minute":  120,
+    "description":  "Produce 120 iron plates per minute in constrained space - requires 4+ drills",
+    "capacity_level":  "high",
+    "cost_model":  "factorio_recipe_cost_v1",
+    "environment":  {
+                        "map_width":  35,
+                        "map_height":  35,
+                        "ore_patches":  [
+                                            {
+                                                "ore_type":  "iron-ore",
+                                                "position":  [
+                                                                 5,
+                                                                 5
+                                                             ],
+                                                "radius":  10
+                                            }
+                                        ],
+                        "difficulty":  "hard",
+                        "water_patches":  [
+                                              {
+                                                  "position":  [
+                                                                   5,
+                                                                   -13
+                                                               ],
+                                                  "width":  8,
+                                                  "height":  4
+                                              }
+                                          ]
+                    }
+}

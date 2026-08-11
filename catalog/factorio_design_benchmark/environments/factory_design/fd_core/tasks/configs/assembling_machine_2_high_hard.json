@@ -1,0 +1,33 @@
+{
+  "task_id": "assembling_machine_2_high_hard",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 30,
+  "description": "Produce 30 assembling machine 2 per minute with diagonal ore patches",
+  "capacity_level": "high",
+  "cost_model": "factorio_recipe_cost_v1",
+  "environment": {
+    "map_width": 80,
+    "map_height": 80,
+    "ore_patches": [
+      {
+        "ore_type": "iron-ore",
+        "position": [-30, 28],
+        "radius": 14
+      },
+      {
+        "ore_type": "copper-ore",
+        "position": [30, -28],
+        "radius": 12
+      }
+    ],
+    "difficulty": "hard",
+    "water_patches": [
+      {
+        "position": [0, -35],
+        "width": 10,
+        "height": 4
+      }
+    ]
+  }
+}

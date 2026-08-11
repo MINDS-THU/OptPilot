@@ -1,0 +1,33 @@
+{
+  "task_id": "assembling_machine_2_high_easy",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 30,
+  "description": "Produce 30 assembling machine 2 per minute - high throughput machine-production chain",
+  "capacity_level": "high",
+  "cost_model": "factorio_recipe_cost_v1",
+  "environment": {
+    "map_width": 100,
+    "map_height": 100,
+    "ore_patches": [
+      {
+        "ore_type": "iron-ore",
+        "position": [-35, 0],
+        "radius": 20
+      },
+      {
+        "ore_type": "copper-ore",
+        "position": [38, 0],
+        "radius": 16
+      }
+    ],
+    "difficulty": "easy",
+    "water_patches": [
+      {
+        "position": [0, -42],
+        "width": 14,
+        "height": 6
+      }
+    ]
+  }
+}

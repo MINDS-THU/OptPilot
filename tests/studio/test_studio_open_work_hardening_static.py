@@ -47,9 +47,11 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         projection = _function_source(self.source, "buildOpenWorkItems")
         renderer = _function_source(self.source, "renderOpenWork")
 
-        for type_label in ('typeLabel: "Interface"', 'typeLabel: failed ? "Run setup" : "Run setup · preparing"', 'typeLabel: "Run"'):
+        for type_label in ('typeLabel: "Interface"', 'typeLabel: failed ? "Run setup" : "Run setup · preparing"', 'typeLabel: "Run"', 'typeLabel: "Approval"'):
             self.assertIn(type_label, projection)
-        for saved_collection in ("state.sessions", "state.plans", "state.agentSessions"):
+        # Saved objects stay out. Conversations appear only through their
+        # pending-approval affordance (U3), never as conversation cards.
+        for saved_collection in ("state.sessions", "state.plans"):
             self.assertNotIn(saved_collection, projection)
         self.assertIn("const activeCount", renderer)
         self.assertIn("item.typeLabel", renderer)
@@ -104,7 +106,9 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         self.assertIn("data-dismiss-open-work-key", renderer)
         self.assertIn("Return to source", renderer)
         self.assertIn("dismissOpenWorkItem", renderer)
-        self.assertIn('item.status !== "failed"', dismiss)
+        self.assertIn(
+            '!["failed", "stopped"].includes(String(item.status || ""))', dismiss
+        )
         self.assertIn("state.interfaceLaunch = null", dismiss)
         self.assertIn("persistActiveInterfaceLaunch(null)", dismiss)
         self.assertIn("delete state.openWorkErrors[item.key]", dismiss)
@@ -170,6 +174,65 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         self.assertIn('item.kind === "study-launch"', open_work_dismiss)
         self.assertIn("dismissActiveStudyLaunch()", open_work_dismiss)
         self.assertIn("error.status = response.status", get_json)
+
+    def test_pending_approvals_surface_with_a_path_back_to_the_conversation(
+        self,
+    ) -> None:
+        projection = _function_source(self.source, "buildOpenWorkItems")
+        opener = _function_source(self.source, "openOpenWorkItem")
+        refresher = _function_source(
+            self.source, "updateAgentSessionFromPayload"
+        )
+
+        self.assertIn(
+            "const pendingCount = Number(session.pending_approval_count || 0);",
+            projection,
+        )
+        # pending_approval_count already covers the queued tail; adding
+        # queued_approval_count to it double-counts. See
+        # tests/studio/test_studio_open_work_approval_counts.py.
+        self.assertNotIn("+ Number(session.queued_approval_count", projection)
+        self.assertIn('=== "awaiting_user_approval"', projection)
+        self.assertIn("key: `approval:${session.id}`", projection)
+        self.assertIn('section: "Needs attention"', projection)
+        # Approval cards route to the owning Conversation, never a new one.
+        self.assertIn('item.kind === "approval"', opener)
+        self.assertIn("selectAgentSession(item.session_id)", opener)
+        # Session summary polling keeps the shelf current.
+        self.assertIn("renderOpenWork()", refresher)
+
+    def test_finished_interface_with_outputs_keeps_a_path_to_kept_outputs(
+        self,
+    ) -> None:
+        projection = _function_source(self.source, "buildOpenWorkItems")
+        attention = _function_source(
+            self.source, "interfaceOutputsNeedAttention"
+        )
+        outputs_renderer = _function_source(
+            self.source, "renderInterfaceSessionOutputs"
+        )
+
+        self.assertIn(
+            'interfaceLaunchStatus === "stopped" && launchOutputs.length > 0',
+            projection,
+        )
+        self.assertIn('"Finished"', projection)
+        self.assertIn(
+            "dismissible: interfaceLaunchFailed || interfaceLaunchFinishedWithOutputs",
+            projection,
+        )
+        self.assertIn("interfaceOutputsNeedAttention(launchOutputs)", projection)
+        # One shared attention predicate for the drawer and the shelf.
+        self.assertIn("keep_as_workspace", attention)
+        self.assertIn("kept_workspace_id", attention)
+        self.assertIn(
+            "interfaceOutputsNeedAttention(outputs)", outputs_renderer
+        )
+        # Finished section sorts after live work.
+        self.assertIn(
+            'sectionOrder = { "Needs attention": 0, Running: 1, Finished: 2 }',
+            projection,
+        )
 
 
 if __name__ == "__main__":

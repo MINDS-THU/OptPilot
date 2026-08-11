@@ -275,12 +275,9 @@ const state = {
 const els = {};
 
 function shellModeFromLocation() {
-  try {
-    const requested = new URLSearchParams(window.location.search).get("shell");
-    return requested === "legacy" ? "legacy" : "conversation";
-  } catch (error) {
-    return "conversation";
-  }
+  // The legacy shell and its URL opt-in flag were retired with U7; the
+  // conversation-first shell is the only shell.
+  return "conversation";
 }
 
 function loadStoredValue(key) {
@@ -435,10 +432,7 @@ function cacheElements() {
     "pageSubtitle",
     "refreshButton",
     "newSessionButton",
-    "legacyNewSessionButton",
-    "assistantToggleButton",
     "assistantPanel",
-    "legacyAssistantSessionCards",
     "shellToolbar",
     "shellSurfaceTitle",
     "shellSurfaceSubtitle",
@@ -451,11 +445,6 @@ function cacheElements() {
     "openWorkShelf",
     "openWorkItems",
     "askOptPilotButton",
-    "activeInterfaceBar",
-    "activeInterfaceOpenButton",
-    "activeInterfaceLabel",
-    "activeInterfaceSubtitle",
-    "activeInterfaceStopButton",
     "assistantBackButton",
     "assistantTitle",
     "assistantSubtitle",
@@ -556,7 +545,6 @@ function cacheElements() {
     "interfaceSessionEmptyBody",
     "interfaceSessionRetryButton",
     "selectionContentDrawerHost",
-    "assistantLauncherSubtitle",
     "settingsModal",
     "settingsDialog",
     "settingsCloseButton",
@@ -743,7 +731,6 @@ function bindEvents() {
   });
   on(els.interfaceStopModal, "keydown", handleInterfaceStopConfirmationKeydown);
   on(els.newSessionButton, "click", createAgentSession);
-  on(els.legacyNewSessionButton, "click", createAgentSession);
   on(els.backToConversationButton, "click", () => openConversationSurface({ history: "push" }));
   on(els.askOptPilotButton, "click", () => setAssistantOverlayOpen(!state.shell.assistantOverlayOpen));
   on(els.openWorkButton, "click", () => setOpenWorkExpanded(!state.shell.openWorkExpanded));
@@ -772,9 +759,6 @@ function bindEvents() {
     if (event.target === els.registrationConfirmationModal) closeRegistrationConfirmation();
   });
   on(els.registrationConfirmationModal, "keydown", handleRegistrationConfirmationKeydown);
-  on(els.assistantToggleButton, "click", toggleAssistant);
-  on(els.activeInterfaceOpenButton, "click", openActiveInterfaceLocation);
-  on(els.activeInterfaceStopButton, "click", stopActiveInterfaceFromGlobalControl);
   on(els.interfaceSessionBackButton, "click", leaveInterfaceSession);
   on(els.interfaceSessionOutputsButton, "click", () => setInterfaceSessionOutputsOpen(true));
   on(els.interfaceSessionOutputsCloseButton, "click", () => setInterfaceSessionOutputsOpen(false));
@@ -1824,6 +1808,23 @@ function assistantVisibleContext() {
     selected_run: isRunsPage && selectedRun
       ? assistantSelectedRunContext(selectedRun)
       : null,
+    selected_interface: isViewingActiveInterface() && state.interfaceLaunch ? {
+      launch_id: String(state.interfaceLaunch.launch_id || ""),
+      status: String(state.interfaceLaunch.status || ""),
+      launch_scope: String(state.interfaceLaunch.launch_scope || "catalog"),
+      profile_id: String(state.interfaceLaunch.profile_id || ""),
+      label: String(state.interfaceLaunch.label || ""),
+      source: state.interfaceLaunch.launch_scope === "workspace-transient"
+        ? {
+          workspace_id: String(state.interfaceLaunch.source_workspace_id || ""),
+          workspace_title: activeInterfaceSource(state.interfaceLaunch),
+        }
+        : {
+          kind: String(state.interfaceLaunch.kind || ""),
+          uid: String(state.interfaceLaunch.uid || ""),
+          key: String(state.interfaceLaunch.key || ""),
+        },
+    } : null,
     registration_menu: isRegistrationMode && state.registrationDraft ? {
       workspace_id: state.registrationDraft.backendWorkspaceId || state.registrationDraft.workspaceId,
       status: state.registrationDraft.status,
@@ -2011,6 +2012,9 @@ function parseJsonPreview(value) {
 
 async function updateAgentSessionFromPayload(session) {
   const workspacesChanged = mergeAgentSessionPayload(session);
+  // Approval counts ride the session payload; keep the Open work shelf
+  // current even when nothing else about the session changed (U3).
+  renderOpenWork();
   if (workspacesChanged) {
     await refreshAgentWorkspaceState();
   }
@@ -2230,63 +2234,9 @@ function resetActiveInterfaceReturnState() {
 }
 
 function renderActiveInterfaceIndicator() {
-  if (!els.activeInterfaceBar) return;
-  const launch = state.interfaceLaunch;
-  const active = isActiveInterfaceLaunch(launch);
-  els.activeInterfaceBar.hidden = !active;
-  if (!active) {
-    els.activeInterfaceBar.classList.remove("is-current");
-    renderOpenWork();
-    return;
-  }
-  const viewing = isViewingActiveInterface(launch);
-  const label = String(launch.label || "Interface");
-  const source = activeInterfaceSource(launch);
-  const status = activeInterfaceStatusText(launch, viewing);
-  const returnError = String(state.interfaceReturnError || "");
-  const returnPending = Boolean(state.interfaceReturnPending);
-  const fallback = Boolean(state.interfaceReturnFallbackUrl);
-  els.activeInterfaceBar.classList.toggle("is-current", viewing);
-  els.activeInterfaceBar.setAttribute(
-    "aria-label",
-    viewing ? "Currently displayed running interface" : "Running interface available",
-  );
-  if (els.activeInterfaceLabel) els.activeInterfaceLabel.textContent = label;
-  if (els.activeInterfaceSubtitle) {
-    els.activeInterfaceSubtitle.textContent = returnPending
-      ? "Opening its exact source…"
-      : returnError || (source ? `${source} · ${status}` : status);
-    els.activeInterfaceSubtitle.title = returnError || "";
-  }
-  if (els.activeInterfaceOpenButton) {
-    els.activeInterfaceOpenButton.disabled = returnPending;
-    els.activeInterfaceOpenButton.setAttribute("aria-busy", returnPending ? "true" : "false");
-    if (viewing) els.activeInterfaceOpenButton.setAttribute("aria-current", "page");
-    else els.activeInterfaceOpenButton.removeAttribute("aria-current");
-    els.activeInterfaceOpenButton.title = fallback
-      ? "Open the running interface in a new window"
-      : viewing
-      ? `${label} is open here`
-      : `Return to ${label}`;
-    els.activeInterfaceOpenButton.setAttribute(
-      "aria-label",
-      fallback
-        ? `Open running interface in a new window: ${label}`
-        : viewing
-        ? `Running interface currently displayed: ${label}`
-        : `Return to running interface: ${label}`,
-    );
-  }
-  if (els.activeInterfaceStopButton) {
-    const stopping = String(launch.status || "") === "stopping";
-    els.activeInterfaceStopButton.disabled = stopping || !launch.launch_id;
-    els.activeInterfaceStopButton.textContent = stopping
-      ? "Stopping…"
-      : String(launch.status || "") === "cleanup_pending"
-      ? "Retry cleanup"
-      : "Stop";
-    els.activeInterfaceStopButton.title = `Stop ${label}`;
-  }
+  // The legacy shell's global interface bar was retired with U7. Open work
+  // is the running-interface affordance; this hook keeps every historical
+  // "interface state changed" call site refreshing the shelf.
   renderOpenWork();
 }
 
@@ -2295,8 +2245,15 @@ function buildOpenWorkItems() {
   const launch = state.interfaceLaunch;
   const interfaceLaunchStatus = String(launch && launch.status || "");
   const interfaceLaunchFailed = interfaceLaunchStatus === "failed";
-  if (isActiveInterfaceLaunch(launch) || interfaceLaunchFailed) {
+  const launchOutputs = launch && launch.result && Array.isArray(launch.result.outputs)
+    ? launch.result.outputs
+    : [];
+  // A finished interface session with reported outputs keeps a path back to
+  // its kept outputs from Open work instead of vanishing on stop (U3).
+  const interfaceLaunchFinishedWithOutputs = interfaceLaunchStatus === "stopped" && launchOutputs.length > 0;
+  if (isActiveInterfaceLaunch(launch) || interfaceLaunchFailed || interfaceLaunchFinishedWithOutputs) {
     const launchStatus = String(launch.status || "running");
+    const outputsNeedAttention = interfaceLaunchFinishedWithOutputs && interfaceOutputsNeedAttention(launchOutputs);
     items.push({
       key: `interface:${launch.launch_id || launch.key || "active"}`,
       kind: "interface",
@@ -2305,14 +2262,22 @@ function buildOpenWorkItems() {
       launch_scope: String(launch.launch_scope || ""),
       source_workspace_id: String(launch.source_workspace_id || ""),
       typeLabel: "Interface",
-      section: ["cleanup_pending", "failed"].includes(launchStatus) ? "Needs attention" : "Running",
+      section: ["cleanup_pending", "failed"].includes(launchStatus) || outputsNeedAttention
+        ? "Needs attention"
+        : interfaceLaunchFinishedWithOutputs
+        ? "Finished"
+        : "Running",
       title: String(launch.label || "Interactive interface"),
       subtitle: interfaceLaunchFailed
         ? String(launch.error || "Interface launch failed · Click to inspect")
+        : interfaceLaunchFinishedWithOutputs
+        ? (outputsNeedAttention
+          ? `${launchOutputs.length} output${launchOutputs.length === 1 ? "" : "s"} · At least one needs saving or review`
+          : `${launchOutputs.length} kept output${launchOutputs.length === 1 ? "" : "s"} · Click to review`)
         : activeInterfaceStatusText(launch, isViewingActiveInterface(launch)),
       status: launchStatus,
-      active: !interfaceLaunchFailed,
-      dismissible: interfaceLaunchFailed,
+      active: !interfaceLaunchFailed && !interfaceLaunchFinishedWithOutputs,
+      dismissible: interfaceLaunchFailed || interfaceLaunchFinishedWithOutputs,
       actionable: Boolean(launch.launch_id || launch.key || launch.source_workspace_id),
     });
   }
@@ -2357,6 +2322,29 @@ function buildOpenWorkItems() {
       active: true,
     });
   });
+  // A Conversation waiting on the user's approval has no shelf affordance
+  // inside full-stage tools; surface it here with a path back (U3).
+  (state.agentSessions || []).forEach((session) => {
+    // pending_approval_count is the whole pending set; queued_approval_count is
+    // its strict tail (everything after the one being shown), not a disjoint
+    // set — summing them double-counts the queue.
+    const pendingCount = Number(session.pending_approval_count || 0);
+    const awaiting = assistantSessionStatus(session) === "awaiting_user_approval";
+    if (!pendingCount && !awaiting) return;
+    items.push({
+      key: `approval:${session.id}`,
+      kind: "approval",
+      session_id: String(session.id || ""),
+      typeLabel: "Approval",
+      section: "Needs attention",
+      title: assistantSessionLabel(session),
+      subtitle: pendingCount > 1
+        ? `${pendingCount} pending approvals · Click to review`
+        : "Pending approval · Click to review",
+      status: "pending",
+      active: false,
+    });
+  });
   const projectedItems = items.map((item) => {
     const error = String(state.openWorkErrors[item.key] || "");
     if (!error) return item;
@@ -2368,8 +2356,18 @@ function buildOpenWorkItems() {
       active: false,
     };
   });
-  const sectionOrder = { "Needs attention": 0, Running: 1 };
+  const sectionOrder = { "Needs attention": 0, Running: 1, Finished: 2 };
   return projectedItems.sort((left, right) => (sectionOrder[left.section] ?? 9) - (sectionOrder[right.section] ?? 9));
+}
+
+function interfaceOutputsNeedAttention(outputs) {
+  return (outputs || []).some((output) => {
+    const status = String(output && output.status || "").toLowerCase();
+    return status === "failed" || (status === "ready"
+      && output.actions && output.actions.keep_as_workspace
+      && output.actions.keep_as_workspace.eligible
+      && !output.kept_workspace_id);
+  });
 }
 
 function openWorkTimestamp(value) {
@@ -2439,7 +2437,7 @@ function renderOpenWork() {
       <span>${escapeHtml(item.subtitle)}</span>
     </${tag}>
   `;
-  }).join("") : `<div class="open-work-empty"><strong>No open work</strong><span>Running interfaces and Runs will appear here. Saved work remains in Run setups, Runs, and Workspaces.</span></div>`;
+  }).join("") : `<div class="open-work-empty"><strong>No open work</strong><span>Running interfaces, Runs, pending approvals, and finished interface outputs appear here. Saved work remains in Run setups, Runs, and Workspaces.</span></div>`;
   els.openWorkItems.querySelectorAll("[data-open-work-key]").forEach((button) => {
     button.addEventListener("click", () => openOpenWorkItem(state.openWorkItemsByKey.get(button.dataset.openWorkKey)));
   });
@@ -2468,6 +2466,10 @@ function renderOpenWork() {
 
 function openOpenWorkItem(item) {
   if (!item) return;
+  if (item.kind === "approval") {
+    void selectAgentSession(item.session_id);
+    return;
+  }
   if (item.kind === "interface") {
     void openExactOpenWorkInterface(item);
     return;
@@ -2486,7 +2488,7 @@ function openOpenWorkItem(item) {
 }
 
 function dismissOpenWorkItem(item) {
-  if (!item || item.status !== "failed") return;
+  if (!item || !["failed", "stopped"].includes(String(item.status || ""))) return;
   if (item.kind === "study-launch") {
     const current = state.studyLaunch;
     const currentKey = current
@@ -3257,12 +3259,6 @@ function mcpServersFromObject(value) {
 
 function renderOpenHandsStatus() {
   const status = state.agentRuntimeStatus || {};
-  if (els.assistantLauncherSubtitle) {
-    const session = currentAgentSession();
-    els.assistantLauncherSubtitle.textContent = session
-      ? `${assistantSessionLabel(session)} · ${assistantPublicRuntimeLabel(status)}`
-      : assistantPublicRuntimeLabel(status);
-  }
   if (!els.openHandsStatus) return;
   const model = status.model || currentOpenHandsSettings().model || "-";
   const server = status.base_url || currentOpenHandsSettings().base_url || "-";
@@ -3443,7 +3439,7 @@ function studioRouteHash() {
       return `#/interfaces/${segment(route.kind)}/${segment(route.sourceId)}/${segment(route.launchId)}`;
     }
   }
-  return "#/workspaces";
+  return "#/conversations";
 }
 
 function syncStudioRoute(options = {}) {
@@ -4051,13 +4047,7 @@ function renderInterfaceSessionOutputs(model = interfaceSessionModel()) {
       : `<p id="interfaceSessionOutputsEmpty" class="interface-output-empty">No outputs have been reported yet.</p>`;
     bindInterfaceOutputControls(els.interfaceSessionOutputsBody);
   }
-  const needsAttention = outputs.some((output) => {
-    const status = String(output && output.status || "").toLowerCase();
-    return status === "failed" || (status === "ready"
-      && output.actions && output.actions.keep_as_workspace
-      && output.actions.keep_as_workspace.eligible
-      && !output.kept_workspace_id);
-  });
+  const needsAttention = interfaceOutputsNeedAttention(outputs);
   const attentionSignature = needsAttention
     ? outputs.map((output) => [output && output.id, output && output.status, output && output.kept_workspace_id || ""]).join("|")
     : "";
@@ -4320,7 +4310,6 @@ function renderShell() {
   const overlay = enabled && state.shell.surface === "content" && state.shell.assistantOverlayOpen;
   const narrow = enabled && window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
   document.body.classList.toggle("shell-v2", enabled);
-  document.body.classList.toggle("shell-legacy", !enabled);
   document.body.classList.toggle("shell-conversation", conversation);
   document.body.classList.toggle("shell-content", enabled && !conversation);
   document.body.classList.toggle("assistant-overlay-open", overlay);
@@ -4449,15 +4438,6 @@ function setWorkbenchMode(mode) {
   renderWorkbenchMode();
   if (state.workbenchMode === "preview") renderPreviewWorkbench();
   if (state.workbenchMode === "setup") renderWorkspaceSetup();
-}
-
-function toggleAssistant() {
-  if (conversationShellEnabled()) {
-    if (state.shell.surface === "conversation") openConversationSurface();
-    else setAssistantOverlayOpen(!state.shell.assistantOverlayOpen);
-    return;
-  }
-  setAssistantOpen(!state.assistantOpen);
 }
 
 function setAssistantOpen(open) {
@@ -4599,6 +4579,57 @@ function conversationHasStarted(session = currentAgentSession()) {
   return started;
 }
 
+const ONBOARDING_CAPABILITY_INTENT_LIMIT = 3;
+const ONBOARDING_INTENT_TITLE_LIMIT = 34;
+
+function onboardingEntryTitle(entry) {
+  const title = String((entry && (entry.label || entry.id)) || "").trim();
+  if (title.length <= ONBOARDING_INTENT_TITLE_LIMIT) return title;
+  return `${title.slice(0, ONBOARDING_INTENT_TITLE_LIMIT - 1).trimEnd()}…`;
+}
+
+function onboardingIntents(groups) {
+  // Static intents stay visible while the Catalog is loading or unavailable;
+  // once it has loaded, intents without registry backing are suppressed and
+  // flagship capabilities join by name from entry metadata (U6).
+  const counts = Object.fromEntries(groups.map((group) => [group.kind, group.entries.length]));
+  const catalogReady = !state.catalogLoading && !state.catalogError;
+  const staticIntents = [
+    ["Explore a simulator", "I want to open and explore a simulator, adjust its inputs, and understand how the system behaves.", (counts.environment || 0) > 0],
+    ["Improve a system", "I have a system and performance metrics. Help me identify suitable methods and improve the decisions.", (counts.method || 0) > 0],
+    ["Compare methods", "I want to compare how several methods perform on an environment and dataset.", (counts.method || 0) >= 2],
+    ["Apply a method", "I want to use a particular method on my problem. Help me provide the necessary inputs and run it.", (counts.method || 0) > 0],
+    ["Build or publish", "Help me build or publish an Environment, Method, or Resource for this problem.", true],
+  ];
+  const intents = staticIntents
+    .filter(([, , backed]) => !catalogReady || backed)
+    .map(([label, prompt]) => [label, prompt]);
+  if (!catalogReady) return intents;
+  const seen = new Set();
+  const capabilityIntents = [];
+  for (const entry of state.catalog.resources || []) {
+    const purpose = String((entry && (entry.purpose || (entry.summary && entry.summary.purpose))) || "").toLowerCase();
+    const title = onboardingEntryTitle(entry);
+    if (purpose !== "generator" || !title || seen.has(title)) continue;
+    seen.add(title);
+    capabilityIntents.push([
+      `Generate with ${title}`,
+      `I want to generate a new artifact with the "${String((entry && (entry.label || entry.id)) || "").trim()}" resource. Help me provide its inputs and run it.`,
+    ]);
+  }
+  for (const entry of state.catalog.methods || []) {
+    const tags = Array.isArray(entry && entry.tags) ? entry.tags.map((tag) => String(tag).toLowerCase()) : [];
+    const title = onboardingEntryTitle(entry);
+    if (!tags.includes("one-time-solve") || !title || seen.has(title)) continue;
+    seen.add(title);
+    capabilityIntents.push([
+      `Solve with ${title}`,
+      `I want to solve one problem with the "${String((entry && (entry.label || entry.id)) || "").trim()}" method. Help me provide the problem inputs and run it once.`,
+    ]);
+  }
+  return [...intents, ...capabilityIntents.slice(0, ONBOARDING_CAPABILITY_INTENT_LIMIT)];
+}
+
 function renderConversationOnboarding(session = currentAgentSession()) {
   if (!els.conversationOnboarding) return false;
   const visible = Boolean(
@@ -4614,10 +4645,12 @@ function renderConversationOnboarding(session = currentAgentSession()) {
     { kind: "method", label: "Methods", entries: state.catalog.methods || [], description: "Solvers, optimizers, policies, and agent workflows." },
     { kind: "resource", label: "Resources", entries: state.catalog.resources || [], description: "Generators, viewers, templates, and supporting tools." },
   ];
+  const intents = onboardingIntents(groups);
   const signature = stableJsonStringify({
     loading: state.catalogLoading,
     error: state.catalogError,
     conversationCreateError: state.agentSessionCreateError,
+    intents,
     groups: groups.map((group) => ({
       kind: group.kind,
       count: group.entries.length,
@@ -4626,13 +4659,6 @@ function renderConversationOnboarding(session = currentAgentSession()) {
   });
   if (els.conversationOnboarding.dataset.signature === signature) return true;
   els.conversationOnboarding.dataset.signature = signature;
-  const intents = [
-    ["Explore a simulator", "I want to open and explore a simulator, adjust its inputs, and understand how the system behaves."],
-    ["Improve a system", "I have a system and performance metrics. Help me identify suitable methods and improve the decisions."],
-    ["Compare methods", "I want to compare how several methods perform on an environment and dataset."],
-    ["Apply a method", "I want to use a particular method on my problem. Help me provide the necessary inputs and run it."],
-    ["Build or publish", "Help me build or publish an Environment, Method, or Resource for this problem."],
-  ];
   const catalogBody = state.catalogLoading
     ? `<div class="onboarding-catalog-state">Loading the local Catalog…</div>`
     : state.catalogError
@@ -4884,10 +4910,6 @@ function renderAssistant() {
   const isSessionList = !conversationShellEnabled() && state.assistantMode === "sessions";
   document.body.classList.toggle("assistant-session-list-open", state.assistantOpen && isSessionList);
   document.documentElement.style.setProperty("--assistant-panel-width", `${state.assistantPanelWidth}px`);
-  if (els.assistantToggleButton) {
-    els.assistantToggleButton.classList.toggle("active", state.assistantOpen);
-    els.assistantToggleButton.setAttribute("aria-expanded", String(state.assistantOpen));
-  }
   const session = currentAgentSession();
   const attachedCount = session ? attachedWorkspaceIds(session.id).length : 0;
   const pageLabel = currentViewLabel();
@@ -6715,7 +6737,7 @@ function renderAssistantSessionList() {
     archivedError: state.archivedAgentSessionsError,
     archived: state.archivedAgentSessions.map((session) => session.id),
   });
-  [els.assistantSessionCards, els.legacyAssistantSessionCards].filter(Boolean).forEach((root) => {
+  [els.assistantSessionCards].filter(Boolean).forEach((root) => {
     if (root.dataset.sessionListSignature === signature) return;
     const scrollTop = root.scrollTop;
     const focusedSessionId = root.contains(document.activeElement)

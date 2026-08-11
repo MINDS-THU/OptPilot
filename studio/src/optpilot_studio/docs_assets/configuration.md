@@ -248,8 +248,11 @@ evaluator:
   pythonPath: [.]
   # Runtime working directory inside the trial workspace, not relative to this YAML file.
   cwd: .
-  env:
-    MY_ENV: value
+  # NOTE: `env:` is NOT supported by the retained runner. Declaring it fails
+  # the Run at attempt binding with `evaluator_environment_unsupported`,
+  # because evaluator paths and environment must come from typed runtime
+  # scopes. Put scenario values in `settings:` below, and use a method's
+  # `runtime.envFromHost` when a secret is genuinely needed.
   # Free object passed to the evaluator in context["settings"].
   # Use it for environment-owned scenario, dataset, query, case-list, or simulator arguments.
   settings:
@@ -628,8 +631,12 @@ entrypoint:
   # This is not a whole-Run or internal HTTP-client timeout.
   exchangeTimeoutSeconds: 60
 
-  # Alternative command entrypoint. Batch-shaped in the schema but not yet
-  # executable by the retained runner.
+  # Alternative command entrypoint. The retained runner executes command
+  # BATCH METHODS: one bounded subprocess per proposal exchange, with
+  # `command[0]` restricted to python/python3 (it is mapped to the worker's
+  # prepared interpreter). Command *evaluators* remain validate-only.
+  # See methods.md for the JSON stdin/stdout and {input_file}/{output_file}
+  # protocols.
   # command: [python, method.py, "{input_file}", "{output_file}"]
 
 # Free object passed to the method as method settings.
