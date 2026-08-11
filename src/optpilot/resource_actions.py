@@ -21,6 +21,12 @@ Execution contract (what the authored command sees):
 - When the action declares ``runtime.setup``, the steps run in the resource
   root before the command (Studio's prepared-runtime cache is not used by
   this local path; setup scripts should be idempotent).
+- A ``runtime.setup`` step that builds a Python environment (``python-venv``
+  or ``uv``) *owns the action's imports*: a ``python`` / ``python3`` command
+  head then resolves to that prepared interpreter instead of the interpreter
+  running optpilot, and its bin directory is prepended to ``PATH``.  An
+  action whose declared interpreter is missing fails closed with a fixable
+  message rather than silently running against host site-packages.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -331,6 +338,26 @@ def run_resource_action(
             + ", ".join(sorted(missing))
         )
 
+    runtime_setup = (
+        action.runtime.get("setup") if isinstance(action.runtime, Mapping) else None
+    )
+    # A setup step that builds a Python environment owns this action's
+    # dependency closure. Resolve the interpreter it declares before anything
+    # is created, so "the runtime was never built" fails closed here with a
+    # fixable message instead of surfacing as an ImportError from the command.
+    runtime_hints = _declared_runtime_hints(runtime_setup, resource_root)
+    declared_python = runtime_hints.get("pythonExecutable")
+    if (
+        declared_python is not None
+        and not run_setup
+        and not Path(declared_python).is_file()
+    ):
+        raise ValueError(
+            f"Action {action.action_id!r} declares a Python runtime at "
+            f"{declared_python}, which does not exist, and setup was skipped. "
+            "Run the action without --skip-setup to build it."
+        )
+
     output_path = Path(output_root).expanduser().resolve()
     if output_path.exists():
         if not output_path.is_dir():
@@ -343,13 +370,15 @@ def run_resource_action(
         output_path.mkdir(parents=True)
 
     setup_summary: Dict[str, Any] | None = None
-    runtime_setup = (
-        action.runtime.get("setup") if isinstance(action.runtime, Mapping) else None
-    )
     if runtime_setup and run_setup:
         from .setup import run_process_setup
 
         setup_summary = run_process_setup(dict(runtime_setup), resource_root)
+    if declared_python is not None and not Path(declared_python).is_file():
+        raise ValueError(
+            f"Action {action.action_id!r} declares a Python runtime at "
+            f"{declared_python}, but setup did not produce it."
+        )
 
     work_dir = Path(tempfile.mkdtemp(prefix="optpilot-resource-action-"))
     started = time.monotonic()
@@ -365,11 +394,11 @@ def run_resource_action(
         # Mirror the retained command-method contract (F3): a python/python3
         # head means "the interpreter running optpilot", so actions work
         # without a python on PATH and see the same user-provisioned
-        # dependencies as the rest of the host installation.
+        # dependencies as the rest of the host installation. An action that
+        # declares its own Python runtime resolves to that interpreter
+        # instead — its declaration, not the host, defines what it imports.
         if argv and argv[0] in RETAINED_COMMAND_METHOD_INTERPRETERS:
-            import sys
-
-            argv[0] = sys.executable
+            argv[0] = declared_python or sys.executable
         run_env = {
             **_minimal_action_env(environment),
             **dict(action.env),
@@ -380,6 +409,14 @@ def run_resource_action(
             INPUTS_FILE_ENV: str(inputs_file),
             OUTPUT_ROOT_ENV: str(output_path),
         }
+        path_entries = runtime_hints.get("pathPrepend")
+        if path_entries:
+            from .setup import apply_prepared_env
+
+            run_env = apply_prepared_env(
+                run_env,
+                {"PATH": os.pathsep.join(str(entry) for entry in path_entries)},
+            )
         cwd = (resource_root / action.cwd).resolve()
         if not cwd.is_dir():
             raise ValueError(f"Action cwd {cwd} is not a directory.")
@@ -429,6 +466,18 @@ def run_resource_action(
         return result
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _declared_runtime_hints(
+    runtime_setup: Any, resource_root: Path
+) -> Mapping[str, Any]:
+    """Return the interpreter and bin paths the setup steps declare, if any."""
+
+    if not isinstance(runtime_setup, Mapping) or not runtime_setup:
+        return {}
+    from .setup import prepared_runtime_from_setup
+
+    return prepared_runtime_from_setup(dict(runtime_setup), resource_root)
 
 
 def _substitute_token(

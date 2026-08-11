@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from optpilot.config import compile_interface_launch_profiles
+from optpilot.resource_actions import compile_resource_actions, find_resource_action
 
 
 class DevsInterfaceLauncherTest(unittest.TestCase):
@@ -641,6 +642,86 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
                 ),
                 1,
             )
+
+
+class DevsGenerateActionRuntimeTest(unittest.TestCase):
+    """The headless `generate` action declares its own dependency closure.
+
+    Its imports (smolagents, litellm, pydantic and ~40 transitive packages)
+    have native wheels, so no vendored pure-wheel lock is possible. The action
+    must therefore declare a `python-venv` runtime built from the same
+    requirements file as the interface — never rely on whichever packages
+    happen to sit in the host installation running optpilot.
+    """
+
+    def setUp(self) -> None:
+        self.resource = (
+            Path(__file__).resolve().parents[2]
+            / "catalog"
+            / "example_package"
+            / "resources"
+            / "devs-gen-interface"
+        )
+
+    def test_generate_action_declares_its_python_runtime(self) -> None:
+        raw = yaml.safe_load(
+            (self.resource / "optpilot.resource.yaml").read_text(encoding="utf-8")
+        )
+        actions = compile_resource_actions(raw)
+        action = find_resource_action(actions, "generate")
+
+        self.assertEqual(action.runtime.get("sandbox"), "process")
+        steps = action.runtime["setup"]["steps"]
+        self.assertEqual([step["uses"] for step in steps], ["python-venv"])
+        self.assertEqual(steps[0]["requirements"], ["requirements-interface.txt"])
+        self.assertTrue((self.resource / "requirements-interface.txt").is_file())
+        # Declared runtime state stays inside the ignored .runtime/ boundary.
+        self.assertTrue(steps[0]["venv"].startswith(".runtime/"))
+        # Setup installs from PyPI and generation calls the provider.
+        self.assertEqual(action.network, "enabled")
+
+    def test_generate_action_runtime_is_not_lockable_as_pure_wheels(self) -> None:
+        # Guards the reason the action installs from a requirements file
+        # instead of a vendored lock: these distributions publish only
+        # platform wheels, which locked_python_runtime rejects.
+        requirements = (self.resource / "requirements-interface.txt").read_text(
+            encoding="utf-8"
+        )
+        for distribution in ("litellm", "numpy", "scipy", "pillow"):
+            self.assertIn(distribution, requirements.lower())
+
+    def test_missing_dependencies_fail_with_a_typed_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs_file = root / "inputs.json"
+            inputs_file.write_text(
+                '{"specification": "a barbershop", "rootModelName": "Shop"}',
+                encoding="utf-8",
+            )
+            output_root = root / "out"
+            output_root.mkdir()
+
+            # -S drops site-packages, reproducing an installation without the
+            # action's declared runtime; -E keeps PYTHONPATH from restoring it.
+            completed = subprocess.run(
+                [sys.executable, "-S", "-E", "headless_generate.py"],
+                cwd=self.resource,
+                env={
+                    "PATH": os.environ.get("PATH", ""),
+                    "OPTPILOT_RESOURCE_ACTION_INPUTS_FILE": str(inputs_file),
+                    "OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT": str(output_root),
+                },
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("resource_action_dependencies_missing", completed.stderr)
+        self.assertIn("requirements-interface.txt", completed.stderr)
+        self.assertIn(sys.executable, completed.stderr)
+        self.assertNotIn("Traceback", completed.stderr)
 
 
 if __name__ == "__main__":
