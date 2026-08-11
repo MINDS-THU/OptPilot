@@ -172,11 +172,19 @@ OPTPILOT_WORKSPACE_RUNTIME_CPUS=4
 OPTPILOT_WORKSPACE_RUNTIME_MEMORY=8g
 OPTPILOT_WORKSPACE_RUNTIME_PIDS_LIMIT=2048
 OPTPILOT_WORKSPACE_RUNTIME_NO_NEW_PRIVILEGES=true
+OPTPILOT_WORKSPACE_RUNTIME_HEALTH_TIMEOUT_SECONDS=10
 ```
 
 Studio stops idle workspace containers after the configured idle timeout when no
 assistant session, selected editor, or reachable Code Server is using them. It
 does not delete workspace files or runtime cache.
+
+Studio checks runtime readiness by running `--version` and `info` against the
+container engine, allowing each probe
+`OPTPILOT_WORKSPACE_RUNTIME_HEALTH_TIMEOUT_SECONDS` (default `10`). A slow engine
+— a cold Docker Desktop, or a loaded host — can need more; raise the value if
+Studio reports that the readiness probe did not answer in time. A probe that
+times out is reported as unconfirmed, not as a stopped engine.
 
 ## Image Allowlist
 

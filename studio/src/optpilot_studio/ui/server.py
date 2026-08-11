@@ -925,6 +925,18 @@ class CodeServerState:
         return self.process is not None and self.process.poll() is None
 
 
+def _probe_command_text(command: Any) -> str:
+    """Render a probe command for operators without echoing its full path."""
+
+    if isinstance(command, (list, tuple)):
+        parts = [str(part) for part in command]
+    else:
+        parts = str(command or "").split()
+    if not parts:
+        return ""
+    return " ".join([Path(parts[0]).name, *parts[1:]])
+
+
 @dataclass
 class WorkspaceRuntimeOptions:
     executable: Optional[str] = None
@@ -942,6 +954,7 @@ class WorkspaceRuntimeOptions:
     image_pull_timeout_seconds: int = 600
     image_build_timeout_seconds: int = 1200
     start_timeout_seconds: int = 90
+    health_probe_timeout_seconds: int = 10
     image_allowlist_patterns: List[str] = field(default_factory=list)
     cpu_limit: str = "2"
     memory_limit: str = "4g"
@@ -987,6 +1000,10 @@ class WorkspaceRuntimeOptions:
             start_timeout_seconds=_int_env(
                 "OPTPILOT_WORKSPACE_RUNTIME_START_TIMEOUT_SECONDS",
                 cls.start_timeout_seconds,
+            ),
+            health_probe_timeout_seconds=_int_env(
+                "OPTPILOT_WORKSPACE_RUNTIME_HEALTH_TIMEOUT_SECONDS",
+                cls.health_probe_timeout_seconds,
             ),
             image_allowlist_patterns=_split_env_patterns(
                 "OPTPILOT_WORKSPACE_RUNTIME_IMAGE_ALLOWLIST"
@@ -1195,6 +1212,12 @@ class WorkspaceRuntimeManager:
             "network": str(self.options.network or "bridge"),
         }
 
+    def _health_probe_timeout(self) -> int:
+        """Seconds a single readiness probe may take before it is unanswered."""
+
+        configured = int(self.options.health_probe_timeout_seconds or 0)
+        return max(1, configured)
+
     def health(self) -> JsonDict:
         cached_at, cached = self._health_cache
         if cached and time.monotonic() - cached_at < 2:
@@ -1212,6 +1235,7 @@ class WorkspaceRuntimeManager:
                 "base_image": self.options.base_image,
                 "build_image": self.options.build_image,
                 "dockerfile": str(self._image_dockerfile()),
+                "probe_timed_out": False,
                 "error": "No Docker/Podman-compatible executable found. Install Docker or Podman, or set OPTPILOT_WORKSPACE_RUNTIME_EXECUTABLE.",
             }
             self._health_cache = (time.monotonic(), payload)
@@ -1229,25 +1253,53 @@ class WorkspaceRuntimeManager:
                 "build_image": self.options.build_image,
                 "dockerfile": str(self._image_dockerfile()),
                 "image_allowlist": list(self.options.image_allowlist_patterns),
+                "probe_timed_out": False,
                 "error": allowlist_error,
             }
             self._health_cache = (time.monotonic(), payload)
             return dict(payload)
+        probe_timeout = self._health_probe_timeout()
         try:
             version_completed = subprocess.run(
                 [executable, "--version"],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=probe_timeout,
                 check=False,
             )
             info_completed = subprocess.run(
                 [executable, "info"],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=probe_timeout,
                 check=False,
             )
+        except subprocess.TimeoutExpired as exc:
+            # A probe that never answered is not proof the engine is stopped:
+            # say so, so operators do not chase a container runtime that is
+            # merely slow (cold start, load) instead of absent.
+            payload = {
+                "ok": False,
+                "available": True,
+                "configured": configured,
+                "executable": executable,
+                "engine": Path(executable).name,
+                "image": self.options.image,
+                "base_image": self.options.base_image,
+                "build_image": self.options.build_image,
+                "dockerfile": str(self._image_dockerfile()),
+                "probe_timed_out": True,
+                "error": (
+                    f"Workspace runtime readiness probe "
+                    f"`{_probe_command_text(exc.cmd) or Path(executable).name}` "
+                    f"did not answer within "
+                    f"{probe_timeout}s. The engine may be starting or "
+                    "unresponsive; retry, or raise "
+                    "OPTPILOT_WORKSPACE_RUNTIME_HEALTH_TIMEOUT_SECONDS."
+                ),
+            }
+            self._health_cache = (time.monotonic(), payload)
+            return dict(payload)
         except Exception as exc:
             payload = {
                 "ok": False,
@@ -1259,6 +1311,7 @@ class WorkspaceRuntimeManager:
                 "base_image": self.options.base_image,
                 "build_image": self.options.build_image,
                 "dockerfile": str(self._image_dockerfile()),
+                "probe_timed_out": False,
                 "error": str(exc),
             }
             self._health_cache = (time.monotonic(), payload)
@@ -1284,6 +1337,7 @@ class WorkspaceRuntimeManager:
             "dockerfile": str(self._image_dockerfile()),
             "image_allowlist": list(self.options.image_allowlist_patterns),
             "version": text[0] if text else "",
+            "probe_timed_out": False,
             "error": error,
         }
         self._health_cache = (time.monotonic(), payload)
@@ -7817,10 +7871,19 @@ def _interface_launch_runtime_capability(state: UiState) -> JsonDict:
             "code": "ready",
             "reason": "Open this interface in an isolated launch runtime.",
         }
+    probe_timed_out = bool(health.get("probe_timed_out"))
     if not health.get("available"):
         reason = (
             "Interface launch needs the Sandbox. Install or configure Docker "
             "or Podman, then refresh Studio."
+        )
+    elif probe_timed_out:
+        # The engine answered nothing rather than answering "stopped": never
+        # tell an operator to start a runtime that may already be running.
+        reason = (
+            "Interface launch could not confirm the Sandbox: Docker or Podman "
+            "did not answer the readiness probe in time. Wait for the engine "
+            "to settle, then retry."
         )
     else:
         reason = (
@@ -7831,6 +7894,7 @@ def _interface_launch_runtime_capability(state: UiState) -> JsonDict:
         "eligible": False,
         "code": "interface_runtime_unavailable",
         "reason": reason,
+        "probe_timed_out": probe_timed_out,
     }
 
 

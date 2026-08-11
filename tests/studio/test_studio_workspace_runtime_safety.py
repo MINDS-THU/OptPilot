@@ -1301,5 +1301,147 @@ class StudioWorkspaceRuntimeSafetyTest(unittest.TestCase):
             self.assertEqual(list(moved.iterdir()), [])
 
 
+class StudioWorkspaceRuntimeHealthProbeTest(unittest.TestCase):
+    """An unanswered readiness probe must never read as a stopped engine."""
+
+    def _manager(
+        self, root: Path, *, executable: Path, timeout_seconds: int = 10
+    ) -> WorkspaceRuntimeManager:
+        studio_root = root / "studio"
+        studio_root.mkdir(parents=True, exist_ok=True)
+        return WorkspaceRuntimeManager(
+            studio_root=studio_root,
+            runtime_root=studio_root / ".optpilot-ui" / "runtime",
+            options=WorkspaceRuntimeOptions(
+                executable=str(executable),
+                image="fake-workspace:latest",
+                build_image=False,
+                health_probe_timeout_seconds=timeout_seconds,
+            ),
+        )
+
+    def _slow_executable(self, root: Path, seconds: float) -> Path:
+        executable = root / "slow_container.py"
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            f"time.sleep({seconds})\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        return executable
+
+    def test_health_reports_probe_timeout_separately_from_stopped_engine(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            manager = self._manager(
+                root,
+                executable=self._slow_executable(root, 30),
+                timeout_seconds=1,
+            )
+
+            health = manager.health()
+
+        self.assertFalse(health["ok"])
+        self.assertTrue(health["available"])
+        self.assertTrue(health["probe_timed_out"])
+        self.assertIn("did not answer within 1s", health["error"])
+        self.assertIn("--version", health["error"])
+        self.assertNotIn(str(root), health["error"])
+
+    def test_health_probe_timeout_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = self._slow_executable(root, 0)
+            manager = self._manager(root, executable=executable, timeout_seconds=42)
+            completed = subprocess.CompletedProcess(
+                args=[str(executable)], returncode=0, stdout="fake 1.0", stderr=""
+            )
+
+            with patch.object(
+                studio_server.subprocess, "run", return_value=completed
+            ) as run:
+                health = manager.health()
+
+        self.assertTrue(health["ok"])
+        self.assertFalse(health["probe_timed_out"])
+        self.assertEqual(
+            [invocation.kwargs["timeout"] for invocation in run.call_args_list],
+            [42, 42],
+        )
+
+    def test_health_probe_timeout_reads_environment_override(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"OPTPILOT_WORKSPACE_RUNTIME_HEALTH_TIMEOUT_SECONDS": "25"},
+            clear=False,
+        ):
+            options = WorkspaceRuntimeOptions.from_env()
+
+        self.assertEqual(options.health_probe_timeout_seconds, 25)
+
+    def test_stopped_engine_still_reports_no_probe_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            executable = self._slow_executable(root, 0)
+            manager = self._manager(root, executable=executable)
+            refused = subprocess.CompletedProcess(
+                args=[str(executable), "info"],
+                returncode=1,
+                stdout="",
+                stderr="Cannot connect to the Docker daemon.",
+            )
+            version = subprocess.CompletedProcess(
+                args=[str(executable), "--version"],
+                returncode=0,
+                stdout="fake 1.0",
+                stderr="",
+            )
+
+            with patch.object(
+                studio_server.subprocess, "run", side_effect=[version, refused]
+            ):
+                health = manager.health()
+
+        self.assertFalse(health["ok"])
+        self.assertTrue(health["available"])
+        self.assertFalse(health["probe_timed_out"])
+        self.assertIn("Cannot connect to the Docker daemon.", health["error"])
+
+    def test_interface_launch_reason_distinguishes_timeout_from_stopped(self) -> None:
+        timed_out = SimpleNamespace(
+            workspace_runtime=SimpleNamespace(
+                health=lambda: {
+                    "ok": False,
+                    "available": True,
+                    "probe_timed_out": True,
+                }
+            )
+        )
+        stopped = SimpleNamespace(
+            workspace_runtime=SimpleNamespace(
+                health=lambda: {
+                    "ok": False,
+                    "available": True,
+                    "probe_timed_out": False,
+                }
+            )
+        )
+
+        timeout_capability = studio_server._interface_launch_runtime_capability(
+            timed_out
+        )
+        stopped_capability = studio_server._interface_launch_runtime_capability(stopped)
+
+        self.assertFalse(timeout_capability["eligible"])
+        self.assertTrue(timeout_capability["probe_timed_out"])
+        self.assertIn("did not answer the readiness probe", timeout_capability["reason"])
+        self.assertNotIn("Start Docker or Podman", timeout_capability["reason"])
+        self.assertFalse(stopped_capability["probe_timed_out"])
+        self.assertIn("Start Docker or Podman", stopped_capability["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()
