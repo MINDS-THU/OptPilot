@@ -6,18 +6,27 @@ import unittest
 from pathlib import Path
 
 from optpilot.config import compile_authoring_config
+from optpilot.locked_python_runtime_contract import (
+    LOCKED_PYTHON_RUNTIME_SOURCE_ROLE,
+    PreparedPythonRuntime,
+)
 from optpilot.realm.owner_derivation import OwnerDerivationManifest, SourceAnchor
 from optpilot.realm.manifests import TreeEntry, TreeManifest
+from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.process_provider import ProcessProviderIdentity
-from optpilot.realm.refs import BlobRef
+from optpilot.realm.refs import BlobRef, SnapshotRef
 from optpilot.realm.run_closure import (
     RUN_ATTEMPT_INPUT_ROLE,
     RUN_ENVIRONMENT_SOURCE_ROLE,
+    RUN_PREPARED_RUNTIME_ROLE,
     InterfaceLaunchProfile,
     ScopeLayer,
     ScopePath,
 )
-from optpilot.realm.run_definition import RUN_METHOD_SOURCE_ROLE
+from optpilot.realm.run_definition import (
+    RUN_METHOD_SOURCE_ROLE,
+    RUN_PREPARED_METHOD_RUNTIME_ROLE,
+)
 from optpilot.realm.study_definition import StudyDefinitionManifest
 from optpilot.retained_study_compiler import (
     LOGICAL_PYTHON_RUNTIME_SETTINGS_SCHEMA,
@@ -30,6 +39,10 @@ from optpilot.retained_study_compiler import (
     package_projection_contract_features,
 )
 from optpilot.runtime_limits import TRIAL_FILESYSTEM_QUOTA
+from optpilot.runtime_scopes import (
+    ENVIRONMENT_PREPARED_PYTHON_SCOPE,
+    METHOD_PREPARED_PYTHON_SCOPE,
+)
 from optpilot.spec import StudySpec, study_spec_from_raw
 
 
@@ -212,6 +225,65 @@ def _study_with_trial_workspace(
             trial_workspace_mappings=selected,
         ),
     )
+
+
+_LOCKED_SETUP = {
+    "cache": "prepared",
+    "timeoutSeconds": 300,
+    "steps": [
+        {"uses": "python-venv", "cwd": ".", "requirements": ["requirements.lock"]}
+    ],
+}
+
+
+def _prepared_runtime(component_kind: str) -> PreparedPythonRuntime:
+    """One already-retained dependency layer, as preparation would return it."""
+
+    digest, cache_key, owner_digest = (
+        ("e" * 64, "c" * 64, "d" * 64)
+        if component_kind == "environment"
+        else ("b" * 64, "f" * 64, "9" * 64)
+    )
+    return PreparedPythonRuntime(
+        component_kind=component_kind,
+        cache_key=cache_key,
+        source_anchor=SourceAnchor(f"{component_kind}-dependency-owner", 3, owner_digest),
+        membership=OwnerMembership(
+            store_id="local-store",
+            content_ref=SnapshotRef(digest),
+            role=LOCKED_PYTHON_RUNTIME_SOURCE_ROLE,
+        ),
+        scope=(
+            ENVIRONMENT_PREPARED_PYTHON_SCOPE
+            if component_kind == "environment"
+            else METHOD_PREPARED_PYTHON_SCOPE
+        ),
+    )
+
+
+def _dependency_study(
+    *,
+    requires_capability: bool,
+    method_setup: bool = False,
+) -> StudySpec:
+    """A study whose Environment locks dependencies the Method may need."""
+
+    study = _study()
+    if requires_capability:
+        capability = {
+            "id": "exact_seed_replay",
+            "description": "Replay one exact evaluation seed.",
+        }
+        study.candidate["context"]["capabilities"] = [copy.deepcopy(capability)]
+        study.environment["adapter"]["config"]["context"]["capabilities"] = [
+            copy.deepcopy(capability)
+        ]
+        study.method["compatibility"]["requiredCapabilities"] = ["exact_seed_replay"]
+    study.environment["runtime"]["setup"] = copy.deepcopy(_LOCKED_SETUP)
+    study.execution["backend"]["config"]["setup"] = copy.deepcopy(_LOCKED_SETUP)
+    if method_setup:
+        study.method["runtime"]["setup"] = copy.deepcopy(_LOCKED_SETUP)
+    return study
 
 
 def _package(**changes) -> RetainedStudyPackage:
@@ -882,6 +954,129 @@ class RetainedStudyCompilerTest(unittest.TestCase):
         )
         encoded = json.dumps(result.study_definition.to_dict(), sort_keys=True)
         self.assertNotIn("/private/projection", encoded)
+
+    def test_capability_method_receives_the_environment_prepared_layer(self) -> None:
+        environment_prepared = _prepared_runtime("environment")
+        result = compile_retained_process_study(
+            _dependency_study(requires_capability=True),
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="capability-dependency",
+            environment_prepared_runtime=environment_prepared,
+        )
+
+        method_runtime = result.run_definition.prepared_method_runtime
+        # Without this layer the Environment callable the Method invokes would
+        # resolve its third-party imports from whatever the host happens to
+        # have installed, so the Study would only run on the build machine.
+        self.assertEqual(
+            method_runtime.runtime_settings["import_roots"],
+            (
+                {"path": "methods", "scope": "study-package-source"},
+                {"path": ".", "scope": ENVIRONMENT_PREPARED_PYTHON_SCOPE},
+            ),
+        )
+        self.assertEqual(len(method_runtime.prepared_layers), 1)
+        layer = method_runtime.prepared_layers[0]
+        self.assertEqual(layer.scope, ENVIRONMENT_PREPARED_PYTHON_SCOPE)
+        self.assertEqual(
+            layer.snapshot_ref, environment_prepared.membership.content_ref
+        )
+        self.assertEqual(layer.source_subpath, "site-packages")
+        self.assertEqual(layer.destination_subpath, ".")
+        self.assertEqual(layer.precedence, 0)
+
+        # The shared layer must reach the Run as retained content under the
+        # Method role, not only as an Environment-role closure member.
+        refs = result.run_definition.content_refs_by_role
+        self.assertEqual(
+            refs[RUN_PREPARED_METHOD_RUNTIME_ROLE],
+            (environment_prepared.membership.content_ref,),
+        )
+        self.assertEqual(
+            refs[RUN_PREPARED_RUNTIME_ROLE],
+            (environment_prepared.membership.content_ref,),
+        )
+        dependency_bindings = {
+            binding.target_role: binding
+            for binding in result.owner_derivation.bindings
+            if binding.source_owner_id == environment_prepared.source_anchor.owner_id
+        }
+        self.assertEqual(
+            set(dependency_bindings),
+            {RUN_PREPARED_RUNTIME_ROLE, RUN_PREPARED_METHOD_RUNTIME_ROLE},
+        )
+        for binding in dependency_bindings.values():
+            self.assertEqual(
+                binding.content_ref, environment_prepared.membership.content_ref
+            )
+            self.assertEqual(binding.source_role, LOCKED_PYTHON_RUNTIME_SOURCE_ROLE)
+        self.assertEqual(
+            [item.owner_id for item in result.owner_derivation.sources].count(
+                environment_prepared.source_anchor.owner_id
+            ),
+            1,
+        )
+
+    def test_method_without_a_capability_keeps_the_environment_layer_out(self) -> None:
+        result = compile_retained_process_study(
+            _dependency_study(requires_capability=False),
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="no-capability-dependency",
+            environment_prepared_runtime=_prepared_runtime("environment"),
+        )
+
+        method_runtime = result.run_definition.prepared_method_runtime
+        self.assertEqual(
+            method_runtime.runtime_settings["import_roots"],
+            ({"path": "methods", "scope": "study-package-source"},),
+        )
+        self.assertEqual(method_runtime.prepared_layers, ())
+        self.assertNotIn(
+            RUN_PREPARED_METHOD_RUNTIME_ROLE,
+            result.run_definition.content_refs_by_role,
+        )
+
+    def test_capability_layer_never_outranks_the_methods_own_dependencies(self) -> None:
+        environment_prepared = _prepared_runtime("environment")
+        method_prepared = _prepared_runtime("method")
+        result = compile_retained_process_study(
+            _dependency_study(requires_capability=True, method_setup=True),
+            package=_package(),
+            package_manifest=_manifest(),
+            provider=_provider(),
+            target_owner_id="capability-and-method-dependency",
+            environment_prepared_runtime=environment_prepared,
+            method_prepared_runtime=method_prepared,
+        )
+
+        method_runtime = result.run_definition.prepared_method_runtime
+        self.assertEqual(
+            method_runtime.runtime_settings["import_roots"],
+            (
+                {"path": "methods", "scope": "study-package-source"},
+                {"path": ".", "scope": METHOD_PREPARED_PYTHON_SCOPE},
+                {"path": ".", "scope": ENVIRONMENT_PREPARED_PYTHON_SCOPE},
+            ),
+        )
+        self.assertEqual(
+            {layer.scope for layer in method_runtime.prepared_layers},
+            {METHOD_PREPARED_PYTHON_SCOPE, ENVIRONMENT_PREPARED_PYTHON_SCOPE},
+        )
+        self.assertEqual(
+            set(
+                result.run_definition.content_refs_by_role[
+                    RUN_PREPARED_METHOD_RUNTIME_ROLE
+                ]
+            ),
+            {
+                method_prepared.membership.content_ref,
+                environment_prepared.membership.content_ref,
+            },
+        )
 
     def test_interface_paths_and_profile_shape_fail_closed(self) -> None:
         base = _study()

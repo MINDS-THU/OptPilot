@@ -63,6 +63,27 @@ This is authoring-surface only — no runtime behavior change — so it is low-r
 - `exact_seed_replay`: `method.yaml` reaches across the package via `pythonPath: [., ../../environments/...]` to import the environment's `evaluator.replay_candidate`. Formalize: a capability declaration names the callable; the runner resolves and exposes the environment import root to methods that require the capability. (Cheaper complement: methods consume the evaluator's already-declared `worst_run.db` artifact, category `simulation_trace`, making replay optional.)
 - Policy validation: hardcoded AST checks in `method.py` (entrypoint name/arity, forbidden imports, field lints) become an environment-declared `policyValidation` block (required entrypoint, forbidden import roots, forbidden identifiers, optional lints) that any code-editing method applies generically.
 
+> **Status 2026-08-11: the dependency half of `exact_seed_replay` is done.**
+> `compile_retained_process_study` now shares the environment's prepared
+> Python layer with the method runtime whenever the method declares
+> `requires.capabilities` (`retained_study_compiler.py`,
+> `_requires_environment_capability`): the layer is added to
+> `prepared_method_runtime.prepared_layers` under
+> `environment-prepared-python`, appended last in the method's import roots
+> (so a method's own locked layer still wins), and retained under
+> `run-prepared-method-runtime` so the run projects it for the method
+> process. Before this, a capability-requiring method got the environment's
+> *source* root (via authored `pythonPath`) but none of its locked
+> dependencies, so those imports silently resolved from the host
+> interpreter and only worked where the packages happened to be installed.
+> Regression coverage: `tests/core/test_retained_study_compiler.py`
+> (three cases) and `tests/core/test_capability_dependency_vertical_e2e.py`
+> (a full local run whose dependency module exists in no host interpreter).
+> Still open for F5: naming the capability callable in the declaration and
+> resolving it in the runner, plus `policyValidation`. Also still open: a
+> method that cross-imports an environment source root *without* declaring a
+> capability gets no dependency layer and is not rejected.
+
 **F6 — Dependency-locking escape hatch, documented (S now, L later).** `_validate_wheel_tags` accepts only pure-Python (`none-any`) wheels; OR-Tools/pymoo/simpy-class stacks therefore can't be locked. Do **not** attempt native-wheel or container execution for this release. Instead: (a) document the supported pattern — a package declares heavy runtimes as *user-provisioned* (host interpreter + documented extras, checked by `optpilot package setup-check`); (b) keep `runtime.sandbox: container` authoring valid so packages are forward-compatible; (c) schedule container evaluator execution as the first post-release framework slice (trust plumbing already exists in `provider_trust_policy.py` / digest-pinned preview approvals to generalize from). COOPA and Factorio-execution adopt pattern (a) in v1.
 
 **F7 — Session protocol: cut from v1 surface (S).** `protocol: session` is a reserved-but-dead enum; shipping a validating-but-never-executable protocol invites broken packages. Mark it explicitly experimental in schema description + docs (or gate behind `apiVersion` bump later). Revisit when a concrete method needs mid-batch adaptation.
