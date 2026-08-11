@@ -448,6 +448,18 @@ CATALOG_ENTRY_REF_SCHEMA = {
         "ref_digest",
     ],
 }
+STUDY_LAUNCH_INPUTS_SCHEMA = {
+    "type": "object",
+    "description": (
+        "Per-launch values for the Run setup's declared inputs, keyed by the "
+        "declared input name (for example the problem statement a one-shot "
+        "solving Run setup expects). Read the declared names, types, and "
+        "descriptions from the Run setup's validation.inputs. These values are "
+        "the problem payload and are retained in Run evidence, so never place "
+        "credentials or secrets here."
+    ),
+    "additionalProperties": True,
+}
 
 
 OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
@@ -679,12 +691,13 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_study_launch",
-        "description": "Launch either an exact saved catalog study ref or an exact managed-workspace study revision into the local Realm after approval.",
+        "description": "Launch either an exact saved catalog study ref or an exact managed-workspace study revision into the local Realm after approval. When the Run setup declares per-launch inputs, supply their values in `inputs`; a launch that leaves a required input unbound is blocked with code study_inputs_required, which names the missing inputs so you can ask the user for them instead of guessing.",
         "parameters": _tool_schema({
             "study_ref": CATALOG_ENTRY_REF_SCHEMA,
             "workspace_id": {"type": "string"},
             "study_relative_path": {"type": "string"},
             "expected_workspace_revision": {"type": "integer", "minimum": 1},
+            "inputs": STUDY_LAUNCH_INPUTS_SCHEMA,
         }),
     },
     {

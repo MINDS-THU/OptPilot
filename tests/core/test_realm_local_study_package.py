@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from optpilot.config import compile_authoring_config
+from optpilot.config_errors import StudyLaunchInputsError
 from optpilot.realm.local_study_package import (
     LocalStudyPackagePlanError,
     plan_local_study_package,
@@ -563,6 +564,33 @@ methodContext:
             with self.assertRaises(LocalStudyPackagePlanError) as raised:
                 plan_local_study_package(study, root)
             self.assertEqual(raised.exception.code, "package_entry_unsupported")
+
+    def test_a_coded_compiler_rejection_keeps_its_own_code(self) -> None:
+        # Every retained launch route (catalog ref, managed workspace) funnels
+        # through here. Re-coding an already-typed rejection as a generic
+        # config_compile_failed would hide which inputs the caller must
+        # collect, which is the whole point of the code.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "package"
+            root.mkdir()
+            study = _write_package(root)
+            study.write_text(
+                _STUDY
+                + "inputs:\n"
+                + "  problem:\n"
+                + "    valueType: string\n"
+                + "    description: the problem\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(StudyLaunchInputsError) as raised:
+                plan_local_study_package(study, root, launch_inputs=None)
+
+        self.assertEqual(raised.exception.code, "study_inputs_required")
+        self.assertEqual(raised.exception.missing_inputs, ["problem"])
+        self.assertEqual(
+            raised.exception.declarations["problem"]["valueType"], "string"
+        )
 
     def test_public_compiler_failure_is_a_typed_single_call_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

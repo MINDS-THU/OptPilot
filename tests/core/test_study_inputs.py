@@ -9,6 +9,11 @@ from pathlib import Path
 import yaml
 
 from optpilot.config import compile_authoring_config, validate_authoring_config
+from optpilot.config_errors import StudyLaunchInputsError
+from optpilot.parameter_values import (
+    missing_required_parameters,
+    validate_parameter_values,
+)
 from optpilot.realm.content import LocalContentStore
 from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.process_provider import ProcessProviderIdentity
@@ -233,6 +238,103 @@ class StudyInputsFailClosedTest(unittest.TestCase):
             )
             spec = compile_authoring_config(study)
         self.assertEqual(spec["method"]["settings"]["inputs"], {"a": 1})
+
+
+class StudyInputsTypedRejectionTest(unittest.TestCase):
+    """Launch-input rejections carry a stable machine code.
+
+    Studio branches on the code (asking the user for missing values rather
+    than reporting a generic failure), so these codes are contract.
+    """
+
+    def _raise(self, **kwargs) -> StudyLaunchInputsError:
+        with tempfile.TemporaryDirectory() as tmp:
+            study = _write_package(Path(tmp), **kwargs.pop("package", {}))
+            with self.assertRaises(StudyLaunchInputsError) as raised:
+                compile_authoring_config(study, **kwargs)
+        return raised.exception
+
+    def test_missing_required_input_is_coded_and_names_the_inputs(self) -> None:
+        error = self._raise(
+            package={"study_overrides": {"inputs": dict(_INPUTS_DECLARATION)}}
+        )
+
+        self.assertEqual(error.code, "study_inputs_required")
+        self.assertEqual(error.missing_inputs, ["problem"])
+        # The declaration rides along so a caller can ask a typed question.
+        self.assertEqual(
+            error.declarations["problem"], _INPUTS_DECLARATION["problem"]
+        )
+        # budget_hint declares a default, so it is not missing.
+        self.assertNotIn("budget_hint", error.declarations)
+
+    def test_inputs_without_a_declaration_are_coded_undeclared(self) -> None:
+        error = self._raise(launch_inputs={"problem": "p"})
+
+        self.assertEqual(error.code, "study_inputs_undeclared")
+        self.assertEqual(error.missing_inputs, [])
+
+    def test_reserved_settings_key_is_coded(self) -> None:
+        error = self._raise(
+            package={
+                "study_overrides": {"inputs": dict(_INPUTS_DECLARATION)},
+                "method_overrides": {
+                    "settings": {"batchSize": 1, "inputs": {"a": 1}}
+                },
+            },
+            launch_inputs={"problem": "p"},
+        )
+
+        self.assertEqual(error.code, "study_inputs_reserved_key")
+
+    def test_a_bad_value_is_invalid_not_required(self) -> None:
+        error = self._raise(
+            package={"study_overrides": {"inputs": dict(_INPUTS_DECLARATION)}},
+            launch_inputs={"problem": 7},
+        )
+
+        # Every declared input has a value; the failure is the value itself.
+        self.assertEqual(error.code, "study_inputs_invalid")
+        self.assertEqual(error.missing_inputs, [])
+
+    def test_a_coded_rejection_is_still_a_value_error(self) -> None:
+        # Existing `except ValueError` callers must keep working.
+        error = self._raise(
+            package={"study_overrides": {"inputs": dict(_INPUTS_DECLARATION)}}
+        )
+
+        self.assertIsInstance(error, ValueError)
+        self.assertEqual(getattr(error, "code", None), "study_inputs_required")
+        self.assertEqual(
+            error.to_dict()["missing_inputs"], ["problem"]
+        )
+
+
+class MissingRequiredParametersTest(unittest.TestCase):
+    """The shared "required unless defaulted" predicate."""
+
+    SCHEMA = {
+        "needed": {"valueType": "string"},
+        "optional": {"valueType": "int", "default": 3},
+    }
+
+    def test_agrees_with_the_validator_it_backs(self) -> None:
+        # The predicate and the validator must not drift: whenever the
+        # predicate reports a name, the validator reports it as required.
+        missing = missing_required_parameters({}, self.SCHEMA)
+        errors = validate_parameter_values({}, self.SCHEMA, location="x")
+
+        self.assertEqual(missing, ["needed"])
+        self.assertTrue(any("x.needed is required" in item for item in errors))
+        self.assertFalse(any("x.optional" in item for item in errors))
+
+    def test_supplied_values_are_not_missing(self) -> None:
+        self.assertEqual(
+            missing_required_parameters({"needed": "v"}, self.SCHEMA), []
+        )
+
+    def test_a_non_mapping_value_set_reports_every_required_name(self) -> None:
+        self.assertEqual(missing_required_parameters(None, self.SCHEMA), ["needed"])
 
 
 class StudyInputsNoInputsRegressionTest(unittest.TestCase):

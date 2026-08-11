@@ -27,6 +27,7 @@ from typing import Any, Mapping, NoReturn
 import yaml
 
 from ..config import compile_authoring_config
+from ..config_errors import CodedConfigError
 from ..spec import StudySpec, study_spec_from_raw
 from ..runtime_limits import MAX_ATTEMPT_INPUT_LAYERS
 from .errors import ContentRejected
@@ -803,6 +804,12 @@ def plan_local_study_package(
         )
         study_spec = study_spec_from_raw(study_path, compiled)
     except LocalStudyPackagePlanError:
+        raise
+    except CodedConfigError:
+        # The compiler already assigned a stable, caller-actionable code (for
+        # example study_inputs_required, which carries the input names a
+        # caller must collect). Re-coding it as a generic compile failure
+        # would discard exactly the information the caller needs.
         raise
     except (OSError, TypeError, ValueError) as error:
         _fail("config_compile_failed", f"Public study config compilation failed: {error}")

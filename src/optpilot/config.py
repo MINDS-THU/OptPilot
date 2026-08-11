@@ -14,7 +14,12 @@ from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import yaml
 
-from .parameter_values import apply_parameter_defaults, validate_parameter_values
+from .config_errors import StudyLaunchInputsError
+from .parameter_values import (
+    apply_parameter_defaults,
+    missing_required_parameters,
+    validate_parameter_values,
+)
 from .policy_validation import validate_policy_declaration
 from .realm.run_closure import InterfaceLaunchProfile
 from .resource_actions import compile_resource_actions
@@ -482,15 +487,19 @@ def _resolve_study_launch_inputs(
     declaration = study.get("inputs")
     if declaration is None:
         if launch_inputs is not None:
-            raise ValueError(
+            raise StudyLaunchInputsError(
+                "study_inputs_undeclared",
                 f"{config_path} declares no inputs, but launch inputs "
                 f"{sorted(launch_inputs)!r} were supplied. Remove --input/"
-                "--inputs-file or declare inputs in the study config."
+                "--inputs-file or declare inputs in the study config.",
             )
         return None
 
     if launch_inputs is not None and not isinstance(launch_inputs, Mapping):
-        raise ValueError(f"{config_path} launch inputs must be a mapping.")
+        raise StudyLaunchInputsError(
+            "study_inputs_invalid",
+            f"{config_path} launch inputs must be a mapping.",
+        )
 
     # ``inputs`` is a reserved settings key: the resolved values are delivered
     # to authored code under evaluator settings["inputs"] and method
@@ -498,17 +507,19 @@ def _resolve_study_launch_inputs(
     # silently shadowed.
     evaluator_settings = (environment.get("evaluator", {}) or {}).get("settings", {}) or {}
     if "inputs" in evaluator_settings:
-        raise ValueError(
+        raise StudyLaunchInputsError(
+            "study_inputs_reserved_key",
             f"{environment_path or '<inline environment>'} evaluator.settings "
             f"declares a top-level 'inputs' key, which is reserved because "
-            f"{config_path} declares study inputs. Rename the evaluator setting."
+            f"{config_path} declares study inputs. Rename the evaluator setting.",
         )
     method_settings = method.get("settings", {}) or {}
     if "inputs" in method_settings:
-        raise ValueError(
+        raise StudyLaunchInputsError(
+            "study_inputs_reserved_key",
             f"{method_path or '<inline method>'} settings declares a top-level "
             f"'inputs' key, which is reserved because {config_path} declares "
-            "study inputs. Rename the method setting."
+            "study inputs. Rename the method setting.",
         )
 
     if not bind_launch_inputs and launch_inputs is None:
@@ -520,7 +531,11 @@ def _resolve_study_launch_inputs(
             defaults, subset, location=f"{config_path} inputs"
         )
         if errors:
-            raise ValueError(_join_input_errors(errors))
+            # Only defaulted names are checked here, so nothing can be
+            # "missing": these are authoring errors in the declaration.
+            raise StudyLaunchInputsError(
+                "study_inputs_invalid", _join_input_errors(errors)
+            )
         return None
 
     resolved = apply_parameter_defaults(dict(launch_inputs or {}), declaration)
@@ -528,7 +543,20 @@ def _resolve_study_launch_inputs(
         resolved, declaration, location=f"{config_path} inputs"
     )
     if errors:
-        raise ValueError(_join_input_errors(errors))
+        # A missing required input is the one failure a caller can resolve by
+        # collecting values, so it gets its own code and carries the names and
+        # declarations needed to ask for them.
+        missing = missing_required_parameters(resolved, declaration)
+        raise StudyLaunchInputsError(
+            "study_inputs_required" if missing else "study_inputs_invalid",
+            _join_input_errors(errors),
+            missing_inputs=missing,
+            declarations={
+                name: declaration[name]
+                for name in missing
+                if name in declaration
+            },
+        )
     return resolved
 
 

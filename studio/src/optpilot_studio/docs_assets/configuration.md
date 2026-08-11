@@ -848,6 +848,22 @@ value must match its declared type and bounds, and supplying any launch inputs
 to a study that declares none is an error. A study that declares `inputs` can
 be launched without flags only when every input has a `default`.
 
+Each rejection carries a stable machine code so a UI can act on it rather than
+match error text. The codes are:
+
+| Code | Meaning |
+| --- | --- |
+| `study_inputs_required` | A declared input has no `default` and no supplied value. Carries the missing names and their declarations, so a caller can collect the values and retry. |
+| `study_inputs_invalid` | A supplied value failed its declared type, bounds, or membership, or an undeclared key was passed. |
+| `study_inputs_undeclared` | Launch inputs were supplied to a study that declares none. |
+| `study_inputs_reserved_key` | The environment's `evaluator.settings` or the method's `settings` already declares the reserved top-level `inputs` key. |
+
+These are raised as `ValueError` subclasses carrying a `code` attribute, so
+existing `except ValueError` handlers keep working unchanged. Studio surfaces
+the code on every launch route — the CLI path, the Studio launch form, and the
+Assistant — and uses `study_inputs_required` to ask for the missing values
+instead of reporting a generic failure.
+
 The resolved mapping is delivered to authored code under a reserved `inputs`
 settings key: the evaluator reads it as `context["settings"]["inputs"]` and
 the method as `settings["inputs"]`. Because the key is reserved, declaring
