@@ -505,6 +505,15 @@ GENERATED_SIMULATION_MAX_RUNTIME_WHEELS = 64
 GENERATED_SIMULATION_MAX_RUNTIME_WHEEL_BYTES = 64 * 1024**2
 GENERATED_SIMULATION_MAX_RUNTIME_TOTAL_BYTES = 256 * 1024**2
 CATALOG_PROJECTION_TTL_SECONDS = 24 * 60 * 60
+# Read-path debounce for catalog discovery.  Consecutive catalog reads inside
+# this window reuse the last projection refresh and the last scanned index
+# instead of re-heartbeating every head and re-walking package source folders
+# per request.  A value of 0 disables the cache entirely, which is the
+# ``UiState`` default so directly constructed states (tests, helpers) keep
+# strictly fresh reads; the served UI opts in via ``run_ui``.  Projection
+# consumer leases outlive this window by orders of magnitude
+# (CATALOG_PROJECTION_TTL_SECONDS), so debounced heartbeats remain ample.
+CATALOG_REFRESH_TTL_SECONDS = 5.0
 _PACKAGE_PLAN_APPLY_LOCK = threading.RLock()
 CATALOG_PACKAGE_DIRS = {"environments", "methods", "resources", "studies"}
 EXCLUDED_SCAN_DIRS = {
@@ -2898,6 +2907,7 @@ class UiState:
         code_server: Optional[CodeServerOptions] = None,
         workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
         runtime_supervisor_claim: Optional[StudioRuntimeSupervisorClaim] = None,
+        catalog_refresh_ttl_seconds: float = 0.0,
     ):
         self.cwd = cwd.resolve()
         self._runtime_supervisor_claim = runtime_supervisor_claim
@@ -2916,6 +2926,14 @@ class UiState:
         self._realm_catalog_package_ids: Dict[Path, str] = {}
         self._catalog_workspace_projections: Dict[str, CatalogSourceProjection] = {}
         self._catalog_projection_lock = threading.RLock()
+        # Read-path debounce state, guarded by _catalog_projection_lock: the
+        # monotonic stamp of the last complete projection refresh and the last
+        # built catalog index payload.  Both stay unused while the TTL is 0.
+        self.catalog_refresh_ttl_seconds = max(
+            0.0, float(catalog_refresh_ttl_seconds)
+        )
+        self._catalog_projections_refreshed_monotonic: Optional[float] = None
+        self._catalog_index_cache: Optional[tuple[float, JsonDict]] = None
         # Study saves write into persistent managed checkouts before advancing
         # their retained heads.  Keyed critical sections keep that checkout
         # write, its optimistic revision fence, and the saved-draft record one
@@ -3522,6 +3540,8 @@ class UiState:
             self._realm_catalog_projections.clear()
             self._realm_catalog_package_ids.clear()
             self._catalog_workspace_projections.clear()
+            self._catalog_projections_refreshed_monotonic = None
+            self._catalog_index_cache = None
         for record in records:
             projection = record.get("projection")
             if projection is not None:
@@ -4035,6 +4055,7 @@ def run_ui(
             ),
             workspace_runtime=runtime_options,
             runtime_supervisor_claim=runtime_supervisor_claim,
+            catalog_refresh_ttl_seconds=CATALOG_REFRESH_TTL_SECONDS,
         )
         handler_cls = _handler_factory(state)
         server = ThreadingHTTPServer((host, port), handler_cls)
@@ -5925,11 +5946,28 @@ def _local_authoring_realm_exists(state: UiState) -> bool:
     ).is_file()
 
 
-def _refresh_realm_catalog_projections(state: UiState) -> None:
-    """Expose authorized Realm catalog heads through leased read-only views."""
+def _refresh_realm_catalog_projections(
+    state: UiState, *, max_age_seconds: Optional[float] = None
+) -> None:
+    """Expose authorized Realm catalog heads through leased read-only views.
+
+    When ``max_age_seconds`` is a positive number and the previous complete
+    refresh finished inside that window, the call returns immediately and the
+    existing projection index keeps serving.  Callers on mutation paths (for
+    example right after a catalog publish) must not pass it so they always
+    observe the current heads.
+    """
 
     if state.realm_runtime is None and not _local_authoring_realm_exists(state):
         return
+    if max_age_seconds is not None and max_age_seconds > 0:
+        with state._catalog_projection_lock:
+            refreshed = state._catalog_projections_refreshed_monotonic
+        if (
+            refreshed is not None
+            and time.monotonic() - refreshed < max_age_seconds
+        ):
+            return
     runtime = _package_plan_realm_runtime(state)
     heads: List[CatalogPackageHead] = []
     cursor: Optional[str] = None
@@ -6039,6 +6077,11 @@ def _refresh_realm_catalog_projections(state: UiState) -> None:
         retired_records = tuple([*previous_records.values(), *replaced_records])
         state._realm_catalog_projections = current_records
         state._realm_catalog_package_ids = current_ids
+        state._catalog_projections_refreshed_monotonic = time.monotonic()
+        if created_projections or retired_records:
+            # Catalog heads changed; a cached index payload would keep
+            # serving superseded projection roots until its TTL expired.
+            state._catalog_index_cache = None
     for record in retired_records:
         projection = record.get("projection")
         if projection is not None:
@@ -6062,7 +6105,9 @@ def _borrow_realm_catalog_source_projection(
     publisher-anchored package selection and acquire a separate consumer lease.
     """
 
-    _refresh_realm_catalog_projections(state)
+    _refresh_realm_catalog_projections(
+        state, max_age_seconds=state.catalog_refresh_ttl_seconds
+    )
     resolved_source = source_path.resolve(strict=True)
     runtime = _package_plan_realm_runtime(state)
     with state._catalog_projection_lock:
@@ -6396,8 +6441,16 @@ def _realize_catalog_workspace_reference(
 
 
 def _catalog_index_payload(state: UiState) -> JsonDict:
+    ttl_seconds = state.catalog_refresh_ttl_seconds
+    if ttl_seconds > 0:
+        with state._catalog_projection_lock:
+            cached = state._catalog_index_cache
+        if cached is not None and time.monotonic() - cached[0] < ttl_seconds:
+            # Consumers only read this payload (public views deep-copy the
+            # entries they expose), so the built index can be shared as-is.
+            return cached[1]
     _refresh_catalog_package_roots(state)
-    _refresh_realm_catalog_projections(state)
+    _refresh_realm_catalog_projections(state, max_age_seconds=ttl_seconds)
     with state._catalog_projection_lock:
         realm_roots = list(state._realm_catalog_package_ids)
         package_ids = dict(state._realm_catalog_package_ids)
@@ -6438,7 +6491,7 @@ def _catalog_index_payload(state: UiState) -> JsonDict:
     grouped = {config: [] for config in INDEXED_CONFIGS}
     for entry in entries:
         grouped.setdefault(entry["config"], []).append(entry)
-    return {
+    payload: JsonDict = {
         "roots": [
             _package_plan_catalog_destination(
                 _catalog_package_id(root, package_ids=package_ids)
@@ -6461,6 +6514,10 @@ def _catalog_index_payload(state: UiState) -> JsonDict:
             for category, implementations in BUILTIN_COMPONENTS.items()
         },
     }
+    if ttl_seconds > 0:
+        with state._catalog_projection_lock:
+            state._catalog_index_cache = (time.monotonic(), payload)
+    return payload
 
 
 def _catalog_payload(state: UiState) -> JsonDict:
@@ -10813,7 +10870,9 @@ def _require_realm_runtime(state: UiState) -> LocalRealmRuntime:
 def _configured_study_package_root(state: UiState, study_path: Path) -> Path:
     """Select the unique most-specific configured package containing a study."""
 
-    _refresh_realm_catalog_projections(state)
+    _refresh_realm_catalog_projections(
+        state, max_age_seconds=state.catalog_refresh_ttl_seconds
+    )
     with state._catalog_projection_lock:
         realm_roots = list(state._realm_catalog_package_ids)
     return _most_specific_study_package_root(
@@ -10830,7 +10889,9 @@ def _assistant_study_package_root(
     session_id: str,
     study_path: Path,
 ) -> Path:
-    _refresh_realm_catalog_projections(state)
+    _refresh_realm_catalog_projections(
+        state, max_age_seconds=state.catalog_refresh_ttl_seconds
+    )
     with state._catalog_projection_lock:
         roots = [*state._realm_catalog_package_ids, *state.catalog_roots]
     session = _require_agent_session(state, session_id)
