@@ -123,7 +123,8 @@ class StudioCoreLoadingResilienceStaticTest(unittest.TestCase):
         detail = _function_source(self.source, "loadRunDetail")
 
         self.assertIn(
-            'getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS })', runs
+            'getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS, conditionalKey: "runs" })',
+            runs,
         )
         self.assertIn("state.runsRefreshInFlight = false", runs)
         self.assertIn("} finally {", runs)

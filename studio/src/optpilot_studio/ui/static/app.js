@@ -329,12 +329,79 @@ function initializeApp() {
   applyStudioRoute({ loadRun: false, render: false });
   renderAll();
   void loadAll();
-  setInterval(loadRunsAndJobs, 3000);
-  setInterval(() => loadSelectedRunOperatorJobs({ silent: true }), 3000);
-  setInterval(syncActiveAgentSession, 5000);
-  setInterval(refreshPlatformStatus, 6000);
-  setInterval(refreshInterfaceLaunchActivity, 1000);
-  setInterval(refreshActiveStudyLaunchElapsed, 1000);
+  markAllPollsRan();
+  setInterval(runScheduledPolls, 1000);
+  setInterval(() => { if (!document.hidden) refreshInterfaceLaunchActivity(); }, 1000);
+  setInterval(() => { if (!document.hidden) refreshActiveStudyLaunchElapsed(); }, 1000);
+  document.addEventListener("visibilitychange", resumePollingOnReturn);
+  for (const eventName of ["pointerdown", "keydown"]) {
+    document.addEventListener(eventName, notePollingUserInteraction, { capture: true, passive: true });
+  }
+}
+
+// Background refreshes run full-rate only while something can actually change
+// between polls (an active Run, Candidate try, launch, or Assistant turn, or
+// the user actively working).  A quiet, watched Studio stays fresh on a slow
+// cadence instead of rebuilding every payload several times per second, and a
+// hidden tab polls not at all until it becomes visible again.
+const POLL_INTERVALS_MS = {
+  runs: { active: 3_000, idle: 15_000 },
+  operatorJobs: { active: 3_000, idle: 15_000 },
+  agentSessions: { active: 5_000, idle: 20_000 },
+  platformStatus: { active: 6_000, idle: 30_000 },
+};
+const RECENT_INTERACTION_POLL_BOOST_MS = 15_000;
+const pollLastRanAt = { runs: 0, operatorJobs: 0, agentSessions: 0, platformStatus: 0 };
+let lastPollingInteractionAt = 0;
+
+function markAllPollsRan() {
+  const now = Date.now();
+  for (const name of Object.keys(pollLastRanAt)) pollLastRanAt[name] = now;
+}
+
+function notePollingUserInteraction() {
+  lastPollingInteractionAt = Date.now();
+}
+
+function resumePollingOnReturn() {
+  if (document.hidden) return;
+  for (const name of Object.keys(pollLastRanAt)) pollLastRanAt[name] = 0;
+  runScheduledPolls();
+}
+
+function studioHasLiveActivity() {
+  if (!state.runsLoaded) return true;
+  if (Date.now() - lastPollingInteractionAt < RECENT_INTERACTION_POLL_BOOST_MS) return true;
+  const activeRunStatuses = new Set(["queued", "preparing", "pending", "running", "stopping"]);
+  if ((state.runs || []).some((run) => activeRunStatuses.has(runStatus(run)))) return true;
+  const activeJobStatuses = new Set(["planned", "awaiting_approval", "queued", "starting", "running", "stopping"]);
+  if ((state.operatorJobs || []).some((job) => activeJobStatuses.has(String(job.state || job.status || "")))) return true;
+  const busySessionStatuses = new Set(["waiting_for_agent", "running", "resuming_after_approval"]);
+  if ((state.agentSessions || []).some((session) => busySessionStatuses.has(assistantSessionStatus(session)))) return true;
+  const interfaceStatus = String(state.interfaceLaunch && state.interfaceLaunch.status || "");
+  if (state.interfaceLaunch && !["ready", "failed", "stopped", "cleanup_pending"].includes(interfaceStatus)) return true;
+  if (state.studyLaunch && !studyLaunchIsTerminal(state.studyLaunch)) return true;
+  return false;
+}
+
+function pollDue(name) {
+  const spec = POLL_INTERVALS_MS[name];
+  const interval = studioHasLiveActivity() ? spec.active : spec.idle;
+  if (Date.now() - (pollLastRanAt[name] || 0) < interval) return false;
+  pollLastRanAt[name] = Date.now();
+  return true;
+}
+
+function runScheduledPolls() {
+  if (document.hidden) return;
+  if (pollDue("runs")) void loadRunsAndJobs();
+  // Candidate-try polling only matters where the Candidate tries panel can be
+  // visible; opening a Run detail or Interface Session loads it explicitly.
+  if ((state.view === "runs" || state.view === "interface") && pollDue("operatorJobs")) {
+    void loadSelectedRunOperatorJobs({ silent: true });
+  }
+  if (pollDue("agentSessions")) void syncActiveAgentSession();
+  if (pollDue("platformStatus")) void refreshPlatformStatus();
 }
 
 if (document.readyState === "loading") {
@@ -1201,7 +1268,24 @@ async function loadRunsAndJobs() {
   state.runsRefreshInFlight = true;
   let runsPayload;
   try {
-    runsPayload = await getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS });
+    runsPayload = await getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS, conditionalKey: "runs" });
+    if (runsPayload === NOT_MODIFIED) {
+      // The server confirmed the Run list is byte-identical to what this
+      // client last parsed; keep every rendered view untouched.
+      const recoveredFromRunsError = Boolean(state.runsError);
+      state.runsError = "";
+      state.runsLastSuccessAt = Date.now();
+      state.runsRefreshInFlight = false;
+      if (recoveredFromRunsError) {
+        if (state.view === "runs") {
+          renderRuns();
+          if (shortlistEditingInProgress()) updateRunDetailRefreshNoticeInPlace();
+          else renderRunDetail();
+        }
+        renderOpenWork();
+      }
+      return;
+    }
     requireArrayField(runsPayload, "runs", "Run list");
     if (
       !runsPayload.catalog
@@ -20911,8 +20995,22 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
   }
 }
 
+// Conditional polling: a poll that passes ``conditionalKey`` sends the last
+// observed ETag for that key, and an unchanged payload comes back as a bodyless
+// 304 resolved to NOT_MODIFIED — the server skips rebuilding the response and
+// the client skips re-parsing and re-rendering identical state.
+const NOT_MODIFIED = Symbol("not-modified");
+const conditionalRequestEtags = new Map();
+
 async function getJson(url, options = {}) {
-  const response = await fetchWithTimeout(url, {}, Number(options.timeoutMs || 0));
+  const conditionalKey = String(options.conditionalKey || "");
+  const etag = conditionalKey ? conditionalRequestEtags.get(conditionalKey) : null;
+  const response = await fetchWithTimeout(
+    url,
+    etag ? { headers: { "If-None-Match": etag } } : {},
+    Number(options.timeoutMs || 0),
+  );
+  if (etag && response.status === 304) return NOT_MODIFIED;
   if (!response.ok) {
     const error = new Error(`${response.status} ${response.statusText}`);
     error.status = response.status;
@@ -20922,6 +21020,10 @@ async function getJson(url, options = {}) {
       // A status code is sufficient for typed recovery when no JSON body exists.
     }
     throw error;
+  }
+  if (conditionalKey) {
+    const responseEtag = response.headers.get("ETag");
+    if (responseEtag) conditionalRequestEtags.set(conditionalKey, responseEtag);
   }
   return response.json();
 }
