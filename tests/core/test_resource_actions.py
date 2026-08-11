@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -390,6 +392,89 @@ out = pathlib.Path(os.environ["OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"])
             (skipped_output / "result.txt").read_text(encoding="utf-8"),
             "no-setup",
         )
+
+
+class DeclaredPythonRuntimeTest(unittest.TestCase):
+    """An action that declares a Python runtime imports what it declares."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.resource_dir = self.root / "generator"
+        self.resource_dir.mkdir()
+        self.output_dir = self.root / "out"
+        self.venv_dir = (self.resource_dir / ".runtime" / "action-venv").resolve()
+        self.action = _action(
+            command=["python", "generate.py"],
+            timeoutSeconds=600,
+            runtime={
+                "sandbox": "process",
+                "setup": {
+                    "timeoutSeconds": 600,
+                    "steps": [
+                        {
+                            "uses": "python-venv",
+                            "venv": ".runtime/action-venv",
+                        }
+                    ],
+                },
+            },
+        )
+        (self.resource_dir / "optpilot.resource.yaml").write_text(
+            yaml.safe_dump(_resource([self.action]), sort_keys=False),
+            encoding="utf-8",
+        )
+        (self.resource_dir / "generate.py").write_text(
+            """
+import json, os, pathlib, sys
+out = pathlib.Path(os.environ["OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"])
+(out / "runtime.json").write_text(
+    json.dumps({"executable": sys.executable, "prefix": sys.prefix,
+                "path": os.environ.get("PATH", "")})
+)
+""",
+            encoding="utf-8",
+        )
+        self.resource_path = self.resource_dir / "optpilot.resource.yaml"
+
+    def test_declared_runtime_owns_the_python_command_head(self) -> None:
+        summary = run_resource_action(
+            self.resource_path, "generate", output_root=self.output_dir
+        )
+
+        self.assertTrue(summary["ok"], summary)
+        self.assertEqual(summary["setup"], {"ran": True})
+        # The command runs on the declared interpreter, not on the one running
+        # optpilot — otherwise the declaration would be decorative and the
+        # action would silently import host site-packages.
+        self.assertNotEqual(summary["command"][0], sys.executable)
+        # Compared unresolved: a venv's bin/python is a symlink to the base
+        # interpreter, so resolving it would assert about the wrong thing.
+        self.assertEqual(Path(summary["command"][0]).parent.parent, self.venv_dir)
+        observed = json.loads(
+            (self.output_dir / "runtime.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(Path(observed["prefix"]), self.venv_dir)
+        self.assertNotEqual(Path(observed["prefix"]), Path(sys.prefix))
+        self.assertIn(
+            str(Path(summary["command"][0]).parent),
+            observed["path"].split(os.pathsep),
+        )
+
+    def test_missing_declared_runtime_fails_closed_before_any_output(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            run_resource_action(
+                self.resource_path,
+                "generate",
+                output_root=self.output_dir,
+                run_setup=False,
+            )
+
+        message = str(raised.exception)
+        self.assertIn("--skip-setup", message)
+        self.assertIn(str(self.venv_dir), message)
+        self.assertFalse(self.output_dir.exists())
 
 
 class ResourceCliTest(unittest.TestCase):

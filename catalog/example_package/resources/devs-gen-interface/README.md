@@ -23,6 +23,8 @@ Preview. Launching does not copy or modify the catalog resource.
 - `devs_tools/devs_construct_recon/`: Active DEVS project construction engine.
 - `default_tools/file_editing/`: Minimal file operations used by the generation agent.
 - `devs_settings.py`: Shared defaults for model ids, graph parsing, and concurrency.
+- `headless_generate.py`: Entry point of the headless `generate` resource action.
+- `requirements-interface.txt`: Python dependency closure shared by the interface and the `generate` action.
 - `src/monitoring.py`: Lightweight logger used by the backend agent.
 
 ## Automatic And Interactive Generation
@@ -106,6 +108,7 @@ or mutable file under one source-local `.runtime/` boundary:
 
 - `.runtime/prepared/python-venv/`
 - `.runtime/prepared/frontend/`
+- `.runtime/action-venv/` (the `generate` action's declared runtime)
 - `.runtime/ephemeral/vite-cache/`
 - `.runtime/working-dirs/`
 - `.runtime/persistent-storage/`
@@ -115,6 +118,69 @@ or mutable file under one source-local `.runtime/` boundary:
 
 The whole `.runtime/` directory is machine-local state and is omitted when a
 connected source folder is checked for Catalog publication.
+
+## Headless Generation (`generate` Action)
+
+The resource also declares one headless action: a written specification in, a
+portable simulator bundle out, without launching the GUI.
+
+```bash
+optpilot resource run \
+  catalog/example_package/resources/devs-gen-interface/optpilot.resource.yaml \
+  generate \
+  --input specification="a barbershop with two barbers" \
+  --output-dir ./generated-bundle
+```
+
+The action needs the same model ids and `OPENROUTER_API_KEY` as the interface,
+declared in its own `grants` block, and the same network access — generation
+calls the provider, and its setup installs from PyPI. Setting `thorough=true`
+additionally runs the verification and simulation-check stages, whose
+generated-code execution may need a container runtime.
+
+### The Action's Python Runtime
+
+`headless_generate.py` drives the same generation pipeline as the backend, so
+it imports the same closure: `smolagents`, `litellm`, `pydantic`, `rich`,
+`markitdown` and roughly forty transitive packages. The action therefore
+declares its own runtime rather than borrowing whatever the host installation
+happens to provide:
+
+```yaml
+runtime:
+  sandbox: process
+  setup:
+    timeoutSeconds: 1800
+    steps:
+      - uses: python-venv
+        venv: .runtime/action-venv
+        requirements: [requirements-interface.txt]
+```
+
+A `python` command head resolves to that declared interpreter — not to the
+interpreter running `optpilot` — so the action imports exactly what it
+declares. The first run builds the venv and can take several minutes; later
+runs reuse it. `--skip-setup` reuses an already-built venv and fails closed
+with a fixable message if it is missing.
+
+This venv is deliberately separate from the interface's prepared runtime at
+`.runtime/prepared/python-venv`. Both are built from
+`requirements-interface.txt`, but keeping them independent means the action
+never silently depends on whether anyone launched the interface first.
+
+**Why not an offline pure-wheel lock.** Generated simulator bundles ship a
+vendored, SHA-256-locked xDEVS wheel and run fully offline. The generation
+pipeline cannot: OptPilot's locked-runtime path accepts only pure
+`py3-none-any` wheels, and this closure is native several times over —
+`pydantic-core` (under `pydantic` v2), `aiohttp` and `tokenizers` (under
+`litellm`), plus `numpy`, `scipy` and `pillow`. No pure-wheel lock of this
+closure exists, so the action installs from a requirements file at setup time
+and needs network on first use.
+
+If the dependencies are unavailable at run time, the action exits with a
+`resource_action_dependencies_missing` message naming the missing import and
+the interpreter that ran, rather than an import traceback from somewhere deep
+in the pipeline.
 
 ## Launching From Studio
 

@@ -22,6 +22,31 @@ from pathlib import Path
 _RESOURCE_ROOT = Path(__file__).resolve().parent
 _ROOT_MODEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
+# The generation pipeline's dependency closure (smolagents, litellm, pydantic
+# and ~40 transitive packages) contains native wheels, so it cannot be a
+# vendored pure-wheel lock. The action declares a `python-venv` runtime built
+# from requirements-interface.txt instead; when that runtime is missing the
+# failure must name itself rather than surface as an import traceback from
+# somewhere deep in the pipeline.
+DEPENDENCIES_MISSING_CODE = "resource_action_dependencies_missing"
+
+
+def _dependency_failure(error: BaseException) -> str:
+    return "\n".join(
+        (
+            f"{DEPENDENCIES_MISSING_CODE}: the DEVS generation pipeline could "
+            f"not import a required dependency ({error}).",
+            "",
+            f"Interpreter: {sys.executable}",
+            "",
+            "The 'generate' action declares its own Python runtime "
+            "(runtime.setup builds .runtime/action-venv from "
+            "requirements-interface.txt). Run the action without "
+            "--skip-setup to build it, or install requirements-interface.txt "
+            "into the interpreter you are running this action with.",
+        )
+    )
+
 
 def main() -> int:
     inputs = json.loads(
@@ -50,17 +75,24 @@ def main() -> int:
     if str(_RESOURCE_ROOT) not in sys.path:
         sys.path.insert(0, str(_RESOURCE_ROOT))
 
-    from devs_settings import agent_concurrency, agent_model_id, agent_strong_model_id
-    from default_tools.file_editing.file_editing_tools import (
-        ListDir,
-        SeeTextFile,
-        SmartReplace,
-    )
-    from devs_tools.devs_construct_recon.constructor import DEVSConstructRecon
-    from devs_display.backend.simulation_execution import (
-        ensure_simulation_manifest,
-        simulation_metadata,
-    )
+    try:
+        from devs_settings import (
+            agent_concurrency,
+            agent_model_id,
+            agent_strong_model_id,
+        )
+        from default_tools.file_editing.file_editing_tools import (
+            ListDir,
+            SeeTextFile,
+            SmartReplace,
+        )
+        from devs_tools.devs_construct_recon.constructor import DEVSConstructRecon
+        from devs_display.backend.simulation_execution import (
+            ensure_simulation_manifest,
+            simulation_metadata,
+        )
+    except ImportError as error:
+        raise SystemExit(_dependency_failure(error)) from None
 
     workdir = Path(tempfile.mkdtemp(prefix="devs-headless-"))
     bundle_folder = "generated_simulator"

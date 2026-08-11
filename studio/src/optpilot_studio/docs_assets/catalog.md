@@ -569,7 +569,8 @@ The execution contract:
 - A `python` / `python3` command head means "the interpreter running
   optpilot" (the same mapping the retained command-method contract uses), so
   actions work without a python on PATH and see the same user-provisioned
-  dependencies as the host installation.
+  dependencies as the host installation — unless the action declares its own
+  Python runtime, in which case that interpreter wins (below).
 - `grants.envFromHost` / `grants.secretsFromHost` name host environment
   values passed through to the command; a missing name fails the run before
   anything executes. In Studio, granted names resolve through Studio
@@ -578,6 +579,16 @@ The execution contract:
   the local headless path runs them in the resource root before the command,
   so setup scripts should be idempotent. Container runtimes are not
   executable by this path.
+- A setup step that builds a Python environment (`python-venv` or `uv`) owns
+  the action's dependency closure: a `python` / `python3` command head then
+  resolves to *that* interpreter instead of the one running optpilot, and its
+  bin directory is prepended to `PATH`. An action whose declared interpreter
+  is missing — typically `--skip-setup` before the runtime was ever built —
+  fails closed with a fixable message instead of silently importing whatever
+  the host installation provides. This is how an action states its
+  dependencies explicitly when its closure contains native wheels and
+  therefore cannot use the offline pure-wheel lock that environments and
+  methods use.
 - One invocation is bounded by the action's `timeoutSeconds` (max one day).
 
 Run actions from the CLI:

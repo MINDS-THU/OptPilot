@@ -37,8 +37,25 @@ actions:
           Run the verification and simulation-check stages too (slower;
           generated-code smoke execution may need a container runtime).
     grants:
+      # Generation calls the configured model through OpenRouter, and setup
+      # installs the dependency closure from PyPI.
+      network: enabled
       envFromHost: [DEVS_INTERFACE_MODEL_ID, DEVS_INTERFACE_STRONG_MODEL_ID]
       secretsFromHost: [OPENROUTER_API_KEY]
+    runtime:
+      sandbox: process
+      setup:
+        timeoutSeconds: 1800
+        steps:
+          # The generation pipeline imports smolagents, litellm, pydantic and
+          # ~40 transitive packages. Their closure contains native wheels
+          # (pydantic-core, aiohttp, tokenizers, numpy, scipy, pillow), so it
+          # cannot be a vendored pure-wheel lock — this action builds its own
+          # venv from the same requirements file the interface uses instead of
+          # borrowing whatever happens to sit in the host installation.
+          - uses: python-venv
+            venv: .runtime/action-venv
+            requirements: [requirements-interface.txt]
     timeoutSeconds: 3600
 
 interface:
