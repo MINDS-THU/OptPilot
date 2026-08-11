@@ -79,12 +79,14 @@ class StudioConversationContinuityStaticTest(unittest.TestCase):
             "state.interfaceLaunch",
             "state.studyLaunch",
             "state.runs",
+            # Conversations surface only through their pending-approval
+            # affordance (U3), never as conversation cards.
+            "state.agentSessions",
         ):
             self.assertIn(canonical_state, projection)
         for durable_or_conversation_state in (
             "state.plans",
             "state.sessions",
-            "state.agentSessions",
         ):
             self.assertNotIn(durable_or_conversation_state, projection)
         self.assertIn("buildOpenWorkItems()", renderer)
@@ -103,9 +105,11 @@ class StudioConversationContinuityStaticTest(unittest.TestCase):
             "interface:",
             "study-launch:",
             "run:",
+            # Approvals ride their Conversation's exact id (U3).
+            "approval:",
         ):
             self.assertIn(coordinate_prefix, projection)
-        for excluded_prefix in ("approval:", "plan:", "workspace:"):
+        for excluded_prefix in ("plan:", "workspace:"):
             self.assertNotIn(excluded_prefix, projection)
         self.assertIn("canonicalRunId(run)", projection)
         self.assertNotIn("activity_id", projection)

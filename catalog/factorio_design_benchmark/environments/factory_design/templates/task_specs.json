@@ -1,0 +1,1634 @@
+{
+ "assembling_machine_2_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 30 assembling machine 2 per minute - high throughput machine-production chain",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 30.0,
+  "task_id": "assembling_machine_2_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -50.0,
+     "y": -50.0
+    },
+    "right_bottom": {
+     "x": 50.0,
+     "y": 50.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -35.0,
+      "y": 0.0
+     },
+     "radius": 20.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 38.0,
+      "y": 0.0
+     },
+     "radius": 16.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "assembling-machine-2",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -42.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "assembling_machine_2_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 30 assembling machine 2 per minute with diagonal ore patches",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 30.0,
+  "task_id": "assembling_machine_2_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -30.0,
+      "y": 28.0
+     },
+     "radius": 14.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 30.0,
+      "y": -28.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "assembling-machine-2",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -35.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "assembling_machine_2_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 10 assembling machine 2 per minute - requires circuits, gears, steel, and assembling machine 1",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 10.0,
+  "task_id": "assembling_machine_2_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -50.0,
+     "y": -50.0
+    },
+    "right_bottom": {
+     "x": 50.0,
+     "y": 50.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -35.0,
+      "y": 0.0
+     },
+     "radius": 20.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 38.0,
+      "y": 0.0
+     },
+     "radius": 16.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "assembling-machine-2",
+   "target_rate_per_minute": 10.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -42.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "assembling_machine_2_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 10 assembling machine 2 per minute with diagonal ore patches",
+  "level": 4,
+  "target_product": "assembling-machine-2",
+  "target_rate_per_minute": 10.0,
+  "task_id": "assembling_machine_2_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -30.0,
+      "y": 28.0
+     },
+     "radius": 14.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 30.0,
+      "y": -28.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "assembling-machine-2",
+   "target_rate_per_minute": 10.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -35.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "electronic_circuit_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 90 electronic circuits per minute - high throughput dual ore processing",
+  "level": 2,
+  "target_product": "electronic-circuit",
+  "target_rate_per_minute": 90.0,
+  "task_id": "electronic_circuit_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -35.0,
+     "y": -35.0
+    },
+    "right_bottom": {
+     "x": 35.0,
+     "y": 35.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -25.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 25.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "electronic-circuit",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "electronic_circuit_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 90 electronic circuits per minute with scattered ore patches",
+  "level": 2,
+  "target_product": "electronic-circuit",
+  "target_rate_per_minute": 90.0,
+  "task_id": "electronic_circuit_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -15.0,
+      "y": 10.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 15.0,
+      "y": -10.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "electronic-circuit",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "electronic_circuit_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 30 electronic circuits per minute - requires copper and iron",
+  "level": 2,
+  "target_product": "electronic-circuit",
+  "target_rate_per_minute": 30.0,
+  "task_id": "electronic_circuit_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -35.0,
+     "y": -35.0
+    },
+    "right_bottom": {
+     "x": 35.0,
+     "y": 35.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -25.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 25.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "electronic-circuit",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "electronic_circuit_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 30 electronic circuits per minute with scattered ore patches",
+  "level": 2,
+  "target_product": "electronic-circuit",
+  "target_rate_per_minute": 30.0,
+  "task_id": "electronic_circuit_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -15.0,
+      "y": 10.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 15.0,
+      "y": -10.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "electronic-circuit",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "inserter_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 60 inserters per minute - high throughput multi-step production",
+  "level": 3,
+  "target_product": "inserter",
+  "target_rate_per_minute": 60.0,
+  "task_id": "inserter_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -25.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 25.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "inserter",
+   "target_rate_per_minute": 60.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "inserter_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 60 inserters per minute with diagonal ore patches",
+  "level": 3,
+  "target_product": "inserter",
+  "target_rate_per_minute": 60.0,
+  "task_id": "inserter_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -30.0,
+     "y": -30.0
+    },
+    "right_bottom": {
+     "x": 30.0,
+     "y": 30.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -22.0,
+      "y": 22.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 22.0,
+      "y": -22.0
+     },
+     "radius": 15.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "inserter",
+   "target_rate_per_minute": 60.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "inserter_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 20 inserters per minute - complex multi-step production",
+  "level": 3,
+  "target_product": "inserter",
+  "target_rate_per_minute": 20.0,
+  "task_id": "inserter_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -25.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 25.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "inserter",
+   "target_rate_per_minute": 20.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "inserter_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 20 inserters per minute with diagonal ore patches",
+  "level": 3,
+  "target_product": "inserter",
+  "target_rate_per_minute": 20.0,
+  "task_id": "inserter_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -30.0,
+     "y": -30.0
+    },
+    "right_bottom": {
+     "x": 30.0,
+     "y": 30.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -22.0,
+      "y": 22.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 22.0,
+      "y": -22.0
+     },
+     "radius": 15.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "inserter",
+   "target_rate_per_minute": 20.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "iron_gear_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 90 iron gear wheels per minute - high throughput iron processing",
+  "level": 1,
+  "target_product": "iron-gear-wheel",
+  "target_rate_per_minute": 90.0,
+  "task_id": "iron_gear_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 0.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-gear-wheel",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 5.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_gear_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 90 iron gear wheels per minute in constrained space",
+  "level": 1,
+  "target_product": "iron-gear-wheel",
+  "target_rate_per_minute": 90.0,
+  "task_id": "iron_gear_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -17.5,
+     "y": -17.5
+    },
+    "right_bottom": {
+     "x": 17.5,
+     "y": 17.5
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 4.0,
+      "y": 4.0
+     },
+     "radius": 10.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-gear-wheel",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 5.0,
+      "y": -13.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_gear_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 30 iron gear wheels per minute - requires drill + furnace + assembler",
+  "level": 1,
+  "target_product": "iron-gear-wheel",
+  "target_rate_per_minute": 30.0,
+  "task_id": "iron_gear_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 0.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-gear-wheel",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_gear_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 30 iron gear wheels per minute in constrained space",
+  "level": 1,
+  "target_product": "iron-gear-wheel",
+  "target_rate_per_minute": 30.0,
+  "task_id": "iron_gear_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -17.5,
+     "y": -17.5
+    },
+    "right_bottom": {
+     "x": 17.5,
+     "y": 17.5
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 4.0,
+      "y": 4.0
+     },
+     "radius": 10.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-gear-wheel",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 5.0,
+      "y": -13.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_plate_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 120 iron plates per minute - requires multiple drills and furnaces",
+  "level": 1,
+  "target_product": "iron-plate",
+  "target_rate_per_minute": 120.0,
+  "task_id": "iron_plate_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 0.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-plate",
+   "target_rate_per_minute": 120.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_plate_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 120 iron plates per minute in constrained space - requires 4+ drills",
+  "level": 1,
+  "target_product": "iron-plate",
+  "target_rate_per_minute": 120.0,
+  "task_id": "iron_plate_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -17.5,
+     "y": -17.5
+    },
+    "right_bottom": {
+     "x": 17.5,
+     "y": 17.5
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 5.0,
+      "y": 5.0
+     },
+     "radius": 10.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-plate",
+   "target_rate_per_minute": 120.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 5.0,
+      "y": -13.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_plate_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 30 iron plates per minute - requires 1 drill + 1 furnace",
+  "level": 1,
+  "target_product": "iron-plate",
+  "target_rate_per_minute": 30.0,
+  "task_id": "iron_plate_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 0.0,
+      "y": 0.0
+     },
+     "radius": 15.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-plate",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "iron_plate_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 30 iron plates per minute in constrained space",
+  "level": 1,
+  "target_product": "iron-plate",
+  "target_rate_per_minute": 30.0,
+  "task_id": "iron_plate_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -17.5,
+     "y": -17.5
+    },
+    "right_bottom": {
+     "x": 17.5,
+     "y": 17.5
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": 5.0,
+      "y": 5.0
+     },
+     "radius": 10.0,
+     "type": "iron-ore"
+    }
+   ],
+   "target_product": "iron-plate",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 5.0,
+      "y": -13.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "military_science_pack_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 30 military science packs per minute - high throughput ammunition, grenade, and wall chain",
+  "level": 4,
+  "target_product": "military-science-pack",
+  "target_rate_per_minute": 30.0,
+  "task_id": "military_science_pack_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -50.0,
+     "y": -50.0
+    },
+    "right_bottom": {
+     "x": 50.0,
+     "y": 50.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -40.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 40.0,
+      "y": 0.0
+     },
+     "radius": 16.0,
+     "type": "copper-ore"
+    },
+    {
+     "position": {
+      "x": 0.0,
+      "y": 32.0
+     },
+     "radius": 14.0,
+     "type": "stone"
+    },
+    {
+     "position": {
+      "x": 0.0,
+      "y": -32.0
+     },
+     "radius": 14.0,
+     "type": "coal"
+    }
+   ],
+   "target_product": "military-science-pack",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -45.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "military_science_pack_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 30 military science packs per minute with four separated resource patches",
+  "level": 4,
+  "target_product": "military-science-pack",
+  "target_rate_per_minute": 30.0,
+  "task_id": "military_science_pack_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -28.0,
+      "y": 24.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 28.0,
+      "y": -24.0
+     },
+     "radius": 10.0,
+     "type": "copper-ore"
+    },
+    {
+     "position": {
+      "x": -28.0,
+      "y": -24.0
+     },
+     "radius": 10.0,
+     "type": "stone"
+    },
+    {
+     "position": {
+      "x": 28.0,
+      "y": 24.0
+     },
+     "radius": 10.0,
+     "type": "coal"
+    }
+   ],
+   "target_product": "military-science-pack",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -35.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "military_science_pack_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 10 military science pack per minute - requires ammunition, grenades, and walls",
+  "level": 4,
+  "target_product": "military-science-pack",
+  "target_rate_per_minute": 10.0,
+  "task_id": "military_science_pack_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -50.0,
+     "y": -50.0
+    },
+    "right_bottom": {
+     "x": 50.0,
+     "y": 50.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -40.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 40.0,
+      "y": 0.0
+     },
+     "radius": 16.0,
+     "type": "copper-ore"
+    },
+    {
+     "position": {
+      "x": 0.0,
+      "y": 32.0
+     },
+     "radius": 14.0,
+     "type": "stone"
+    },
+    {
+     "position": {
+      "x": 0.0,
+      "y": -32.0
+     },
+     "radius": 14.0,
+     "type": "coal"
+    }
+   ],
+   "target_product": "military-science-pack",
+   "target_rate_per_minute": 10.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -45.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "military_science_pack_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 10 military science packs per minute with four separated resource patches",
+  "level": 4,
+  "target_product": "military-science-pack",
+  "target_rate_per_minute": 10.0,
+  "task_id": "military_science_pack_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -28.0,
+      "y": 24.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 28.0,
+      "y": -24.0
+     },
+     "radius": 10.0,
+     "type": "copper-ore"
+    },
+    {
+     "position": {
+      "x": -28.0,
+      "y": -24.0
+     },
+     "radius": 10.0,
+     "type": "stone"
+    },
+    {
+     "position": {
+      "x": 28.0,
+      "y": 24.0
+     },
+     "radius": 10.0,
+     "type": "coal"
+    }
+   ],
+   "target_product": "military-science-pack",
+   "target_rate_per_minute": 10.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -35.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "science_pack_green_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 45 logistic science packs (green) per minute - high throughput complex chain",
+  "level": 3,
+  "target_product": "logistic-science-pack",
+  "target_rate_per_minute": 45.0,
+  "task_id": "science_pack_green_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -30.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 30.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "logistic-science-pack",
+   "target_rate_per_minute": 45.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "science_pack_green_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 45 logistic science packs (green) per minute with diagonal ore patches",
+  "level": 3,
+  "target_product": "logistic-science-pack",
+  "target_rate_per_minute": 45.0,
+  "task_id": "science_pack_green_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -30.0,
+     "y": -30.0
+    },
+    "right_bottom": {
+     "x": 30.0,
+     "y": 30.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 20.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": -20.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "logistic-science-pack",
+   "target_rate_per_minute": 45.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "science_pack_green_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 15 logistic science packs (green) per minute - requires inserter + belt",
+  "level": 3,
+  "target_product": "logistic-science-pack",
+  "target_rate_per_minute": 15.0,
+  "task_id": "science_pack_green_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -40.0,
+     "y": -40.0
+    },
+    "right_bottom": {
+     "x": 40.0,
+     "y": 40.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -30.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 30.0,
+      "y": 0.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "logistic-science-pack",
+   "target_rate_per_minute": 15.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -30.0
+     },
+     "width": 14
+    }
+   ]
+  }
+ },
+ "science_pack_green_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 15 logistic science packs (green) per minute with diagonal ore patches",
+  "level": 3,
+  "target_product": "logistic-science-pack",
+  "target_rate_per_minute": 15.0,
+  "task_id": "science_pack_green_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -30.0,
+     "y": -30.0
+    },
+    "right_bottom": {
+     "x": 30.0,
+     "y": 30.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 20.0
+     },
+     "radius": 18.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": -20.0
+     },
+     "radius": 18.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "logistic-science-pack",
+   "target_rate_per_minute": 15.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 10
+    }
+   ]
+  }
+ },
+ "science_pack_red_high_easy": {
+  "capacity_level": "high",
+  "description": "Produce 90 automation science packs (red) per minute - high throughput",
+  "level": 2,
+  "target_product": "automation-science-pack",
+  "target_rate_per_minute": 90.0,
+  "task_id": "science_pack_red_high_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -35.0,
+     "y": -35.0
+    },
+    "right_bottom": {
+     "x": 35.0,
+     "y": 35.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 0.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": 0.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "automation-science-pack",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 12
+    }
+   ]
+  }
+ },
+ "science_pack_red_high_hard": {
+  "capacity_level": "high",
+  "description": "Produce 90 automation science packs (red) per minute with scattered ore patches",
+  "level": 2,
+  "target_product": "automation-science-pack",
+  "target_rate_per_minute": 90.0,
+  "task_id": "science_pack_red_high_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 15.0
+     },
+     "radius": 6.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": -15.0
+     },
+     "radius": 6.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "automation-science-pack",
+   "target_rate_per_minute": 90.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ },
+ "science_pack_red_low_easy": {
+  "capacity_level": "low",
+  "description": "Produce 30 automation science packs (red) per minute - copper plate + gear wheel",
+  "level": 2,
+  "target_product": "automation-science-pack",
+  "target_rate_per_minute": 30.0,
+  "task_id": "science_pack_red_low_easy",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -35.0,
+     "y": -35.0
+    },
+    "right_bottom": {
+     "x": 35.0,
+     "y": 35.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 0.0
+     },
+     "radius": 12.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": 0.0
+     },
+     "radius": 12.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "automation-science-pack",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 6,
+     "position": {
+      "x": 0.0,
+      "y": -25.0
+     },
+     "width": 12
+    }
+   ]
+  }
+ },
+ "science_pack_red_low_hard": {
+  "capacity_level": "low",
+  "description": "Produce 30 automation science packs (red) per minute with scattered ore patches",
+  "level": 2,
+  "target_product": "automation-science-pack",
+  "target_rate_per_minute": 30.0,
+  "task_id": "science_pack_red_low_hard",
+  "validation_config": {
+   "cost_model": "factorio_recipe_cost_v1",
+   "map_bounds": {
+    "left_top": {
+     "x": -25.0,
+     "y": -25.0
+    },
+    "right_bottom": {
+     "x": 25.0,
+     "y": 25.0
+    }
+   },
+   "ore_patches": [
+    {
+     "position": {
+      "x": -20.0,
+      "y": 15.0
+     },
+     "radius": 6.0,
+     "type": "iron-ore"
+    },
+    {
+     "position": {
+      "x": 20.0,
+      "y": -15.0
+     },
+     "radius": 6.0,
+     "type": "copper-ore"
+    }
+   ],
+   "target_product": "automation-science-pack",
+   "target_rate_per_minute": 30.0,
+   "water_patches": [
+    {
+     "height": 4,
+     "position": {
+      "x": 0.0,
+      "y": -20.0
+     },
+     "width": 8
+    }
+   ]
+  }
+ }
+}

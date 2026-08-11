@@ -81,41 +81,6 @@
           </button>
         </nav>
 
-        <nav class="nav legacy-navigation" aria-label="Legacy navigation">
-          <button class="nav-button" data-view="experiments" type="button">
-            <span class="nav-icon nav-icon-studies" aria-hidden="true"></span>
-            <span class="nav-label">
-              <strong>Studies</strong>
-              <small aria-hidden="true">Configure and launch Runs</small>
-            </span>
-          </button>
-          <button class="nav-button" data-view="runs" type="button">
-            <span class="nav-icon nav-icon-runs" aria-hidden="true"></span>
-            <span class="nav-label">
-              <strong>Runs</strong>
-              <small aria-hidden="true">Progress and results</small>
-            </span>
-          </button>
-        </nav>
-
-        <section id="activeInterfaceBar" class="active-interface-bar legacy-only" aria-label="Running interface" hidden>
-          <button id="activeInterfaceOpenButton" class="active-interface-open" type="button">
-            <span class="active-interface-dot" aria-hidden="true"></span>
-            <span class="active-interface-copy">
-              <strong id="activeInterfaceLabel">Interface</strong>
-              <small id="activeInterfaceSubtitle">Running in this tab</small>
-            </span>
-          </button>
-          <button id="activeInterfaceStopButton" class="active-interface-stop" type="button">Stop</button>
-        </section>
-
-          <button id="assistantToggleButton" class="assistant-launcher legacy-only" type="button">
-            <span class="nav-icon nav-icon-assistant" aria-hidden="true"></span>
-            <span class="assistant-launcher-label">
-              <strong>OptPilot</strong>
-              <small id="assistantLauncherSubtitle">Conversation help</small>
-            </span>
-          </button>
 
         <section class="conversation-rail" aria-labelledby="conversationRailTitle">
           <div class="conversation-rail-header">
@@ -209,12 +174,7 @@
 	            </div>
 	            <button id="closeAssistantButton" class="ghost-button" type="button">Close</button>
 	          </div>
-          <div id="assistantSessionList" class="assistant-session-list">
-            <div class="assistant-session-actions">
-              <button id="legacyNewSessionButton" class="primary-button" type="button">New conversation</button>
-            </div>
-            <div id="legacyAssistantSessionCards" class="assistant-session-cards"></div>
-          </div>
+          <div id="assistantSessionList" class="assistant-session-list"></div>
           <section id="conversationOnboarding" class="conversation-onboarding" aria-label="What OptPilot can do" hidden></section>
           <div id="agentTimeline" class="agent-timeline" role="log" aria-label="Conversation history" aria-live="polite" aria-relevant="additions" aria-atomic="false"></div>
           <aside id="conversationWorkspacePanel" class="conversation-workspace-panel" aria-labelledby="conversationWorkspaceTitle" hidden>

@@ -76,7 +76,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
             persist,
         )
 
-    def test_active_interface_is_persistently_visible_and_actionable(self) -> None:
+    def test_running_interface_affordance_lives_in_open_work(self) -> None:
         viewing = _source_between(
             self.source,
             "function isViewingActiveInterface(",
@@ -85,7 +85,12 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         indicator = _source_between(
             self.source,
             "function renderActiveInterfaceIndicator(",
-            "function renderInterfaceConflictActions(",
+            "function buildOpenWorkItems(",
+        )
+        shelf = _source_between(
+            self.source,
+            "function buildOpenWorkItems(",
+            "function interfaceOutputsNeedAttention(",
         )
         return_action = _source_between(
             self.source,
@@ -98,6 +103,8 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
             "function workspaceSortMs(",
         )
 
+        # The legacy shell's global interface bar was retired with U7; the
+        # Open work shelf is the persistent running-interface affordance.
         for element_id in (
             "activeInterfaceBar",
             "activeInterfaceOpenButton",
@@ -105,19 +112,19 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
             "activeInterfaceSubtitle",
             "activeInterfaceStopButton",
         ):
-            self.assertIn(f'id="{element_id}"', self.html)
-            self.assertIn(f'"{element_id}"', self.source)
-        self.assertIn("isActiveInterfaceLaunch(launch)", indicator)
+            self.assertNotIn(f'id="{element_id}"', self.html)
+        self.assertNotIn("active-interface-bar", self.styles)
+        self.assertIn("renderOpenWork();", indicator)
+        self.assertIn("isActiveInterfaceLaunch(launch)", shelf)
+        self.assertIn(
+            "activeInterfaceStatusText(launch, isViewingActiveInterface(launch))",
+            shelf,
+        )
+        self.assertIn('"cleanup_pending"', shelf)
         self.assertIn("state.view !== \"workspace\"", viewing)
         self.assertIn("state.workbenchMode !== \"preview\"", viewing)
         self.assertIn("currentWorkspaceInterfaceLaunch(session) === launch", viewing)
         self.assertIn("currentCatalogInterfaceLaunch(session) === launch", viewing)
-        self.assertIn("isViewingActiveInterface(launch)", indicator)
-        self.assertIn('classList.toggle("is-current", viewing)', indicator)
-        self.assertIn('setAttribute("aria-current", "page")', indicator)
-        self.assertIn('removeAttribute("aria-current")', indicator)
-        self.assertIn("activeInterfaceStatusText(launch, viewing)", indicator)
-        self.assertIn('"cleanup_pending"', indicator)
         self.assertIn("workspaceSessionByBackendId(workspaceId)", return_action)
         self.assertIn("/api/workspaces/${encodeURIComponent(workspaceId)}", return_action)
         self.assertIn("catalogSourceSessionByKey(launch.key)", return_action)
@@ -127,9 +134,14 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         self.assertIn("state.interfaceReturnFallbackUrl", return_action)
         self.assertIn("stopInterfaceLaunch(launch.key)", stop_action)
         self.assertIn("renderActiveInterfaceIndicator();", self.source)
-        self.assertIn(".active-interface-bar[hidden]", self.styles)
-        self.assertIn(".active-interface-bar.is-current", self.styles)
-        self.assertIn(".active-interface-open:focus-visible", self.styles)
+        self.assertIn(
+            'on(els.returnToActiveInterfaceButton, "click", openActiveInterfaceLocation)',
+            self.source,
+        )
+        self.assertIn(
+            'on(els.stopActiveInterfaceButton, "click", stopActiveInterfaceFromGlobalControl)',
+            self.source,
+        )
 
     def test_workbench_tab_change_refreshes_active_interface_location(self) -> None:
         workbench = _source_between(

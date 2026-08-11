@@ -88,6 +88,29 @@ jobs:
           cd catalog/production_agv_scheduling
           sha256sum --check UNITY_BUILD.sha256
 
+      - name: Validate flagship catalog packages
+        run: |
+          optpilot package validate catalog/devs_gallery --check-source
+          optpilot package validate catalog/llm_policy_search --check-source
+          optpilot package validate catalog/or_solving --check-source
+          optpilot package validate catalog/factorio_design_benchmark --check-source
+
+      - name: Smoke the flagship packages (no LLM, no external services)
+        env:
+          # The policy-search method prepares its runtime before the first
+          # exchange, so its envFromHost grant must resolve even though the
+          # baseline smoke study never calls a model.
+          OPENROUTER_API_KEY: ci-placeholder-not-used-by-baseline-smoke
+        run: |
+          optpilot run catalog/factorio_design_benchmark/studies/factory_design_smoke.yaml \
+            --package-root catalog/factorio_design_benchmark
+          optpilot run catalog/devs_gallery/studies/seird_minimize_deaths.yaml \
+            --package-root catalog/devs_gallery
+          optpilot run catalog/llm_policy_search/studies/queue_demo_baseline_smoke.yaml \
+            --package-root catalog/llm_policy_search
+          optpilot run catalog/or_solving/studies/solve_or_problem_mock.yaml \
+            --package-root catalog/or_solving
+
       - name: Compile package
         run: python -m compileall src/optpilot
 

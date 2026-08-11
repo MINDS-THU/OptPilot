@@ -25,6 +25,27 @@ scratch), and it defines:
 Do not re-derive the design; follow the plan and update it when reality
 diverges. `designs/pre-release-fix-plan.md` carries per-item status notes.
 
+## Release state (2026-08-11)
+
+Phase 4 mechanics are done in the working tree (uncommitted): version bumped
+to **0.2.0** across the four synced strings; `scripts/check_release_artifacts.py`
+**passes** (it was failing before — 110 tracked non-script files carried the
+executable bit, and `catalog/or_solving/.../launch_console.sh` is a genuine
+launch script that was missing from `ALLOWED_EXECUTABLE_PATHS`); `mkdocs build
+--strict` is green with a new **Flagship Capabilities** nav section
+(devs-gallery, generate-and-optimize, llm-policy-search, or-solving,
+factorio-design-benchmark); CI now validates all four flagship packages and
+runs a zero-LLM smoke Study for each (the policy-search smoke needs a
+placeholder `OPENROUTER_API_KEY` because its method runtime is prepared before
+the first exchange).
+
+**One hard blocker remains** (plan §8): `_to_delete/_claude_resources.tar.gz`
+(86 MB, containing `reproduce-COOPA-BC8B/`) and `_claude_snapshot.tar.gz`
+(25 MB) are **tracked in git and already pushed** — added in `ab46b0a`, which
+is on `origin/phase-1-release-prep`. `git rm` is not enough; the blobs are in
+remote history, so removal needs a rewrite plus force-push. That is an owner
+decision and it carries the unresolved COOPA licence question.
+
 ## State of the branch (2026-08-07)
 
 Everything below is committed and pushed on the
@@ -40,13 +61,15 @@ Everything below is committed and pushed on the
 Phase 2 starts from this branch. Remaining owner chore: `_to_delete/` at the
 repo root holds transfer artifacts and stale git index locks; delete it.
 
-Full-suite state on the owner's machine (2026-08-07): ~2,460 tests with 4
-known pre-existing, environment-dependent failures — all reproduced
-identically on a pristine `ab46b0a` worktree (three
-`tests/studio/test_mvp.py` UI-source assertions and one
-`test_realm_study_definition_ledger` migration transaction count). Run the
-full suite once before changing anything to establish YOUR baseline, and
-diff failure sets rather than eyeballing counts.
+Full-suite state on the owner's machine (**2026-08-11**): **2,528 tests, 6
+failures, all pre-existing** — the four long-known environment-dependent ones
+(three `tests/studio/test_mvp.py` cases needing code-server/OpenHands, and
+`test_realm_study_definition_ledger`'s migration transaction count) plus the
+two `StudioAgentSessionArchiveTests` cases that upstream `1accc3c` ("Hide and
+reap untouched conversations") broke — verified by `git stash` on a clean
+tree, and chipped as a follow-up. Zero regressions from the W4/Phase-3/release
+work. Run the full suite once before changing anything to establish YOUR
+baseline, and diff failure sets rather than eyeballing counts.
 
 ## Completed so far (all verified and pushed)
 
@@ -380,9 +403,21 @@ and inline status notes mark what is already built.
    iframe's proxy cookie can be blocked as third-party.
    Remaining: item 4 (`or_benchmark` dataset environment reusing
    `checks/score_results.py` logic), item 5 license resolution.
-4. **W4 — Factorio design benchmark** (plan §5.4). Static-validation-first;
-   Direct baseline is a Python batch method; **confirm canonical target
-   rates** (below) before publishing numbers.
+4. **W4 — Factorio design benchmark: items 1-3 and 5 DONE 2026-08-11**
+   (plan §5.4). `catalog/factorio_design_benchmark` = `factory-design`
+   environment (file candidate, 11 metrics, `task_id` chosen per launch via
+   F2 inputs), `direct-designer` + deterministic `direct-designer-seed`,
+   smoke + 25-trial studies, 32-task sweep script, docs page, CI wiring.
+   Smoke verified through the retained runner (failed_check_count=5, cost
+   9619.3125, matching a standalone evaluator run). Key lesson: the vendored
+   evaluator locks **pydantic 1.10.22** in the environment's own runtime
+   because pydantic 2's `pydantic-core` has no pure wheel and the process
+   runtime accepts only `py3-none-any`; see
+   `tests/core/test_factorio_vendored_core.py` (288-case differential test).
+   Item 4 (Factorio execution mode) is documented-not-shipped. **Canonical
+   target rates** remain an owner question, but reframed: the research tree
+   has no paper artifact, and the JSON configs disagree with the programmatic
+   fallbacks in `task_config.py` for all 8 families (not 4).
 5. **W5 — DEVS-Gen × policy-search joint workstream: DONE 2026-08-09**
    (plan §5.5, all items + demo). The `dispatch_station` reference
    composition in `catalog/llm_policy_search/` (generated simulator with
@@ -401,9 +436,16 @@ and inline status notes mark what is already built.
    ledger's `method_exchange_abandoned` event + the 10.06s gap between
    prepared/abandoned timestamps in `run_events`; worker diagnostics
    volumes never saw a traceback because the worker was healthy.
-6. **Remaining U-items** (plan §4): U2 finish the "Run setup" client-side
-   rename; U3 Open work completeness; U5 interface context; U6 dynamic
-   onboarding; U7 legacy-shell removal (last); U8 optional.
+6. **Remaining U-items: DONE 2026-08-10** (plan §4 carries per-item status
+   notes): U4 catalog search (`optpilot_catalog_list` query/tags — restart
+   the OpenHands agent-server after deploying, it caches tool schemas), U6
+   registry-driven onboarding intents, U5 bounded `selected_interface`
+   context, U3 Open work approvals + finished-interface outputs (ui.md
+   records why Workspaces stay out), U2 rename, and U7 legacy-shell
+   removal (`?shell=legacy` gone; no-hash fallback is `#/conversations`).
+   Still open from U7's list: the shortlist `review_collection` renderer
+   bridge (`_shortlist_legacy_ui_projection`) — a Run-renderer payload
+   migration, queued as a follow-up task. U8 remains optional/deferred.
 7. **Studio follow-ups queued from the 2026-08-07 review** (small, good
    first tasks): an approval-gated Assistant tool for filling/running F4
    resource actions (mirror `optpilot_study_launch` in
@@ -453,8 +495,8 @@ product families).
   `bind_launch_inputs=False` so required-input studies still validate
   statically. Don't "fix" that.
 - The terminology rule: user-facing = "Run setup"; schema/API/CLI/docs
-  config-kind = `study`. Legacy-shell strings stay as-is until U7 removes the
-  legacy shell entirely.
+  config-kind = `study`. (The legacy shell and its strings were removed by
+  U7 on 2026-08-10.)
 - The four research codebases under `resource/` are untracked scratch and
   must never ship or be imported by shipped code. Integration happens by
   creating proper catalog packages (plan §5), not by referencing `resource/`.

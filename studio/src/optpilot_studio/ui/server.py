@@ -6519,6 +6519,75 @@ def _catalog_payload(state: UiState) -> JsonDict:
     }
 
 
+def _catalog_search_tags(raw: Any) -> tuple[str, ...]:
+    """Normalize an optional tag filter into lowercase tag tokens."""
+
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or any(
+        not isinstance(item, str) for item in raw
+    ):
+        raise ValueError("tags must be a list of tag strings.")
+    return tuple(
+        sorted({item.strip().lower() for item in raw if item.strip()})
+    )
+
+
+def _catalog_entry_search_text(entry: Mapping[str, Any]) -> str:
+    """Combine the entry's searchable identity fields into one haystack."""
+
+    parts: list[str] = []
+    for key in ("id", "label", "description", "package_id", "qualified_id", "purpose"):
+        value = entry.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    summary = entry.get("summary")
+    if isinstance(summary, Mapping):
+        purpose = summary.get("purpose")
+        if isinstance(purpose, str):
+            parts.append(purpose)
+    tags = entry.get("tags")
+    if isinstance(tags, list):
+        parts.extend(item for item in tags if isinstance(item, str))
+    return " ".join(parts).lower()
+
+
+def _search_catalog_entries(
+    entries: Iterable[Mapping[str, Any]],
+    *,
+    query: str = "",
+    tags: tuple[str, ...] = (),
+) -> list[JsonDict]:
+    """Filter catalog entries by free-text terms and required tags.
+
+    Every whitespace-separated query term must appear somewhere in the
+    entry's identity text (id, name, description, package, purpose, tags),
+    and every requested tag must be declared on the entry exactly.
+    """
+
+    terms = [term.lower() for term in query.split() if term]
+    results: list[JsonDict] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        if tags:
+            entry_tags = {
+                item.strip().lower()
+                for item in entry.get("tags", [])
+                if isinstance(item, str)
+            }
+            if not set(tags).issubset(entry_tags):
+                continue
+        if terms:
+            haystack = _catalog_entry_search_text(entry)
+            if not all(term in haystack for term in terms):
+                continue
+        results.append(dict(entry))
+    return results
+
+
 def _realm_catalog_entry_link_key(
     entry: Mapping[str, Any],
 ) -> Optional[tuple[str, str, int, str]]:
@@ -17347,6 +17416,11 @@ def _decorate_agent_session_status(state: UiState, payload: JsonDict) -> JsonDic
         _agent_forwarding_failed_approval_ids(state, session_id) if session_id else []
     )
     payload["effective_status"] = _agent_effective_status(state, payload)
+    # These three fields describe one list, not three disjoint sets:
+    # pending_approval_count is the whole pending set, active_approval_ids is
+    # the single request currently offered to the user, and
+    # queued_approval_count is the remaining tail. Clients that want a total
+    # use pending_approval_count alone; adding the queued count double-counts.
     payload["pending_approval_count"] = len(active_ids)
     payload["active_approval_ids"] = active_ids[:1]
     payload["queued_approval_count"] = max(len(active_ids) - 1, 0)
@@ -18311,14 +18385,27 @@ def _execute_agent_tool(
             "studies": "studies",
             "resources": "resources",
         }
-        data = (
-            catalog
+        query = str(arguments.get("query") or "").strip()
+        tags = _catalog_search_tags(arguments.get("tags"))
+        selected = (
+            {key: catalog.get(key, []) for key in ("environments", "methods", "studies", "resources")}
             if not kind
             else {kind_keys.get(kind, kind): catalog.get(kind_keys.get(kind, kind), [])}
         )
-        return _tool_result(
-            tool, True, "Catalog entries and saved study plans listed.", data=data
-        )
+        total = sum(len(entries) for entries in selected.values())
+        filtered = {
+            key: _search_catalog_entries(entries, query=query, tags=tags)
+            for key, entries in selected.items()
+        }
+        matched = sum(len(entries) for entries in filtered.values())
+        data = filtered if kind else {**catalog, **filtered}
+        summary = "Catalog entries and saved study plans listed."
+        if query or tags:
+            summary = (
+                f"Catalog search matched {matched} of {total} "
+                "entries and saved study plans."
+            )
+        return _tool_result(tool, True, summary, data=data)
     if tool == "optpilot_catalog_detail":
         kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
         uid = str(arguments.get("uid") or "")
@@ -21829,6 +21916,9 @@ def _agent_context_packet(
         if ui_selected_run is not None
         else None
     )
+    selected_interface = _assistant_selected_interface(
+        ui_context.get("selected_interface"), current_page=current_page
+    )
     registration_menu = (
         ui_context.get("registration_menu")
         if assistant_mode == "registration"
@@ -21867,6 +21957,7 @@ def _agent_context_packet(
         selected_catalog_entry=selected_catalog_entry,
         selected_study_plan=selected_study_plan,
         selected_run=selected_run,
+        selected_interface=selected_interface,
         code_editor=code_editor,
         workspace_preview=workspace_preview,
         visible_state={
@@ -21880,6 +21971,7 @@ def _agent_context_packet(
                 "selected_catalog_entry",
                 "selected_study_plan",
                 "selected_run",
+                "selected_interface",
                 "code_editor",
                 "workspace_preview",
             }
@@ -21894,6 +21986,39 @@ def _assistant_page_name(value: Any) -> str:
         "workspace": "editor",
         "experiments": "studies",
     }.get(page, page)
+
+
+def _assistant_selected_interface(
+    value: Any, *, current_page: str
+) -> Optional[JsonDict]:
+    """Bound a full-stage interface selection to exact launch coordinates.
+
+    The packet carries identity only — launch id, lifecycle status, and the
+    Catalog or Workspace source that launched it — never preview URLs, host
+    paths, or presentation tokens (U5).
+    """
+
+    if current_page not in {"interface", "editor"} or not isinstance(
+        value, Mapping
+    ):
+        return None
+    result: JsonDict = {}
+    for key in ("launch_id", "status", "launch_scope", "profile_id", "label"):
+        item = value.get(key)
+        if isinstance(item, str) and item:
+            result[key] = item[:256]
+    if not result.get("launch_id"):
+        return None
+    source = value.get("source")
+    if isinstance(source, Mapping):
+        bounded_source: JsonDict = {}
+        for key in ("kind", "uid", "key", "workspace_id", "workspace_title"):
+            item = source.get(key)
+            if isinstance(item, str) and item:
+                bounded_source[key] = item[:256]
+        if bounded_source:
+            result["source"] = bounded_source
+    return result
 
 
 def _read_workspace_index(state: UiState) -> List[JsonDict]:

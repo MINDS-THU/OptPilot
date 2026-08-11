@@ -295,185 +295,6 @@ body.assistant-open .sidebar {
   font-size: 10.5px;
   font-weight: 560;
 }
-
-.assistant-launcher {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  flex: 0 0 auto;
-  column-gap: 10px;
-  width: calc(100% + 14px);
-  min-height: 54px;
-  margin-top: 2px;
-  margin-right: -14px;
-  padding: 10px 14px;
-  border: 1px solid #e1d3e7;
-  border-right-color: transparent;
-  border-radius: 8px 0 0 8px;
-  background: linear-gradient(90deg, #f9f4fa 0%, #ffffff 100%);
-  color: var(--accent-strong);
-  text-align: left;
-  box-shadow: 0 8px 20px rgba(38, 21, 45, 0.08);
-}
-
-.assistant-launcher-label {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.assistant-launcher:hover,
-.assistant-launcher.active {
-  border-color: #c9b4d2;
-  border-right-color: transparent;
-  background: #f4ebf6;
-  color: var(--accent-strong);
-  box-shadow: inset 4px 0 0 var(--accent);
-}
-
-body.assistant-open .assistant-launcher.active {
-  z-index: 45;
-  width: calc(100% + 16px);
-  margin-right: -16px;
-  border-color: #c9b4d2;
-  border-right-color: #ffffff;
-  background: linear-gradient(90deg, #f4ebf6 0%, #fbf7fc 64%, #ffffff 100%);
-  box-shadow: inset 4px 0 0 var(--accent), 2px 0 0 #ffffff;
-}
-
-body.assistant-open .assistant-launcher.active::after {
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  bottom: -1px;
-  width: 2px;
-  background: #ffffff;
-  content: "";
-  pointer-events: none;
-}
-
-.assistant-launcher strong {
-  color: inherit;
-  font-size: 13px;
-}
-
-.assistant-launcher small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.active-interface-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 6px;
-  min-height: 48px;
-  margin-top: 2px;
-  padding: 6px;
-  border: 1px solid #dbe4e2;
-  border-radius: 9px;
-  background: #ffffff;
-  box-shadow: none;
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.active-interface-bar[hidden] {
-  display: none;
-}
-
-.active-interface-open {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 4px 5px;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-}
-
-.active-interface-open:hover {
-  background: #f0faf8;
-}
-
-.active-interface-open:focus-visible {
-  outline: 2px solid rgba(47, 151, 136, 0.45);
-  outline-offset: 1px;
-}
-
-.active-interface-bar.is-current {
-  border-color: #bddfd8;
-  background: #f0faf8;
-  box-shadow: inset 3px 0 0 #2f9788;
-}
-
-.active-interface-bar.is-current .active-interface-open {
-  color: #225f57;
-}
-
-.active-interface-bar.is-current .active-interface-open:hover {
-  background: transparent;
-}
-
-.active-interface-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #2f9788;
-  box-shadow: 0 0 0 2px rgba(47, 151, 136, 0.1);
-}
-
-.active-interface-bar.is-current .active-interface-dot {
-  box-shadow: 0 0 0 3px rgba(47, 151, 136, 0.16);
-}
-
-.active-interface-copy {
-  display: grid;
-  min-width: 0;
-  gap: 1px;
-}
-
-.active-interface-copy strong,
-.active-interface-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.active-interface-copy strong {
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.active-interface-copy small {
-  color: #58756f;
-  font-size: 10px;
-  line-height: 1.2;
-}
-
-.active-interface-stop {
-  padding: 5px 7px;
-  border: 1px solid #a8cec7;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #276f64;
-  font-size: 10.5px;
-  font-weight: 650;
-}
-
-.active-interface-stop:hover:not(:disabled) {
-  border-color: #6caeA3;
-  background: #e4f5f1;
-}
-
-.active-interface-stop:disabled {
-  opacity: 0.58;
-}
-
 .preview-conflict-actions {
   display: flex;
   flex-wrap: wrap;
@@ -8854,20 +8675,6 @@ body.assistant-open .agent-panel {
   body.assistant-open .sidebar {
     overflow: hidden;
   }
-
-  body.assistant-open .assistant-launcher.active {
-    width: 100%;
-    margin-right: 0;
-    border-right-color: #c9b4d2;
-    border-radius: 8px;
-    background: #f4ebf6;
-    box-shadow: inset 4px 0 0 var(--accent);
-  }
-
-  body.assistant-open .assistant-launcher.active::after {
-    display: none;
-  }
-
   .nav-button {
     justify-content: flex-start;
     text-align: left;
@@ -8877,14 +8684,6 @@ body.assistant-open .agent-panel {
     flex: 1 1 auto;
     text-align: left;
   }
-
-  .assistant-launcher {
-    width: 100%;
-    margin-right: 0;
-    border-right-color: #e1d3e7;
-    border-radius: 8px;
-  }
-
   .sidebar-workspaces .session-list {
     max-height: min(38vh, 320px);
   }
@@ -9021,7 +8820,7 @@ body.assistant-open .agent-panel {
   }
 }
 
-/* Conversation-first shell. The legacy shell remains available with ?shell=legacy. */
+/* Conversation-first shell (the only shell; the legacy shell was retired). */
 .shell-toolbar,
 .open-work-shelf,
 .conversation-rail,
@@ -9031,11 +8830,6 @@ body.assistant-open .agent-panel {
 .shell-primary-destination,
 .conversation-workspace-panel {
   display: none;
-}
-
-body.shell-v2 .legacy-only,
-body.shell-v2 .legacy-navigation {
-  display: none !important;
 }
 
 body.shell-v2 .sidebar-workspaces {

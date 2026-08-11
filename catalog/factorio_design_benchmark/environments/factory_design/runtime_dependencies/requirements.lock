@@ -1,0 +1,2 @@
+vendor/pydantic-1.10.22-py3-none-any.whl --hash=sha256:343037d608bcbd34df937ac259708bfc83664dadf88afe8516c4f282d7d471a9
+vendor/typing_extensions-4.14.1-py3-none-any.whl --hash=sha256:d1e1e3b58374dc93031d6eda2420a48ea44a36c2b4766a4fdeb3710755731d76

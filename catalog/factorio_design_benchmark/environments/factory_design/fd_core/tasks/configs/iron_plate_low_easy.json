@@ -1,0 +1,34 @@
+﻿{
+    "task_id":  "iron_plate_low_easy",
+    "level":  1,
+    "target_product":  "iron-plate",
+    "target_rate_per_minute":  30,
+    "description":  "Produce 30 iron plates per minute - requires 1 drill + 1 furnace",
+    "capacity_level":  "low",
+    "cost_model":  "factorio_recipe_cost_v1",
+    "environment":  {
+                        "map_width":  50,
+                        "map_height":  50,
+                        "ore_patches":  [
+                                            {
+                                                "ore_type":  "iron-ore",
+                                                "position":  [
+                                                                 0,
+                                                                 0
+                                                             ],
+                                                "radius":  15
+                                            }
+                                        ],
+                        "difficulty":  "easy",
+                        "water_patches":  [
+                                              {
+                                                  "position":  [
+                                                                   0,
+                                                                   -20
+                                                               ],
+                                                  "width":  8,
+                                                  "height":  4
+                                              }
+                                          ]
+                    }
+}

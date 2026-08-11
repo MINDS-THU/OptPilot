@@ -107,9 +107,29 @@ Read the docs in this order if you are new:
 5. [Job-Shop Tutorial Map](examples.md): run the built-in example package and see
    several method families target the same evaluation problem.
 6. [OptPilot Studio](ui.md): use the local GUI, workspace manager, and assistant.
+7. [Bundled Capability Packages](#bundled-capability-packages): pick the
+   package closest to your own problem and run it.
 
 Use [Configuration Reference](configuration.md) when you need the allowed YAML
 fields and [How a Run Works](how-it-works.md) when you need the runtime sequence.
+
+## Bundled Capability Packages
+
+Beyond the job-shop tutorial, the source checkout ships four packages that each
+demonstrate a different kind of work. The "Where To Go Next" section of
+[First Job-Shop Run](getting-started.md) carries the exact launch command for
+each; the pages below explain them.
+
+| Package | What it demonstrates | Runs without an API key? |
+| --- | --- | --- |
+| [DEVS Gallery](devs-gallery.md) (`catalog/devs_gallery`) | Generated discrete-event simulators packaged as ordinary Environments. | Yes |
+| [OR Solving](or-solving.md) (`catalog/or_solving`) | Solving a natural-language operations-research problem stated at launch time. | Mock twin yes; the real COOPA pipeline needs a key **and** a user-provisioned COOPA checkout |
+| [Factorio Design Benchmark](factorio-design-benchmark.md) (`catalog/factorio_design_benchmark`) | Comparing methods repeatably on one static-validation environment. | Smoke study yes; the design study needs a key |
+| [LLM Policy Search](llm-policy-search.md) (`catalog/llm_policy_search`) | Improving a simulator's decision policy with a trace-aware LLM loop. | Baseline smokes yes; the search studies need a key |
+
+[Generate and Optimize](generate-and-optimize.md) joins the last two ideas:
+generate a simulator from a text specification, then optimize the policy it
+declares.
 
 ## What Ships Where?
 
@@ -119,8 +139,18 @@ evidence store, and package validation command.
 The source checkout also contains:
 
 - `catalog/example_package/`: the built-in job-shop tutorial package
+- `catalog/devs_gallery/`, `catalog/or_solving/`,
+  `catalog/factorio_design_benchmark/`, and `catalog/llm_policy_search/`: the
+  four capability packages above
+- `catalog/production_agv_scheduling/`: a larger AGV scheduling package with
+  several environment variants and declared interfaces
 - `studio/`: the OptPilot Studio UI package
 - docs, tests, and contributor tooling
+
+No catalog package is redistributed in the PyPI wheel. Third-party code that
+does ship inside a package carries its license text and a third-party notice
+inside that package. Code that cannot be redistributed is not bundled at all:
+`catalog/or_solving/` imports COOPA from a checkout you provide.
 
 A package that works with the core CLI can be dropped into a Studio catalog root
 later. That is the intended path: integrate with the schema first, then use

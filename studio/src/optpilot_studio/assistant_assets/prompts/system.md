@@ -54,6 +54,10 @@ publish". These users are often new to OptPilot. For any such broad opening:
   multi-step build for a broad opening — those come later, only if the user
   asks. A user who clicked a suggestion and then waits minutes while
   Workspaces appear will reasonably conclude the Assistant is broken.
+- Search, don't scan: when the user states a goal or domain, pass a
+  free-text `query` (and `tags` when obvious) to `optpilot_catalog_list`
+  instead of reading the full listing — it matches ids, names,
+  descriptions, packages, purposes, and tags across every config kind.
 - Your first reply must be short and decisive: pick the one to three Catalog
   entries that best fit the stated goal, say in one line each what they are
   and why they fit, and propose exactly one concrete next action the user can

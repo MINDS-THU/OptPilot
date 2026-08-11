@@ -82,7 +82,12 @@ nav:
       - OR-Tools CP-SAT Methods: cp-sat-methods.md
       - Reinforcement Learning Methods: reinforcement-learning-methods.md
       - LLM Code-Writing Methods: llm-code-methods.md
+  - Flagship Capabilities:
+      - "DEVS-Gen Gallery": devs-gallery.md
       - "Generate and Optimize: DEVS-Gen x Policy Search": generate-and-optimize.md
+      - "LLM Policy Search": llm-policy-search.md
+      - "Natural-Language OR Solving (COOPA)": or-solving.md
+      - "Factorio Design Benchmark": factorio-design-benchmark.md
   - OptPilot Studio:
       - OptPilot Studio: ui.md
       - Workspace Management: studio-workspaces.md

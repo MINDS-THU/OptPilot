@@ -1,0 +1,42 @@
+﻿{
+    "task_id":  "science_pack_red_high_easy",
+    "level":  2,
+    "target_product":  "automation-science-pack",
+    "target_rate_per_minute":  90,
+    "description":  "Produce 90 automation science packs (red) per minute - high throughput",
+    "capacity_level":  "high",
+    "cost_model":  "factorio_recipe_cost_v1",
+    "environment":  {
+                        "map_width":  70,
+                        "map_height":  70,
+                        "ore_patches":  [
+                                            {
+                                                "ore_type":  "iron-ore",
+                                                "position":  [
+                                                                 -20,
+                                                                 0
+                                                             ],
+                                                "radius":  12
+                                            },
+                                            {
+                                                "ore_type":  "copper-ore",
+                                                "position":  [
+                                                                 20,
+                                                                 0
+                                                             ],
+                                                "radius":  12
+                                            }
+                                        ],
+                        "difficulty":  "easy",
+                        "water_patches":  [
+                                              {
+                                                  "position":  [
+                                                                   0,
+                                                                   -25
+                                                               ],
+                                                  "width":  12,
+                                                  "height":  6
+                                              }
+                                          ]
+                    }
+}
