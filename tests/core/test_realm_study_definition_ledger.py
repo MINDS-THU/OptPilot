@@ -1044,9 +1044,11 @@ class RealmStudyDefinitionMigrationTest(unittest.TestCase):
 
                 connection = sqlite3.connect(database)
                 try:
+                    # Pin to the module's own version rather than a literal, so a
+                    # new migration does not silently leave this assertion stale.
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        34,
+                        ledger_module._CURRENT_SCHEMA_VERSION,
                     )
                     self.assertEqual(
                         connection.execute("PRAGMA foreign_key_check").fetchall(),
