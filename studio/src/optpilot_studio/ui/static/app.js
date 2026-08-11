@@ -13813,16 +13813,16 @@ function reviewDraft(detail = state.selectedRun) {
   const current = state.reviewDrafts[runId];
   if (!current || current.base_revision_digest !== collection.revision_digest) {
     state.reviewDrafts[runId] = {
-      collection_id: String(collection.collection_id || ""),
+      shortlist_id: String(collection.shortlist_id || ""),
       expected_revision: Number(collection.revision || 0),
       base_revision_digest: String(collection.revision_digest || ""),
       title: String(collection.title || "Shortlist"),
-      items: (Array.isArray(collection.items) ? collection.items : []).map((item) => ({
+      items: (Array.isArray(collection.cards) ? collection.cards : []).map((item) => ({
         selection_digest: String(item && item.selection && item.selection.selection_digest || ""),
         note: String(item && item.note || ""),
         inspection_outcomes: Array.isArray(item && item.inspection_outcomes) ? item.inspection_outcomes : [],
         selection: item && item.selection || {},
-        evidence: item && item.evidence || {},
+        saved_evidence: item && item.saved_evidence || {},
       })),
       dirty: false,
     };
@@ -13842,14 +13842,14 @@ function displayedReviewCollection(detail = state.selectedRun) {
   const viewed = state.reviewViewedCollections[runId];
   if (
     viewed
-    && viewed.collection_id === current.collection_id
+    && viewed.shortlist_id === current.shortlist_id
     && Number(viewed.revision) !== Number(current.revision)
   ) return viewed;
   return current;
 }
 
 function reviewCandidateResult(item) {
-  const result = item && item.evidence && item.evidence.candidate_result || {};
+  const result = item && item.saved_evidence && item.saved_evidence.candidate_result || {};
   const aggregate = result.aggregate && typeof result.aggregate === "object" ? result.aggregate : null;
   const objective = result.objective || {};
   return {
@@ -13886,12 +13886,12 @@ function renderReviewCollection(detail) {
   const collection = displayedReviewCollection(detail);
   const historical = Number(collection.revision) !== Number(current.revision);
   const draft = historical ? null : reviewDraft(detail);
-  const items = historical ? (Array.isArray(collection.items) ? collection.items : []) : draft ? draft.items : [];
+  const items = historical ? (Array.isArray(collection.cards) ? collection.cards : []) : draft ? draft.items : [];
   const history = reviewCollectionHistory(detail);
   const revisions = Array.isArray(history && history.items) ? history.items : [];
   const error = state.reviewError;
   return `
-    <section class="review-collection" data-review-collection="${escapeHtml(collection.collection_id || "")}">
+    <section class="review-collection" data-review-collection="${escapeHtml(collection.shortlist_id || "")}">
       <div class="review-collection-heading">
         <div>
           <span class="eyebrow">Saved Candidates</span>
@@ -13936,7 +13936,7 @@ function renderReviewCollection(detail) {
 function renderReviewItem(item, index, count, options = {}) {
   const selection = item && item.selection || {};
   const result = reviewCandidateResult(item);
-  const retention = item && item.evidence && item.evidence.retention || {};
+  const retention = item && item.saved_evidence && item.saved_evidence.retention || {};
   const artifactCount = Number(retention.artifact_content_count || 0);
   return `
     <article class="review-item" data-review-index="${escapeHtml(index)}">
@@ -14887,7 +14887,7 @@ function renderCandidateComparisonAction(item, page) {
 }
 
 function reviewCollection(detail = state.selectedRun) {
-  const value = detail && detail.review_collection;
+  const value = detail && detail.shortlist;
   return value && typeof value === "object" ? value : null;
 }
 
@@ -14897,7 +14897,7 @@ function reviewContainsCandidate(candidateId, detail = state.selectedRun) {
 
 function reviewCandidateCard(candidateId, detail = state.selectedRun) {
   const collection = reviewCollection(detail);
-  const items = Array.isArray(collection && collection.items) ? collection.items : [];
+  const items = Array.isArray(collection && collection.cards) ? collection.cards : [];
   return items.find((item) => item && item.selection && item.selection.kind === "candidate" && item.selection.entity_id === candidateId) || null;
 }
 
@@ -17339,7 +17339,7 @@ function shortlistCommandDraft(detail = state.selectedRun) {
     };
   }
   return {
-    shortlist_id: draft.collection_id,
+    shortlist_id: draft.shortlist_id,
     expected_revision: draft.expected_revision,
     title: draft.title,
     cards: draft.items.map((item) => ({
@@ -17426,9 +17426,9 @@ async function addCandidateToReview(selectionId, options = {}) {
   );
   try {
     const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/shortlist`, intent.payload);
-    if (!payload || payload.run_id !== runId || !payload.shortlist || !payload.collection) throw new Error("Shortlist response is incomplete.");
+    if (!payload || payload.run_id !== runId || !payload.shortlist) throw new Error("Shortlist response is incomplete.");
     if (state.selectedRunId === runId && state.selectedRun) {
-      state.selectedRun.review_collection = payload.collection;
+      state.selectedRun.shortlist = payload.shortlist;
       state.selectedRun.review_collection_history = payload.history || state.selectedRun.review_collection_history;
       delete state.reviewDrafts[runId];
       delete state.reviewViewedCollections[runId];
@@ -17465,9 +17465,9 @@ async function saveReviewDraft() {
   );
   try {
     const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/shortlist`, intent.payload);
-    if (!payload || payload.run_id !== runId || !payload.shortlist || !payload.collection) throw new Error("Saved Shortlist response is incomplete.");
+    if (!payload || payload.run_id !== runId || !payload.shortlist) throw new Error("Saved Shortlist response is incomplete.");
     if (state.selectedRunId === runId && state.selectedRun) {
-      state.selectedRun.review_collection = payload.collection;
+      state.selectedRun.shortlist = payload.shortlist;
       state.selectedRun.review_collection_history = payload.history || state.selectedRun.review_collection_history;
       delete state.reviewDrafts[runId];
       delete state.reviewViewedCollections[runId];
@@ -17487,7 +17487,7 @@ async function deleteReviewCollection() {
   const draft = reviewDraft();
   if (!runId || !collection || state.reviewDeletePending || state.reviewSavePending) return;
   const revisionCount = Number(collection.revision || 0);
-  const itemCount = Array.isArray(collection.items) ? collection.items.length : 0;
+  const itemCount = Array.isArray(collection.cards) ? collection.cards.length : 0;
   const unsavedWarning = draft && draft.dirty
     ? " Unsaved Shortlist edits will also be discarded."
     : "";
@@ -17504,7 +17504,7 @@ async function deleteReviewCollection() {
       command: "delete",
       presentation_selection: null,
       draft: {
-        collection_id: collection.collection_id,
+        collection_id: collection.shortlist_id,
         expected_revision: collection.revision,
         expected_revision_digest: collection.revision_digest,
         confirmation: "delete_review_collection",
@@ -17518,11 +17518,11 @@ async function deleteReviewCollection() {
       || payload.collection !== null
       || !deletion
       || deletion.schema !== "optpilot.review-collection-deletion.v1"
-      || deletion.collection_id !== collection.collection_id
+      || deletion.collection_id !== collection.shortlist_id
       || deletion.previous_revision_digest !== collection.revision_digest
     ) throw new Error("Shortlist deletion response is incomplete.");
     if (state.selectedRunId === runId && state.selectedRun) {
-      state.selectedRun.review_collection = null;
+      state.selectedRun.shortlist = null;
       state.selectedRun.review_collection_history = null;
       delete state.reviewDrafts[runId];
       delete state.reviewViewedCollections[runId];
@@ -17559,9 +17559,9 @@ async function attachOperatorJobToReview(jobId) {
   );
   try {
     const payload = await postJson(`/api/runs/${encodeURIComponent(runId)}/shortlist`, intent.payload);
-    if (!payload || payload.run_id !== runId || !payload.shortlist || !payload.collection) throw new Error("Saved Shortlist try result is incomplete.");
+    if (!payload || payload.run_id !== runId || !payload.shortlist) throw new Error("Saved Shortlist try result is incomplete.");
     if (state.selectedRunId === runId && state.selectedRun) {
-      state.selectedRun.review_collection = payload.collection;
+      state.selectedRun.shortlist = payload.shortlist;
       state.selectedRun.review_collection_history = payload.history || state.selectedRun.review_collection_history;
       delete state.reviewDrafts[runId];
       delete state.reviewViewedCollections[runId];
@@ -17592,7 +17592,7 @@ async function exportReviewRevision() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `optpilot-shortlist-${collection.collection_id}-v${collection.revision}.json`;
+    link.download = `optpilot-shortlist-${collection.shortlist_id}-v${collection.revision}.json`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -17620,11 +17620,11 @@ async function openReviewRevision(value) {
   renderRunDetail();
   try {
     const payload = await getJson(`/api/runs/${encodeURIComponent(runId)}/review-collection?revision=${encodeURIComponent(revision)}`);
-    const collection = payload && payload.collection;
+    const collection = payload && payload.shortlist;
     if (
       !collection
       || payload.run_id !== runId
-      || collection.collection_id !== current.collection_id
+      || collection.shortlist_id !== current.shortlist_id
       || Number(collection.revision) !== revision
     ) throw new Error("Shortlist history does not match the selected saved version.");
     state.reviewViewedCollections[runId] = collection;

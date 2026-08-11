@@ -1661,16 +1661,14 @@ class StudioRealmRunsTest(unittest.TestCase):
         self.assertEqual(first["schema"], "optpilot.run-shortlist-response.v1")
         self.assertEqual(first["shortlist"]["revision"], 1)
         self.assertEqual(len(first["shortlist"]["cards"]), 1)
-        self.assertEqual(
-            first["collection"]["items"][0]["saved_result_at"],
-            first["shortlist"]["cards"][0]["saved_result_at"],
-        )
-        self.assertEqual(
-            first["collection"]["items"][0]["evidence_digest"],
-            first["shortlist"]["cards"][0]["saved_evidence_digest"],
-        )
+        # The legacy renderer bridge is gone: the response carries the raw
+        # Shortlist only, so the card must expose the raw field names.
+        self.assertNotIn("collection", first)
 
-        first_card = first["collection"]["items"][0]
+        first_card = first["shortlist"]["cards"][0]
+        self.assertEqual(first_card["candidate_id"], candidates[0]["id"])
+        self.assertIsInstance(first_card["saved_result_at"], float)
+        self.assertRegex(first_card["saved_evidence_digest"], r"^[0-9a-f]{64}$")
         handler._read_json_body = lambda: {  # type: ignore[method-assign]
             "schema": "optpilot.run-shortlist-command.v1",
             "request_id": "02020202-0202-4202-8202-020202020202",
@@ -1776,7 +1774,8 @@ class StudioRealmRunsTest(unittest.TestCase):
             self.state,
             ref=RunViewRef(run_id=self.run_id),
         )
-        self.assertIsNone(detail["review_collection"])
+        self.assertIsNone(detail["shortlist"])
+        self.assertNotIn("review_collection", detail)
         candidate = detail["pages"]["candidate"]["items"][0]
         handler, responses = self._handler()
         handler.path = f"/api/runs/{self.run_id}/review-collection"
@@ -1857,7 +1856,19 @@ class StudioRealmRunsTest(unittest.TestCase):
             {"revision": ["1"]},
         )
         historical = responses[-1][0]
-        self.assertEqual(historical["collection"]["revision"], 1)
+        # The non-export branch returns the raw Shortlist under "shortlist";
+        # the legacy "collection" projection is gone from this route.
+        self.assertNotIn("collection", historical)
+        historical_shortlist = historical["shortlist"]
+        self.assertEqual(historical_shortlist["revision"], 1)
+        self.assertEqual(
+            historical_shortlist["shortlist_id"], collection["collection_id"]
+        )
+        self.assertEqual(historical_shortlist["run_id"], self.run_id)
+        self.assertNotIn("items", historical_shortlist)
+        self.assertEqual(
+            historical_shortlist["cards"][0]["candidate_id"], candidate["id"]
+        )
         self.assertEqual(
             [item["revision"] for item in historical["history"]["items"]],
             [2, 1],
@@ -1867,7 +1878,7 @@ class StudioRealmRunsTest(unittest.TestCase):
             self.state,
             ref=RunViewRef(run_id=self.run_id),
         )
-        self.assertEqual(refreshed["review_collection"]["revision"], 2)
+        self.assertEqual(refreshed["shortlist"]["revision"], 2)
         self.assertEqual(
             [
                 item["revision"]
@@ -1875,7 +1886,7 @@ class StudioRealmRunsTest(unittest.TestCase):
             ],
             [2, 1],
         )
-        serialized = json.dumps(refreshed["review_collection"], sort_keys=True)
+        serialized = json.dumps(refreshed["shortlist"], sort_keys=True)
         self.assertNotIn(str(self.realm_root), serialized)
 
         handler._read_json_body = lambda: {  # type: ignore[method-assign]
@@ -1946,7 +1957,7 @@ class StudioRealmRunsTest(unittest.TestCase):
             self.state,
             ref=RunViewRef(run_id=self.run_id),
         )
-        self.assertIsNone(after_delete["review_collection"])
+        self.assertIsNone(after_delete["shortlist"])
         self.assertIsNone(after_delete["review_collection_history"])
 
     def test_terminal_operator_job_outcomes_attach_to_review_revisions(self) -> None:
