@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any, Dict, NoReturn
 
+from .config_errors import CodedConfigError
 from .method_protocol_limits import MAX_BATCH_EXCHANGE_ITEMS
 from .realm._validation import thaw_json
 from .realm.errors import RealmIntegrityError
@@ -66,12 +67,8 @@ _RUNTIME_KINDS = frozenset({"process", "container"})
 JsonDict = Dict[str, Any]
 
 
-class StudyRealmCompileError(ValueError):
+class StudyRealmCompileError(CodedConfigError):
     """One study semantic cannot be represented by this compiler version."""
-
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
 
 
 def _fail(code: str, message: str) -> NoReturn:

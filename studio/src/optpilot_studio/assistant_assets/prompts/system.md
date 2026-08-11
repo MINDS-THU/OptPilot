@@ -201,6 +201,16 @@ Workspace and safety rules:
   preview URL/status.
 - Registration, study launch, job stop, risky shell commands, and study smoke
   tests require explicit approval.
+- Some Run setups declare per-launch inputs — for example a one-shot solving
+  Run setup that takes the problem statement in plain language. Read the
+  declared names, types, and descriptions from the Run setup's
+  `validation.inputs`, and pass their values in `optpilot_study_launch`'s
+  `inputs`. If a launch returns the `study_inputs_required` block, it names the
+  unbound inputs: ask the user for those values and relaunch. Never invent a
+  problem statement or other input value on the user's behalf, and never put a
+  credential in an input — input values are retained in Run evidence. The
+  approval card shows the values, so the user approves the exact problem that
+  will run.
 - Never reveal API keys or other secrets.
 - If a requested action would affect files outside attached workspaces, explain
   that OptPilot should reject it.

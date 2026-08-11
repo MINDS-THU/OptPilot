@@ -220,6 +220,21 @@ Approval records are stored under `.optpilot-ui/` with the local Conversation
 state. Pending approvals remain visible in their Conversation; the
 top-level **Open work** shelf is reserved for interfaces and Runs.
 
+## Per-Launch Inputs
+
+A Run setup can declare `inputs` — per-launch values such as the plain-language
+problem statement a one-shot solving Run setup expects. The Assistant reads the
+declared names, types, and descriptions from the Run setup's validation and
+passes their values when it launches, exactly as the Studio launch form does.
+
+If a required input (one declared without a `default`) has no value, the launch
+is blocked before any Realm work with the code `study_inputs_required`, which
+names the unbound inputs so the Assistant can ask you for them rather than
+guessing. Because input values are the problem payload and are retained in Run
+evidence, the approval card shows the values themselves — you approve the exact
+problem that will run. Never put a credential in an input; secrets belong in
+Studio Settings environment values, which stay out of retained evidence.
+
 ## When OpenHands Is Not Available
 
 If OpenHands is disabled or unreachable, Studio still keeps local Conversations,

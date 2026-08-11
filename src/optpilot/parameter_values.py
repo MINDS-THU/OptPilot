@@ -57,6 +57,7 @@ def validate_parameter_values(
                 f"{sorted(schema.keys())}."
             )
 
+    missing_required = set(missing_required_parameters(values, schema))
     for name, definition in schema.items():
         if not isinstance(definition, Mapping):
             errors.append(f"{location}.{name} declaration must be an object.")
@@ -65,11 +66,34 @@ def validate_parameter_values(
             errors.extend(
                 _validate_value(values[name], definition, f"{location}.{name}")
             )
-        elif "default" not in definition:
+        elif name in missing_required:
             errors.append(
                 f"{location}.{name} is required (no default is declared)."
             )
     return errors
+
+
+def missing_required_parameters(
+    values: Any,
+    schema: Mapping[str, Any],
+) -> List[str]:
+    """Declared parameters that have no ``default`` and no supplied value.
+
+    This is the single definition of "required" for parameter maps.
+    ``validate_parameter_values`` reports these as errors; callers that want
+    to *collect* the missing values instead of failing — a UI prompting for
+    per-launch study inputs, for example — use this directly so their notion
+    of required cannot drift from the validator's.
+    """
+
+    supplied = values if isinstance(values, Mapping) else {}
+    return sorted(
+        str(name)
+        for name, definition in schema.items()
+        if isinstance(definition, Mapping)
+        and "default" not in definition
+        and name not in supplied
+    )
 
 
 def apply_parameter_defaults(

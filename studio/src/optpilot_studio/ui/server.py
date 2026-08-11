@@ -63,6 +63,8 @@ from optpilot.config import (
     compile_interface_launch_profiles,
     validate_authoring_config,
 )
+from optpilot.config_errors import CodedConfigError, StudyLaunchInputsError
+from optpilot.parameter_values import missing_required_parameters
 from optpilot.resource_actions import (
     compile_resource_actions,
     find_resource_action,
@@ -3305,7 +3307,7 @@ class UiState:
             else:
                 assert study_path is not None
                 validation = _validate_study(study_path, state=self)
-                _require_study_launchable(validation)
+                _require_study_launchable(validation, launch_inputs=launch_inputs)
                 method_environment_binding = _studio_method_environment_binding(
                     self,
                     [
@@ -15694,7 +15696,36 @@ def _study_launch_capability(validation: Mapping[str, Any]) -> JsonDict:
     }
 
 
-def _study_launch_block(validation: Mapping[str, Any]) -> Optional[JsonDict]:
+def _declared_study_inputs(validation: Mapping[str, Any]) -> JsonDict:
+    """The study's declared per-launch input map, or an empty map."""
+
+    declared = validation.get("inputs")
+    return dict(declared) if isinstance(declared, Mapping) else {}
+
+
+def _unbound_required_study_inputs(
+    validation: Mapping[str, Any],
+    launch_inputs: Optional[Mapping[str, Any]],
+) -> List[str]:
+    """Declared inputs that have no default and no supplied launch value.
+
+    Delegates to core's ``missing_required_parameters`` so this predictive
+    check cannot drift from the rule the compiler actually enforces. This is
+    a UX affordance only — it lets a caller collect the values before
+    launching. Core re-checks unconditionally and remains authoritative.
+    """
+
+    return missing_required_parameters(
+        launch_inputs if isinstance(launch_inputs, Mapping) else {},
+        _declared_study_inputs(validation),
+    )
+
+
+def _study_launch_block(
+    validation: Mapping[str, Any],
+    *,
+    launch_inputs: Optional[Mapping[str, Any]] = None,
+) -> Optional[JsonDict]:
     if validation.get("valid") is not True:
         errors = [str(item) for item in validation.get("errors", []) or [] if str(item)]
         return {
@@ -15703,16 +15734,39 @@ def _study_launch_block(validation: Mapping[str, Any]) -> Optional[JsonDict]:
             "reason": errors[0] if errors else "Study validation failed.",
         }
     launch = _study_launch_capability(validation)
-    return None if launch.get("eligible") is True else launch
+    if launch.get("eligible") is not True:
+        return launch
+    missing = _unbound_required_study_inputs(validation, launch_inputs)
+    if missing:
+        declared = _declared_study_inputs(validation)
+        return {
+            "eligible": False,
+            "code": "study_inputs_required",
+            "reason": (
+                "This run setup needs a value for "
+                f"{', '.join(missing)} before it can launch."
+            ),
+            "missing_inputs": missing,
+            "input_declarations": {
+                name: deepcopy(declared[name]) for name in missing
+            },
+        }
+    return None
 
 
-def _require_study_launchable(validation: Mapping[str, Any]) -> None:
-    blocked = _study_launch_block(validation)
+def _require_study_launchable(
+    validation: Mapping[str, Any],
+    *,
+    launch_inputs: Optional[Mapping[str, Any]] = None,
+) -> None:
+    blocked = _study_launch_block(validation, launch_inputs=launch_inputs)
     if blocked is None:
         return
     code = str(blocked.get("code") or "retained_execution_unsupported")
     reason = str(blocked.get("reason") or "The study is not launchable.")
-    raise ValueError(f"Study launch blocked ({code}): {reason}")
+    # The message keeps its established format; the code rides along so the
+    # launch response reports it in `code` instead of a generic rejection.
+    raise CodedConfigError(code, f"Study launch blocked ({code}): {reason}")
 
 
 def _canonical_method_request_timeout_seconds(value: Any) -> float:
@@ -15853,6 +15907,37 @@ def _canonical_study_launch_inputs(value: Any) -> Dict[str, Any]:
             raise ValueError("Study launch input names must be short strings.")
         result[key] = item
     return result
+
+
+_MAX_STUDY_LAUNCH_INPUT_DISPLAY_CHARS = 400
+
+
+def _study_launch_input_display(launch_inputs: Mapping[str, Any]) -> List[str]:
+    """Render bound launch-input values for one approval card.
+
+    Launch inputs are the problem payload and are retained inside the run
+    definition digest, so the approver must see the values that will actually
+    run rather than only the input names. Long values are elided with an
+    explicit marker; the untruncated mapping stays in the approval's recorded
+    arguments.
+    """
+
+    rendered: List[str] = []
+    for name in sorted(launch_inputs):
+        value = launch_inputs[name]
+        text = (
+            value
+            if isinstance(value, str)
+            else json.dumps(value, sort_keys=True, default=str)
+        )
+        if len(text) > _MAX_STUDY_LAUNCH_INPUT_DISPLAY_CHARS:
+            hidden = len(text) - _MAX_STUDY_LAUNCH_INPUT_DISPLAY_CHARS
+            text = (
+                f"{text[:_MAX_STUDY_LAUNCH_INPUT_DISPLAY_CHARS]}… "
+                f"(+{hidden} more characters)"
+            )
+        rendered.append(f"{name}={text}")
+    return rendered
 
 
 def _study_launch_intent_source(request: Mapping[str, Any]) -> EntityCoordinate:
@@ -16235,6 +16320,7 @@ def _execute_study_launch_request(
                 HTTPStatus.OK,
             )
 
+    requested_launch_inputs = request.get("inputs")
     configured_study_path: Optional[Path] = None
     configured_validation: Optional[JsonDict] = None
     if "study_path" in request:
@@ -16243,7 +16329,9 @@ def _execute_study_launch_request(
         configured_validation = _validate_study(
             configured_study_path, state=state
         )
-        blocked = _study_launch_block(configured_validation)
+        blocked = _study_launch_block(
+            configured_validation, launch_inputs=requested_launch_inputs
+        )
         if blocked is not None:
             code = str(blocked.get("code") or "study_invalid")
             message = str(
@@ -16262,7 +16350,7 @@ def _execute_study_launch_request(
         method_request_timeout_seconds = request.get(
             "method_request_timeout_seconds"
         )
-        launch_inputs = request.get("inputs")
+        launch_inputs = requested_launch_inputs
         if "workspace_id" in request:
             launched = state.launch_study(
                 workspace_id=str(request["workspace_id"]),
@@ -18800,6 +18888,14 @@ def _execute_agent_tool(
             raise ValueError(
                 "Pass exactly one of study_ref or workspace_id for study launch."
             )
+        # An empty mapping is normalized away: core rejects launch inputs
+        # supplied to a study that declares none, and an assistant that
+        # habitually sends `inputs: {}` must not trip that error.
+        launch_inputs = (
+            _canonical_study_launch_inputs(arguments["inputs"])
+            if arguments.get("inputs") is not None
+            else None
+        ) or None
         study_relative_path = ""
         expected_workspace_revision: Optional[int] = None
         if study_ref:
@@ -18865,7 +18961,7 @@ def _execute_agent_tool(
                 f"workspace:{workspace_id}@{expected_workspace_revision}",
                 study_relative_path,
             ]
-        blocked = _study_launch_block(validation)
+        blocked = _study_launch_block(validation, launch_inputs=launch_inputs)
         if blocked is not None:
             reason = str(blocked.get("reason") or "Study launch preflight failed.")
             return _tool_result(
@@ -18874,6 +18970,16 @@ def _execute_agent_tool(
                 f"Study launch blocked: {reason}",
                 data={"validation": validation, "capability": blocked},
             )
+        if launch_inputs:
+            # The approver decides on the problem payload, not just the study
+            # identity, so the bound values belong on the card itself.
+            rendered_inputs = _study_launch_input_display(launch_inputs)
+            approval_summary = (
+                f"{approval_summary} Inputs: {'; '.join(rendered_inputs)}."
+            )
+            approval_targets = approval_targets + [
+                f"input:{item}" for item in rendered_inputs
+            ]
         gate = _agent_permission_gate(
             state,
             session_id,
@@ -18889,12 +18995,13 @@ def _execute_agent_tool(
         if gate is not None:
             return gate
         job = (
-            state.launch_study(catalog_entry=study_ref)
+            state.launch_study(catalog_entry=study_ref, launch_inputs=launch_inputs)
             if study_ref
             else state.launch_study(
                 workspace_id=workspace_id,
                 study_relative_path=study_relative_path,
                 expected_workspace_revision=expected_workspace_revision,
+                launch_inputs=launch_inputs,
             )
         )
         return _tool_result(
