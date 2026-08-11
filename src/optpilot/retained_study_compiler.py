@@ -19,7 +19,7 @@ from .realm.errors import RealmIntegrityError
 from .realm.manifests import TreeEntry, TreeManifest, validate_portable_path
 from .realm.owner_derivation import Binding, OwnerDerivationManifest, SourceAnchor
 from .realm.process_provider import ProcessProviderIdentity
-from .realm.refs import SnapshotRef, canonical_json_bytes
+from .realm.refs import PhysicalContentRef, SnapshotRef, canonical_json_bytes
 from .realm.run_closure import (
     RUN_ATTEMPT_INPUT_ROLE,
     RUN_ENVIRONMENT_SOURCE_ROLE,
@@ -425,6 +425,24 @@ class RetainedStudyCompilation:
 
 def _config_parent(path: str) -> str:
     return str(PurePosixPath(path).parent)
+
+
+def _requires_environment_capability(study_spec: StudySpec) -> bool:
+    """Whether the Method calls an Environment-provided capability itself.
+
+    ``study_realm_compiler`` has already proved that every required capability
+    is one the Environment declares, so the presence of a requirement is the
+    exact signal that Environment code runs inside the Method process.
+    """
+
+    compatibility = _mapping(
+        study_spec.method.get("compatibility"), "method.compatibility"
+    )
+    required = _sequence(
+        compatibility.get("requiredCapabilities", ()) or (),
+        "method requiredCapabilities",
+    )
+    return bool(required)
 
 
 def _manifest_paths(manifest: TreeManifest) -> tuple[set[str], set[str]]:
@@ -1445,6 +1463,19 @@ def compile_retained_process_study(
         source_layers=(method_layer,),
         method_contract=expected_retained_method_contract(retained_study_spec),
     )
+    # A Method that requires an Environment capability calls the Environment's
+    # own retained callable inside the Method process.  That callable's exact
+    # dependency layer has to travel with it: without this the Environment's
+    # third-party imports resolve against whatever the host interpreter happens
+    # to provide, so a Study that works on the build machine fails on a clean
+    # install.  The layer is shared read-only under its own Environment scope,
+    # at lowest import precedence, so the Method's own locked layer still wins.
+    capability_prepared_layers = (
+        environment_prepared_layers
+        if environment_prepared_runtime is not None
+        and _requires_environment_capability(retained_study_spec)
+        else ()
+    )
     method_prepared_layers = (
         (
             ScopeLayer(
@@ -1455,7 +1486,7 @@ def compile_retained_process_study(
         )
         if method_prepared_runtime is not None
         else ()
-    )
+    ) + capability_prepared_layers
     method_import_roots = tuple(
         ScopePath(_PACKAGE_SCOPE, path)
         for path in package.method_python_import_roots
@@ -1467,6 +1498,13 @@ def compile_retained_process_study(
         for path in (
             method_prepared_runtime.import_roots
             if method_prepared_runtime is not None
+            else ()
+        )
+    ) + tuple(
+        ScopePath(environment_prepared_runtime.scope, path)
+        for path in (
+            environment_prepared_runtime.import_roots
+            if capability_prepared_layers
             else ()
         )
     )
@@ -1514,15 +1552,44 @@ def compile_retained_process_study(
                 method_prepared_runtime.membership.content_ref,
             )
         )
+    if capability_prepared_layers:
+        expected_refs.add(
+            (
+                RUN_PREPARED_METHOD_RUNTIME_ROLE,
+                environment_prepared_runtime.membership.content_ref,
+            )
+        )
     if set(run_definition.required_content_refs) != expected_refs:
         _fail(
             "unexpected_content_closure",
             "The process-study slice produced content outside its exact retained source and dependency layers.",
         )
-    prepared_by_role = {
-        RUN_PREPARED_RUNTIME_ROLE: environment_prepared_runtime,
-        RUN_PREPARED_METHOD_RUNTIME_ROLE: method_prepared_runtime,
-    }
+    # A shared capability layer places the same exact Environment dependency
+    # content under two roles, so the exact retained layer is selected by
+    # (role, content ref) rather than by role alone.
+    prepared_by_ref: dict[tuple[str, PhysicalContentRef], PreparedPythonRuntime] = {}
+    if environment_prepared_runtime is not None:
+        prepared_by_ref[
+            (
+                RUN_PREPARED_RUNTIME_ROLE,
+                environment_prepared_runtime.membership.content_ref,
+            )
+        ] = environment_prepared_runtime
+    if method_prepared_runtime is not None:
+        prepared_by_ref[
+            (
+                RUN_PREPARED_METHOD_RUNTIME_ROLE,
+                method_prepared_runtime.membership.content_ref,
+            )
+        ] = method_prepared_runtime
+    if capability_prepared_layers:
+        prepared_by_ref[
+            (
+                RUN_PREPARED_METHOD_RUNTIME_ROLE,
+                environment_prepared_runtime.membership.content_ref,
+            )
+        ] = environment_prepared_runtime
+    prepared_roles = {RUN_PREPARED_RUNTIME_ROLE, RUN_PREPARED_METHOD_RUNTIME_ROLE}
     sources = [package.source_anchor]
     sources.extend(
         prepared.source_anchor
@@ -1534,8 +1601,13 @@ def compile_retained_process_study(
     )
     bindings: list[Binding] = []
     for role, content_ref in run_definition.required_content_refs:
-        prepared = prepared_by_role.get(role)
+        prepared = prepared_by_ref.get((role, content_ref))
         if prepared is None:
+            if role in prepared_roles:
+                _fail(
+                    "unexpected_content_closure",
+                    "A dependency role points outside its exact retained layer.",
+                )
             if content_ref != package.snapshot_ref:
                 _fail(
                     "unexpected_content_closure",
@@ -1551,11 +1623,6 @@ def compile_retained_process_study(
                 )
             )
         else:
-            if content_ref != prepared.membership.content_ref:
-                _fail(
-                    "unexpected_content_closure",
-                    "A dependency role points outside its exact retained layer.",
-                )
             bindings.append(
                 Binding(
                     source_owner_id=prepared.source_anchor.owner_id,

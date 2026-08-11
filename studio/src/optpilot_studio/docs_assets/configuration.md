@@ -703,6 +703,16 @@ read-only dependency layers, and executes the Study through the ordinary Run
 path. A successful preparation is cached locally for speed, while every Run
 retains the exact dependency trees it used.
 
+A method that names an environment capability under
+`accepts.requires.capabilities` runs that environment's own code inside the
+method process, so it also receives the environment's prepared dependency
+layer, read-only. The layer is placed after the method's own imports, which
+means a method that locks its own dependencies keeps them: the environment's
+layer only supplies imports the method does not provide itself. Declaring the
+capability is what grants this — a method that reaches into an environment
+directory through `entrypoint.pythonPath` alone sees that source but none of
+its locked dependencies.
+
 Batch Python methods can implement:
 
 ```python
