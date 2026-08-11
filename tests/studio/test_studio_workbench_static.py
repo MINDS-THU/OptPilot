@@ -286,7 +286,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
 
         self.assertIn(
-            'getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS })',
+            'getJson("/api/runs", { timeoutMs: RUNS_REQUEST_TIMEOUT_MS, conditionalKey: "runs" })',
             loading,
         )
         self.assertNotIn("/api/jobs", loading)

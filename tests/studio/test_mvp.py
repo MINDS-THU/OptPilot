@@ -7595,6 +7595,22 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(record["status"], "stopped")
         self.assertTrue(record["idle_stopped"])
 
+    def test_runtime_health_rate_limits_container_garbage_collection(self) -> None:
+        from optpilot_studio.ui.server import _rate_limited_runtime_gc
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
+            with patch.object(
+                type(state.workspace_runtime),
+                "garbage_collect",
+                return_value={"stopped": [], "skipped": [], "idle_timeout_seconds": 1},
+            ) as gc:
+                first = _rate_limited_runtime_gc(state)
+                second = _rate_limited_runtime_gc(state)
+        self.assertEqual(gc.call_count, 1)
+        self.assertEqual(first, second)
+
     def test_ui_workspace_runtime_marks_old_image_container_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

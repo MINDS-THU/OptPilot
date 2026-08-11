@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import unittest
 from http import HTTPStatus
 from pathlib import Path
@@ -11,6 +12,21 @@ from unittest import mock
 
 from optpilot_studio.ui.coordination_store import CoordinationStorageUnavailable
 from optpilot_studio.ui.server import _handler_factory
+
+
+def _mock_ui_state() -> mock.Mock:
+    """A permissive UiState double with the real Run-list cache fields.
+
+    Every mutating request invalidates the Run-list response cache in a
+    ``finally`` hook, so even failure-path handler tests need a real lock and
+    counter rather than auto-created Mock attributes.
+    """
+
+    state = mock.Mock()
+    state._runs_response_cache_lock = threading.Lock()
+    state._runs_response_cache = None
+    state._runs_mutation_generation = 0
+    return state
 
 
 _APP_JS = (
@@ -44,7 +60,7 @@ class StudioStorageUnavailableHttpTest(unittest.TestCase):
         patched_callable: str,
         error: BaseException,
     ) -> tuple[dict, HTTPStatus]:
-        handler = object.__new__(_handler_factory(mock.Mock()))
+        handler = object.__new__(_handler_factory(_mock_ui_state()))
         responses: list[tuple[dict, HTTPStatus]] = []
         handler.path = path
         handler._read_json_body = lambda: {}  # type: ignore[method-assign]
@@ -120,7 +136,7 @@ class StudioStorageUnavailableHttpTest(unittest.TestCase):
         )
         for method, path, patched_callable in cases:
             with self.subTest(method=method):
-                handler = object.__new__(_handler_factory(mock.Mock()))
+                handler = object.__new__(_handler_factory(_mock_ui_state()))
                 responses: list[tuple[dict, HTTPStatus]] = []
                 handler.path = path
                 handler._send_json = (  # type: ignore[method-assign]

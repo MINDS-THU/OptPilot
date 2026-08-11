@@ -169,6 +169,7 @@ from optpilot.setup import minimal_host_env, setup_commands_for_step, setup_cwd
 from optpilot.spec import study_spec_from_raw
 from optpilot.study_launch_service import (
     METHOD_ENVIRONMENT_BINDING_SCHEMA,
+    STUDY_LAUNCH_JOB_KIND,
     RealmStudyLaunchService,
     StudyLaunchDispatchDeferred,
     StudyLaunchView,
@@ -3062,6 +3063,15 @@ class UiState:
         self.agent_sessions_dir = self.cwd / ".optpilot-ui" / "agent_sessions"
         self.agent_sessions_dir.mkdir(parents=True, exist_ok=True)
         self._agent_session_index_lock = threading.RLock()
+        # The Run-list response is rebuilt only when a cheap fingerprint over
+        # the run catalog, study-launch job records, and this process's own
+        # mutation counter changes.  Rebuilding it on every poll re-reads one
+        # full snapshot per Run, which alone kept an idle Studio near one CPU.
+        self._runs_response_cache_lock = threading.Lock()
+        self._runs_response_cache: Optional[JsonDict] = None
+        self._runs_mutation_generation = 0
+        self._runtime_gc_lock = threading.Lock()
+        self._runtime_gc_last: Optional[tuple[float, JsonDict]] = None
         self.code_server_dir = self.cwd / ".optpilot-ui" / "code-server"
         self.code_server_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self.cwd / ".optpilot-ui" / "settings.json"
@@ -4618,15 +4628,25 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if path == "/api/runs":
+                    page_token = _query_value(query, "page_token")
+                    limit = _bounded_query_int(query, "limit", default=50)
+                    if page_token is None and state.realm_runtime is not None:
+                        entry = _runs_response_entry(state, limit=limit)
+                        if (
+                            self.headers.get("If-None-Match")
+                            == entry["etag"]
+                        ):
+                            self._send_not_modified(entry["etag"])
+                        else:
+                            self._send_json_bytes(
+                                entry["body"], etag=entry["etag"]
+                            )
+                        return
                     self._send_json(
                         _realm_runs_payload(
                             state,
-                            page_token=_query_value(query, "page_token"),
-                            limit=_bounded_query_int(
-                                query,
-                                "limit",
-                                default=50,
-                            ),
+                            page_token=page_token,
+                            limit=limit,
                         )
                     )
                     return
@@ -5040,6 +5060,9 @@ def _handler_factory(state: UiState):
                     {"error": str(exc), "type": type(exc).__name__},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
+            finally:
+                if not _runs_neutral_mutation_path(parsed.path):
+                    _invalidate_runs_response_cache(state)
 
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -5079,6 +5102,9 @@ def _handler_factory(state: UiState):
                     {"error": str(exc), "type": type(exc).__name__},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
+            finally:
+                if not _runs_neutral_mutation_path(parsed.path):
+                    _invalidate_runs_response_cache(state)
 
         def _handle_workspace_get(self, path: str) -> None:
             parts = path.split("/")
@@ -5978,15 +6004,33 @@ def _handler_factory(state: UiState):
             data = json.dumps(
                 _public_studio_payload(payload), indent=2, sort_keys=True
             ).encode("utf-8")
+            self._send_json_bytes(data, status=status)
+
+        def _send_json_bytes(
+            self,
+            data: bytes,
+            status: HTTPStatus = HTTPStatus.OK,
+            *,
+            etag: Optional[str] = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             # Run heads, capability facts, and job/workspace status are live
             # projections.  A browser cache must never combine an old head with
-            # a newly restarted Studio client.
+            # a newly restarted Studio client.  The optional ETag exists for
+            # the client's explicit If-None-Match polling, not browser caching.
             self.send_header("Cache-Control", "no-store, max-age=0")
+            if etag is not None:
+                self.send_header("ETag", etag)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def _send_not_modified(self, etag: str) -> None:
+            self.send_response(HTTPStatus.NOT_MODIFIED)
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("ETag", etag)
+            self.end_headers()
 
         def log_message(self, format: str, *args: Any) -> None:
             return
@@ -8856,15 +8900,14 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
 
 
 def _runtime_health(state: Optional[UiState] = None) -> JsonDict:
-    docker = _executable_health("docker", ["docker", "--version"])
-    podman = _executable_health("podman", ["podman", "--version"])
-    code_server = _executable_health("code-server", ["code-server", "--version"])
+    docker = _cached_executable_health("docker", ["docker", "--version"])
+    podman = _cached_executable_health("podman", ["podman", "--version"])
+    code_server = _cached_executable_health(
+        "code-server", ["code-server", "--version"]
+    )
     runtime_gc: JsonDict = {}
     if state:
-        runtime_gc = state.workspace_runtime.garbage_collect(
-            _workspace_records_for_runtime_gc(state),
-            active_workspace_id=state.active_code_workspace_id,
-        )
+        runtime_gc = _rate_limited_runtime_gc(state)
     workspace_runtime = (
         state.workspace_runtime.global_status(
             active_workspace=state._active_code_workspace()
@@ -9178,6 +9221,45 @@ def _is_registered_managed_workspace_root(state: UiState, root: Path) -> bool:
         if registered and Path(registered).resolve() == resolved:
             return True
     return False
+
+
+# ``<engine> --version`` output only changes when the host installs or removes
+# software, yet the health endpoint is polled continuously; without a TTL every
+# poll spawns three subprocesses.
+_EXECUTABLE_HEALTH_TTL_SECONDS = 300.0
+_executable_health_cache: Dict[str, tuple[float, JsonDict]] = {}
+_executable_health_cache_lock = threading.Lock()
+
+# Idle-container reclamation compares minutes-scale idle timers; sweeping the
+# container engine once a minute preserves the policy without a subprocess
+# storm on every status poll.
+_RUNTIME_GC_MIN_INTERVAL_SECONDS = 60.0
+
+
+def _cached_executable_health(name: str, command: List[str]) -> JsonDict:
+    now = time.monotonic()
+    with _executable_health_cache_lock:
+        entry = _executable_health_cache.get(name)
+        if entry is not None and now - entry[0] < _EXECUTABLE_HEALTH_TTL_SECONDS:
+            return dict(entry[1])
+    result = _executable_health(name, command)
+    with _executable_health_cache_lock:
+        _executable_health_cache[name] = (time.monotonic(), result)
+    return dict(result)
+
+
+def _rate_limited_runtime_gc(state: UiState) -> JsonDict:
+    now = time.monotonic()
+    with state._runtime_gc_lock:
+        last = state._runtime_gc_last
+        if last is not None and now - last[0] < _RUNTIME_GC_MIN_INTERVAL_SECONDS:
+            return dict(last[1])
+        result = state.workspace_runtime.garbage_collect(
+            _workspace_records_for_runtime_gc(state),
+            active_workspace_id=state.active_code_workspace_id,
+        )
+        state._runtime_gc_last = (time.monotonic(), result)
+        return dict(result)
 
 
 def _executable_health(name: str, command: List[str]) -> JsonDict:
@@ -14863,6 +14945,100 @@ def _realm_runs_payload(
             "truncated": len(diagnostics) > diagnostic_limit,
         },
     }
+
+
+# Independent fingerprint checks bound staleness for the one known write that
+# neither touches a run head nor a job row (a run-cancellation request made by
+# a non-Studio process); Studio's own mutations invalidate explicitly.
+_RUNS_RESPONSE_CACHE_MAX_AGE_SECONDS = 30.0
+
+
+def _invalidate_runs_response_cache(state: UiState) -> None:
+    with state._runs_response_cache_lock:
+        state._runs_mutation_generation += 1
+        state._runs_response_cache = None
+
+
+def _runs_neutral_mutation_path(path: str) -> bool:
+    """True for chatty mutation endpoints that can never change a Run row.
+
+    The Assistant transcript sync posts every few seconds while a session is
+    busy; invalidating the Run-list cache on it would defeat the cache.
+    """
+
+    return path.startswith("/api/agent-sessions/") and path.endswith("/sync")
+
+
+def _runs_payload_fingerprint(state: UiState, *, limit: int) -> str:
+    """Digest every cheap input that can change a Run-list row.
+
+    Reads one bounded catalog page and the raw study-launch job records; both
+    are single authorized SQL scans without per-run snapshot reads.  The
+    process-local mutation generation covers Studio-side writes (notably
+    run-cancellation requests) that change row presentation without moving a
+    run head or a job revision.
+    """
+
+    runtime = _require_realm_runtime(state)
+    page = runtime.run_reader.list_runs(limit=limit)
+    jobs = runtime.ledger.list_operator_jobs_for_actor(
+        actor_principal_id=runtime.actor_principal_id,
+        job_kind=STUDY_LAUNCH_JOB_KIND,
+        limit=200,
+    )
+    material = {
+        "generation": state._runs_mutation_generation,
+        "jobs": [
+            [job.job_id, job.revision, job.updated_at, job.cleanup_state.value]
+            for job in jobs
+        ],
+        "limit": limit,
+        "runs": [
+            [
+                item.run_id,
+                item.state,
+                item.retention_state,
+                item.current_revision,
+                item.head_sequence,
+                item.accepted_logical_trials,
+                item.updated_at,
+            ]
+            for item in page.items
+        ],
+        "truncated": page.has_more,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _runs_response_entry(state: UiState, *, limit: int) -> JsonDict:
+    """Serve the serialized first Run-list page, rebuilding only on change."""
+
+    with state._runs_response_cache_lock:
+        fingerprint = _runs_payload_fingerprint(state, limit=limit)
+        entry = state._runs_response_cache
+        now = time.monotonic()
+        if (
+            entry is not None
+            and entry["limit"] == limit
+            and entry["fingerprint"] == fingerprint
+            and now - entry["built_at"] < _RUNS_RESPONSE_CACHE_MAX_AGE_SECONDS
+        ):
+            return entry
+        payload = _realm_runs_payload(state, limit=limit)
+        body = json.dumps(
+            _public_studio_payload(payload), indent=2, sort_keys=True
+        ).encode("utf-8")
+        entry = {
+            "body": body,
+            "built_at": now,
+            "etag": '"' + hashlib.sha256(body).hexdigest()[:32] + '"',
+            "fingerprint": fingerprint,
+            "limit": limit,
+        }
+        state._runs_response_cache = entry
+        return entry
 
 
 def _list_runs(state: UiState) -> List[JsonDict]:

@@ -77,6 +77,7 @@ from optpilot_studio.ui.server import (
     _execute_run_workbench_action,
     _execute_agent_tool,
     _handler_factory,
+    _invalidate_runs_response_cache,
     _mint_assistant_run_selection,
     _prepare_assistant_smoke_package,
     _realm_compat_run_row,
@@ -84,6 +85,7 @@ from optpilot_studio.ui.server import (
     _realm_runs_payload,
     _reconcile_visible_run_executions,
     _row_workbench_action_capabilities,
+    _runs_response_entry,
     _reconcile_visible_operator_jobs,
     _run_temporary_realm_smoke,
     _schedule_operator_job_execution,
@@ -592,8 +594,17 @@ class StudioRealmRunsTest(unittest.TestCase):
     def _handler(self):
         handler = object.__new__(_handler_factory(self.state))
         responses = []
+        handler.headers = {}
         handler._send_json = lambda payload, status=HTTPStatus.OK: responses.append(  # type: ignore[method-assign]
             (payload, status)
+        )
+        handler._send_json_bytes = (  # type: ignore[method-assign]
+            lambda data, status=HTTPStatus.OK, etag=None: responses.append(
+                (json.loads(data.decode("utf-8")), status)
+            )
+        )
+        handler._send_not_modified = lambda etag: responses.append(  # type: ignore[method-assign]
+            ({"etag": etag}, HTTPStatus.NOT_MODIFIED)
         )
         return handler, responses
 
@@ -1337,6 +1348,41 @@ class StudioRealmRunsTest(unittest.TestCase):
             "private diagnostic",
             json.dumps(payload["unavailable"], sort_keys=True),
         )
+
+    def test_run_list_response_cache_rebuilds_only_on_change(self) -> None:
+        first = _runs_response_entry(self.state, limit=50)
+        second = _runs_response_entry(self.state, limit=50)
+        self.assertIs(first, second)
+
+        handler, responses = self._handler()
+        handler.headers = {"If-None-Match": first["etag"]}
+        handler.path = "/api/runs"
+        handler.do_GET()
+        payload, status = responses[-1]
+        self.assertEqual(status, HTTPStatus.NOT_MODIFIED, payload)
+        self.assertEqual(payload["etag"], first["etag"])
+
+        # Advancing the run head changes the fingerprint and rebuilds the
+        # serialized body, so a poll observes the new head immediately.
+        self._complete_default_trial(metric=2.5)
+        third = _runs_response_entry(self.state, limit=50)
+        self.assertIsNot(second, third)
+        self.assertNotEqual(second["etag"], third["etag"])
+
+        handler.headers = {"If-None-Match": second["etag"]}
+        handler.do_GET()
+        payload, status = responses[-1]
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(
+            payload["runs"][0]["completed_trials"],
+            1,
+        )
+
+        # A Studio-side mutation invalidates the cache even when neither a
+        # run head nor a job record moved (e.g. a run-cancellation request).
+        _invalidate_runs_response_cache(self.state)
+        fourth = _runs_response_entry(self.state, limit=50)
+        self.assertIsNot(third, fourth)
 
     def test_run_list_and_detail_share_singleton_best_candidate_semantics(
         self,
