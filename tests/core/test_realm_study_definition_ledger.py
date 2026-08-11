@@ -1046,7 +1046,7 @@ class RealmStudyDefinitionMigrationTest(unittest.TestCase):
                 try:
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        34,
+                        35,
                     )
                     self.assertEqual(
                         connection.execute("PRAGMA foreign_key_check").fetchall(),
