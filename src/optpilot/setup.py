@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
+
 
 JsonDict = Dict[str, Any]
 ProgressCallback = Callable[[str, str], None]
@@ -182,6 +184,13 @@ def setup_commands_for_step(step: JsonDict, root: Path) -> List[List[str]]:
     if kind == "command":
         command = [str(item) for item in step.get("command", []) or []]
         if command:
+            # A python/python3 head is a logical interpreter name, not a host
+            # executable — the same contract retained command methods and
+            # resource actions use, and the same default the python-venv step
+            # above applies. Without the mapping a setup step fails outright on
+            # hosts that only ship python3.
+            if command[0] in RETAINED_COMMAND_METHOD_INTERPRETERS:
+                command[0] = sys.executable
             return [command]
     raise ValueError(f"Unsupported setup step: {kind!r}")
 
