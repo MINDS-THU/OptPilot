@@ -2939,9 +2939,15 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(current["status"], "ready")
         self.assertTrue(current["can_stop"])
-        self.assertIn("OPTPILOT_INTERFACE_OUTPUT_ROOT", internal_handles)
-        self.assertIn("OPTPILOT_INTERFACE_OUTPUTS_FILE", internal_handles)
+        self.assertIn("OPTPILOT_INTERFACE_RUNTIME_ROOT", internal_handles)
         self.assertIn("OPTPILOT_INTERFACE_EPHEMERAL_ROOT", internal_handles)
+        # This profile is view-only: it does not declare `outputs`, so Studio must
+        # not carve out an output area or control file for it. Per
+        # docs/configuration.md, `outputs: true` declares the producing capability
+        # and is omitted for view-only interfaces; the opted-in side is covered by
+        # test_ui_launches_catalog_resource_interface_without_copying_source.
+        self.assertNotIn("OPTPILOT_INTERFACE_OUTPUT_ROOT", internal_handles)
+        self.assertNotIn("OPTPILOT_INTERFACE_OUTPUTS_FILE", internal_handles)
         self.assertNotIn("OPTPILOT_INTERFACE_FRONTEND_RUNTIME_ROOT", internal_handles)
         self.assertNotIn("OPTPILOT_INTERFACE_VENV", internal_handles)
         ephemeral_root = internal_handles["OPTPILOT_INTERFACE_EPHEMERAL_ROOT"]
@@ -3218,7 +3224,16 @@ class MvpIntegrationTest(unittest.TestCase):
                 return launch_id, current["result"]
 
             first_launch_id, launched = launch_workspace_interface()
-            setup_counter = Path(workspace["root"]) / "setup-count.txt"
+            # The editable catalog workspace is rooted at the *package*, not at the
+            # selected component. The interface declares `cwd: .`, which resolves
+            # against the component source root -- the same path the workspace
+            # reports as catalog_origin.source_root_relative_path -- so runtime
+            # setup runs there, not at the workspace root.
+            component_root = (
+                Path(workspace["root"])
+                / workspace["catalog_origin"]["source_root_relative_path"]
+            )
+            setup_counter = component_root / "setup-count.txt"
             workspace_after_first_launch = _require_ui_workspace(state, workspace_id)
             first_stopped = _stop_interface_launch(state, first_launch_id)
             second_launch_id, relaunched = launch_workspace_interface()
@@ -5007,10 +5022,26 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertIn("attached_workspace_ids: []", body)
         self.assertIn('selected_workspace_id: ""', body)
-        self.assertIn("state.agentWorkspaceAttachments[id] = []", body)
-        self.assertIn("state.selectedWorkspaceByAgentSession[id] = null", body)
         self.assertNotIn("attached_workspace_ids: attached", body)
         self.assertNotIn("currentAttachedIds.slice()", body)
+
+        # The create path no longer seeds the attachment maps itself; it hands the
+        # server's response to updateAgentSessionFromPayload, which rebuilds them
+        # via mergeAgentSessionPayload. Detachment therefore has to hold there.
+        self.assertIn("updateAgentSessionFromPayload(payload.session)", body)
+
+        merge_start = source.index("function mergeAgentSessionPayload(session)")
+        merge_end = source.index("\nfunction ", merge_start + 1)
+        merge_body = source[merge_start:merge_end]
+        self.assertIn(
+            "state.agentWorkspaceAttachments[session.id] = nextAttachments",
+            merge_body,
+        )
+        self.assertIn(
+            "state.selectedWorkspaceByAgentSession[session.id] = "
+            "session.selected_workspace_id || null",
+            merge_body,
+        )
 
     def test_ui_agent_session_list_does_not_probe_workspace_runtimes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
