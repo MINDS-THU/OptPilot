@@ -454,10 +454,13 @@ Register as package `or_solving` with two registrations sharing one pruned runti
 > `solve-or-problem` declares `inputs.problem` (F2) — the Studio launch form
 > renders it, and Studio gates the launch on the missing host values
 > (`runtime_environment_missing`) until configured. An explicitly labeled
-> mock twin (`coopa-solver-mock` / `solve-or-problem-mock`) smoke-tests the
+> mock twin (`coopa-solver-mock` / `solve-or-problem-mock`) smoke-tested the
 > identical machinery with no LLM/network/COOPA; verified end-to-end through
 > the retained runner: `optpilot run … --input problem="…"` → succeeded run,
 > artifact retained with the launch input inside, evaluator metrics scored.
+> **Removed 2026-08-12** — a method whose answers are canned placeholders does
+> not belong in a practitioner-facing catalog. `optpilot package validate
+> catalog/or_solving` covers the wiring check it used to serve.
 > Real-pipeline execution verified 2026-08-07 through Studio's retained
 > runner: LP test problem solved with predicted = 36.0 (exact optimum),
 > solved = 1.0, full 8.9 KB artifact retained (manager routing,
@@ -646,7 +649,7 @@ Each workstream's definition of done: package fully self-contained — no cross-
 
 Status as of 2026-08-11 (verified on the owner's machine; see the notes).
 
-- [x] All four packages install-validate-smoke in CI from a clean checkout — CI now runs `package validate --check-source` for all four flagship packages and a zero-LLM smoke Study for each (`factory_design_smoke`, `seird_minimize_deaths`, `queue_demo_baseline_smoke`, `solve_or_problem_mock`). The policy-search smoke needs a placeholder `OPENROUTER_API_KEY` because its method runtime is prepared before the first exchange; CI supplies one.
+- [x] All four packages install-validate-smoke in CI from a clean checkout — CI now runs `package validate --check-source` for all four flagship packages and a zero-LLM smoke Study for three of them (`factory_design_smoke`, `seird_minimize_deaths`, `queue_demo_baseline_smoke`). `or_solving` is validate-only in CI since the `solve_or_problem_mock` twin was removed 2026-08-12; its real study needs a user-provisioned COOPA checkout. The policy-search smoke needs a placeholder `OPENROUTER_API_KEY` because its method runtime is prepared before the first exchange; CI supplies one.
 - [x] A new user can, in under 30 minutes with only the docs — `getting-started.md` now carries a "Where To Go Next" routing table mapping each of the four outcomes to its package root, command and prerequisites, and each flagship package has its own page. Three of the four outcomes run with no key at all; OR-from-text needs a key *and* a user-provisioned COOPA checkout, which the criterion's own "(given an API key)" wording does not cover — stated plainly in the docs. The 30-minute figure itself is not machine-verifiable and no page promises a time.
 - [x] Every capability discoverable via Assistant search *and* via direct Catalog browsing — U4 gave `optpilot_catalog_list` free-text `query` + `tags`; U6 surfaces flagship capabilities by name on the welcome page from registry metadata.
 - [x] No consequential action reachable from Assistant prose without a card + approval — enforced by the card contract and `_agent_permission_gate`; unchanged this cycle.

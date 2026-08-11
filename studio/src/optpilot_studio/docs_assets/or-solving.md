@@ -31,40 +31,17 @@ contracts, so the problem statement you typed is part of the Run's evidence and
 of its run-definition digest — same problem, same digest.
 
 !!! warning "COOPA is user-provisioned, not redistributed"
-    The COOPA research codebase carries **no license file**, so this package
-    ships no COOPA source at all. Every file under `catalog/or_solving/` is
-    OptPilot-original code that *imports* a checkout you supply through
-    `COOPA_HOME`. Its solver backends are native (GLPK/IPOPT binaries,
-    `ortools`, `pymoo`) and cannot be locked into an OptPilot process runtime,
-    which accepts pure `py3-none-any` wheels only. This path is
-    user-provisioned by design, and will stay that way until the license
-    question is resolved with COOPA's authors.
+    This package ships no COOPA source. Every file under `catalog/or_solving/`
+    is OptPilot-original code that *imports* a checkout you supply through
+    `COOPA_HOME`. COOPA is Apache-2.0 licensed, so vendoring it here would be
+    permitted; it stays user-provisioned because its solver backends are
+    native (GLPK/IPOPT binaries, `ortools`, `pymoo`) and cannot be locked into
+    an OptPilot process runtime, which accepts pure `py3-none-any` wheels
+    only.
 
-## Start with the mock twin — no COOPA, no API key
+## The pipeline
 
-`solve-or-problem-mock` (`studies/solve_or_problem_mock.yaml`) uses the
-explicitly labeled `coopa-solver-mock` method. It exercises the identical
-machinery — per-launch input, command-protocol batch exchange, artifact
-retention, evaluator scoring — with no COOPA checkout, no network, and no keys.
-Its `problem` input has a placeholder default, so this runs as-is:
-
-```bash
-uv run optpilot run catalog/or_solving/studies/solve_or_problem_mock.yaml \
-  --package-root catalog/or_solving
-```
-
-The Run succeeds with one trial: `solved = 1.0`, `objective_value = 0.0`. Add
-`--input problem="A bakery makes cakes and pies..."` to watch your own statement
-land inside the retained artifact.
-
-!!! note "Mock answers are placeholders, never solutions"
-    Every artifact this method emits is marked `"mode": "mock"` and its
-    `predicted` value is a constant. `solved = 1.0` here means "a well-formed
-    artifact came back", which is exactly what the smoke test is for.
-
-## The real pipeline
-
-`solve-or-problem` pairs the same `or-problem` environment with the
+`solve-or-problem` pairs the `or-problem` environment with the
 `coopa-solver` method, which drives the COOPA pipeline: confidence-scored
 formulation extraction with refinement, routing to one of four optimizer agents
 (mathematical / combinatorial / metaheuristic / general), LLM-generated solver

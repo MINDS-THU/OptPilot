@@ -372,28 +372,30 @@ Catalog and watch behavior through Run evidence. See
 ### Solve one OR problem from text
 
 `catalog/or_solving` takes a plain-language problem statement as a per-launch
-input. Start with the mock twin, which exercises the identical machinery with
-no network, no key, and no external checkout:
+input and returns a retained solution artifact — formulation, routing decision,
+generated solver code, and the numeric answer:
 
 ```bash
-uv run optpilot run catalog/or_solving/studies/solve_or_problem_mock.yaml \
+uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
   --package-root catalog/or_solving \
+  --method-request-timeout 900 \
   --input problem="A factory makes two products. Product A yields 40 profit and takes 2 hours of labor; product B yields 30 and takes 1 hour. With 100 labor hours available, maximize profit."
 ```
 
-It succeeds with `solved = 1.0` and retains a solution artifact marked
-`"mode": "mock"`. The answers are canned placeholders, never real solutions.
-
-!!! warning "The real solver needs more than an API key"
+!!! warning "This study needs more than an API key"
 
     `studies/solve_or_problem.yaml` drives the COOPA multi-agent pipeline.
-    COOPA has no license file and is therefore **not redistributed** with
-    OptPilot. Before that study can run you must obtain a COOPA checkout
-    yourself, point `COOPA_HOME` at it, install
+    COOPA is Apache-2.0 licensed but is **not vendored** into OptPilot,
+    because its solver backends are native and cannot be locked into a
+    process runtime. Before that study can run you must obtain a COOPA
+    checkout, point `COOPA_HOME` at it, install
     `catalog/or_solving/methods/coopa_solver/requirements-pruned.txt` into the
     Python environment that executes the method, and supply
     `OPENROUTER_API_KEY`. The exact steps are in
     `catalog/or_solving/README.md` and [OR Solving](or-solving.md).
+
+    To check the package wiring without any of that, run its validation:
+    `uv run optpilot package validate catalog/or_solving`.
 
 With those prerequisites in place the real study is launched the same way:
 

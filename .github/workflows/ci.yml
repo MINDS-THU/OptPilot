@@ -108,8 +108,6 @@ jobs:
             --package-root catalog/devs_gallery
           optpilot run catalog/llm_policy_search/studies/queue_demo_baseline_smoke.yaml \
             --package-root catalog/llm_policy_search
-          optpilot run catalog/or_solving/studies/solve_or_problem_mock.yaml \
-            --package-root catalog/or_solving
 
       - name: Compile package
         run: python -m compileall src/optpilot

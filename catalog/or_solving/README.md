@@ -43,11 +43,8 @@ checkout you provide:
     --input problem="A factory makes two products. Product A yields \$40 profit and takes 2 hours of labor; product B yields \$30 and takes 1 hour. With 100 labor hours available, maximize profit."
   ```
 
-- `solve-or-problem-mock` — an explicitly labeled mock that exercises the
-  exact same OptPilot machinery (per-launch inputs, command-protocol batch
-  method, artifact retention, evaluator scoring) without COOPA, network, or
-  API keys. Use it for smoke tests and CI. Its artifacts are marked
-  `"mode": "mock"` and its answers are canned, never real solutions.
+To check the package's wiring without COOPA, a network, or API keys, run
+`optpilot package validate catalog/or_solving`.
 
 ## What the evaluator checks
 
