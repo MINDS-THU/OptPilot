@@ -47,6 +47,35 @@ These checks still do not install dependencies or prove that every study can
 complete. For a release-quality package, validate the package, validate the
 study files you intend to advertise, and smoke-run at least one small study.
 
+### Undeclared Run-Time Dependencies
+
+Validation always reads the Python sources reachable from a component's
+declared entry points and reports the imports that no declared dependency
+layer provides. This runs by default and never imports or executes authored
+code, so imports deferred inside `propose` are seen too:
+
+```text
+Warnings:
+- methods/ortools_cpsat_solver/method.yaml
+  - dependency_host_provisioned: job_shop_lib is imported by
+    methods/ortools_cpsat_solver/method.py but no declared runtime provides it
+```
+
+An import counts as declared when it is the Python standard library, source
+retained inside the package (including a vendored source tree), a top-level
+module of a wheel named by the component's `runtime.setup` requirements lock,
+or OptPilot's own dependency closure. Everything else resolves only because
+the authoring machine happens to have the package installed, and it will be
+missing wherever the package travels.
+
+This is reported as the `dependency_host_provisioned` capability code and as a
+per-component warning; it does not make the package invalid, because a
+component may be knowingly host-provisioned. The bundled job-shop methods are:
+they need native `ortools` and `torch` closures and are installed through the
+`examples` dependency group. To resolve a warning, vendor the dependency into
+the component's locked runtime, retain it as package source, or document the
+component as host-provisioned. Pass `--no-dependency-check` to skip the scan.
+
 If a package declares component `runtime.setup` or interface
 `runtime.setup`, check the setup
 files first:

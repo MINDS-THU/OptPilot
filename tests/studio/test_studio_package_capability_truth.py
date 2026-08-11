@@ -385,6 +385,68 @@ class StudioPackageCapabilityTruthTest(unittest.TestCase):
             "run Test", " ".join(_package_plan_warnings(plan, validation))
         )
 
+    def test_host_provisioned_dependency_is_warned_before_registration(self) -> None:
+        """A package that only runs here must not register as quietly ready."""
+
+        reason = (
+            "Some components import packages that only the host interpreter "
+            "provides: job_shop_lib."
+        )
+        validation = {
+            "valid": True,
+            "capabilities": {
+                "retained_execution": {
+                    "supported": True,
+                    "eligible": True,
+                    "code": "ready",
+                    "reason": None,
+                    "methods": [],
+                },
+                "dependency_closure": {
+                    "declared": False,
+                    "code": "dependency_host_provisioned",
+                    "reason": reason,
+                    "undeclared_modules": ["job_shop_lib"],
+                    "components": [],
+                },
+            },
+        }
+        plan = {
+            "classification": "environment-plus-method",
+            "studies": [{"id": "smoke"}],
+            "smoke": {"valid": True},
+        }
+
+        self.assertEqual(_package_plan_warnings(plan, validation), [reason])
+
+    def test_declared_dependency_closure_adds_no_warning(self) -> None:
+        validation = {
+            "valid": True,
+            "capabilities": {
+                "retained_execution": {
+                    "supported": True,
+                    "eligible": True,
+                    "code": "ready",
+                    "reason": None,
+                    "methods": [],
+                },
+                "dependency_closure": {
+                    "declared": True,
+                    "code": "dependency_closure_declared",
+                    "reason": None,
+                    "undeclared_modules": [],
+                    "components": [],
+                },
+            },
+        }
+        plan = {
+            "classification": "environment-plus-method",
+            "studies": [{"id": "smoke"}],
+            "smoke": {"valid": True},
+        }
+
+        self.assertEqual(_package_plan_warnings(plan, validation), [])
+
 
 if __name__ == "__main__":
     unittest.main()

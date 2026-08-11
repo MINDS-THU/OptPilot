@@ -94,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     package_validate_parser.add_argument("--check-source", action="store_true", help="Check public source paths referenced by package configs")
     package_validate_parser.add_argument("--check-imports", action="store_true", help="Import Python callables in isolated subprocesses")
     package_validate_parser.add_argument("--check-setup-files", action="store_true", help="Check files needed by runtime and interface setup declarations")
+    package_validate_parser.add_argument("--no-dependency-check", action="store_true", help="Skip the static scan for run-time imports no declared runtime provides")
     package_validate_parser.set_defaults(handler=_package_validate_command)
     package_setup_parser = package_subparsers.add_parser("setup-check", help="Check or execute package setup declarations")
     package_setup_parser.add_argument("package", help="Path to a package folder")
@@ -387,10 +388,12 @@ def _package_validate_command(args) -> int:
         check_imports=args.check_imports,
         check_source=args.check_source,
         check_setup_files=args.check_setup_files,
+        check_dependencies=not args.no_dependency_check,
     )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
-    elif result["valid"]:
+        return 0 if result["valid"] else 1
+    if result["valid"]:
         print(f"Valid package: {result['package']}")
         print(f"Configs: {result['counts']}")
     else:
@@ -403,9 +406,30 @@ def _package_validate_command(args) -> int:
             print(f"- {entry['path']}")
             for error in entry.get("errors", []):
                 print(f"  - {error}")
-            for warning in entry.get("warnings", []):
-                print(f"  - warning: {warning}")
+    _print_package_warnings(result)
     return 0 if result["valid"] else 1
+
+
+def _print_package_warnings(result: dict) -> None:
+    """Report portability warnings whether or not the package is valid.
+
+    A component that imports a package nothing declares still validates; the
+    defect only appears on a machine that lacks the ambient install, so a valid
+    package must not print as unqualified green.
+    """
+
+    warned = [
+        entry
+        for entry in result.get("entries", [])
+        if entry.get("warnings")
+    ]
+    if not warned:
+        return
+    print("Warnings:")
+    for entry in warned:
+        print(f"- {entry['path']}")
+        for warning in entry.get("warnings", []):
+            print(f"  - {warning}")
 
 
 def _package_setup_check_command(args) -> int:
