@@ -37,8 +37,27 @@ Everything below is committed and pushed on the
 - `727ddbc` — Assistant quality pass
 - `25ad874` — Assistant dispatch fixes (send timeout, stale-finished guard)
 
-Phase 2 starts from this branch. Remaining owner chore: `_to_delete/` at the
-repo root holds transfer artifacts and stale git index locks; delete it.
+Phase 2 starts from this branch.
+
+### `_to_delete/` credential incident (2026-08-11)
+
+`_to_delete/` was not a routine chore. It was **committed** in `ab46b0a` and
+pushed to the public `MINDS-THU/OptPilot`, where it sat from 2026-08-06. Its
+86 MB `_claude_resources.tar.gz` carried all four `resource/` research trees —
+including the unlicensed COOPA code, violating release criterion §8 — plus six
+real `.env` files from `devs_display_new` holding **11 live API credentials**
+(OpenAI, 4× OpenRouter, HuggingFace, Alibaba, Nebius, Jina, Serper, and an app
+password). All 11 were revoked by the owner on 2026-08-11.
+
+It is now untracked and in `.gitignore`. That is **not** the whole fix: the
+blobs remain reachable in history on every ref carrying `ab46b0a`, so a
+`git-filter-repo` purge plus a force-push is still pending, and because the
+repo has 4 forks sharing object storage, a GitHub Support request is needed to
+actually garbage-collect the objects.
+
+**Never stage tarballs of `resource/` for transfer.** The `resource/*` ignore
+rule and the `MANIFEST.in` prune both failed here, because neither inspects
+archive contents.
 
 Full-suite state on the owner's machine (2026-08-07): ~2,460 tests with 4
 known pre-existing, environment-dependent failures — all reproduced

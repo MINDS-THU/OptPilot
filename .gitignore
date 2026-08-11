@@ -35,3 +35,7 @@ workspace/
 .optpilot-ui/
 .venv/
 catalog/or_solving/methods/coopa_solver/coopa_home/
+
+# Transfer/scratch artifacts. Never commit: tarballs staged here have
+# previously carried research trees and .env files into the public repo.
+_to_delete/
