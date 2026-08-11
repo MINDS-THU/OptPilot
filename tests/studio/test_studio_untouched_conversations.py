@@ -52,6 +52,15 @@ class UntouchedConversationTest(unittest.TestCase):
                 [item["id"] for item in listed], [session["id"]]
             )
 
+    def test_user_titled_conversation_is_listed_without_a_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = self._state(Path(tmp_dir))
+            session = _create_agent_session(state, {"title": "AGV throughput ideas"})
+            listed = _list_agent_session_summaries(state)
+            self.assertEqual(
+                [item["id"] for item in listed], [session["id"]]
+            )
+
     def test_old_untouched_conversation_is_reaped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))

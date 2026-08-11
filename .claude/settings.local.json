@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git remote *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(uv run python -c ' *)",
+      "Bash(uv run *)"
     ]
   }
 }

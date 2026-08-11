@@ -20048,18 +20048,20 @@ def _normalized_agent_sessions(state: UiState) -> List[JsonDict]:
 
 
 def _agent_session_is_untouched(session: JsonDict) -> bool:
-    """A conversation the user never wrote to and never attached work to.
+    """A conversation the user never wrote to, named, or attached work to.
 
     Untouched conversations are kept out of the sidebar list (they only
     clutter it as "Untitled conversation" entries) and are eventually
     reaped; the one the user currently has open still works — it simply
-    joins the list with its first message.
+    joins the list with its first message. A conversation the user gave a
+    title is deliberate work in progress, never clutter.
     """
 
     return (
         not session.get("has_user_message")
         and not session.get("attached_workspace_ids")
         and not session.get("archived")
+        and _agent_title_origin(session) != "user"
     )
 
 
