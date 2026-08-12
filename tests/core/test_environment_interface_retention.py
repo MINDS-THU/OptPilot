@@ -19,7 +19,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 class EnvironmentInterfaceRetentionTest(unittest.TestCase):
     def test_example_resource_interfaces_use_the_target_profile_contract(self) -> None:
-        resources = _REPOSITORY_ROOT / "catalog" / "example_package" / "resources"
+        resources = _REPOSITORY_ROOT / "catalog" / "devs_gallery" / "resources"
         for path in resources.glob("*/optpilot.resource.yaml"):
             with self.subTest(path=path):
                 raw = yaml.safe_load(path.read_text(encoding="utf-8"))

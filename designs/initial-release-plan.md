@@ -329,7 +329,7 @@ Already the strongest integration: the pipeline *describe system → guided/auto
    > produced by simulating a minimal model through the real writer and
    > tamper rejections).
 4. **Headless generation as a Resource action (S, after F4).** "spec file → simulator bundle" without the web UI — the paper's own batch mode, exposed to CLI and Assistant.
-5. **Hygiene (S).** The curated `catalog/example_package/resources/devs-gen-interface` copy is the release base; `resource/devs_display_new` (research monorepo, baselines, Chinese dev notes) and `devs_gen_gallery` remain untracked scratch. Loosen the hardcoded OpenRouter model registry to configured model IDs. Godot/MQTT visualization stays out of v1 (needs broker + Godot runtime; only one gallery example exists) — listed as post-release.
+5. **Hygiene (S).** The curated `catalog/devs_gallery/resources/devs-gen-interface` copy is the release base; `resource/devs_display_new` (research monorepo, baselines, Chinese dev notes) and `devs_gen_gallery` remain untracked scratch. Loosen the hardcoded OpenRouter model registry to configured model IDs. Godot/MQTT visualization stays out of v1 (needs broker + Godot runtime; only one gallery example exists) — listed as post-release.
 
 ### 5.2 Trace-aware LLM policy search — the generalization
 

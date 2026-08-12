@@ -126,7 +126,7 @@ portable simulator bundle out, without launching the GUI.
 
 ```bash
 optpilot resource run \
-  catalog/example_package/resources/devs-gen-interface/optpilot.resource.yaml \
+  catalog/devs_gallery/resources/devs-gen-interface/optpilot.resource.yaml \
   generate \
   --input specification="a barbershop with two barbers" \
   --output-dir ./generated-bundle

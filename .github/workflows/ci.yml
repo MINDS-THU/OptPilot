@@ -41,8 +41,8 @@ jobs:
           /tmp/optpilot-core-check/bin/optpilot package validate tests/fixtures/catalog
           rm -rf /tmp/optpilot-core-realm
           /tmp/optpilot-core-check/bin/optpilot run \
-            catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
-            --package-root catalog/example_package \
+            test_catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+            --package-root test_catalog/example_package \
             --realm-root /tmp/optpilot-core-realm
           /tmp/optpilot-core-check/bin/python - <<'PY'
           import importlib.resources

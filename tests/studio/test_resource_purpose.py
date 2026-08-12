@@ -65,7 +65,7 @@ class ResourcePurposeTest(unittest.TestCase):
         manifest_path = (
             _REPOSITORY_ROOT
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
             / "optpilot.resource.yaml"

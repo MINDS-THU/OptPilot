@@ -15,7 +15,7 @@ from optpilot.spec import load_study_spec
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-_PACKAGE_ROOT = _REPOSITORY_ROOT / "catalog" / "example_package"
+_PACKAGE_ROOT = _REPOSITORY_ROOT / "test_catalog" / "example_package"
 
 
 class ExamplePackageRetainedCompatibilityTest(unittest.TestCase):
@@ -120,7 +120,7 @@ class ExamplePackageRetainedCompatibilityTest(unittest.TestCase):
         )
 
     def test_tuning_method_emits_only_canonical_candidate_input_fields(self) -> None:
-        from catalog.example_package.methods.tune_dispatch_weights.method import (
+        from test_catalog.example_package.methods.tune_dispatch_weights.method import (
             TuneDispatchWeightsMethod,
         )
 
@@ -141,10 +141,10 @@ class ExamplePackageRetainedCompatibilityTest(unittest.TestCase):
         )
 
     def test_retained_parameter_methods_replay_deterministic_candidates(self) -> None:
-        from catalog.example_package.methods.fixed_rule_parameters.method import (
+        from test_catalog.example_package.methods.fixed_rule_parameters.method import (
             FixedRuleParametersMethod,
         )
-        from catalog.example_package.methods.tune_dispatch_weights.method import (
+        from test_catalog.example_package.methods.tune_dispatch_weights.method import (
             TuneDispatchWeightsMethod,
         )
 
@@ -177,10 +177,10 @@ class ExamplePackageRetainedCompatibilityTest(unittest.TestCase):
                 self.assertNotIn("uuid.uuid4", source.read_text(encoding="utf-8"))
 
     def test_file_methods_emit_canonical_candidates_without_credentials(self) -> None:
-        from catalog.example_package.methods.baseline_file_copy.method import (
+        from test_catalog.example_package.methods.baseline_file_copy.method import (
             BaselineFileCopyMethod,
         )
-        from catalog.example_package.methods.openai_file_editor.method import (
+        from test_catalog.example_package.methods.openai_file_editor.method import (
             OpenAIFileEditMethod,
         )
 

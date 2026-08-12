@@ -39,8 +39,8 @@ The default URL is usually:
 http://127.0.0.1:8765/
 ```
 
-Studio scans packages under `catalog/` by default. The bundled tutorial package
-is `catalog/example_package/`.
+Studio scans packages under `catalog/` by default. The largest bundled package
+is `catalog/production_agv_scheduling/`.
 
 ## First 10 Minutes In Studio
 
@@ -79,7 +79,7 @@ Start with this path:
 
 ![Studio catalog workflow](assets/studio-catalog.png)
 
-_Captured from the Studio source checkout with `catalog/example_package/` loaded._
+_Captured from the Studio source checkout with the bundled `catalog/` packages loaded._
 
 ## Navigation And Working Surfaces
 

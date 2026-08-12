@@ -18,7 +18,7 @@ The repository ships one package:
 
 ```text
 catalog/
-  example_package/
+  production_agv_scheduling/
 ```
 
 The core CLI can validate a package folder:
@@ -114,7 +114,7 @@ Packages are the bridge between the core CLI and Studio:
 The bundled job-shop tutorial is just one package:
 
 ```text
-catalog/example_package/
+catalog/production_agv_scheduling/
 ```
 
 It is useful as a template, but user packages should live beside it rather than
@@ -126,7 +126,7 @@ OptPilot separates authored imports, immutable published packages, editable
 workspaces, and canonical runs:
 
 ```text
-catalog/example_package/     bundled configured filesystem import
+catalog/production_agv_scheduling/  bundled configured filesystem import
 catalog/my_package/          optional user-authored filesystem import
 private per-user Realm       package revisions, workspace revisions,
                              retained study definitions, canonical runs,
@@ -173,11 +173,11 @@ A catalog is the collection of packages available to OptPilot. A package is one
 folder inside that collection.
 
 For source-controlled filesystem imports, add a new sibling under `catalog/`;
-do not overwrite `example_package` or another user package:
+do not overwrite a bundled package or another user package:
 
 ```text
 catalog/
-  example_package/       # bundled runnable examples
+  production_agv_scheduling/ # bundled flagship package
   scheduling_case_study/ # another package
   my_lab_project/        # user-owned package
 ```
@@ -198,7 +198,7 @@ uv run optpilot package validate catalog/my_package
 ```
 
 ```bash
-uv run optpilot ui --catalog catalog/example_package --catalog path/to/my_package
+uv run optpilot ui --catalog catalog/production_agv_scheduling --catalog path/to/my_package
 ```
 
 A useful package usually includes:
@@ -209,8 +209,8 @@ A useful package usually includes:
 - dependency files or setup commands for components that need installation
 - small sample data; large or licensed data should have clear download instructions
 
-Keep new packages additive. Do not copy them into `example_package` unless you
-are intentionally editing the example package itself. One folder per package
+Keep new packages additive. Do not copy them into a bundled package unless you
+are intentionally editing that package itself. One folder per package
 makes it easy to inspect where entries came from, update or remove a package,
 and keep user-owned work separate from bundled examples.
 
@@ -230,7 +230,7 @@ For a first local package:
 9. Launch Studio with the package visible:
 
 ```bash
-uv run optpilot ui --catalog catalog/example_package --catalog catalog/my_package
+uv run optpilot ui --catalog catalog/production_agv_scheduling --catalog catalog/my_package
 ```
 
 10. In Catalog, find the package under **Configured sources** and choose **Open

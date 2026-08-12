@@ -265,5 +265,7 @@ retains an exact path-free study definition in the Realm. That definition and
 its immutable content closure are the audit boundary; there is no public
 `study_spec.json` run-directory contract.
 
-For a concrete tutorial that uses one environment with several different
-candidate contracts, see [Job-Shop Environment](job-shop-environment.md).
+For a concrete package that pairs one simulation environment with several
+different candidate contracts, browse `catalog/production_agv_scheduling/` —
+its methods span file candidates and parameter candidates against the same
+environment.

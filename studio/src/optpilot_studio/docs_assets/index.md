@@ -104,8 +104,9 @@ Read the docs in this order if you are new:
    candidates, runtime workspaces, and evidence.
 4. [Packages and Catalogs](catalog.md): understand how reusable environments,
    methods, resources, and studies are organized.
-5. [Job-Shop Tutorial Map](examples.md): run the built-in example package and see
-   several method families target the same evaluation problem.
+5. [Bundled Capability Packages](#bundled-capability-packages): browse
+   `catalog/production_agv_scheduling/` to see several method families target
+   the same evaluation problem.
 6. [OptPilot Studio](ui.md): use the local GUI, workspace manager, and assistant.
 7. [Bundled Capability Packages](#bundled-capability-packages): pick the
    package closest to your own problem and run it.
@@ -138,7 +139,6 @@ evidence store, and package validation command.
 
 The source checkout also contains:
 
-- `catalog/example_package/`: the built-in job-shop tutorial package
 - `catalog/devs_gallery/`, `catalog/or_solving/`,
   `catalog/factorio_design_benchmark/`, and `catalog/llm_policy_search/`: the
   four capability packages above

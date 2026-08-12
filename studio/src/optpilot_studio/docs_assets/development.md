@@ -83,5 +83,5 @@ Before publishing:
 - Confirm source-checkout installs still expose `optpilot ui`.
 - Confirm only intentional internal Markdown notes are committed under
   `resource/`; local external projects should stay uncommitted.
-- Confirm user-facing examples live under `catalog/example_package/environments`, `catalog/example_package/methods`, and `catalog/example_package/studies`.
+- Confirm user-facing entries live under a bundled package's `environments/`, `methods/`, and `studies/` folders in `catalog/`.
 - Confirm test-only catalogs live under `tests/fixtures/catalog`.

@@ -84,7 +84,7 @@ git clone https://github.com/MINDS-THU/OptPilot.git
 cd OptPilot
 uv sync --all-packages --group examples --group docs
 uv run optpilot --help
-uv run optpilot package validate catalog/example_package --check-source
+uv run optpilot package validate catalog/production_agv_scheduling --check-source
 ```
 
 Four bundled studies run without optional dependencies: the fixed weighted-rule

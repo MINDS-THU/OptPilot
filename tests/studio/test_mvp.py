@@ -587,7 +587,7 @@ def _publish_exact_study_builder_fixture(
 
 class MvpIntegrationTest(unittest.TestCase):
     def test_openai_file_editor_rejects_empty_edit_payloads(self) -> None:
-        from catalog.example_package.methods.openai_file_editor.method import _extract_edited_files
+        from test_catalog.example_package.methods.openai_file_editor.method import _extract_edited_files
 
         with self.assertRaisesRegex(ValueError, "non-empty `files` list"):
             _extract_edited_files({"summary": "No changes."}, ["dispatch_rule.py"])
@@ -612,7 +612,7 @@ class MvpIntegrationTest(unittest.TestCase):
     def test_job_shop_rl_uses_environment_owned_training_context(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
         spec = compile_authoring_config(
-            repo_root / "catalog" / "example_package" / "studies" / "job_shop_rl_stable_baselines.yaml"
+            repo_root / "test_catalog" / "example_package" / "studies" / "job_shop_rl_stable_baselines.yaml"
         )
         method_config = spec["method"]["config"]
         references = spec["candidate"]["context"]["methodContext"]["references"]
@@ -707,7 +707,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_job_shop_case_settings_match_method_references(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
-        spec = compile_authoring_config(repo_root / "catalog" / "example_package" / "studies" / "job_shop_ortools_cpsat.yaml")
+        spec = compile_authoring_config(repo_root / "test_catalog" / "example_package" / "studies" / "job_shop_ortools_cpsat.yaml")
 
         settings_cases = {
             case["id"]
@@ -1899,10 +1899,10 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_ui_catalog_scans_authoring_configs_and_validates_study(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
-        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "test_catalog" / "example_package"], run_roots=[])
 
         catalog = _catalog_payload(state)
-        validation = _validate_study(repo_root / "catalog" / "example_package" / "studies" / "job_shop_rule_parameters_baseline.yaml")
+        validation = _validate_study(repo_root / "test_catalog" / "example_package" / "studies" / "job_shop_rule_parameters_baseline.yaml")
 
         job_shop_parameter_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
         job_shop_solution_environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-schedule-solution")
@@ -1935,7 +1935,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_core_package_validate_indexes_example_package(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
-        package = repo_root / "catalog" / "example_package"
+        package = repo_root / "test_catalog" / "example_package"
 
         result = validate_package(package)
         entry_ids = {(entry["config"], entry["id"]) for entry in result["entries"]}
@@ -1945,9 +1945,18 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(result["counts"]["environment"], 3)
         self.assertGreaterEqual(result["counts"]["method"], 6)
         self.assertGreaterEqual(result["counts"]["study"], 6)
-        self.assertGreaterEqual(result["counts"]["resource"], 1)
         self.assertIn(("environment", "job-shop-rule-parameters"), entry_ids)
         self.assertIn(("method", "tune-dispatch-weights"), entry_ids)
+
+    def test_core_package_validate_indexes_devs_gen_interface_resource(self) -> None:
+        repo_root = Path(__file__).resolve().parents[2]
+        package = repo_root / "catalog" / "devs_gallery"
+
+        result = validate_package(package)
+        entry_ids = {(entry["config"], entry["id"]) for entry in result["entries"]}
+
+        self.assertTrue(result["valid"], result)
+        self.assertGreaterEqual(result["counts"]["resource"], 1)
         self.assertIn(("resource", "devs-gen-interface"), entry_ids)
 
     def test_core_package_roots_expand_catalog_folder_to_packages(self) -> None:
@@ -1955,14 +1964,17 @@ class MvpIntegrationTest(unittest.TestCase):
 
         roots = expand_package_roots([repo_root / "catalog"])
 
-        self.assertIn(repo_root / "catalog" / "example_package", roots)
+        self.assertIn(repo_root / "catalog" / "production_agv_scheduling", roots)
+        # test_catalog/ is deliberately not a default root: it holds test-only
+        # fixtures that must never be offered to users.
+        self.assertNotIn(repo_root / "test_catalog" / "example_package", roots)
 
     def test_cli_package_validate_json_output(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
         stdout = io.StringIO()
 
         with contextlib.redirect_stdout(stdout):
-            exit_code = cli_main(["package", "validate", str(repo_root / "catalog" / "example_package"), "--json"])
+            exit_code = cli_main(["package", "validate", str(repo_root / "test_catalog" / "example_package"), "--json"])
 
         payload = json.loads(stdout.getvalue())
         self.assertEqual(exit_code, 0)
@@ -2400,7 +2412,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
     def test_ui_catalog_exposes_complete_component_config_yaml(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
-        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "catalog" / "example_package"], run_roots=[])
+        state = UiState(cwd=repo_root, catalog_roots=[repo_root / "test_catalog" / "example_package"], run_roots=[])
 
         catalog = _catalog_payload(state)
         environment = next(item for item in catalog["environments"] if item["id"] == "job-shop-rule-parameters")
@@ -2440,7 +2452,7 @@ class MvpIntegrationTest(unittest.TestCase):
             tmp_path = Path(tmp_dir)
             state = UiState(
                 cwd=tmp_path,
-                catalog_roots=[repo_root / "catalog" / "example_package"],
+                catalog_roots=[repo_root / "test_catalog" / "example_package"],
                 run_roots=[],
             )
             catalog = _catalog_payload(state)
@@ -2484,17 +2496,21 @@ class MvpIntegrationTest(unittest.TestCase):
 
         catalog = _catalog_payload(state)
 
-        self.assertIn(repo_root / "catalog" / "example_package", roots)
+        self.assertIn(repo_root / "catalog" / "production_agv_scheduling", roots)
+        self.assertNotIn(repo_root / "test_catalog" / "example_package", roots)
         self.assertEqual(state.catalog_roots, roots)
         environment_ids = {item["id"] for item in catalog["environments"]}
         method_ids = {item["id"] for item in catalog["methods"]}
         study_labels = {item["label"] for item in catalog["studies"]}
 
-        self.assertIn("job-shop-rule-parameters", environment_ids)
-        self.assertIn("job-shop-dispatch-rule", environment_ids)
-        self.assertIn("openai-file-editor", method_ids)
-        self.assertIn("fixed-rule-parameters", method_ids)
-        self.assertIn("job-shop-rule-parameters-baseline", study_labels)
+        self.assertIn("production-agv-scheduling-smoke", environment_ids)
+        self.assertIn("or-problem", environment_ids)
+        self.assertIn("exhaustive-rule-grid", method_ids)
+        self.assertIn("coopa-solver", method_ids)
+        self.assertIn("production-agv-scheduling-smoke", study_labels)
+        # test_catalog/ fixtures must never reach the user-facing catalog.
+        self.assertNotIn("job-shop-rule-parameters", environment_ids)
+        self.assertNotIn("fixed-rule-parameters", method_ids)
         self.assertTrue(catalog["environments"])
         self.assertTrue(catalog["methods"])
         self.assertTrue(catalog["studies"])
@@ -7870,7 +7886,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 "--port",
                 "9001",
                 "--catalog",
-                "catalog/example_package",
+                "test_catalog/example_package",
                 "--workspace-runtime-bin",
                 "podman",
                 "--workspace-runtime-image",
@@ -7884,7 +7900,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(args.command, "ui")
         self.assertEqual(args.port, 9001)
-        self.assertEqual(args.catalog, ["catalog/example_package"])
+        self.assertEqual(args.catalog, ["test_catalog/example_package"])
         self.assertEqual(args.workspace_runtime_bin, "podman")
         self.assertEqual(args.workspace_runtime_image, "custom/workspace:latest")
         self.assertEqual(args.workspace_runtime_network, "bridge")

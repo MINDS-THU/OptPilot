@@ -31,7 +31,7 @@ interface) or the headless `generate` resource action:
 
 ```bash
 optpilot resource run \
-  catalog/example_package/resources/devs-gen-interface/optpilot.resource.yaml \
+  catalog/devs_gallery/resources/devs-gen-interface/optpilot.resource.yaml \
   generate \
   --inputs-file spec.yaml --output-dir generated/
 ```
@@ -147,7 +147,7 @@ reduction in urgency-weighted waiting over FIFO.
 
 | Piece | Location |
 |---|---|
-| Generator prompts + policy-hook contract | `catalog/example_package/resources/devs-gen-interface/` |
+| Generator prompts + policy-hook contract | `catalog/devs_gallery/resources/devs-gen-interface/` |
 | Manifest v2 metrics/policy extraction | `devs_tools/.../result_summary_contract.py` |
 | Generic method | `catalog/llm_policy_search/methods/llm_policy_search/` |
 | Reference composition | `catalog/llm_policy_search/environments/dispatch_station/` |

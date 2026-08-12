@@ -14,7 +14,7 @@ from unittest.mock import patch
 RESOURCE_ROOT = (
     Path(__file__).resolve().parents[2]
     / "catalog"
-    / "example_package"
+    / "devs_gallery"
     / "resources"
     / "devs-gen-interface"
 )

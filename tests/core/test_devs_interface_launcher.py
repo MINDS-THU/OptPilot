@@ -53,7 +53,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -99,7 +99,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -158,7 +158,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -216,7 +216,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -254,7 +254,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -278,7 +278,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -299,7 +299,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )
@@ -658,7 +658,7 @@ class DevsGenerateActionRuntimeTest(unittest.TestCase):
         self.resource = (
             Path(__file__).resolve().parents[2]
             / "catalog"
-            / "example_package"
+            / "devs_gallery"
             / "resources"
             / "devs-gen-interface"
         )

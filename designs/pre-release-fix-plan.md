@@ -232,7 +232,7 @@ Implementation:
 
 ## Example Package Requirement
 
-Keep `catalog/example_package/resources/devs-gen-interface/` in the
+Keep `catalog/devs_gallery/resources/devs-gen-interface/` in the
 source-checkout example package as the launchable resource example. It should
 stay focused on launching the DEVS GUI and generating discrete-event simulator
 projects. Benchmark suites, experiment logs, papers, and unrelated local copies

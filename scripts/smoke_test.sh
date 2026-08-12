@@ -24,15 +24,15 @@ trap cleanup EXIT
 
 "$PYTHON_BIN" -m compileall -q src/optpilot studio/src/optpilot_studio
 "$PYTHON_BIN" -m optpilot package validate \
-  catalog/example_package \
+  test_catalog/example_package \
   --check-source >/dev/null
 "$PYTHON_BIN" -m optpilot validate \
-  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  test_catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
   >/dev/null
 
 "$PYTHON_BIN" -m optpilot run \
-  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
-  --package-root catalog/example_package \
+  test_catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
+  --package-root test_catalog/example_package \
   --realm-root "$SMOKE_ROOT/realm" \
   | "$PYTHON_BIN" -c '
 import json

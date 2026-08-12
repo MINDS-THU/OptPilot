@@ -99,10 +99,10 @@ STUDIO_REQUIRED_SDIST_ENTRIES = {
 }
 
 ALLOWED_EXECUTABLE_PATHS = {
-    "catalog/example_package/resources/devs-gen-interface/_optpilot_launch_interface.sh",
+    "catalog/devs_gallery/resources/devs-gen-interface/_optpilot_launch_interface.sh",
     "catalog/or_solving/methods/coopa_solver/launch_console.sh",
-    "catalog/example_package/resources/devs-gen-interface/_start_backend.sh",
-    "catalog/example_package/resources/devs-gen-interface/_start_frontend.sh",
+    "catalog/devs_gallery/resources/devs-gen-interface/_start_backend.sh",
+    "catalog/devs_gallery/resources/devs-gen-interface/_start_frontend.sh",
     "scripts/smoke_test.sh",
 }
 

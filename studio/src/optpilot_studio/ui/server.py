@@ -463,7 +463,6 @@ INDEXED_CONFIGS = {"environment", "method", "study"}
 REGISTERABLE_CONFIGS = {"environment", "method"}
 OPT_CONFIGS = {"environment", "method", "resource", "study"}
 CATALOG_DIR_NAME = "catalog"
-EXAMPLE_PACKAGE_NAME = "example_package"
 LOCAL_PACKAGE_NAME = "local_package"
 PACKAGE_PLAN_OWNERSHIP_SCHEMA = "optpilot.package-plan-ownership.v1"
 PACKAGE_PLAN_TRANSACTION_SCHEMA = "optpilot.package-plan-transaction.v1"

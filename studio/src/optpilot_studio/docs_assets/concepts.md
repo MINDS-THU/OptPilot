@@ -278,5 +278,5 @@ The split is intentional:
 - Read [How a Run Works](how-it-works.md) when you need the runtime sequence.
 - Read [Configuration](configuration.md) when you need allowed fields and YAML
   examples.
-- Read [Job-Shop Environment](job-shop-environment.md) for the main tutorial
-  example that uses one environment with several candidate contracts.
+- Browse `catalog/production_agv_scheduling/` for a worked package that uses
+  one simulation environment with several candidate contracts.
