@@ -56,10 +56,12 @@ and already has most of the machinery:
   `^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$` — *"image_ref must
   be pinned by sha256."* An image digest is a **stronger** exactness claim
   than a wheel set, not a weaker one.
-- **Trust.** `TrustedGatewayApproval` already models administrator approval of
-  a specific image digest, on the explicit reasoning that *"image pinning
-  alone is not sufficient: an arbitrary image controls the gateway."*
-  `RealmProviderTrustPolicyService` exists alongside it.
+- **Trust.** `ContainerGatewayImageTrust` already models administrator
+  approval of a specific image digest, on the explicit reasoning that *"image
+  pinning alone is not sufficient: an arbitrary image controls the gateway."*
+  `RealmProviderTrustPolicyService` exists alongside it. (The earlier draft of
+  this doc called the class `TrustedGatewayApproval`; that name is the
+  provider-side concept, not the class.)
 - **Execution.** Container interfaces and Studio workspaces already run this
   way (`workspace_runtime/Dockerfile`).
 - **Platform awareness.** `prepared_runtime_cache.py::key_payload` already
@@ -151,6 +153,14 @@ if the timing demands it.
 Note that under the container design the GLPK-vs-HiGHS question disappears
 entirely: the image can carry GLPK, IPOPT, or anything else. Choose HiGHS on
 solver merits if at all, not to work around packaging.
+
+## Implementation
+
+See [`container-method-runtime-plan.md`](container-method-runtime-plan.md) for the
+reviewed implementation plan. Note that it narrows the first slice to **method**
+runtimes: environments, evaluators and execution backends stay process-only,
+because the record layer is already container-ready on the method side while the
+environment side needs a new attempt provider and supervisor.
 
 ## Open questions for the owner
 
