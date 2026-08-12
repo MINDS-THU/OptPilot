@@ -1,6 +1,7 @@
 """Pruned COOPA pipeline shim (W3, plan §5.3 item 2).
 
-Imports the user-provisioned COOPA checkout (``COOPA_HOME``) and drives the
+Imports the bundled COOPA source (``coopa_home/``, overridable with
+``COOPA_HOME``) and drives the
 paper pipeline for one problem: confidence-scored formulation extraction →
 optimizer-agent solve → numeric answer, returning the full artifact set.
 
@@ -8,7 +9,7 @@ Deliberately pruned relative to COOPA's own ``create_manager_agent``: no
 web-browsing agent and no knowledge/retrieval agents, so none of the
 retrieval/web tail (crawl4ai, gradio, langchain, e2b, serpapi) is imported.
 The manager is assembled here from COOPA's four optimizer agents and its
-published manager prompt. COOPA source is never copied into this package.
+published manager prompt.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ _MAX_GENERATED_FILES = 12
 
 
 def _coopa_home() -> Path:
-    """Resolve the user-provisioned COOPA checkout.
+    """Resolve the COOPA source root.
 
     Tries ``COOPA_HOME`` first, then a ``coopa_home/`` folder next to this
     shim. The fallback matters in containerized interface launches, where a

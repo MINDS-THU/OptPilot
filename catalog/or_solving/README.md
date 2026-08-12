@@ -9,25 +9,25 @@ generated solver code → numeric answer). The full solution artifact —
 formulation with provenance, per-dimension confidence, routing decision,
 generated code, and the numeric solution — is retained with the Run.
 
-## License status: COOPA is user-provisioned, not redistributed
+## Setup
 
-The COOPA codebase has **no license file**, so this package does not include
-or redistribute any COOPA source. Everything here (environment, evaluator,
-method adapter, shim) is OptPilot-original code that *imports* COOPA from a
-checkout you provide:
+COOPA is **bundled** with this package under
+`methods/coopa_solver/coopa_home/` (Apache-2.0, see its `LICENSE`). You do not
+need to obtain it separately. Set `COOPA_HOME` only if you want to point the
+method at a different checkout — the shim prefers `COOPA_HOME` when set and
+falls back to the bundled copy otherwise.
 
-1. Obtain the COOPA code from its authors (the research checkout layout with
-   `apps/`, `src/`, and `general_tools/` at its root).
-2. Set `COOPA_HOME` to that root in the environment that runs OptPilot
-   (shell for CLI runs; Studio Settings for Studio runs).
-3. Install the pruned runtime dependencies into the Python environment that
+Two things are still yours to provide, because neither can be locked into an
+OptPilot process runtime (which accepts pure `py3-none-any` wheels only):
+
+1. Install the pruned runtime dependencies into the Python environment that
    executes the method (see `methods/coopa_solver/requirements-pruned.txt`).
    Solver backends are user-provisioned extras: `ortools` and `pymoo` are
    pip-installable; GLPK/IPOPT come from your system package manager.
    Without them, keep `agentMode: mathematical-only` availability in mind —
    the paper reports the mathematical agent alone covers ~91% of benchmark
    dispatches.
-4. Set `OPENROUTER_API_KEY` (or configure the model id in
+2. Set `OPENROUTER_API_KEY` (or configure the model id in
    `settingsSchema.model` for a provider litellm can route with your keys).
 
 ## Run setups

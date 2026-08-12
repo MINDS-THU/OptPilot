@@ -1,0 +1,45 @@
+/.env
+**/__pycache__/
+**/logs/
+**/results/
+**/temp_files/
+**/downloads/
+**/reports/
+/.gradio/
+/temp*.jsonl
+/apps/operations_research/or_knowledge_base*/
+/apps/operations_research/or_vector_store*/
+
+# --- Release cleanup additions ---
+# OS / editor cruft
+.DS_Store
+**/.DS_Store
+
+# Local working / archive dirs (not for release)
+/_archive/
+/working_directory/
+/.onager/
+/figures/
+/scripts/
+/analysis/
+/data_outputs/
+/notes/
+
+# Large data & knowledge base (shared out-of-band, not in git)
+/apps/operations_research/datasets/
+/apps/operations_research/knowledge_base/
+
+# Logs, crash dumps, and process output
+*.log
+*.out
+nohup.out
+core.*
+
+# Solver scratch / model dumps
+*.lp
+*.nl
+*.sol
+
+# Generated figures
+*.png
+*.pdf

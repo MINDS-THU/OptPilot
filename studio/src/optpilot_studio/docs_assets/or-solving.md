@@ -30,14 +30,13 @@ returns a single candidate whose parameters are `objective_value`,
 contracts, so the problem statement you typed is part of the Run's evidence and
 of its run-definition digest — same problem, same digest.
 
-!!! warning "COOPA is user-provisioned, not redistributed"
-    This package ships no COOPA source. Every file under `catalog/or_solving/`
-    is OptPilot-original code that *imports* a checkout you supply through
-    `COOPA_HOME`. COOPA is Apache-2.0 licensed, so vendoring it here would be
-    permitted; it stays user-provisioned because its solver backends are
-    native (GLPK/IPOPT binaries, `ortools`, `pymoo`) and cannot be locked into
-    an OptPilot process runtime, which accepts pure `py3-none-any` wheels
-    only.
+!!! note "COOPA is bundled; its solver backends are not"
+    COOPA (Apache-2.0) ships inside this package at
+    `methods/coopa_solver/coopa_home/`, so no separate checkout is needed.
+    Set `COOPA_HOME` only to point at a different one. What you must still
+    install yourself are the native solver backends (GLPK/IPOPT binaries,
+    `ortools`, `pymoo`) — an OptPilot process runtime accepts pure
+    `py3-none-any` wheels only, so those cannot be locked into the package.
 
 ## The pipeline
 
@@ -45,12 +44,11 @@ of its run-definition digest — same problem, same digest.
 `coopa-solver` method, which drives the COOPA pipeline: confidence-scored
 formulation extraction with refinement, routing to one of four optimizer agents
 (mathematical / combinatorial / metaheuristic / general), LLM-generated solver
-code executed locally, and a numeric answer. Four prerequisites are yours to
+code executed locally, and a numeric answer. Three prerequisites are yours to
 provide:
 
 | Prerequisite | How |
 | --- | --- |
-| COOPA checkout | Obtain from its authors; the research layout with `apps/`, `src/`, `general_tools/` at the root. Set `COOPA_HOME` to it (shell for CLI, Studio Settings for Studio). |
 | Pruned runtime deps | `uv pip install -r catalog/or_solving/methods/coopa_solver/requirements-pruned.txt` into the **same** Python environment that runs `optpilot`. |
 | Solver backends | `ortools` and `pymoo` come with the requirements file; GLPK/IPOPT binaries come from your system package manager (e.g. `brew install glpk ipopt`). |
 | Model access | `OPENROUTER_API_KEY`, or a `model` setting litellm can route with your own keys. |
@@ -65,7 +63,7 @@ The method declares `entrypoint.exchangeTimeoutSeconds: 900` and the runner
 honors that declaration, so no timeout flag is needed (`--method-request-timeout`
 remains a launch-time override). In Studio the same launch is a **Launch inputs**
 form on the Run setup, blocked with `runtime_environment_missing` until
-`COOPA_HOME` and `OPENROUTER_API_KEY` exist as Settings values.
+`OPENROUTER_API_KEY` exists as a Settings value.
 
 !!! warning "Generated solver code runs locally"
     COOPA's design is to execute the solver code its agents write. In this
@@ -134,12 +132,11 @@ the console as a web presentation on port 8000 with `COOPA_HOME` and
   network and no key. Mock runs are labelled in the UI.
 
 !!! note "Inside the launch runtime, host paths do not exist"
-    A container-launched interface cannot see your host `COOPA_HOME`. The shim
-    therefore also looks for a checkout at
-    `catalog/or_solving/methods/coopa_solver/coopa_home/` — a gitignored
-    location you populate yourself; COOPA is never committed. Without either, a
-    non-mock start refuses with an explicit message, as it does when
-    `OPENROUTER_API_KEY` is not granted.
+    A container-launched interface cannot see a host `COOPA_HOME`. That is why
+    the bundled copy at `catalog/or_solving/methods/coopa_solver/coopa_home/`
+    matters: the shim falls back to it, so a containerized launch works with no
+    host path at all. A non-mock start still refuses with an explicit message
+    when `OPENROUTER_API_KEY` is not granted.
 
 ## Validating without running
 

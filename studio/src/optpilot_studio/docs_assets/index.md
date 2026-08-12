@@ -124,7 +124,7 @@ each; the pages below explain them.
 | Package | What it demonstrates | Runs without an API key? |
 | --- | --- | --- |
 | [DEVS Gallery](devs-gallery.md) (`catalog/devs_gallery`) | Generated discrete-event simulators packaged as ordinary Environments. | Yes |
-| [OR Solving](or-solving.md) (`catalog/or_solving`) | Solving a natural-language operations-research problem stated at launch time. | Mock twin yes; the real COOPA pipeline needs a key **and** a user-provisioned COOPA checkout |
+| [OR Solving](or-solving.md) (`catalog/or_solving`) | Solving a natural-language operations-research problem stated at launch time. | Needs a key and the pruned runtime deps; COOPA itself is bundled |
 | [Factorio Design Benchmark](factorio-design-benchmark.md) (`catalog/factorio_design_benchmark`) | Comparing methods repeatably on one static-validation environment. | Smoke study yes; the design study needs a key |
 | [LLM Policy Search](llm-policy-search.md) (`catalog/llm_policy_search`) | Improving a simulator's decision policy with a trace-aware LLM loop. | Baseline smokes yes; the search studies need a key |
 

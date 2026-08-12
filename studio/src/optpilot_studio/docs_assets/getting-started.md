@@ -331,7 +331,7 @@ one `optpilot run` away. This table is the routing map:
 | --- | --- | --- |
 | Run the production-and-AGV baseline | `catalog/production_agv_scheduling` | Nothing extra (this page) |
 | Open a gallery simulator | `catalog/devs_gallery` | Nothing extra |
-| Solve one OR problem from text | `catalog/or_solving` | `OPENROUTER_API_KEY` **and** a user-provisioned COOPA checkout |
+| Solve one OR problem from text | `catalog/or_solving` | `OPENROUTER_API_KEY` and the pruned runtime deps (COOPA itself is bundled) |
 | Run one Factorio static-validation study | `catalog/factorio_design_benchmark` | Nothing extra for the smoke study; `OPENROUTER_API_KEY` for the design study |
 | Improve a policy with LLM search | `catalog/llm_policy_search` | Baselines: nothing. Search: `OPENROUTER_API_KEY` |
 
@@ -372,10 +372,9 @@ uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
 !!! warning "This study needs more than an API key"
 
     `studies/solve_or_problem.yaml` drives the COOPA multi-agent pipeline.
-    COOPA is Apache-2.0 licensed but is **not vendored** into OptPilot,
-    because its solver backends are native and cannot be locked into a
-    process runtime. Before that study can run you must obtain a COOPA
-    checkout, point `COOPA_HOME` at it, install
+    COOPA itself is bundled with the package, but its native solver
+    backends are not — they cannot be locked into a process runtime. Before
+    that study can run you must install
     `catalog/or_solving/methods/coopa_solver/requirements-pruned.txt` into the
     Python environment that executes the method, and supply
     `OPENROUTER_API_KEY`. The exact steps are in

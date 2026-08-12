@@ -408,9 +408,9 @@ class _Handler(BaseHTTPRequestHandler):
                 if not payload.get("mock"):
                     if _resolve_coopa_home() is None:
                         raise ValueError(
-                            "COOPA is not available in this runtime. Place a "
-                            "COOPA checkout at methods/coopa_solver/coopa_home "
-                            "(it is deliberately not redistributed), or tick "
+                            "COOPA is not available in this runtime. The "
+                            "bundled copy at methods/coopa_solver/coopa_home "
+                            "is missing and COOPA_HOME is unset, or tick "
                             "Mock to demo the console without it."
                         )
                     if not os.environ.get("OPENROUTER_API_KEY"):
