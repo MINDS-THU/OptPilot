@@ -196,6 +196,89 @@ The natural-language OR solving package:
 One study, two different execution modes, chosen independently by what each half
 declares.
 
+## 7a. The two execution modes, and how dependencies reach each
+
+There are exactly two ways OptPilot runs authored code.
+
+### Which things use which mode
+
+| What runs | Local process | Docker container |
+| --- | --- | --- |
+| Environment (scores solutions) | Always today. In future, only if it declares an image | Only when it declares an image |
+| Method (proposes solutions) | When it declares no image | When it declares an image |
+| Resource action (one-shot tool) | Always | Never — refused |
+| Interface (interactive view) | When declared as a process | When declared as a container |
+| Editing workspace | Never | Always |
+
+The mode is chosen **per component**, by what that component declares. A single
+study routinely uses both: in the OR-solving package the method runs in a
+container while the environment runs as a local process, because only the
+method needs compiled software.
+
+### How dependencies reach a local process
+
+A local process can obtain dependencies in exactly two ways, and both are
+limited to **pure Python**:
+
+1. **Carried in the package as source.** The library's `.py` files sit in the
+   package folder and travel with it. Nothing is installed; they are simply
+   present, and they are fingerprinted along with the rest of the package.
+   *(The AGV scheduling package does this with its simulation library.)*
+2. **Assembled from verified files at first use.** The package includes the
+   library's distribution files. On first run OptPilot unpacks them into a
+   folder, checking each against a fingerprint recorded in the package. This
+   never touches the network. The folder is kept and reused.
+
+That is the whole list. **A local process cannot obtain anything else
+automatically**, and this is a hard limit rather than missing work:
+
+- *Compiled Python libraries* (`numpy`, `ortools`, PyTorch) contain machine code
+  built for one operating system and processor. There is no form of them that
+  can be carried as portable source.
+- *Separate programs* (the GLPK or IPOPT solvers) are not Python at all.
+- *Other languages* (Java, R, Node) need their own interpreter or runtime.
+
+OptPilot could in principle run an installer on your machine for the first of
+these. It deliberately does not, because whatever that installer fetched could
+not be identified afterwards — which is precisely the incompleteness the record
+exists to prevent. And it would do nothing for the second and third.
+
+So: **if a component needs anything beyond pure Python, a local process cannot
+serve it.** That single fact is why the second mode exists.
+
+### How dependencies reach a container
+
+They do not. **Nothing is installed at run time at all.**
+
+Everything the code needs — pure Python libraries, compiled Python libraries,
+solver binaries, a Java runtime, GPU libraries, licensed software — is already
+inside the image, put there when the author built it. Your machine downloads the
+finished image once, checks its fingerprint, and runs it.
+
+This is why the container mode has no limits on what kind of dependency it
+supports: the question "how does OptPilot install this?" never arises. The
+installing happened once, on the author's build machine, and what you receive is
+the result.
+
+### The two modes side by side
+
+| | Local process | Docker container |
+| --- | --- | --- |
+| Pure Python libraries | Carried as source, or assembled from verified files | Already inside the image |
+| Compiled Python libraries | **Not possible** | Already inside the image |
+| Separate programs (GLPK, IPOPT) | **Not possible** | Already inside the image |
+| Other languages (Java, R, Node) | **Not possible** | Already inside the image |
+| Installed on your machine at run time | Only the unpacking of pure-Python files | **Nothing** |
+| Needs container software installed | No | Yes |
+| Network access during preparation | Never | Only the one-time image download |
+
+The trade is straightforward. The local process needs no container software but
+can only ever serve pure Python. The container serves anything at all, but the
+machine must have container software and must download the image once.
+
+Because the mode is per component, a package pays that cost only for the parts
+that need it — and a package needing nothing beyond pure Python never pays it.
+
 ## 8. Everything else that executes
 
 Three other things run code. None produces output that becomes part of the
