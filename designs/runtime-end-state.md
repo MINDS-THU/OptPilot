@@ -103,6 +103,80 @@ rather than deleting the vocabulary and breaking them.
 boundary, not a *security* boundary. Containers are the only real isolation
 OptPilot has. The end state stops implying otherwise.
 
+## Mechanics: where code lives, where dependencies live, what runs where
+
+The principle is not only about *what is recorded*; it dictates *where code
+physically goes*. Three artifacts are combined at execution, and they stay
+separate on purpose:
+
+| Artifact | Identity | Retained as | Lands where |
+| --- | --- | --- | --- |
+| Authored code | Realm content digest | `run-method-source`, `run-environment-source` | Projected onto the host filesystem |
+| Dependencies | Sealed-layer digest, or image digest | `locked-python-runtime-payload`, or the image | A `site-packages` tree on the host, or inside the image |
+| Execution | — | — | Subprocess, or container with the projection bind-mounted |
+
+Today the worker resolves `import_roots` from
+`prepared_method_runtime.runtime_settings` into host paths and points the
+interpreter at them. Code and dependencies are **separate artifacts joined at
+run time**, never merged.
+
+### Consequence: authored code is never baked into an image
+
+The image carries third-party dependencies only. The component's own source —
+including anything vendored into the package, such as `or_solving`'s
+`coopa_home/` — stays retained Realm content, is projected on the host, and is
+**bind-mounted** into the container.
+
+This is forced by the principle, not a convenience:
+
+- The two identities change at different rates. Code changes per edit; the
+  image changes per rebuild. Merging them means every code edit invalidates
+  the dependency artifact, and every dependency bump rewrites code identity.
+- More seriously, baking code in breaks *the code that ran is the code that was
+  retained*. Execution would use a copy inside the image while the evidence
+  points at Realm content. The digest would be claiming something false.
+
+**The container is a dependency environment, not a code container.**
+
+### Consequence: installation moves from run time to build time
+
+- **Today:** dependencies are installed at prepare time, on the user's machine,
+  into a content-addressed layer cached by `prepared_runtime_cache`.
+- **End state:** dependencies are installed at image build time, in the
+  package's own repository CI. The user's machine pulls a digest and verifies
+  it; it installs nothing.
+
+That is why "stop making users install things by hand" is answered by moving
+the build, not by writing a better installer. An installer that runs on the
+user's machine reintroduces exactly the uncertainty the principle forbids.
+
+### Worked example: `or_solving`
+
+```
+ghcr.io/<org>/or-solving@sha256:...        <- ortools, pymoo, smolagents, glpsol
+        built once, in that package's CI       (third-party only)
+                    |
+                    |  pulled by digest, verified, trust-approved
+                    v
+        +--------------------------------+
+        |  container                     |
+        |   /optpilot/method   <---------+---- bind mount of the projected,
+        |   PYTHONPATH -> that path      |     retained method source
+        |   runs coopa_solver.py         |     (including vendored coopa_home)
+        +--------------------------------+
+```
+
+The environment (`or_problem`) is unaffected: stdlib-only, so it keeps running
+as a host subprocess with its code projected exactly as today.
+
+### What does not change
+
+A component that declares no runtime is untouched — code projected,
+dependencies already present (OptPilot's own, or pure-Python source vendored
+into the package as `production_agv_scheduling` does with `simpy`), subprocess
+on the host, no engine involved. The mechanism above engages only when a
+component declares an image.
+
 ## The unresolved case: resource actions
 
 Resource actions are the one surface the principle does not cleanly place, and
