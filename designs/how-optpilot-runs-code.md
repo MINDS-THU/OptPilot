@@ -1,326 +1,250 @@
 # How OptPilot runs code — the target design
 
-**Status: design, 2026-08-13.** A complete description of how a codebase is
-declared, installed, executed and recorded. Written to be read cold, without
-prior knowledge of the codebase.
+**Status: design, 2026-08-13. Not implemented.** Written to be read without
+prior knowledge of the codebase; every term is defined where it first appears.
 
-## 1. The pieces
+Two decisions shape this document, both taken 2026-08-13:
 
-**A package** is a folder of related work. It may contain:
+- **Everything runs in a container.** There is no second execution mode.
+  Packages that need nothing special use a default image OptPilot provides.
+- **A package is a folder.** There is one kind, editable and inspectable, and
+  versions are immutable snapshots taken of it.
 
-- **Environments** — something that takes a proposed solution and scores it. A
-  factory simulator, a scheduling model, a benchmark checker.
-- **Methods** — something that proposes solutions. A genetic algorithm, an LLM
-  that writes policy code, a solver.
-- **Resources** — supporting tools. A generator with a web interface, a dataset
-  browser.
-- **Run setups** — a pairing of one environment with one method, plus an
-  objective and a budget. ("Minimise waiting time, 25 attempts.")
+## 1. What OptPilot is for
 
-**The catalog** is the set of packages available to you. A package becomes
-available by being **registered** into it.
+When you run a study, OptPilot saves a permanent copy of everything involved —
+the code, the settings, every proposal, every score, the sequence of events —
+in a private archive on your machine. The archive is append-only: written once,
+never modified.
 
-**The permanent store** is OptPilot's private, append-only archive. Every time
-something runs, a complete copy of what was involved — the code, the settings,
-the proposals, the scores, the sequence of events — is written there and never
-modified. It is not a cache that can be cleared and rebuilt; it is the evidence.
-(In the source it is called the *Realm*.)
+Everything saved gets a **fingerprint**: a code computed from the contents,
+such that changing one byte changes the code completely, and anyone can
+recompute it to check.
 
-**A fingerprint** is a long code computed from the contents of something. Change
-one byte and the fingerprint changes completely. Two things with the same
-fingerprint are guaranteed byte-identical, and anyone can recompute it to check.
-(In the source, a *digest*.)
+The purpose is that afterwards you can say precisely *"this run used this code
+with these libraries and produced this result"*, and someone else can verify it.
 
-**The promise** these serve: after a run, you can state precisely what produced
-a result, and someone else can verify it. That is what OptPilot is for, and
-every rule below exists to keep that statement true.
+## 2. The rule everything follows
 
-## 2. The rule that governs execution
+> **Anything whose output becomes part of the permanent record must identify
+> its libraries by fingerprint, and that fingerprint must be part of the
+> record.**
 
-> **Anything whose output becomes part of the permanent record must identify its
-> libraries by fingerprint, and that fingerprint must be part of the record.**
+Two things produce such output: **environments**, which score proposed
+solutions, and **methods**, which propose them.
 
-Two things produce output that becomes part of the record: **environments** (their
-scores are the results) and **methods** (their proposals are recorded and
-evaluated). Everything else — one-shot tools, interactive views, editing
-workspaces — does not, and is not bound by the rule.
+Why this rather than "make installing easier": if a library is installed by
+hand, OptPilot cannot say what arrived. The record then describes a run while
+staying silent about something that may have determined the answer. That is not
+an inconvenience; it is the record being wrong while still looking right.
 
-## 3. Declaring what a package needs
+## 3. A package is a folder
 
-An author declares one of three situations.
+A **package** is a folder holding related work — the code for a simulator, the
+code for an algorithm, and settings files describing them. The folder is
+yours: readable, editable, and exactly what you would put in a source
+repository.
 
-### Situation A — nothing beyond what OptPilot already has
+There is no second, hidden kind of package. Everything in the catalog is a
+folder you can open.
 
-The code uses only Python's built-in libraries, or libraries OptPilot itself
-depends on. Nothing is declared. Nothing is installed.
+**Versions are snapshots of that folder.** Taking a version copies the folder's
+current contents into the archive as an immutable, numbered snapshot. The
+folder stays editable; the snapshot never changes.
 
-### Situation B — pure Python libraries, carried inside the package
+This is the arrangement source control uses: a working folder you edit, and an
+immutable history captured from it. Snapshots are cheap — they record which
+files are present and each one's fingerprint, and contents already stored are
+reused. A new snapshot of a 4 GB package where one file changed costs one file.
 
-Libraries written entirely in Python can simply be included in the package
-folder. They travel with the code and are fingerprinted along with it.
+## 4. Building a package
 
-*Example:* the production-and-AGV scheduling package carries its own copy of the
-simulation library it uses. Nothing is installed on the user's machine and the
-libraries are covered by the record automatically.
+**Write code.** You work in a **workspace** — an editable project with a
+development environment around it. It runs in a container with network access,
+so you can install and experiment freely. That is what it is for.
 
-An author may also list pure-Python libraries as files to be assembled into a
-prepared folder at first use. OptPilot verifies each file against a recorded
-fingerprint and never contacts the internet while doing so.
+**Register each piece.** You declare "this code is an environment" (or a method,
+or a resource), and which package it belongs to. Registering writes the code
+and its settings file into that package's folder, and takes a new snapshot.
+Registering is not a draft step — it is the act that adds the piece.
 
-### Situation C — compiled libraries, or separate programs
+**Share it.** Putting the folder where others can obtain it, typically a source
+repository. This does not exist yet.
 
-Some libraries contain compiled machine code (`ortools`, `numpy`, PyTorch), and
-some dependencies are separate programs entirely (the GLPK solver). Neither can
-be carried as Python source.
+Because a package is a folder, adding a second piece later is unremarkable:
+it writes different files into the same folder. Two pieces built in two
+different workspaces coexist without special handling.
 
-For these, the author builds a **container image**: a self-contained bundle
-holding an operating system, an interpreter, and the compiled software. The image
-gets a fingerprint. The package then names it:
+## 5. What a package declares about its dependencies
+
+Every component runs in a container, so the only question is **which image**.
+
+An **image** is a self-contained bundle holding an operating system, a Python
+interpreter, and installed software. It has a fingerprint.
+
+### The default image — most packages
+
+If a package declares nothing, its components run in the **default image**
+OptPilot provides. It contains Python and OptPilot's own dependencies. It has a
+fingerprint like any other, so the record stays complete without the author
+doing anything.
+
+This covers two cases that used to be distinct:
+
+- Code using only Python's built-in libraries.
+- Code carrying pure-Python libraries inside the package folder. Those travel
+  with the code, are bind-mounted in with it, and import normally.
+
+### A package's own image — when more is needed
+
+Some software cannot travel as Python source: libraries containing compiled
+machine code (`ortools`, `numpy`, PyTorch), separate programs (the GLPK or
+IPOPT solvers), or other language runtimes (Java, R, Node).
+
+For these the author builds an image and names it by fingerprint:
 
 ```yaml
 runtime:
-  sandbox: container
   container:
     image: ghcr.io/example/or-solving@sha256:<fingerprint>
     platform: linux/amd64
 ```
 
-Only an already-built image may be named, identified by fingerprint. A package
-cannot ask OptPilot to build one on the fly, because a build is only repeatable
-if everything it fetches is pinned — and a name like `latest` points at
-different contents over time, which would make the record meaningless.
+Only an already-built image may be named, and only by fingerprint. A package
+cannot ask OptPilot to build one, because a build is repeatable only if
+everything it fetches is pinned, and a moving name like `latest` points at
+different contents over time.
 
-## 4. Publishing a package
+### How an author obtains an image
 
-Each package lives in its own source repository.
+The intended path uses the workspace they were already working in:
 
-If it needs an image, that repository's automated build produces it, publishes it
-to the registry attached to the repository, and reports the fingerprint. The
-author writes that fingerprint into the package.
+1. Build and debug in the workspace, installing whatever is needed.
+2. **Capture the workspace as an image.** It gets a fingerprint.
+3. Name that fingerprint in the package.
 
-The consequence worth stating plainly: **installing moves from the user to the
-author, and happens once.** The author's build machine resolves and installs the
-compiled software. Every user afterwards downloads the finished result and checks
-its fingerprint.
+The author's machine does the installing, once. Every user afterwards downloads
+the finished image and verifies its fingerprint, installing nothing.
 
-## 5. Registering a package
+An image can be replaced whenever new code needs new software: capture a new
+one, update the settings, take a new snapshot. Earlier runs keep naming the
+earlier image and remain replayable. Pinning does not freeze a package; it makes
+each run state exactly what it used.
 
-Registration is the moment a package enters your catalog. OptPilot validates it —
-the configuration is well-formed, declared files exist, declared libraries are
-accounted for — and copies its contents into the permanent store, fingerprinted.
+## 6. Running a study
 
-**Registration is also the boundary of the record.** A run records the code that
-produced it. It does not record whatever produced *that* code. If a simulator was
-written by a generator, the simulator's source is captured and fingerprinted at
-registration and is fully inspectable, but the generator is not part of the run's
-record. The boundary has to stop somewhere, and "registered in the catalog" is a
-line that can be checked.
+**Capture.** The environment's and the method's code are copied from the
+package folder into the archive and fingerprinted. Execution uses those copies,
+so editing the folder mid-run cannot change what runs or what is recorded.
 
-## 6. Launching a run
+**Resolve images.** Each component's image — the default one or its own — must
+already be present locally. OptPilot does not download silently. It checks the
+image's fingerprint matches what is named, and that the image is approved for
+execution.
 
-When a run setup is launched, OptPilot works through four steps before any code
-executes.
+**Check before writing anything.** Missing container software, an unapproved
+image, an absent image, or a fingerprint mismatch stops the launch here, naming
+the problem. Nothing is written to the archive and no code runs.
 
-**Capture.** The environment's code and the method's code are copied out of the
-package into the permanent store and fingerprinted. From here on, execution uses
-these copies, not the folder on disk — so editing the package mid-run cannot
-change what is running or what is recorded.
+**Write the run definition.** A record naming the code fingerprints, the image
+fingerprints, the settings, the objective and the budget — combining into one
+fingerprint for the whole definition.
 
-**Resolve the runtime.** For each of the environment and the method:
+## 7. Where code physically runs
 
-- *Situation A:* nothing to do.
-- *Situation B:* the pure-Python libraries are assembled into a prepared folder,
-  each file checked against its recorded fingerprint. The result is stored and
-  reused on later runs.
-- *Situation C:* the named image must already be present locally. OptPilot does
-  not download it silently. It verifies the image's fingerprint matches the one
-  the package names, and checks that image has been approved for execution.
-
-**Check before anything is written.** Missing container software, an
-unapproved image, an absent image, or a fingerprint mismatch all stop the launch
-here, with a message naming the problem. Nothing is written to the permanent
-store and no code runs.
-
-**Write the run definition.** A record is created naming: the environment code
-fingerprint, the method code fingerprint, the runtime fingerprints, the settings,
-the objective, the budget. These combine into a single fingerprint for the run
-definition. Same inputs give the same fingerprint; any difference gives a
-different one.
-
-## 7. Where code actually executes
-
-Three things come together at execution, and they stay separate deliberately:
+Three things come together, and they stay separate deliberately:
 
 | | What it is | Where it comes from |
 | --- | --- | --- |
-| Your code | The environment or method source | Copied from the permanent store into a temporary folder |
-| The libraries | Pure-Python folder, or a container image | Prepared folder on disk, or inside the image |
-| The execution | The running program | A normal process, or a container |
+| Your code | The environment or method source | Copied from the archive into a temporary folder |
+| The software it needs | The default image, or the package's own | Inside the image |
+| The execution | The running program | A container |
 
-### Situation A and B — a normal process
-
-OptPilot starts an ordinary program on your machine. It points the interpreter at
-the temporary folder holding your code, and at the prepared library folder if
-there is one. No container software is involved or required.
-
-### Situation C — a container
-
-OptPilot starts a container from the named image and **makes the temporary folder
-holding your code visible inside it** — the same way plugging in an external drive
-makes files visible to a program. The image supplies the libraries; the folder
+OptPilot starts a container from the named image and **makes the temporary
+folder holding your code visible inside it** — as plugging in an external drive
+makes files visible to a program. The image supplies software; the folder
 supplies your code.
 
-**Your code is never built into the image.** Two reasons:
+**Your code is never built into the image.** Two reasons. Practically, you would
+rebuild the image on every edit; builds take minutes and edits take seconds.
+More importantly, the record says the run used code with a particular
+fingerprint, pointing at the archived copy. If the container ran a *different*
+copy baked into the image, the record would be wrong — and wrong invisibly,
+because it would still look right.
 
-- Practical: you would rebuild the image on every edit. Builds take minutes,
-  edits take seconds.
-- Correctness: the record says the run used the code with a particular
-  fingerprint, pointing at the copy in the permanent store. If the container ran
-  a *different* copy baked into the image, the record would be wrong — and wrong
-  invisibly, since it would still look right.
+The container supplies software. It does not hold your code.
 
-So the container exists to supply libraries. It does not hold your code.
+### Everything runs this way
 
-### A worked example
+| What runs | Image |
+| --- | --- |
+| Environment (scores solutions) | Default, or its own |
+| Method (proposes solutions) | Default, or its own |
+| One-shot tool | Default, or its own |
+| Interactive view | Default, or its own |
+| Editing workspace | A development image |
 
-The natural-language OR solving package:
+There is no local-process mode. A single execution path, one set of rules, one
+place where isolation is enforced.
 
-- The **image** holds `ortools`, `pymoo`, `smolagents` and the GLPK solver —
-  third-party software only.
-- The **method's code**, including the solving engine bundled into the package,
-  stays in the permanent store and is shown to the container from a temporary
-  folder.
-- The **environment** needs only Python's built-in libraries, so it runs as an
-  ordinary process on your machine, with no container at all.
+## 8. Why there is no local-process mode
 
-One study, two different execution modes, chosen independently by what each half
-declares.
+A local process provided no isolation at all. Between starting one and running
+your code, OptPilot performed two operations: change directory, then execute.
+There was no sandbox, no privilege drop, and no resource limit anywhere.
 
-## 7a. The two execution modes, and how dependencies reach each
+Package code therefore ran as you, with your access: your home directory, your
+keys, and OptPilot's own archive, which is writable by the same user.
 
-There are exactly two ways OptPilot runs authored code.
+Several declarations *looked* like boundaries and were not enforced — a
+disabled-network setting, read-only source, storage quotas, processor and memory
+limits, and the evaluator timeout. A study run even recorded that network access
+was "denied, enforced", which was false.
 
-### Which things use which mode
+This mattered concretely: the OR-solving package runs LLM-written Python with
+an API key present, and its problem statement is free text, so an instruction
+embedded in a problem description reached the host. The LLM policy-search
+packages have the same shape.
 
-| What runs | Local process | Docker container |
-| --- | --- | --- |
-| Environment (scores solutions) | Always today. In future, only if it declares an image | Only when it declares an image |
-| Method (proposes solutions) | When it declares no image | When it declares an image |
-| Resource action (one-shot tool) | Always | Never — refused |
-| Interface (interactive view) | When declared as a process | When declared as a container |
-| Editing workspace | Never | Always |
+Containers give real isolation, and they give it uniformly. Once every
+component runs in one, a declared network restriction can actually be enforced,
+resource limits can actually be applied, and the record can state the truth.
 
-The mode is chosen **per component**, by what that component declares. A single
-study routinely uses both: in the OR-solving package the method runs in a
-container while the environment runs as a local process, because only the
-method needs compiled software.
+## 9. What the record contains
 
-### How dependencies reach a local process
+For a completed run: the environment code with its fingerprint, the method code
+with its fingerprint, the image fingerprints, the settings, objective, budget
+and launch values, every proposal and score, the ordered sequence of events,
+and one fingerprint covering all of it.
 
-A local process can obtain dependencies in exactly two ways, and both are
-limited to **pure Python**:
+**Where the record stops.** A run records the code that produced it, not the
+code that produced *that* code. The boundary is registration. If a simulator was
+written by a generator, the simulator's source is captured and fully
+inspectable, but the generator is not part of the run's record. Recording where
+code came from is a note attached to a package, unrelated to how it executes.
 
-1. **Carried in the package as source.** The library's `.py` files sit in the
-   package folder and travel with it. Nothing is installed; they are simply
-   present, and they are fingerprinted along with the rest of the package.
-   *(The AGV scheduling package does this with its simulation library.)*
-2. **Assembled from verified files at first use.** The package includes the
-   library's distribution files. On first run OptPilot unpacks them into a
-   folder, checking each against a fingerprint recorded in the package. This
-   never touches the network. The folder is kept and reused.
+## 10. What this costs
 
-That is the whole list. **A local process cannot obtain anything else
-automatically**, and this is a hard limit rather than missing work:
+Stated plainly, because these are real:
 
-- *Compiled Python libraries* (`numpy`, `ortools`, PyTorch) contain machine code
-  built for one operating system and processor. There is no form of them that
-  can be carried as portable source.
-- *Separate programs* (the GLPK or IPOPT solvers) are not Python at all.
-- *Other languages* (Java, R, Node) need their own interpreter or runtime.
+- **Container software becomes required.** There is no path that runs without
+  it. Previously the command line worked without any.
+- **Each evaluation pays container startup.** An environment is invoked once per
+  proposed solution. Startup is on the order of a second. A twenty-five-trial
+  study gains well under a minute; a study with many thousands of trials gains
+  hours. **This has not been measured on a real study and should be, before
+  the design is committed to.**
+- **The default image must be built, distributed and downloaded once.**
+- **First use of any custom image is slow** — these run to a couple of
+  gigabytes, and nothing is fetched silently.
 
-OptPilot could in principle run an installer on your machine for the first of
-these. It deliberately does not, because whatever that installer fetched could
-not be identified afterwards — which is precisely the incompleteness the record
-exists to prevent. And it would do nothing for the second and third.
+## 11. What this does not solve
 
-So: **if a component needs anything beyond pure Python, a local process cannot
-serve it.** That single fact is why the second mode exists.
-
-### How dependencies reach a container
-
-They do not. **Nothing is installed at run time at all.**
-
-Everything the code needs — pure Python libraries, compiled Python libraries,
-solver binaries, a Java runtime, GPU libraries, licensed software — is already
-inside the image, put there when the author built it. Your machine downloads the
-finished image once, checks its fingerprint, and runs it.
-
-This is why the container mode has no limits on what kind of dependency it
-supports: the question "how does OptPilot install this?" never arises. The
-installing happened once, on the author's build machine, and what you receive is
-the result.
-
-### The two modes side by side
-
-| | Local process | Docker container |
-| --- | --- | --- |
-| Pure Python libraries | Carried as source, or assembled from verified files | Already inside the image |
-| Compiled Python libraries | **Not possible** | Already inside the image |
-| Separate programs (GLPK, IPOPT) | **Not possible** | Already inside the image |
-| Other languages (Java, R, Node) | **Not possible** | Already inside the image |
-| Installed on your machine at run time | Only the unpacking of pure-Python files | **Nothing** |
-| Needs container software installed | No | Yes |
-| Network access during preparation | Never | Only the one-time image download |
-
-The trade is straightforward. The local process needs no container software but
-can only ever serve pure Python. The container serves anything at all, but the
-machine must have container software and must download the image once.
-
-Because the mode is per component, a package pays that cost only for the parts
-that need it — and a package needing nothing beyond pure Python never pays it.
-
-## 8. Everything else that executes
-
-Three other things run code. None produces output that becomes part of the
-record, so none is bound by the rule.
-
-**One-shot tools** (a generator that turns a description into a simulator) run as
-ordinary processes. They hand you files; you decide whether to register them. The
-record begins at registration.
-
-**Interactive views** (a 3D factory visualisation, a solver console) may run in a
-container, for isolation rather than record-keeping: a web application that opens
-ports and reaches the network is worth keeping away from the rest of your
-machine. Looking at one produces no result.
-
-**Editing workspaces** always run in a container, and are the most permissive
-thing here by design. A development environment needs to be writable and needs
-network access so you can install things while experimenting. That is what it is
-for. Whatever you write becomes subject to the rule only when you register it.
-
-## 9. What the record ends up containing
-
-For a completed run:
-
-- The environment code, byte-for-byte, with its fingerprint.
-- The method code, byte-for-byte, with its fingerprint.
-- The runtime fingerprint — the prepared library folder, or the image.
-- The settings, objective, budget, and any values supplied at launch.
-- Every proposal, every score, and the ordered sequence of events.
-- A single run-definition fingerprint covering all of the above.
-
-Which supports the statement the whole design exists for: *this exact code, with
-these exact libraries, produced this result* — and anyone can check it.
-
-## 10. What this does not do
-
-- **It does not judge an image's trustworthiness.** A fingerprint proves you have
-  the exact bytes someone published. Whether those bytes are what they claim is a
-  separate question, answered by a human approving the image before it may run.
-- **It does not make image builds repeatable.** The fingerprint makes *replay*
-  exact. Rebuilding "the same" image later can produce different contents unless
-  every library version is pinned during the build.
-- **It does not make the first use fast.** These images run to a couple of
-  gigabytes and are not downloaded silently. First use is a deliberate step.
-- **It is untested outside Python.** The rule covers a package built on Java, R
-  or CUDA, and an image can carry them. Nothing has exercised that yet.
+- **Whether an image is trustworthy.** A fingerprint proves you have the exact
+  bytes someone published, not that those bytes are what they claim. A person
+  approves an image before it may run.
+- **Repeatable image builds.** Replay is exact; rebuilding "the same" image
+  later can differ unless every version is pinned during the build.
+- **Sharing packages.** Distribution does not exist yet.
+- **Non-Python components.** An image can carry Java, R or CUDA and the rule
+  covers them, but nothing has exercised that.

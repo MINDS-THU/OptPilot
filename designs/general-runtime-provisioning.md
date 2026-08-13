@@ -2,6 +2,12 @@
 
 **Status: proposal, 2026-08-12. Not implemented.**
 
+> **Superseded in part, 2026-08-13.** Two later decisions change the
+> conclusions here: execution is **container-only with a default base
+> image** (there is no local-process mode), and a package is **a folder**
+> with immutable snapshots for versions (there is no separate stored
+> package kind). See [`how-optpilot-runs-code.md`](how-optpilot-runs-code.md).
+
 ## The problem, stated generally
 
 A package must be able to bring its own runtime, whatever that runtime is,
