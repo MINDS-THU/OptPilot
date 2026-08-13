@@ -44,7 +44,7 @@ Not interactive-versus-headless. **Evidence-producing or not.**
 | --- | --- | --- |
 | Environment evaluator | Observations → retained | Content-addressed, in the digest |
 | Method | Candidates → retained | Content-addressed, in the digest |
-| Resource action | Artifacts that may become catalog entries | **Unresolved — see below** |
+| Resource action | Files a human may choose to register | None; the record starts at registration |
 | Interface | An interactive session | None; isolation only |
 | Studio workspace | A place a human edits | None; isolation only |
 
@@ -177,28 +177,39 @@ into the package as `production_agv_scheduling` does with `simpy`), subprocess
 on the host, no engine involved. The mechanism above engages only when a
 component declares an image.
 
-## The unresolved case: resource actions
+## Resolved: the record starts at registration
 
-Resource actions are the one surface the principle does not cleanly place, and
-that is a real question rather than an oversight.
+Resource actions look ambiguous — the DEVS generator's `generate` produces a
+bundle that is then registered as an environment, and that environment produces
+Runs. So does the generator belong in the evidence chain?
 
-They look non-evidence: one-shot local operations, container explicitly refused
-(`resource_actions.py:195`). But the DEVS generator's `generate` action
-produces a bundle that is then **registered as an environment**, and that
-environment produces Runs. So the provenance of the generator arguably belongs
-in the evidence chain of everything it generated.
+**Owner decision 2026-08-13: no.** A Run records the code that produced it, not
+the code that produced that code. The boundary is **registration into the
+catalog**.
 
-Two defensible answers:
+This is the stronger rule, for two reasons:
 
-- **Actions are tooling.** Their outputs are inputs a human reviews and
-  registers deliberately. Provenance stops at registration. Keep them as they
-  are.
-- **Actions are evidence-producing.** A generated environment should record
-  what generated it. Then actions need content-sealed runtimes like any other
-  evidence producer.
+1. **It terminates.** If a Run's record covered the code that wrote its code, it
+   should equally cover whatever wrote that, and the editor, and the author.
+   "Is it registered in the catalog?" is a bright line that can be checked;
+   "is it in the provenance chain?" is unbounded. It is the boundary git draws:
+   a commit records the code, not the editor that typed it.
+2. **Nothing is actually lost.** A generated environment's source is captured
+   and fingerprinted at registration like any other package, and every Run using
+   it records that content digest. The generated code is fully inspectable. What
+   is not captured automatically is its *origin story* — that an LLM wrote it,
+   which model, from which prompt.
 
-The second is more defensible if OptPilot's claim is end-to-end reproducibility.
-It is also more work. This needs an owner decision, not a default.
+That origin story, if wanted, is **package metadata**, not a runtime property.
+It can be recorded as a note attached to the package without the generator
+needing a content-addressed runtime. The two concerns were never coupled;
+conflating "we should be able to trace this" with "this must execute in a
+sealed runtime" is what made the case look unresolved.
+
+**Consequence:** resource actions keep running as ordinary host processes, and
+the explicit refusal at `resource_actions.py:195` is correct rather than a
+limitation. The evidence-producing set is exactly two surfaces: environment
+evaluators and methods.
 
 ## Sequencing, each stage useful alone
 
@@ -218,7 +229,8 @@ It is also more work. This needs an owner decision, not a default.
    dialect declared rather than emergent.
 5. **Container environment runtimes** — only when a package actually needs one.
    No shipped package does today.
-6. **Decide the resource-action question** — and act on it.
+Resource actions, interfaces and workspaces need no stage: the first is
+settled above, and the last two do not produce evidence.
 
 ## What this design does not solve
 
