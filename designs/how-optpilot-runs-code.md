@@ -7,7 +7,7 @@ where it first appears.
 (§§1–3) exist today. The execution model — everything running in a container,
 images named by fingerprint, and registration capturing an image (§§4–8) — is a
 target design, not built. Anything else not yet built is marked where it
-appears. Dated 2026-08-13.
+appears. Dated 2026-08-14.
 
 ## 1. What OptPilot does, and what it promises
 
@@ -19,7 +19,7 @@ Its distinguishing promise concerns what happens *afterwards*. Every execution
 writes a permanent copy of everything involved — the code, the settings, every
 proposal, every score, the ordered sequence of events — into a private
 **archive** on your machine. Nothing in it is ever modified. A record can be
-deliberately deleted to reclaim space (§11), which leaves behind a note saying a
+deliberately deleted to reclaim space (§12), which leaves behind a note saying a
 record existed and was removed — so a deleted record is never mistaken for one
 that never happened.
 
@@ -163,13 +163,76 @@ settings file:
 # coopa_solver method settings, inside that same package
 runtime:
   container:
-    image: ghcr.io/example/or-solving-solver@sha256:<fingerprint>
+    image: ghcr.io/example/or-solving/solver@sha256:<fingerprint>
     platform: linux/amd64
 ```
 
 This is the mechanism behind the `or_solving` split above: its method names an
 image its environment does not use. An author may therefore set only the package
 image and be done, or add an override where one earns its keep.
+
+### Where images live
+
+An image must be somewhere another person's machine can fetch it from. That place
+is a **registry**: a server that stores images and hands them out on request. The
+addresses in the examples above are registry addresses.
+
+**Images live in GitHub's container registry, in the same account that holds the
+package's source code.** That is the settled choice, and the four properties
+behind it are also the bar any replacement would have to clear:
+
+- **Someone without an account can download a public image.** No sign-up, no
+  access token, no signing in through their container software. This sits
+  directly in the path of a person trying OptPilot for the first time, and it is
+  where the obvious alternative fails: Docker Hub allows an unidentified visitor
+  100 downloads per six hours, counted per network address, so a few colleagues
+  sharing one office connection can exhaust it between them in an afternoon and
+  meet failures that look like broken software.
+- **No published limit on how many downloads a visitor may make.** GitHub
+  documents none for this registry.
+- **Publishing a public image costs its author nothing**, either to store or to
+  serve, so a package becoming widely used does not generate a bill.
+- **Names may nest.** `ghcr.io/<account>/or-solving/solver` is a valid name, so a
+  package's image and its per-component overrides sit under one readable path
+  instead of needing invented flat names.
+
+**A newly published image is private, and the resulting error misleads.** This is
+the one sharp edge. The registry makes a new image private by default. The
+author's own machine is signed in, so it works for them. Everyone else is
+refused — and refused with the *same* answer the registry gives for an image that
+was never published at all, since it will not reveal which of the two is true.
+Author and user therefore have no shared symptom to compare: one succeeds, the
+other is told only that access is denied, and the container software's usual
+wording for that offers both explanations at once.
+
+So it is not left to memory. Publishing (§5) ends by asking the registry, with no
+credentials at all, whether the image is readable, and refuses to record the
+address unless it is. That question goes to the registry directly rather than
+through the container software — which has just signed in and already holds a
+copy locally, and would therefore answer yes whatever the setting says. It costs
+one small request, and downloads nothing.
+
+**The default image is held to stricter rules**, because every package naming no
+image of its own depends on it. It is published by an automated build in
+OptPilot's own source repository rather than from any individual's machine, is
+public from its first publication, and is never deleted — removing it would make
+every run that used it unrepeatable at once (§9).
+
+**The images of packages that ship with OptPilot are held to those same rules**,
+for the same reason. A package such as `or_solving` cannot run on the default
+image, so a fresh copy of OptPilot is only usable if that package's image is
+published, public and permanent too. Those are published by the same automated
+builds, under the same account. An image published by anyone else for their own
+package carries no such promise, which is what the risks below are about.
+
+**Three risks remain, and none is OptPilot's to control.** A registry publishing
+no download limit today may introduce one later, as Docker Hub did; the
+consequence is bounded, since people would then need accounts rather than a
+different registry. Nothing prevents an image's owner from deleting it, which
+leaves every record naming it readable and verifiable but no longer re-executable
+(§9). And nothing prevents an owner making a published image private again after
+the fact, which reproduces precisely the confusion the publishing check exists to
+prevent, at a moment when the author is no longer watching for it.
 
 ### What an image must provide
 
@@ -273,11 +336,19 @@ container into the container software's local image store on your machine and
 records that store's fingerprint. The package's settings then name a local
 image, which runs on your machine and nowhere else.
 
-Making it shareable is a separate, explicit step: push the image to a
-repository named in the package's settings, using whatever login the container
-software already has — OptPilot never handles registry credentials — after
-which the settings name `repository@<fingerprint>`. The launch check (§6)
-accepts either form and compares it against the same form on the machine.
+Making it shareable is a separate, explicit step: publish the image to a
+registry (§4) under a name the package's settings record, using whatever login
+the container software already has — OptPilot never handles registry
+credentials — after which the settings name `registry-address@<fingerprint>`.
+The launch check (§6) accepts either form and compares it against the same form
+on the machine.
+
+Publishing does not end at the upload. OptPilot then fetches the image back
+carrying no credentials at all, the way someone who has never seen the package
+would, and records the address only if that succeeds. This catches the
+private-by-default trap of §4 while the author is still there to fix it, instead
+of leaving it for the first stranger who tries the package and reads the failure
+as the image not existing.
 
 A package whose settings hold only local fingerprints is a package only its
 author can run. That is the concrete meaning of sharing not being built yet
@@ -319,7 +390,7 @@ and cheap to download, since the shared layers are already present.
 
 That stops being true if the workspace's starting point drifts away from the
 package's image, which happens two ways. Two workspaces opened before either has
-registered both start from the standard image, so each captures its own
+registered both start from the default image, so each captures its own
 independent copy of whatever was installed in it. And a workspace left open
 while another registers is building on a starting point the package has since
 moved past.
@@ -342,6 +413,13 @@ was — as the package's image if that is what the component was using, or as it
 override if it had one. Refreshing the package's image for every component that
 shares it is the same action performed from a workspace that has no override.
 
+A captured image is local (above), so re-registering into a package that had
+already been shared replaces a published address with a fingerprint only this
+machine holds — quietly making the package unrunnable for everyone else. OptPilot
+says so at the time and marks the package as needing publishing again. If the
+inventory comparison finds nothing was installed, no image is captured and the
+published address stands untouched.
+
 Adding a second piece later writes different files into the same folder. Pieces
 built at different times, in different workspaces, coexist because they occupy
 different paths in one directory.
@@ -350,7 +428,8 @@ A run setup is created the same way, by naming an environment, a method, an
 objective and a budget. It runs no code of its own, so it names no image.
 
 **Share it.** Publishing the folder where others can obtain it, typically a
-source repository. *Not built yet.*
+source repository — by preference the same account that holds the package's
+image (§4), so code and image share one owner and one history. *Not built yet.*
 
 ## 6. Running a run setup
 
@@ -371,8 +450,9 @@ can be listed, and can be withdrawn — withdrawing does not stop a run already
 under way but prevents the next container from starting. The default image that
 ships with a release is approved already. A launch with nobody present to
 answer, such as one in an automated build, uses an approval granted in advance
-rather than being prompted. A missing engine, an image that is absent, unapproved, or
-whose fingerprint does not match what the package names, stops the launch here.
+rather than being prompted. Missing container software, or an image that is
+absent, unapproved, or whose fingerprint does not match what the package names,
+stops the launch here.
 Nothing has been written and no code has run.
 
 **Network and credentials.** A container gets no outbound network and no
@@ -459,7 +539,13 @@ inside the container, and nothing else from the machine:
 | --- | --- |
 | The unpacked snapshot of the component's code | read-only |
 | An output directory, empty at the start of each piece of work | writable |
-| A required capability provider's snapshot, when one is declared | read-only |
+| The snapshot of another component this one declares it needs | read-only |
+
+The third row covers a component written to call into another — a method that
+scores its proposals by running the environment's own simulator rather than
+reimplementing it. Declaring that need is what makes the other component's code
+readable from inside the container; without a declaration it is not mounted, and
+the two cannot see each other at all.
 
 The archive, your home directory and every other path on the machine are not
 mounted. The result of a piece of work is the JSON response together with
@@ -575,6 +661,12 @@ how that code executes.
   same" image from scratch later can produce different contents, unless every
   version it installs is pinned during the build.
 - **Sharing packages between people.** *Not built yet.*
+- **Images that are not public.** Publishing refuses to record an address a
+  stranger cannot read (§4), so a group whose code and images are private to
+  their organisation has no supported way to share one; it works for whoever
+  built it and for nobody else. A team wanting to use a commercially licensed
+  library among themselves falls in this gap, which is the inward-facing side of
+  the redistribution rule in §12.
 - **Reclaiming space automatically.** Deletion is deliberate and manual (§12);
   nothing expires on its own, so an archive left alone still grows.
 - **Components not written in Python.** An image can carry Java, R or CUDA and
@@ -599,7 +691,7 @@ and often several packages. Deleting the image a run names because you deleted
 image is offered for removal when the last record referring to it goes, never
 before.
 
-The same applies to the standard image OptPilot supplies: past versions are kept
+The same applies to the default image OptPilot supplies: past versions are kept
 while any record still names one, and become removable when none does.
 
 **Software that cannot be redistributed is not packaged.** A component needing a
@@ -630,10 +722,10 @@ dependencies either carried inside the package or installed by hand, and the
 bundled packages are written for that. Adopting this design means each of them
 needs an image before it can run at all, and the code paths that prepare and
 launch host processes are replaced rather than kept alongside. Whether that
-happens in one step or package by package is part of the release decision
-above, not of this design.
+happens in one step or package by package is a rollout decision outside this
+document.
 
-## 14. Open questions
+## 14. Open question
 
 - **Registering software the package's image does not have.** The alignment
   rules in §5 resolve the case where a workspace ends up with what the package
@@ -641,14 +733,12 @@ above, not of this design.
   genuinely new. Two honest outcomes exist — capture it as an image for the one
   component you are registering, leaving every other component on the package's
   image, or move the package's image forward so everything gets it. The first
-  keeps other components small and gives the package a second image to maintain;
-  the second keeps one image and makes every component carry the addition.
-  Neither is right in general: adding a solver one method needs argues for the
-  first, upgrading a shared library argues for the second. This is a decision
+  keeps other components small and gives the package a second name to maintain
+  and publish; the second keeps one name and makes every component carry the
+  addition. Neither avoids accumulation — a record names the image it used, so
+  every superseded image stays published for as long as any run refers to it
+  (§4), and images pile up either way. Neither is right in general: adding a
+  solver one method needs argues for the first, upgrading a shared library
+  argues for the second. This is a decision
   the author should be asked to make at registration, and the wording of that
   question matters more than the mechanism behind it.
-- **Where images are hosted.** One source repository can publish several
-  differently-named images, so a package needing one image plus an override is
-  straightforward. Worth confirming for the intended registry: whether a person
-  without an account can download a public image, and at what rate, since that
-  sits directly in the path of someone using a package for the first time.

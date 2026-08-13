@@ -2,11 +2,13 @@
 
 **Status: design, 2026-08-13. Not implemented.**
 
-> **Superseded in part, 2026-08-13.** Two later decisions change the
+> **Superseded in part, 2026-08-14.** Three later decisions change the
 > conclusions here: execution is **container-only with a default base
-> image** (there is no local-process mode), and a package is **a folder**
+> image** (there is no local-process mode), a package is **a folder**
 > with immutable snapshots for versions (there is no separate stored
-> package kind). See [`how-optpilot-runs-code.md`](how-optpilot-runs-code.md).
+> package kind), and images are hosted on **GitHub's container registry**
+> alongside the package's source. See
+> [`how-optpilot-runs-code.md`](how-optpilot-runs-code.md).
 
 Supersedes the framing in [`general-runtime-provisioning.md`](general-runtime-provisioning.md),
 which argued from "containers already exist here." That was an argument from

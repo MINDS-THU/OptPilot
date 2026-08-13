@@ -2,11 +2,13 @@
 
 **Status: proposal, 2026-08-12. Not implemented.**
 
-> **Superseded in part, 2026-08-13.** Two later decisions change the
+> **Superseded in part, 2026-08-14.** Three later decisions change the
 > conclusions here: execution is **container-only with a default base
-> image** (there is no local-process mode), and a package is **a folder**
+> image** (there is no local-process mode), a package is **a folder**
 > with immutable snapshots for versions (there is no separate stored
-> package kind). See [`how-optpilot-runs-code.md`](how-optpilot-runs-code.md).
+> package kind), and images are hosted on **GitHub's container registry**
+> alongside the package's source. See
+> [`how-optpilot-runs-code.md`](how-optpilot-runs-code.md).
 
 ## The problem, stated generally
 
@@ -170,9 +172,11 @@ environment side needs a new attempt provider and supervisor.
 
 ## Open questions for the owner
 
-- **Who builds and hosts the images?** This is the real cost, and it is
-  operational rather than technical: a registry, a build pipeline, and a
-  policy for who may approve a digest. Vendoring has no equivalent cost.
+- ~~**Who builds and hosts the images?**~~ **Answered 2026-08-14:** GitHub's
+  container registry, in the account holding the package's source, chosen
+  because a stranger can download a public image without an account and
+  public images are free to serve. Who may *approve* a digest for execution
+  is a separate policy question, settled in `how-optpilot-runs-code.md` §6.
 - **Is a container runtime acceptable as a per-package requirement?** Studio
   users already have one. CLI-only users of pure-Python packages would still
   never need one under this design.
