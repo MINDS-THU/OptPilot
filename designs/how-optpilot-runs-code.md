@@ -71,7 +71,7 @@ The **catalog** is the set of packages available to you. Every entry is a folder
 on disk: you can open it, read it, edit it, and put it in a source repository.
 Some packages are **bundled** — they ship with OptPilot in its `catalog/`
 folder. Two are used as examples below: `production_agv_scheduling`, a factory
-and vehicle scheduling simulator with eight methods for it, and `or_solving`,
+and vehicle scheduling simulator with seven methods for it, and `or_solving`,
 which solves an operations-research problem stated in plain language.
 
 **A version is a snapshot.** Taking a version copies the folder's current
@@ -108,12 +108,18 @@ credential only by declaring so, exactly like anything else.
 **One image per distinct set of software the package requires — not one per
 component.** Most packages need exactly one.
 
-`production_agv_scheduling` shows why the distinction matters. Its seven
-environments are one simulator configured seven ways: they run the same
-evaluator code and need identical software, so seven images would be seven
-copies of the same thing. Of its eight methods, seven need nothing beyond what
-OptPilot itself provides; one, `rolling-milp-baselines`, needs a commercial
-solver library. So that package needs at most two images.
+`production_agv_scheduling` shows why counting components is the wrong measure.
+It holds fourteen of them — seven environments and seven methods — and needs
+**one image**. Its seven environments are one simulator configured seven ways,
+running the same evaluator code; its seven methods search that simulator in
+different ways but need nothing beyond what OptPilot itself provides. Fourteen
+images would be fourteen copies of the same thing.
+
+`or_solving` shows when a second image is warranted. Its environment only checks
+that a returned answer is well formed, so it needs nothing unusual, while its
+method needs a native optimisation library, a solver program and a
+language-model client. One image serving both would make the environment carry
+gigabytes it never opens.
 
 ### The default image
 
@@ -143,10 +149,10 @@ A package needing any of these names an image, which every component in it uses
 unless that component says otherwise:
 
 ```yaml
-# package settings
+# or_solving package settings
 runtime:
   container:
-    image: ghcr.io/example/agv-scheduling@sha256:<fingerprint>
+    image: ghcr.io/example/or-solving@sha256:<fingerprint>
     platform: linux/amd64
 ```
 
@@ -154,21 +160,16 @@ A single component may name a different one, using the same fields in its own
 settings file:
 
 ```yaml
-# rolling_milp method settings
+# coopa_solver method settings, inside that same package
 runtime:
   container:
-    image: ghcr.io/example/agv-scheduling-milp@sha256:<fingerprint>
+    image: ghcr.io/example/or-solving-solver@sha256:<fingerprint>
     platform: linux/amd64
 ```
 
-The override exists because components within one package can differ sharply.
-In `or_solving`, the environment needs only Python's standard library while the
-method needs a native optimisation library, a solver program and a
-language-model client. Forcing them to share would make the environment carry
-gigabytes it never touches.
-
-An author may therefore set only the package image and be done, or add overrides
-where they earn their keep.
+This is the mechanism behind the `or_solving` split above: its method names an
+image its environment does not use. An author may therefore set only the package
+image and be done, or add an override where one earns its keep.
 
 ### What an image must provide
 
