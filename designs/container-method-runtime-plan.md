@@ -2,6 +2,11 @@
 
 **Status: reviewed proposal, 2026-08-13. Not implemented.**
 
+Two owner decisions on 2026-08-13 simplify this plan: there are **no existing
+users or records to preserve**, and each package will live in **its own GitHub
+repository with its image in that repository's container registry**. See B3 and
+the open questions.
+
 Implements the architecture in [`general-runtime-provisioning.md`](general-runtime-provisioning.md)
 under the owner's three decisions: `image:` only (sha256-pinned), per-package
 Docker acceptable, `or_solving` first.
@@ -80,21 +85,29 @@ filter applied **in the ledger query**, and `local_runtime.py` plus all three
 the same commit as the migration. Regression test: a study approval for digest
 X leaves `environment-preview trust list` and gateway trust unchanged.
 
-### B3. The migration would brick existing Realms
+### B3. ~~The migration would brick existing Realms~~ — dissolved by owner decision
 
-`RealmLedger._migrate` runs inside `BEGIN IMMEDIATE`, and `PRAGMA
-foreign_keys` is a **no-op inside a transaction** — so the pragma cannot be
-turned off for a table rebuild. A naive recreate of the trust tables fires
-triggers and trips foreign keys mid-migration, leaving *every* install —
-process-only users included — unable to open its Realm.
+**Owner decision 2026-08-13: there are no existing users and no records worth
+preserving. The goal is a clean, robust, general codebase.**
 
-**Design:** the migration is explicitly sequenced: drop `provider_trust_heads`
-first (DROP TABLE fires no triggers), create the new decisions table **without
-triggers**, copy, drop-and-rename, create the new heads table **without
-triggers**, copy, and create all ten triggers plus indexes **last**. The
-contract-qualified `UNIQUE(policy_id, image_ref, contract, sequence)` and
-`(…, decision_id)` **replace** the unqualified constraints, and the self-FK
-includes `contract`. A migration test must open a populated v35 Realm.
+That removes this blocker rather than mitigating it, and it changes the right
+answer, not just the risk. The reviewed hazard was real — `_migrate` runs
+inside `BEGIN IMMEDIATE`, where `PRAGMA foreign_keys` is a no-op, so an
+in-place rebuild of the trust tables fires triggers and trips foreign keys.
+But the careful drop/copy/rename/re-trigger dance existed *only* to preserve
+rows nobody needs.
+
+**Design:** do not write a data-preserving migration. Define the trust tables
+with `contract` as a first-class column from the start — in the existing
+trust migration if it can simply be edited, otherwise in a replacement that
+creates the correct shape outright. The contract-qualified uniqueness
+constraints and the contract-inclusive self-foreign-key become the definition
+rather than a patch over an earlier one.
+
+Cost, stated plainly: **anyone holding a local Realm must delete and recreate
+it.** That is acceptable today and will not be later, so this is the moment to
+get the shape right. Add a schema-version guard that fails with a clear
+"recreate your Realm" message rather than a confusing integrity error.
 
 ### B4. Secrets on the command line
 
@@ -211,9 +224,15 @@ irreversible step is 4 (the migration); it deserves its own review.
 
 ## Open questions for the owner
 
-- **Who builds and hosts the image, and who may approve a digest?** Still the
-  real cost, and unresolved. Approval is mechanical; the registry and build
-  pipeline are not.
+- ~~Who builds and hosts the image?~~ **Decided 2026-08-13:** each package
+  gets its own GitHub repository, and its image is published to the container
+  registry attached to that repository (`ghcr.io/<org>/<package>@sha256:...`).
+  This aligns with the packages-as-repos direction already in
+  `initial-release-plan.md` §6 (D1-D4), and it makes provenance obvious: the
+  image and the package source share one repo, one owner, one history. The
+  build should run in that repo's CI so the digest is produced by a recorded
+  workflow rather than a laptop. Still open: who may *approve* a digest for
+  execution, which is a policy question rather than a hosting one.
 - **Image size.** ortools + pymoo + numpy + pandas + litellm + a Debian base
   with GLPK is realistically 1.5–2.5 GB, and there is no implicit pull. First
   use will be slow and must be an explicit, documented operator step.

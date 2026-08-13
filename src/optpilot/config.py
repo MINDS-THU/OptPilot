@@ -1469,20 +1469,23 @@ def _compile_execution(
     sandbox = runtime.get("sandbox", "process")
 
     if sandbox == "container":
-        backend_type = "container"
-        backend_impl = "builtin.container_backend"
-        backend_config = _compile_container_backend_config(runtime, environment_path or study_path)
-    else:
-        backend_type = "local"
-        backend_impl = "builtin.local_subprocess_backend"
-        backend_config = _compile_runtime(runtime, environment_path or study_path)
+        # There is no container executor for environments. Failing here is
+        # deliberate: the alternative is compiling to the process backend,
+        # which would silently run an evaluator on the host that its author
+        # asked to be isolated.
+        raise ValueError(
+            "environment.runtime.sandbox: container is not executable. "
+            "Environment evaluators run in the process sandbox; only methods "
+            "may declare a container runtime."
+        )
+    backend_type = "local"
+    backend_impl = "builtin.local_subprocess_backend"
+    backend_config = _compile_runtime(runtime, environment_path or study_path)
 
     timeout = int(execution.get("timeoutSeconds") or environment.get("evaluator", {}).get("timeoutSeconds") or 600)
     parallelism = int(execution.get("parallelism", 1) or 1)
     retry = dict(execution.get("retry", {}))
     sandbox_spec = _runtime_to_sandbox_spec(runtime)
-    if sandbox == "container":
-        sandbox_spec["runtimeType"] = "container"
     max_retries = int(retry.get("maxRetries", 0) or 0)
     return {
         "backend": {
@@ -1605,11 +1608,6 @@ def _compile_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[str, Any]
         if container.get("build"):
             compiled["build"] = _resolve_container_build(container["build"], base_path)
     return {key: value for key, value in compiled.items() if value not in ({}, [], None)}
-
-
-def _compile_container_backend_config(runtime: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
-    compiled = _compile_runtime(runtime, base_path)
-    return compiled
 
 
 def _runtime_to_sandbox_spec(runtime: Dict[str, Any]) -> Dict[str, Any]:

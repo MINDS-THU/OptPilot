@@ -1627,34 +1627,28 @@ class MvpIntegrationTest(unittest.TestCase):
         container_on_process["runtime"] = {"sandbox": "process", "container": {"image": "python:3.12"}}
         self.assertFalse(validate_public_config_schema(container_on_process).valid)
 
-    def test_container_build_dockerfile_resolves_relative_to_build_context(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            docker_dir = tmp_path / "docker"
-            docker_dir.mkdir()
-            dockerfile = docker_dir / "Dockerfile"
-            dockerfile.write_text("FROM python:3.11-slim\n", encoding="utf-8")
-            runtime = {
-                "sandbox": "container",
-                "container": {
-                    "image": "optpilot-context-relative-test:latest",
-                    "build": {
-                        "context": "docker",
-                        "dockerfile": "Dockerfile",
-                        "tag": "optpilot-context-relative-test:latest",
-                    },
-                    "network": "disabled",
-                },
-            }
+    def test_environment_container_sandbox_is_refused_at_compile(self) -> None:
+        # The legacy container execution backend is gone. An environment that
+        # asks for container isolation must fail closed here rather than
+        # compile to the process backend and silently run on the host.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "evaluator.py").write_text(
+                "def evaluate(context):\n    return {'metric_values': {'throughput': 1.0}}\n",
+                encoding="utf-8",
+            )
             environment_path = tmp_path / "environment.yaml"
             environment_path.write_text(
                 yaml.safe_dump(
                     {
                         "apiVersion": "optpilot.io/v1",
                         "config": "environment",
-                        "id": "container-context-env",
-                        "evaluator": {"python": "tests.fixtures.catalog.toy_factory_env:evaluate"},
-                        "runtime": runtime,
+                        "id": "container-env",
+                        "runtime": {
+                            "sandbox": "container",
+                            "container": {"image": "example/img:latest"},
+                        },
+                        "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
                         "candidate": {
                             "format": "parameters",
                             "parameters": {"schema": {"x": {"valueType": "float", "min": 0.0, "max": 1.0}}},
@@ -1671,9 +1665,8 @@ class MvpIntegrationTest(unittest.TestCase):
                     {
                         "apiVersion": "optpilot.io/v1",
                         "config": "method",
-                        "id": "container-context-method",
+                        "id": "container-env-method",
                         "entrypoint": {"python": "tests.fixtures.catalog.user_methods.fixed_parameter_method:FixedParameterMethod"},
-                        "runtime": runtime,
                         "settings": {"batchSize": 1, "values": {"x": 0.5}},
                         "accepts": {"formats": ["parameters"]},
                     },
@@ -1687,7 +1680,7 @@ class MvpIntegrationTest(unittest.TestCase):
                     {
                         "apiVersion": "optpilot.io/v1",
                         "config": "study",
-                        "name": "container-context-study",
+                        "name": "container-env-study",
                         "environmentConfig": "environment.yaml",
                         "methodConfig": "method.yaml",
                         "objective": {"metric": "throughput", "direction": "maximize"},
@@ -1698,12 +1691,11 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            compiled = compile_authoring_config(study_path)
+            with self.assertRaises(ValueError) as caught:
+                compile_authoring_config(study_path)
 
-        self.assertEqual(compiled["execution"]["backend"]["config"]["build"]["context"], str(docker_dir.resolve()))
-        self.assertEqual(compiled["execution"]["backend"]["config"]["build"]["dockerfile"], str(dockerfile.resolve()))
-        self.assertEqual(compiled["method"]["runtime"]["build"]["context"], str(docker_dir.resolve()))
-        self.assertEqual(compiled["method"]["runtime"]["build"]["dockerfile"], str(dockerfile.resolve()))
+        self.assertIn("not executable", str(caught.exception))
+        self.assertIn("only methods", str(caught.exception))
 
     def test_public_schema_rejects_unimplemented_runtime_and_candidate_shapes(self) -> None:
         environment = {

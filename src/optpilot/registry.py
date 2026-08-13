@@ -20,7 +20,6 @@ BUILTIN_COMPONENTS: Dict[str, Dict[str, str]] = {
     "backend": {
         "builtin.local_backend": "optpilot.execution:LocalExecutionBackend",
         "builtin.local_subprocess_backend": "optpilot.execution:LocalSubprocessExecutionBackend",
-        "builtin.container_backend": "optpilot.execution:LocalContainerExecutionBackend",
     },
     "scheduler": {
         "builtin.local_scheduler": "optpilot.scheduler:LocalTrialScheduler",

@@ -24,9 +24,11 @@ PROVIDER_TRUST_POLICY_OWNER_KIND = "provider-trust-policy"
 PROVIDER_TRUST_GATEWAY_CONTRACT = "optpilot-stdlib-gateway-v1"
 PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE = "python3"
 
-_IMMUTABLE_IMAGE_RE = re.compile(
+IMMUTABLE_IMAGE_RE = re.compile(
     r"^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$"
 )
+# Retained for callers that predate the exported name.
+_IMMUTABLE_IMAGE_RE = IMMUTABLE_IMAGE_RE
 _CONTAINER_EXECUTABLE_RE = re.compile(
     r"^(?:/[A-Za-z0-9_.+-]+)+$|^[A-Za-z0-9_.+-]+$"
 )
