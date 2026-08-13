@@ -93,6 +93,14 @@ tools, **interactive views** (browser interfaces a package can offer for
 inspecting or steering work), and the **workspace** — the editable project with
 development tools around it that you build a package in, described in §5.
 
+All of them resolve an image the same way — the component's own if it names
+one, otherwise the package's, otherwise the default — and all pass the same
+checks before starting (§6). An interactive view is long-lived rather than
+per-piece-of-work: its port is reachable only from the machine it runs on, only
+through OptPilot, and it is stopped when you close it or the run it belongs to
+ends. Being interactive grants it nothing extra; it reaches the network or a
+credential only by declaring so, exactly like anything else.
+
 ### How many images a package needs
 
 **One image per distinct set of software the package requires — not one per
@@ -116,7 +124,9 @@ code and import directly. `production_agv_scheduling` carries its simulation
 library this way.
 
 The default image has a fingerprint like any other, so the record stays complete
-without the author declaring anything.
+without the author declaring anything. A run records the fingerprint of the
+default image it actually used, so a later OptPilot release shipping a newer
+default does not change what an existing run says it ran.
 
 ### A package's own image, and per-component overrides
 
@@ -158,6 +168,56 @@ gigabytes it never touches.
 An author may therefore set only the package image and be done, or add overrides
 where they earn their keep.
 
+### What an image must provide
+
+OptPilot supplies the command, the working directory and its own in-container
+launcher, so an image is a place to run code rather than a self-starting
+program. It must provide:
+
+- A Python interpreter on the path as `python3`, at or above the minimum
+  version OptPilot supports.
+- A widely-used Linux base. OptPilot mounts its launcher and editing tools in
+  as prebuilt binaries rather than installing them, and those binaries need a
+  compatible system C library, so minimal distributions built on a different
+  one are not usable.
+- A writable temporary directory, and a default user that is not root.
+
+Any start-up command the image declares is ignored. These requirements are
+checked when an image is first named or captured, and again at approval, so a
+mismatch is reported while the author can still fix it.
+
+### Limits
+
+Every container runs under a processor share, a memory cap, a wall-clock limit
+per piece of work, and a cap on how much output it may produce. OptPilot
+applies defaults; a component may raise them:
+
+```yaml
+runtime:
+  container:
+    image: ghcr.io/example/agv-scheduling@sha256:<fingerprint>
+    platform: linux/amd64
+    limits:
+      memory: 8GiB
+      timeoutSeconds: 900
+```
+
+A raised limit is shown next to the image when you approve it, because raising
+one is part of what you are agreeing to.
+
+### Architecture
+
+`platform` names the architecture the image is for. A machine of a different
+architecture stops the launch at the same point as a missing image. Emulation
+is possible but must be asked for explicitly at launch, and the fact is
+recorded, because an emulated run is roughly ten times slower and should never
+be mistaken for a native one.
+
+Where a reference covers several architectures, the run records the fingerprint
+of the *one* that ran, not of the multi-architecture reference. Otherwise the
+same recorded fingerprint would mean different executed bytes on different
+machines.
+
 An image must already be built when it is named, and is named by fingerprint.
 OptPilot never builds an image while a run is in progress — a build fetches
 software from the network, and what it fetches can differ between builds, so a
@@ -184,9 +244,11 @@ while you are building it, it works in a run. Which image that is:
 - *A component with its own override* — editing that component uses its image
   rather than the package's.
 
-OptPilot adds the editing tools on top of whichever image is used, and excludes
-them when capturing (below), so a package's image stays a description of what
-its code needs and never contains an editor.
+OptPilot supplies the editing tools by **mounting** them into the container
+from outside rather than adding them to the image. They are therefore never
+part of the image's contents, so a package's image stays a description of what
+its code needs and never contains an editor — and capturing (below) needs no
+step to strip them out, because they were never there.
 
 **Register each piece.** You declare "this code is an environment" (or a method,
 or a resource), and which package it belongs to. Registering does four things
@@ -203,12 +265,63 @@ These belong together because splitting them lets you register code whose
 software requirements are recorded nowhere. It would sit in the package looking
 complete and fail when anyone ran it.
 
-If you installed nothing beyond what the starting image already had, the
-existing fingerprint is kept and no image is produced.
+**Where a captured image goes.** Capture commits the stopped workspace
+container into the container software's local image store on your machine and
+records that store's fingerprint. The package's settings then name a local
+image, which runs on your machine and nowhere else.
+
+Making it shareable is a separate, explicit step: push the image to a
+repository named in the package's settings, using whatever login the container
+software already has — OptPilot never handles registry credentials — after
+which the settings name `repository@<fingerprint>`. The launch check (§6)
+accepts either form and compares it against the same form on the machine.
+
+A package whose settings hold only local fingerprints is a package only its
+author can run. That is the concrete meaning of sharing not being built yet
+(§11).
+
+**Detecting that nothing was installed.** If the author installed nothing, the
+starting image's fingerprint is kept and no new image is produced.
+
+Deciding this by looking at which files changed does not work: editing anything
+leaves shell history, editor state, logs and caches behind, so the changed-file
+list is never empty even when no software was installed.
+
+The reliable signal is **what software is present**, not what files moved.
+OptPilot records an inventory when the workspace starts and again at
+registration: the installed Python packages with their versions, from every
+interpreter environment on the image's path rather than only the default one,
+and the installed system packages. Matching inventories mean nothing was
+installed.
+
+This is exact for software that arrived through a package manager, which is how
+software normally arrives. It would miss a program placed by hand, such as a
+binary downloaded straight into a system directory; catching that additionally
+needs a file comparison narrowed to the few directories holding programs and
+libraries, ignoring temporary files, caches and home directories. The inventory
+comparison alone covers the ordinary case, and mounting the editor rather than
+installing it (above) means the only thing that can change an inventory is the
+author.
+
+Producing a duplicate image would not waste much storage — images are stored as
+layers, a registry stores each layer once, and an image capturing no changes
+shares every layer with its starting image. The reason to detect it is clarity:
+several fingerprints that are functionally identical, with nothing to say which
+a package should name.
+
+**Updating something already registered.** Registering again over the same
+component replaces its files, re-runs the inventory comparison, and takes a new
+snapshot. If software was added, the new image is recorded where the old one
+was — as the package's image if that is what the component was using, or as its
+override if it had one. Refreshing the package's image for every component that
+shares it is the same action performed from a workspace that has no override.
 
 Adding a second piece later writes different files into the same folder. Pieces
 built at different times, in different workspaces, coexist because they occupy
 different paths in one directory.
+
+A run setup is created the same way, by naming an environment, a method, an
+objective and a budget. It runs no code of its own, so it names no image.
 
 **Share it.** Publishing the folder where others can obtain it, typically a
 source repository. *Not built yet.*
@@ -222,15 +335,50 @@ failure leaves nothing behind.
 own override — must already be present on the machine. OptPilot does not fetch
 one on its own: it reports which image is needed and how large it is, and you
 fetch it, either through the container software directly or by accepting the
-prompt. You then **approve** that exact fingerprint for execution, which
-OptPilot remembers; approving is how you say you are willing to run software
-someone else built. A missing engine, an image that is absent, unapproved, or
+prompt. You then **approve** it for execution, which OptPilot remembers.
+
+Approval covers the exact image fingerprint *together with the network and
+credential grants declared against it*, because what you are agreeing to is an
+exposure, not merely a set of bytes. Widening those grants, or changing the
+image, asks again; narrowing them does not. Approvals are recorded per machine,
+can be listed, and can be withdrawn — withdrawing does not stop a run already
+under way but prevents the next container from starting. The default image that
+ships with a release is approved already. A launch with nobody present to
+answer, such as one in an automated build, uses an approval granted in advance
+rather than being prompted. A missing engine, an image that is absent, unapproved, or
 whose fingerprint does not match what the package names, stops the launch here.
 Nothing has been written and no code has run.
 
+**Network and credentials.** A container gets no outbound network and no
+credentials unless the component asks for them. Each component declares, in its
+own settings, the network access it needs and the named credentials it needs —
+`or_solving`'s method declares both, because it calls a language model; its
+environment declares neither.
+
+Values are read from the launching user's settings and passed to the container
+as environment variables when it starts, never on the command line where other
+programs on the machine could read them. **The names of what was declared are
+part of the run definition; the values are never written to the archive.** This
+is the deliberate opposite of run-setup inputs, whose values *are* recorded,
+because an input is part of the question being asked while a credential is not.
+
+Granted network is ordinary outbound access. It carries no route to services
+running on the host machine and none to other containers of the same run.
+
+These grants are per component and never per package, because a component that
+executes model-written code must be assumed capable of reading and sending
+anything it has been given.
+
 **Capture the code.** The package folder is snapshotted into the archive and
 fingerprinted. Execution uses that snapshot, so editing the folder while a run
-is in progress changes neither what runs nor what is recorded.
+is in progress changes neither what runs nor what is recorded. A run setup may
+pair an environment and a method that live in different packages; each is
+snapshotted from its own package, and the run definition names both
+fingerprints.
+
+A launch snapshots the folder as it stands, whether or not you took a version
+deliberately. If the contents are unchanged since the last snapshot, the
+existing one is reused rather than duplicated.
 
 **Write the run definition.** A record naming the environment and method code
 fingerprints, the image fingerprints, the settings, the objective, the budget,
@@ -256,9 +404,42 @@ holding your code visible inside it** — the way plugging in an external drive
 makes files visible to a program. The image supplies software; the folder
 supplies your code.
 
-A container is started for each piece of work: once per proposed solution for an
-environment, once per round of proposals for a method. It is not one long-lived
-container for the whole run, which is why startup time matters (§10).
+**How long a container lives.** An environment gets a fresh container for each
+proposed solution, so nothing one candidate leaves behind can affect how a later
+one is scored.
+
+A method gets **one container for the whole run**. It has to: a method
+accumulates state between rounds — a population, a conversation history, the
+position of a random number generator — and a fresh container each round would
+discard it. The method's container is started once and receives each round of
+proposals over a stream that stays open, answering on the same stream.
+
+So a run starts one container per method, plus one per proposed solution. That
+second number is what makes startup time matter (§10).
+
+**How a container is invoked.** OptPilot supplies the command itself and
+ignores any the image declares. The working directory is the mounted code
+folder, and the component's code is placed on the interpreter's import path.
+One request — the candidate and the settings — arrives as a single JSON
+document, and one JSON document is expected back. Anything printed for a human
+to read must go to the error stream, which is captured into the record; the
+result stream carries only the response. Each exchange is bounded by the
+component's time limit.
+
+**What is mounted, and what comes back.** Exactly three things are visible
+inside the container, and nothing else from the machine:
+
+| Mount | Access |
+| --- | --- |
+| The unpacked snapshot of the component's code | read-only |
+| An output directory, empty at the start of each piece of work | writable |
+| A required capability provider's snapshot, when one is declared | read-only |
+
+The archive, your home directory and every other path on the machine are not
+mounted. The result of a piece of work is the JSON response together with
+whatever was written into the output directory, both collected when the
+container exits. Links pointing outside the output directory are not followed
+when collecting, and the total collected size is capped.
 
 **Your code stays outside the image.** Two reasons. Practically, an image
 containing your code would need rebuilding on every edit, and builds take
@@ -287,9 +468,11 @@ instruction embedded in a problem description reaches the running code.
 
 Run as an ordinary program on the machine, that code would have the launching
 user's full access: their home directory, their credentials, and OptPilot's own
-archive. A container bounds it, and makes restrictions enforceable rather than
-merely stated — a component declaring it needs no network can be held to that,
-and processor, memory and time limits can be applied and relied upon.
+archive. A container bounds it, and makes restrictions real rather than merely stated. A
+component reaches the network only if it asked to, and the processor, memory,
+time and output limits of §4 are applied by the container software rather than
+trusted to the code. Exceeding one ends that piece of work; it is recorded as a
+failure naming the limit, and the run continues under its failure policy (§9).
 
 ## 9. What the record contains
 
@@ -308,6 +491,32 @@ So the run-definition fingerprint answers *what was run*, and the accumulated
 results answer *what happened*. Two launches of the same setup with the same
 inputs share a run-definition fingerprint, and each has its own results.
 
+The record also notes the machine the run executed on: which container software
+and version, the limits actually applied, and whether emulation was used. Two
+runs sharing a run-definition fingerprint but differing in results can then be
+compared on where they ran.
+
+**When something fails.** A container that exits non-zero, returns something
+unreadable, exceeds a limit, or fails to start ends that piece of work. It is
+recorded as a failed trial carrying the exit status, the limit breached if any,
+and the captured error output — never a silent gap. Nothing is retried
+automatically. The run continues until the run setup's tolerance for consecutive
+failures is reached.
+
+If the container software or the machine itself dies, the record is left valid
+and readable, marked as ended incomplete; the run definition already stands.
+Containers are labelled with the run they belong to, and any left behind are
+cleaned up at the next launch. The image check is repeated every time a
+container starts, so an image removed part-way through a run fails loudly rather
+than quietly resolving to something else. A run is not resumed; launching again
+is a new execution of the same run definition.
+
+**What the archive holds.** The archive stores code, results and fingerprints —
+including the fingerprint of every image used. It does **not** store image
+contents. So repeating a run exactly depends on the image still being obtainable
+from wherever it came from; if it has been deleted there, the record remains
+verifiable and readable but the run cannot be re-executed.
+
 **Where the record stops.** A run records the code that produced it, not the
 code that produced *that* code. The boundary is registration. If a simulator was
 written by a generator, the simulator's source is captured and fully
@@ -319,11 +528,12 @@ how that code executes.
 
 - **Container software is required.** Every component runs in a container, so
   the machine must have Docker or Podman installed.
-- **Each piece of work pays container startup.** An environment is invoked once
-  per proposed solution, and starting a container takes on the order of a
-  second. A run of twenty-five trials gains well under a minute; one of many
-  thousands gains hours. **This has not been measured on a real run, and should
-  be before the design is committed to.**
+- **Each proposed solution pays container startup.** A method's container is
+  started once for the whole run, so the cost scales with the number of
+  candidates evaluated, not with rounds. Starting a container takes on the order
+  of a second: a run of twenty-five trials gains well under a minute, one of
+  many thousands gains hours. **This has not been measured on a real run, and
+  should be before the design is committed to.**
 - **The default image must be built, distributed and downloaded once.**
 - **A package's own image is slow on first use** — such images run to a couple
   of gigabytes, and fetching one is a deliberate step.
@@ -342,7 +552,37 @@ how that code executes.
 - **Components not written in Python.** An image can carry Java, R or CUDA and
   the rule covers them, but nothing has exercised that path.
 
-## 12. Open questions
+## 12. Decisions this design needs
+
+These cannot be settled from the design itself.
+
+- **The default image: published where, and kept for how long?** Every package
+  that declares nothing depends on it, and runs record the fingerprint of the
+  one they used. Retaining every past default keeps old runs re-executable
+  indefinitely at an ongoing hosting cost; retaining only recent ones leaves
+  older runs verifiable but not re-executable.
+- **Does the release wait for every bundled package to have an image?** This
+  bites `rolling-milp-baselines`, whose commercial solver may not be
+  redistributable at all — so the choice is between shipping without it,
+  shipping a recipe users build themselves, and delaying.
+- **What if only a privileged container service is available?** Refusing to
+  launch is the only choice under which the isolation argument of §8 holds
+  without qualification, and also the one that turns away the most users.
+- **May anything ever leave the archive?** It grows without bound on a laptop
+  otherwise. Allowing a deliberate prune qualifies the promise in §1 that
+  nothing is ever modified, and would need a record that something was removed.
+
+## 13. Relationship to what runs today
+
+Today environments and methods run as ordinary processes on the machine, with
+dependencies either carried inside the package or installed by hand, and the
+bundled packages are written for that. Adopting this design means each of them
+needs an image before it can run at all, and the code paths that prepare and
+launch host processes are replaced rather than kept alongside. Whether that
+happens in one step or package by package is part of the release decision
+above, not of this design.
+
+## 14. Open questions
 
 - **Registering from a second workspace.** If a package's second component is
   built in a different workspace, that workspace captures its own image. When
