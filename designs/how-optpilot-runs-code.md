@@ -311,6 +311,29 @@ shares every layer with its starting image. The reason to detect it is clarity:
 several fingerprints that are functionally identical, with nothing to say which
 a package should name.
 
+**Keeping a workspace aligned with its package.** A workspace records the image
+it started from. Because a workspace starts from the package's image (above),
+anything it captures is normally that image plus one more layer — cheap to store
+and cheap to download, since the shared layers are already present.
+
+That stops being true if the workspace's starting point drifts away from the
+package's image, which happens two ways. Two workspaces opened before either has
+registered both start from the standard image, so each captures its own
+independent copy of whatever was installed in it. And a workspace left open
+while another registers is building on a starting point the package has since
+moved past.
+
+Both are the same problem, and the cheap fix is preventative: when a package's
+image changes while a workspace is open, the workspace says so and offers to
+restart from the new one.
+
+For what remains, the inventory comparison above is extended to consider the
+package's current image as well as the workspace's starting image. If what you
+ended up with matches what the package's image already holds, that image is used
+and nothing is captured — even though the workspace began somewhere else. Two
+people who installed the same thing in parallel therefore converge on one image
+rather than two.
+
 **Updating something already registered.** Registering again over the same
 component replaces its files, re-runs the inventory comparison, and takes a new
 snapshot. If software was added, the new image is recorded where the old one
@@ -611,19 +634,20 @@ above, not of this design.
 
 ## 14. Open questions
 
-- **Registering from a second workspace.** If a package's second component is
-  built in a different workspace, that workspace captures its own image. When
-  both components need much the same software, the package ends up with two
-  large near-identical images. The options are to accept it, to let the author
-  say "reuse the image already recorded for this package", or to detect that the
-  captured environments match and share one fingerprint. The second is the most
-  predictable.
+- **Registering software the package's image does not have.** The alignment
+  rules in §5 resolve the case where a workspace ends up with what the package
+  already provides. They do not resolve the opposite: you installed something
+  genuinely new. Two honest outcomes exist — capture it as an image for the one
+  component you are registering, leaving every other component on the package's
+  image, or move the package's image forward so everything gets it. The first
+  keeps other components small and gives the package a second image to maintain;
+  the second keeps one image and makes every component carry the addition.
+  Neither is right in general: adding a solver one method needs argues for the
+  first, upgrading a shared library argues for the second. This is a decision
+  the author should be asked to make at registration, and the wording of that
+  question matters more than the mechanism behind it.
 - **Where images are hosted.** One source repository can publish several
   differently-named images, so a package needing one image plus an override is
   straightforward. Worth confirming for the intended registry: whether a person
   without an account can download a public image, and at what rate, since that
   sits directly in the path of someone using a package for the first time.
-- **Redistribution of licensed software.** An image containing a commercial
-  solver may not be freely publishable — which affects
-  `production_agv_scheduling` directly, since its `rolling-milp-baselines`
-  method needs one. This is a per-package legal question, not a packaging one.
