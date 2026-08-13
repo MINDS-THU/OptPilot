@@ -1,7 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-baselines
-description: Matched-seed 100-replication evaluation for exhaustive rule and rolling-MILP baselines.
+description: Matched-seed 100-replication evaluation for exhaustive rule baselines.
 tags: [production, agv, scheduling, files, simulation, baseline]
 
 interface:

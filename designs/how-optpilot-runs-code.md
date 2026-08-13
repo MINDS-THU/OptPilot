@@ -18,8 +18,10 @@ each other under an objective and a budget.
 Its distinguishing promise concerns what happens *afterwards*. Every execution
 writes a permanent copy of everything involved — the code, the settings, every
 proposal, every score, the ordered sequence of events — into a private
-**archive** on your machine. The archive is append-only: written once, never
-modified.
+**archive** on your machine. Nothing in it is ever modified. A record can be
+deliberately deleted to reclaim space (§11), which leaves behind a note saying a
+record existed and was removed — so a deleted record is never mistaken for one
+that never happened.
 
 Every stored item gets a **fingerprint**: a code computed from its contents,
 such that changing a single byte changes the code completely, and anyone can
@@ -549,28 +551,53 @@ how that code executes.
   same" image from scratch later can produce different contents, unless every
   version it installs is pinned during the build.
 - **Sharing packages between people.** *Not built yet.*
+- **Reclaiming space automatically.** Deletion is deliberate and manual (§12);
+  nothing expires on its own, so an archive left alone still grows.
 - **Components not written in Python.** An image can carry Java, R or CUDA and
   the rule covers them, but nothing has exercised that path.
 
-## 12. Decisions this design needs
+## 12. Settled: storage, licensing, and privilege
 
-These cannot be settled from the design itself.
+**Records and images can be deleted deliberately.** The archive would otherwise
+grow without limit on a laptop, and the realistic end of that is someone
+deleting all of it by hand. So a person may remove chosen runs, reclaiming their
+results and code snapshots.
 
-- **The default image: published where, and kept for how long?** Every package
-  that declares nothing depends on it, and runs record the fingerprint of the
-  one they used. Retaining every past default keeps old runs re-executable
-  indefinitely at an ongoing hosting cost; retaining only recent ones leaves
-  older runs verifiable but not re-executable.
-- **Does the release wait for every bundled package to have an image?** This
-  bites `rolling-milp-baselines`, whose commercial solver may not be
-  redistributable at all — so the choice is between shipping without it,
-  shipping a recipe users build themselves, and delaying.
-- **What if only a privileged container service is available?** Refusing to
-  launch is the only choice under which the isolation argument of §8 holds
-  without qualification, and also the one that turns away the most users.
-- **May anything ever leave the archive?** It grows without bound on a laptop
-  otherwise. Allowing a deliberate prune qualifies the promise in §1 that
-  nothing is ever modified, and would need a record that something was removed.
+Two rules keep this from undermining §1. A removal leaves a **note in place of
+the record**, naming what was removed and when, so a deleted run is
+distinguishable from one that never existed. And removal is always a person's
+explicit act — nothing expires, and nothing is cleaned up automatically.
+
+A run's image may be removed the same way, but **only once no remaining record
+names it**. Images are shared: one image typically serves every run of a package
+and often several packages. Deleting the image a run names because you deleted
+*that* run would silently strip other runs of their ability to re-execute. So an
+image is offered for removal when the last record referring to it goes, never
+before.
+
+The same applies to the standard image OptPilot supplies: past versions are kept
+while any record still names one, and become removable when none does.
+
+**Software that cannot be redistributed is not packaged.** A component needing a
+commercially licensed library cannot have that library placed inside a published
+image, so it cannot be shipped in a form anyone can run. Such a component is
+removed from the package rather than shipped as a method that fails for everyone
+without a licence. `production_agv_scheduling` lost its rolling-MILP baseline
+for this reason on 2026-08-13; the simulator still accepts the kind of policy it
+provided, so it can return if the licensing question is ever resolved.
+
+**A container system running with administrator rights is accepted.** Container
+software is commonly configured to run as a background service with
+administrator rights over the machine; an arrangement exists that runs with only
+the invoking user's rights, but it is not the default nearly anywhere. OptPilot
+runs on either and does not warn.
+
+This has an honest consequence for §8. On the common configuration, a container
+bounds what code *ordinarily* reaches, and applies the processor, memory, time
+and output limits — but code that breaks out of a container has administrator
+access to the machine rather than only the user's. So the isolation §8 describes
+is a strong boundary against ordinary behaviour, not a guarantee against
+deliberate escape.
 
 ## 13. Relationship to what runs today
 

@@ -15,7 +15,6 @@ SUITES = (
     ("rule grid", "methods/rule_grid", "test_method.py"),
     ("evolutionary search", "methods/evolutionary_rule_search", "test_method.py"),
     ("process-aware LLM", "methods/process_aware_llm/tests", "test_method.py"),
-    ("rolling MILP", "methods/rolling_milp/tests", "test_rolling_milp_method.py"),
     (
         "environment evaluator",
         "environments/production_agv_scheduling/tests",

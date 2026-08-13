@@ -50,9 +50,11 @@ per-commit gates.
 3. **Platform coverage.** The currently pinned preview image was verified on
    Apple Silicon. Publish and test a pinned multi-platform OCI index for
    `linux/arm64` and `linux/amd64` before claiming general desktop support.
-4. **Licensed solver gate.** Run both rolling-MILP candidates on a supported
-   `gurobipy` installation with a valid Gurobi license. Until then, that method
-   remains an explicitly optional baseline.
+4. **Rolling-MILP baseline removed (2026-08-13).** It required `gurobipy` and
+   a Gurobi license, which cannot be redistributed inside a published container
+   image. Rather than ship a method nobody could run without buying a licence,
+   it was removed from the package. The simulator still accepts event-driven
+   controllers, so it can return if the licensing question is resolved.
 5. **Durable LLM recovery.** Current retained workers do not project a durable
    method-state or prompt-object store. A completely replaced worker can lose
    iterative search state and repeat paid provider calls. The method also does
@@ -72,7 +74,6 @@ per-commit gates.
   because it transmits research inputs and incurs external cost.
 - The full 21-trial LLM study, 135-point rule grid, and 704-candidate GA, DE,
   and PSO studies on appropriately sized runners.
-- Both rolling-MILP variants on a licensed runner.
 - Long-horizon and 100-replication baseline evaluations.
 - Browser checks for Unity loading, Brotli response headers, local MQTT
   connection, visible AGV/product movement, and interface cleanup on the

@@ -33,7 +33,6 @@ not substitute for an upstream release tag or grant redistribution rights.
   AGV-assignment rule grid, including `DEFAULT/DEFAULT/DEFAULT`.
 - The 14-dimensional weighted-rule representation and the GA, DE, and PSO
   search families.
-- Both the original and two-stage rolling MILP policy variants.
 - The manager, trace-query, parallel-editor, evaluation, and elite-preserving
   structure of the process-aware LLM method.
 - The supplied compiled Unity WebGL factory visualization. The retained export
@@ -71,10 +70,11 @@ not substitute for an upstream release tag or grant redistribution rights.
 - LLM-generated source is inherently dependent on the selected model and
   provider. Prompts, model metadata, candidate lineage, and evaluated files are
   retained as run evidence.
-- The rolling MILP candidates require a working Gurobi Python installation and
-  license at evaluation time. Missing solver support is reported as a failed
-  candidate. Ordinary solve failures use the paper's explicitly labelled
-  heuristic fallback, and fallback counts remain visible in evaluation metrics
+- The rolling-MILP policy variants from the paper are not packaged here: they
+  require a licensed Gurobi installation, which cannot be redistributed inside
+  a published container image. Ordinary solve failures in the packaged methods
+  use the paper's explicitly labelled heuristic fallback, and fallback counts
+  remain visible in evaluation metrics
   rather than being relabelled as successful MILP solves.
 - The supplied research snapshot did not include a top-level license file.
   Confirm redistribution rights for the extracted research code before

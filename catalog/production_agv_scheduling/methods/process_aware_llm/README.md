@@ -28,8 +28,8 @@ The method rejects generated source that declares the simulation-bound
 `create_controller` entry point, directly imports simulator/runtime modules, or
 uses the obsolete AGV field name `battery`. The environment also rejects an
 ambiguous module that exposes both `create_scheduler` and `create_controller`;
-the controller-only entry point remains available to the packaged rolling-MILP
-baseline.
+the controller-only entry point remains available to event-driven
+controllers.
 
 These checks enforce the package contract and catch common model mistakes, but
 they are not a Python security sandbox. A snapshot policy is still imported and

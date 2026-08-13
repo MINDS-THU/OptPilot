@@ -31,8 +31,7 @@ The simulator accepts two policy entry points without knowing which method
 created them:
 
 - `create_scheduler()` for snapshot-to-command dispatch policies.
-- `create_controller(simulation, settings)` for event-driven controllers such
-  as the rolling MILP.
+- `create_controller(simulation, settings)` for event-driven controllers.
 
 ## Included methods
 
@@ -43,7 +42,6 @@ created them:
 | Genetic algorithm | 14 rule weights, initialized with all 64 non-random one-hot combinations, followed by ten generations | `studies/ga_weighted_rules.yaml` |
 | Differential evolution | The same 14-weight space with DE/best/1/bin | `studies/de_weighted_rules.yaml` |
 | Particle swarm optimization | The same 14-weight space with the paper's PSO parameters | `studies/pso_weighted_rules.yaml` |
-| Rolling MILP | Original monolithic and two-stage controller bundles | `studies/rolling_milp.yaml` |
 
 The evolutionary methods rank candidates by
 `mean_total_score - 0.35 × std_total_score`. Candidate evaluation remains in
@@ -227,10 +225,6 @@ once and the fourth begins when one evaluator slot becomes available. Reduce
 `execution.parallelism` for a smaller machine without changing the candidates
 or their retained evaluation settings.
 
-Rolling-MILP evaluation requires `gurobipy` and a valid Gurobi license in the
-environment worker's Python runtime. The package can still be validated and the
-MILP candidates can still be generated without Gurobi. An actual MILP trial
-fails with a clear dependency or license error when the solver is unavailable.
 For ordinary solve failures, infeasible statuses, or time-limit exits, the
 paper configuration uses its explicit heuristic fallback. Those replans are
 labelled as fallbacks—not successful MILP solves—and the evaluator reports both
@@ -248,7 +242,6 @@ production_agv_scheduling/
   methods/process_aware_llm/                # manager/query/parallel-editor loop
   methods/rule_grid/                        # 135 fixed rule combinations
   methods/evolutionary_rule_search/         # GA, DE, and PSO
-  methods/rolling_milp/                     # original and two-stage MILP
   studies/                                  # runnable bindings and budgets
 ```
 
