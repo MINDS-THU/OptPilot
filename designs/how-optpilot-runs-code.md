@@ -570,14 +570,29 @@ to read must go to the error stream, which is captured into the record; the
 result stream carries only the response. Each exchange is bounded by the
 component's time limit.
 
-**What is mounted, and what comes back.** Exactly three things are visible
+**What is mounted, and what comes back.** Exactly four things are visible
 inside the container, and nothing else from the machine:
 
 | Mount | Access |
 | --- | --- |
+| OptPilot's own launcher | read-only |
 | The unpacked snapshot of the component's code | read-only |
 | An output directory, empty at the start of each piece of work | writable |
 | The snapshot of another component this one declares it needs | read-only |
+
+The launcher is the piece that receives a request, runs the component's code and
+returns the answer. It is mounted rather than installed, which is what keeps an
+image a description of what the *package's* code needs: an image never contains
+OptPilot, never tracks OptPilot's version, and does not have to be rebuilt when
+OptPilot changes.
+
+For that to hold, the launcher must need nothing from the image but a Python
+interpreter. Measured on 2026-08-14: the two programs that run inside a container
+both load correctly with OptPilot's source mounted read-only and all three of its
+third-party libraries replaced by stubs that raise on any use — nothing reads
+them. They are pulled in only by a chain of imports written for authoring-time
+work, and deferring those imports is what makes the guarantee real rather than
+incidental. *(Verified for loading, not yet for a complete piece of work.)*
 
 The third row covers a component written to call into another — a method that
 scores its proposals by running the environment's own simulator rather than
