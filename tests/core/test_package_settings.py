@@ -10,13 +10,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from optpilot.image_reference import parse_image_reference
 from optpilot.package_settings import (
     PACKAGE_SETTINGS_FILENAMES,
+    ContainerImageDeclaration,
+    resolve_component_image,
     ensure_package_identity,
     find_package_settings_path,
     load_package_settings,
     new_package_identity,
     package_identity,
+    PackageSettings,
     validate_package_identity,
     write_package_settings,
 )
@@ -212,3 +216,122 @@ class MovingAPackageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+DIGEST = "sha256:" + "c" * 64
+
+
+class PackageImageTests(unittest.TestCase):
+    """The package-wide image: declared once, used by every component in it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name) / "pkg"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write(self, body: str) -> None:
+        (self.root / PACKAGE_SETTINGS_FILENAMES[0]).write_text(
+            "apiVersion: optpilot.io/v1\nconfig: package\n"
+            f"identity: {new_package_identity()}\n" + body
+        )
+
+    def test_a_package_may_declare_no_image(self) -> None:
+        self._write("")
+        self.assertIsNone(load_package_settings(self.root).container)
+
+    def test_a_declared_image_is_read(self) -> None:
+        self._write(
+            f"runtime:\n  container:\n    image: ghcr.io/example/or-solving@{DIGEST}\n"
+            "    platform: linux/amd64\n"
+        )
+        container = load_package_settings(self.root).container
+        self.assertEqual(container.platform, "linux/amd64")
+        self.assertEqual(container.image.digest, DIGEST)
+        self.assertEqual(container.image.repository, "ghcr.io/example/or-solving")
+
+    def test_a_tag_is_refused(self) -> None:
+        self._write(
+            "runtime:\n  container:\n    image: ghcr.io/example/or-solving:latest\n"
+            "    platform: linux/amd64\n"
+        )
+        with self.assertRaises(ValueError) as caught:
+            load_package_settings(self.root)
+        self.assertIn("pinned by sha256", str(caught.exception))
+
+    def test_platform_is_required(self) -> None:
+        # The same reference on a different architecture is different bytes.
+        self._write(
+            f"runtime:\n  container:\n    image: ghcr.io/example/x@{DIGEST}\n"
+        )
+        with self.assertRaises(ValueError) as caught:
+            load_package_settings(self.root)
+        self.assertIn("platform is required", str(caught.exception))
+
+    def test_unknown_keys_are_refused(self) -> None:
+        self._write(
+            f"runtime:\n  container:\n    image: ghcr.io/example/x@{DIGEST}\n"
+            "    platform: linux/amd64\n    build: ./Dockerfile\n"
+        )
+        with self.assertRaises(ValueError) as caught:
+            load_package_settings(self.root)
+        self.assertIn("build", str(caught.exception))
+
+    def test_an_image_survives_rewriting_the_file(self) -> None:
+        declared = ContainerImageDeclaration(
+            image=parse_image_reference(f"ghcr.io/example/x@{DIGEST}"),
+            platform="linux/arm64",
+        )
+        identity = new_package_identity()
+        write_package_settings(self.root, identity=identity, container=declared)
+        reloaded = load_package_settings(self.root)
+        self.assertEqual(reloaded.container.image.raw, declared.image.raw)
+        self.assertEqual(reloaded.container.platform, "linux/arm64")
+
+
+class ImageResolutionTests(unittest.TestCase):
+    """Its own if it names one, else its package's, else OptPilot's default."""
+
+    def setUp(self) -> None:
+        self.package_image = ContainerImageDeclaration(
+            image=parse_image_reference(f"ghcr.io/example/pkg@{DIGEST}"),
+            platform="linux/amd64",
+        )
+        self.component_image = ContainerImageDeclaration(
+            image=parse_image_reference("sha256:" + "d" * 64),
+            platform="linux/amd64",
+        )
+
+    def _settings(self, container):
+        return PackageSettings(
+            path=Path("/tmp/x/optpilot.package.yaml"),
+            identity=new_package_identity(),
+            container=container,
+        )
+
+    def test_a_component_uses_its_own_image_when_it_names_one(self) -> None:
+        resolved = resolve_component_image(
+            self.component_image, self._settings(self.package_image)
+        )
+        self.assertIs(resolved, self.component_image)
+
+    def test_a_component_falls_back_to_the_package_image(self) -> None:
+        resolved = resolve_component_image(None, self._settings(self.package_image))
+        self.assertIs(resolved, self.package_image)
+
+    def test_neither_declared_means_the_default_image(self) -> None:
+        self.assertIsNone(resolve_component_image(None, self._settings(None)))
+        self.assertIsNone(resolve_component_image(None, None))
+
+    def test_an_override_does_not_inherit_the_package_platform(self) -> None:
+        # Resolution stops at the first declaration; nothing is merged, so a
+        # component override is read exactly as written.
+        override = ContainerImageDeclaration(
+            image=parse_image_reference("sha256:" + "e" * 64), platform="linux/arm64"
+        )
+        resolved = resolve_component_image(
+            override, self._settings(self.package_image)
+        )
+        self.assertEqual(resolved.platform, "linux/arm64")

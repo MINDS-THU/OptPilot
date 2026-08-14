@@ -27,12 +27,16 @@ from __future__ import annotations
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
+
+from .image_reference import ImageReference, parse_image_reference
 
 __all__ = [
     "PACKAGE_SETTINGS_FILENAMES",
     "PACKAGE_IDENTITY_BYTES",
+    "ContainerImageDeclaration",
     "PackageSettings",
+    "resolve_component_image",
     "ensure_package_identity",
     "find_package_settings_path",
     "load_package_settings",
@@ -56,12 +60,23 @@ _IDENTITY_LENGTH = PACKAGE_IDENTITY_BYTES * 2
 
 
 @dataclass(frozen=True)
+class ContainerImageDeclaration:
+    """An image, named by fingerprint, and the architecture it is built for."""
+
+    image: ImageReference
+    platform: str
+
+
+@dataclass(frozen=True)
 class PackageSettings:
     """What a package says about itself."""
 
     path: Path
     identity: str
     description: Optional[str] = None
+    #: The image every component in this package uses unless it names its own.
+    #: Absent when the package needs nothing beyond what OptPilot provides.
+    container: Optional[ContainerImageDeclaration] = None
 
     @property
     def package_root(self) -> Path:
@@ -135,7 +150,63 @@ def load_package_settings(package_root: str | Path) -> Optional[PackageSettings]
         path=path,
         identity=validate_package_identity(raw.get("identity")),
         description=description,
+        container=_parse_container(raw.get("runtime"), subject=str(path)),
     )
+
+
+def _parse_container(
+    runtime: Any, *, subject: str
+) -> Optional[ContainerImageDeclaration]:
+    """Read the optional package-wide image declaration."""
+
+    if runtime is None:
+        return None
+    if not isinstance(runtime, Mapping):
+        raise ValueError(f"{subject} runtime must be a mapping.")
+    container = runtime.get("container")
+    if container is None:
+        return None
+    if not isinstance(container, Mapping):
+        raise ValueError(f"{subject} runtime.container must be a mapping.")
+    unknown = set(container) - {"image", "platform"}
+    if unknown:
+        raise ValueError(
+            f"{subject} runtime.container has unknown keys: "
+            + ", ".join(sorted(unknown))
+        )
+    platform = container.get("platform")
+    if not isinstance(platform, str) or not platform.strip():
+        # Required, because the same reference on a machine of a different
+        # architecture would otherwise run different bytes under the same name.
+        raise ValueError(
+            f"{subject} runtime.container.platform is required, for example "
+            "linux/amd64."
+        )
+    return ContainerImageDeclaration(
+        image=parse_image_reference(
+            container.get("image"), subject=f"{subject} runtime.container.image"
+        ),
+        platform=platform.strip(),
+    )
+
+
+def resolve_component_image(
+    component_container: Optional[ContainerImageDeclaration],
+    package_settings: Optional[PackageSettings],
+) -> Optional[ContainerImageDeclaration]:
+    """Which image a component runs in: its own, else its package's, else none.
+
+    Returning ``None`` means the component named nothing and neither did its
+    package, so it runs in the image OptPilot provides by default. Resolution
+    stops at the first declaration found -- a component that names an image does
+    not inherit anything from the package.
+    """
+
+    if component_container is not None:
+        return component_container
+    if package_settings is not None:
+        return package_settings.container
+    return None
 
 
 def package_identity(package_root: str | Path) -> Optional[str]:
@@ -150,8 +221,14 @@ def write_package_settings(
     *,
     identity: str,
     description: Optional[str] = None,
+    container: Optional[ContainerImageDeclaration] = None,
 ) -> Path:
-    """Write the settings file, creating the package folder if needed."""
+    """Write the settings file, creating the package folder if needed.
+
+    ``container`` is written out when given. A caller rewriting an existing file
+    must pass the declaration it read, or the package would silently lose the
+    image its components run in.
+    """
 
     identity = validate_package_identity(identity)
     root = Path(package_root)
@@ -167,6 +244,15 @@ def write_package_settings(
     ]
     if description:
         lines.append(f"description: {_yaml_scalar(description)}")
+    if container is not None:
+        lines.extend(
+            [
+                "runtime:",
+                "  container:",
+                f"    image: {container.image.raw}",
+                f"    platform: {container.platform}",
+            ]
+        )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
