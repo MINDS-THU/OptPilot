@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import yaml
 
 from .config import AUTHORING_API_VERSION
+from .package_settings import PACKAGE_SETTINGS_FILENAMES, package_identity
 
 
 JsonDict = Dict[str, Any]
@@ -56,6 +57,10 @@ class PackageIndex:
     entries: List[PackageEntry] = field(default_factory=list)
     ignored_yaml: List[Path] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    #: Durable identity from the package's own settings file, when it has one.
+    #: Absent for a folder that has never been published, which keeps working
+    #: exactly as before.
+    identity: Optional[str] = None
 
     def entries_by_config(self, config: str) -> List[PackageEntry]:
         return [entry for entry in self.entries if entry.config == config]
@@ -105,9 +110,21 @@ def index_package(package_root: str | Path) -> PackageIndex:
         result.errors.append(f"Package root does not exist or is not a directory: {root}")
         return result
 
+    try:
+        result.identity = package_identity(root)
+    except ValueError as error:
+        # A malformed settings file is reported, never ignored: falling back to
+        # the old path-derived anchor is what detaches a package from its
+        # history, and it would happen silently.
+        result.errors.append(str(error))
+
     for path in _iter_yaml_files(root):
         resolved = path.resolve()
         if resolved in seen_paths:
+            continue
+        if path.parent == root and path.name in PACKAGE_SETTINGS_FILENAMES:
+            # Describes the package itself rather than anything in it, so it is
+            # neither an entry nor a stray file.
             continue
         if _resource_manifest_source_root(root, path) is not None:
             continue

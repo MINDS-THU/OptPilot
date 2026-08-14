@@ -43,6 +43,7 @@ import yaml
 
 from optpilot.attempts import EvaluationSpec
 from optpilot.container_utils import network_args
+from optpilot.package_settings import package_identity
 from optpilot.dependency_closure import DEPENDENCY_HOST_PROVISIONED_CODE
 from optpilot.locked_python_runtime_contract import (
     LockedPythonRuntimeError,
@@ -6885,8 +6886,36 @@ def _public_catalog_entry(entry: JsonDict) -> JsonDict:
 
 
 def _configured_catalog_source_id(root: Path) -> str:
+    """Identify a package folder, preferring an identity that travels with it.
+
+    A package's published update authority is derived from this value. Deriving
+    it from the folder's location meant moving the folder produced a different
+    authority, silently detaching the package from its own history. A package
+    that declares its own identity is therefore identified by that instead.
+
+    A folder with no identity keeps the location-derived value, so nothing
+    changes for packages that have never been published.
+    """
+
     if not root.is_absolute():
         raise ValueError("Configured catalog roots must be absolute paths.")
+    try:
+        identity = package_identity(root)
+    except ValueError:
+        # A malformed settings file must not take the whole catalog down at
+        # startup. index_package records the error against this package, so it
+        # is reported rather than swallowed, and the old value keeps it usable.
+        identity = None
+    if identity is not None:
+        return (
+            "import_"
+            + request_digest(
+                {
+                    "identity": identity,
+                    "schema": "optpilot.configured-catalog-source.v2",
+                }
+            )[:40]
+        )
     return (
         "import_"
         + request_digest(
