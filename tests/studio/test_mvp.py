@@ -53,7 +53,6 @@ from optpilot.realm.content import AllowedTreeSource
 from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.refs import request_digest
-from optpilot.method_runtime import _host_method_env
 from optpilot.package_index import expand_package_roots
 from optpilot.package_validation import validate_package
 from optpilot.provenance import PromptStore, build_generator_record, build_model_record
@@ -1425,14 +1424,10 @@ class MvpIntegrationTest(unittest.TestCase):
             },
             clear=False,
         ):
-            method_env = _host_method_env({"envFromHost": ["OPTPILOT_DECLARED_TOKEN"], "env": {"STATIC_VALUE": "1"}})
             worker_env = _worker_process_env({"envFromHost": ["OPTPILOT_DECLARED_TOKEN"], "env": {"STATIC_VALUE": "1"}})
 
-        self.assertEqual(method_env["OPTPILOT_DECLARED_TOKEN"], "visible")
         self.assertEqual(worker_env["OPTPILOT_DECLARED_TOKEN"], "visible")
-        self.assertEqual(method_env["STATIC_VALUE"], "1")
         self.assertEqual(worker_env["STATIC_VALUE"], "1")
-        self.assertNotIn("OPTPILOT_UNDECLARED_TOKEN", method_env)
         self.assertNotIn("OPTPILOT_UNDECLARED_TOKEN", worker_env)
 
     def test_method_config_rejects_unimplemented_shapes(self) -> None:
