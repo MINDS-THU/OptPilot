@@ -467,7 +467,13 @@ CATALOG_DIR_NAME = "catalog"
 LOCAL_PACKAGE_NAME = "local_package"
 PACKAGE_PLAN_OWNERSHIP_SCHEMA = "optpilot.package-plan-ownership.v1"
 PACKAGE_PLAN_TRANSACTION_SCHEMA = "optpilot.package-plan-transaction.v1"
-PACKAGE_PLAN_OWNERSHIP_FILENAME = ".optpilot-package-plan-ownership.json"
+#: Registration's own note of which files it wrote. It lives under `.optpilot`
+#: because that directory is already excluded when a package folder is sealed
+#: (CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS). At the package root it would be
+#: captured as package content, so a folder could never seal to the same bytes
+#: as the package it holds -- and a run launched from the folder would record
+#: something subtly different from what was registered.
+PACKAGE_PLAN_OWNERSHIP_FILENAME = ".optpilot/package-plan-ownership.json"
 PACKAGE_PLAN_ARTIFACT_SCHEMA = "optpilot.package-plan-artifact.v1"
 PACKAGE_PLAN_ARTIFACT_ROLE = "package-plan-artifact"
 PACKAGE_PLAN_CATALOG_BASE_SCHEMA = "optpilot.package-plan-catalog-base.v1"
@@ -33450,6 +33456,7 @@ def _apply_package_artifact_transaction(
         ownership_path = _contained_output_path(
             stage_root, Path(PACKAGE_PLAN_OWNERSHIP_FILENAME)
         )
+        ownership_path.parent.mkdir(parents=True, exist_ok=True)
         ownership_path.write_text(
             json.dumps(updated_ownership, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

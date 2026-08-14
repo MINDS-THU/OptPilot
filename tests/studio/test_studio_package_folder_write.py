@@ -166,6 +166,31 @@ class MirroringTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._mirror()
 
+    def test_no_bookkeeping_is_left_loose_at_the_package_root(self) -> None:
+        """The folder must be able to seal to the same bytes as the package.
+
+        Anything OptPilot writes for its own use has to live under `.optpilot`,
+        which sealing already skips. A loose file at the root is captured as
+        package content, so a run launched from the folder would record
+        something different from what was registered -- and sealing can exclude
+        directories only, never individual files, so it could not be patched
+        around afterwards.
+        """
+
+        folder = self._mirror()
+        from optpilot.package_settings import PACKAGE_SETTINGS_FILENAMES
+
+        allowed = {".optpilot", *PACKAGE_SETTINGS_FILENAMES}
+        content = {
+            entry.name for entry in folder.iterdir() if entry.name not in allowed
+        }
+        stray = {
+            name
+            for name in content
+            if name.startswith(".") or "package-plan" in name
+        }
+        self.assertEqual(stray, set(), f"bookkeeping left at the package root: {stray}")
+
     def test_ownership_is_recorded_once_per_package(self) -> None:
         # Per-plan ownership is what would let a folder drift from the package.
         self.assertEqual(CATALOG_FOLDER_OWNER_WORKSPACE, "catalog")
