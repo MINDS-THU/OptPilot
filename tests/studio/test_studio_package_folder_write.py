@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from optpilot_studio.ui import server
 from optpilot_studio.ui.server import (
+    _package_folder_fingerprint,
     CATALOG_FOLDER_OWNER_PLAN,
     CATALOG_FOLDER_OWNER_WORKSPACE,
     _apply_package_artifact_transaction,
@@ -152,11 +153,16 @@ class MirroringTests(unittest.TestCase):
         folder = self._mirror()
         self.assertFalse((folder / "methods").exists())
 
-    def test_a_file_the_author_added_survives_registration(self) -> None:
+    def test_a_file_the_author_added_is_protected(self) -> None:
+        # Originally this asserted the weaker guarantee -- that an added file
+        # survived the next registration untouched. The fast-forward rule makes
+        # it stronger: adding a file moves the package on, so registering work
+        # built on the older folder is refused before anything is written.
         folder = self._mirror()
         note = folder / "NOTES.md"
         note.write_text("mine\n")
-        self._mirror()
+        with self.assertRaises(RealmConflict):
+            self._mirror()
         self.assertTrue(note.is_file())
         self.assertEqual(note.read_text(), "mine\n")
 
@@ -237,3 +243,95 @@ class FailedWriteLeavesTheFolderIntactTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FastForwardOnlyTests(unittest.TestCase):
+    """Registering moves a package forward, and refuses when it cannot.
+
+    The catalog belongs to one person, so a package has one lineage. If the
+    folder still matches what OptPilot last wrote, overwriting it loses nothing.
+    If it does not, the work being registered was built on an older picture of
+    the package and writing it would destroy whatever moved the folder on --
+    most often the author's own edit, made in the folder precisely because the
+    folder is the thing you are meant to be able to edit.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self._tmp.name)
+        self.published = self.base / "published"
+        self.published.mkdir()
+        _published_tree(self.published)
+        self.state = _FakeState(self.base)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _mirror(self) -> Path:
+        with patch.object(server, "_refresh_catalog_package_roots", lambda state: None):
+            return _mirror_published_package_to_folder(
+                self.state,
+                plan={"id": "plan-1", "workspace_id": "ws-1"},
+                package_id="my_package",
+                projection_root=self.published,
+            )
+
+    def test_the_first_registration_is_always_allowed(self) -> None:
+        # There is no folder yet, so there is nothing to move on from.
+        self.assertTrue(self._mirror().is_dir())
+
+    def test_registering_again_is_allowed_when_nothing_changed(self) -> None:
+        self._mirror()
+        self._mirror()  # must not raise
+
+    def test_an_edit_in_the_folder_is_never_overwritten(self) -> None:
+        folder = self._mirror()
+        edited = folder / "environments" / "sim" / "environment.yaml"
+        edited.write_text("# my fix\n")
+        with self.assertRaises(RealmConflict) as caught:
+            self._mirror()
+        self.assertEqual(edited.read_text(), "# my fix\n")
+        message = str(caught.exception)
+        self.assertIn("older version", message)
+        self.assertIn("Nothing has been written", message)
+
+    def test_a_new_file_in_the_folder_also_blocks(self) -> None:
+        # Adding counts as moving the package on, the same as editing.
+        folder = self._mirror()
+        (folder / "NOTES.md").write_text("mine\n")
+        with self.assertRaises(RealmConflict):
+            self._mirror()
+
+    def test_deleting_a_file_in_the_folder_also_blocks(self) -> None:
+        folder = self._mirror()
+        (folder / "methods" / "search" / "method.yaml").unlink()
+        with self.assertRaises(RealmConflict):
+            self._mirror()
+
+    def test_bookkeeping_does_not_count_as_an_edit(self) -> None:
+        # Otherwise writing our own record would look like the author having
+        # changed the package, and every second registration would be refused.
+        folder = self._mirror()
+        before = _package_folder_fingerprint(folder)
+        (folder / ".optpilot" / "scratch.json").write_text("{}\n")
+        self.assertEqual(_package_folder_fingerprint(folder), before)
+        self._mirror()  # must not raise
+
+    def test_the_fingerprint_notices_content_not_just_names(self) -> None:
+        folder = self._mirror()
+        target = folder / "environments" / "sim" / "environment.yaml"
+        before = _package_folder_fingerprint(folder)
+        target.write_text(target.read_text() + "\n# changed\n")
+        self.assertNotEqual(_package_folder_fingerprint(folder), before)
+
+    def test_recovering_by_restoring_the_folder_lets_registration_proceed(
+        self,
+    ) -> None:
+        folder = self._mirror()
+        target = folder / "environments" / "sim" / "environment.yaml"
+        original = target.read_text()
+        target.write_text("# diverged\n")
+        with self.assertRaises(RealmConflict):
+            self._mirror()
+        target.write_text(original)
+        self._mirror()  # the refusal is not sticky

@@ -33332,6 +33332,57 @@ CATALOG_FOLDER_OWNER_WORKSPACE = "catalog"
 CATALOG_FOLDER_OWNER_PLAN = "published-head"
 
 
+def _package_folder_fingerprint(package_root: Path) -> str:
+    """A fingerprint of everything in a package folder that counts as content.
+
+    OptPilot's own bookkeeping under `.optpilot` is skipped, matching what a seal
+    of this folder would capture, so writing bookkeeping never looks like the
+    author having edited the package.
+    """
+
+    entries: List[str] = []
+    if package_root.is_dir():
+        for path in sorted(package_root.rglob("*")):
+            if any(part in CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS for part in path.parts):
+                continue
+            if not path.is_file() or path.is_symlink():
+                continue
+            relative = path.relative_to(package_root).as_posix()
+            entries.append(f"{relative}:{hashlib.sha256(path.read_bytes()).hexdigest()}")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
+def _assert_package_folder_not_moved_on(
+    package_root: Path, ownership: JsonDict, *, package_id: str
+) -> None:
+    """Refuse to write when the folder changed since OptPilot last wrote it.
+
+    The catalog belongs to one person, so there is exactly one lineage per
+    package and registration only ever moves it forward. If the folder still
+    matches what was last written, overwriting it loses nothing by definition.
+    If it does not -- because the author edited it directly, or because another
+    workspace registered into it -- then the work being registered was built on
+    an older picture of the package, and writing it would silently discard
+    whatever moved the folder on.
+
+    Refusing is the whole point: there is no safe way to merge the two, and
+    quietly preferring either one destroys work the author cannot get back.
+    """
+
+    recorded = ownership.get("folder_fingerprint")
+    if not recorded:
+        return
+    current = _package_folder_fingerprint(package_root)
+    if current == recorded:
+        return
+    raise RealmConflict(
+        f"The {package_id} package folder has changed since it was last "
+        "registered, so this work was built on an older version of it. Nothing "
+        "has been written. Bring your changes onto the current package folder "
+        "and register again."
+    )
+
+
 def _mirror_published_package_to_folder(
     state: UiState,
     *,
@@ -33356,6 +33407,9 @@ def _mirror_published_package_to_folder(
     )
     if not owned_paths:
         raise ValueError("Published catalog package is empty.")
+    _assert_package_folder_not_moved_on(
+        folder, _read_package_plan_ownership(folder), package_id=package_id
+    )
     # The installer stages beside the package folder, so the catalog directory
     # has to exist before it runs. For a package being registered for the first
     # time it does not.
@@ -33371,8 +33425,21 @@ def _mirror_published_package_to_folder(
         artifact_root=projection_root,
     )
     ensure_package_identity(folder)
+    _record_package_folder_fingerprint(folder)
     _refresh_catalog_package_roots(state)
     return folder
+
+
+def _record_package_folder_fingerprint(package_root: Path) -> None:
+    """Remember what the folder looked like when OptPilot last wrote it."""
+
+    ownership = _read_package_plan_ownership(package_root)
+    ownership["folder_fingerprint"] = _package_folder_fingerprint(package_root)
+    path = _package_plan_ownership_path(package_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(ownership, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _apply_package_artifact_transaction(
@@ -33613,13 +33680,21 @@ def _read_package_plan_ownership(package_root: Path) -> JsonDict:
                 "applied_at": applied_at,
             }
         )
-    return {
+    result: JsonDict = {
         "schema": PACKAGE_PLAN_OWNERSHIP_SCHEMA,
         "applications": sorted(
             normalized,
             key=lambda item: (item["workspace_id"], item["plan_id"]),
         ),
     }
+    fingerprint = raw.get("folder_fingerprint")
+    if fingerprint is not None:
+        if not isinstance(fingerprint, str):
+            raise ValueError(
+                "Package-plan ownership folder_fingerprint must be a string."
+            )
+        result["folder_fingerprint"] = fingerprint
+    return result
 
 
 def _package_plan_application(
