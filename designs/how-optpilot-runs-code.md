@@ -323,8 +323,9 @@ together:
 1. Writes the code into that package's folder.
 2. Writes its settings file.
 3. Captures whatever you installed in the workspace as an image and records its
-   fingerprint — as the package's image if the package has none, otherwise as an
-   override on the component just registered.
+   fingerprint — as the package's image if the package has none, and otherwise
+   wherever you choose when asked, which defaults to an override on the
+   component just registered (below).
 4. Takes a snapshot of the package.
 
 These belong together because splitting them lets you register code whose
@@ -405,6 +406,43 @@ ended up with matches what the package's image already holds, that image is used
 and nothing is captured — even though the workspace began somewhere else. Two
 people who installed the same thing in parallel therefore converge on one image
 rather than two.
+
+**When you installed something the package does not have.** The alignment rules
+above cover ending up with what the package already provides. When you end up
+with more, where it goes is the author's decision, and OptPilot asks at
+registration rather than choosing silently. Two answers:
+
+- *Keep it to this component.* The image is recorded as an override on the piece
+  being registered, and everything else in the package stays on the package's
+  image.
+- *Give it to the whole package.* The package's image moves forward, and every
+  component that uses it gets the addition — components carrying their own
+  override do not, since they run their own image (§4).
+
+**The first is the default**, because it is the narrower act: it changes what one
+component runs, where the second changes what every component runs, including
+ones the author has not looked at and did not write. It is also the reversible
+one — promoting an override to the package's image later is just answering this
+same question the other way at a later registration, while a package image that
+has already absorbed something is not straightforwardly unwound.
+
+The wording matters more than the mechanism, because the person answering is
+thinking about their own component rather than about everything else in the
+package. Registering a method into `production_agv_scheduling` after installing
+a library the package's image lacks, it might read:
+
+> You installed **pandas 2.2.3**, which this package's image does not have.
+>
+> - **Only this method** (default) — nothing else in `production_agv_scheduling`
+>   is affected.
+> - **The whole package** — every other component using the package's image gets
+>   pandas too, so everyone who uses `production_agv_scheduling` downloads it,
+>   not only people running this method.
+
+Naming the software, naming the package, and saying plainly what the wider answer
+touches are what make the default a considered choice rather than the one that
+dismisses the box. Registration with nobody present — from a command line, or in
+an automated build — takes the default without asking.
 
 **Updating something already registered.** Registering again over the same
 component replaces its files, re-runs the inventory comparison, and takes a new
@@ -640,12 +678,13 @@ how that code executes.
 
 - **Container software is required.** Every component runs in a container, so
   the machine must have Docker or Podman installed.
-- **Each proposed solution pays container startup.** A method's container is
-  started once for the whole run, so the cost scales with the number of
-  candidates evaluated, not with rounds. Starting a container takes on the order
-  of a second: a run of twenty-five trials gains well under a minute, one of
-  many thousands gains hours. **This has not been measured on a real run, and
-  should be before the design is committed to.**
+- **Each proposed solution pays container startup.** An environment's container
+  starts once per proposed solution while a method's starts once for the whole
+  run, so the cost scales with candidates evaluated rather than with rounds.
+  Starting a container takes on the order of a second: a run of twenty-five
+  trials gains well under a minute, one of many thousands gains hours. **That
+  figure has not been measured on a real run; it is the design's one open
+  question (§14).**
 - **The default image must be built, distributed and downloaded once.**
 - **A package's own image is slow on first use** — such images run to a couple
   of gigabytes, and fetching one is a deliberate step.
@@ -727,18 +766,17 @@ document.
 
 ## 14. Open question
 
-- **Registering software the package's image does not have.** The alignment
-  rules in §5 resolve the case where a workspace ends up with what the package
-  already provides. They do not resolve the opposite: you installed something
-  genuinely new. Two honest outcomes exist — capture it as an image for the one
-  component you are registering, leaving every other component on the package's
-  image, or move the package's image forward so everything gets it. The first
-  keeps other components small and gives the package a second name to maintain
-  and publish; the second keeps one name and makes every component carry the
-  addition. Neither avoids accumulation — a record names the image it used, so
-  every superseded image stays published for as long as any run refers to it
-  (§4), and images pile up either way. Neither is right in general: adding a
-  solver one method needs argues for the first, upgrading a shared library
-  argues for the second. This is a decision
-  the author should be asked to make at registration, and the wording of that
-  question matters more than the mechanism behind it.
+- **What container startup actually costs.** A method's container starts once
+  for a whole run, but an environment's starts once per proposed solution (§7),
+  so the overhead grows with the number of trials. The figure in §10 — about a
+  second each — is an estimate that has not been measured on a real run.
+
+  This is the last item that could change the design rather than its
+  implementation. If startup turned out to be several seconds, a run of many
+  thousands of trials would pay hours for it, and reusing one environment
+  container across several proposed solutions would have to be weighed against
+  what a fresh container per solution buys — the guarantee that nothing one
+  candidate leaves behind can affect how a later one is scored (§7). That is a
+  change to the rule, not to the code implementing it. Measuring it on a
+  twenty-five-trial `production_agv_scheduling` run settles it either way, and
+  costs an afternoon.
