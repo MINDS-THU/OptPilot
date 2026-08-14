@@ -681,10 +681,9 @@ how that code executes.
 - **Each proposed solution pays container startup.** An environment's container
   starts once per proposed solution while a method's starts once for the whole
   run, so the cost scales with candidates evaluated rather than with rounds.
-  Starting a container takes on the order of a second: a run of twenty-five
-  trials gains well under a minute, one of many thousands gains hours. **That
-  figure has not been measured on a real run; it is the design's one open
-  question (§14).**
+  Starting a container **measures at 0.20 s** (§14), so twenty-five trials cost
+  five seconds and ten thousand cost half an hour. This was estimated at "about a
+  second" before being measured; the real figure is five times smaller.
 - **The default image must be built, distributed and downloaded once.**
 - **A package's own image is slow on first use** — such images run to a couple
   of gigabytes, and fetching one is a deliberate step.
@@ -764,19 +763,36 @@ launch host processes are replaced rather than kept alongside. Whether that
 happens in one step or package by package is a rollout decision outside this
 document.
 
-## 14. Open question
+## 14. Settled by measurement: what startup costs
 
-- **What container startup actually costs.** A method's container starts once
-  for a whole run, but an environment's starts once per proposed solution (§7),
-  so the overhead grows with the number of trials. The figure in §10 — about a
-  second each — is an estimate that has not been measured on a real run.
+This was the design's last open question, because §7 gives an environment a fresh
+container for every proposed solution. If that cost seconds, the rule itself
+would have needed revisiting.
 
-  This is the last item that could change the design rather than its
-  implementation. If startup turned out to be several seconds, a run of many
-  thousands of trials would pay hours for it, and reusing one environment
-  container across several proposed solutions would have to be weighed against
-  what a fresh container per solution buys — the guarantee that nothing one
-  candidate leaves behind can affect how a later one is scored (§7). That is a
-  change to the rule, not to the code implementing it. Measuring it on a
-  twenty-five-trial `production_agv_scheduling` run settles it either way, and
-  costs an afternoon.
+Measured on 2026-08-14 — Docker 29.5.3, macOS, arm64, a 205 MB Python image,
+thirty samples each, median reported:
+
+| Shape | Cost |
+| --- | --- |
+| Fresh container, plain | 0.23 s |
+| Fresh container with what §4 and §7 require — read-only code mount, writable output directory, no network, processor, memory and process limits | **0.20 s** |
+| Reusing one already-running container instead | 0.06 s |
+
+So a fresh container per proposed solution costs **0.20 s**, and reusing one
+would save 0.14 s of that. Starting a Python interpreter inside a container adds
+6 ms, and importing a normal set of standard-library modules another 15 ms —
+small enough beside 200 ms not to change the comparison.
+
+**The rule stands.** Twenty-five trials pay five seconds for per-candidate
+freshness, a thousand pay three minutes, ten thousand pay half an hour against
+ten minutes for a reused container. Nothing here is worth giving up the guarantee
+that nothing one candidate leaves behind can affect how a later one is scored.
+The prior estimate of "about a second" was five times too pessimistic.
+
+Three limits on the measurement, none of which look likely to reverse it. It ran
+on macOS, where the container software runs inside a virtual machine, so a Linux
+server should be no slower. The work inside the container was trivial, which is
+the point — it isolates the overhead — but a real evaluator's own running time is
+the same either way and only makes the overhead a smaller fraction. And a
+multi-gigabyte package image was not measured; startup is largely independent of
+image size once the image is on the machine, but that was not confirmed here.
