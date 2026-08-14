@@ -7,7 +7,10 @@
       "additionalProperties": false,
       "properties": {
         "sandbox": {
-          "enum": ["process", "container"]
+          "enum": [
+            "process",
+            "container"
+          ]
         },
         "setup": {
           "$ref": "common.schema.json#/definitions/setup"
@@ -15,55 +18,67 @@
         "container": {
           "type": "object",
           "additionalProperties": false,
+          "description": "The image this component runs in. It must already be built and is named by fingerprint: a tag can resolve to different bytes later, so a record naming one would not describe what ran. There is deliberately no way to declare a build -- building fetches software from the network, and what it fetches can differ between builds.",
+          "required": [
+            "image",
+            "platform"
+          ],
           "properties": {
-            "image": {"type": "string"},
-            "executable": {"type": "string"},
-            "build": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["tag"],
-              "properties": {
-                "context": {"type": "string"},
-                "dockerfile": {"type": "string"},
-                "tag": {"type": "string"},
-                "target": {"type": "string"},
-                "platform": {"type": "string"},
-                "args": {
-                  "type": "object",
-                  "additionalProperties": {"type": "string"}
-                },
-                "extraArgs": {
-                  "type": "array",
-                  "items": {"type": "string"}
-                },
-                "timeoutSeconds": {"type": "integer", "minimum": 1}
-              }
+            "image": {
+              "type": "string",
+              "pattern": "^(?:sha256:[0-9a-f]{64}|[^\\s@]+@sha256:[0-9a-f]{64})$"
+            },
+            "platform": {
+              "type": "string",
+              "description": "The architecture the image is built for, such as linux/amd64. Required: the same reference on a machine of a different architecture is different bytes under the same name.",
+              "minLength": 1
             },
             "network": {
-              "enum": ["enabled", "disabled"]
+              "enum": [
+                "enabled",
+                "disabled"
+              ]
             }
-          },
-          "anyOf": [
-            {"required": ["image"]},
-            {"required": ["build"]}
-          ]
+          }
         },
-        "workdir": {"type": "string"},
-        "env": {"$ref": "common.schema.json#/definitions/envObject"},
-        "envFromHost": {"$ref": "common.schema.json#/definitions/stringList"}
+        "workdir": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "common.schema.json#/definitions/envObject"
+        },
+        "envFromHost": {
+          "$ref": "common.schema.json#/definitions/stringList"
+        }
       },
       "allOf": [
         {
           "if": {
-            "required": ["sandbox"],
-            "properties": {"sandbox": {"const": "container"}}
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
           },
           "then": {
-            "required": ["container"],
-            "not": {"required": ["setup"]}
+            "required": [
+              "container"
+            ],
+            "not": {
+              "required": [
+                "setup"
+              ]
+            }
           },
           "else": {
-            "not": {"required": ["container"]}
+            "not": {
+              "required": [
+                "container"
+              ]
+            }
           }
         }
       ]

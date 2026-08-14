@@ -14,6 +14,8 @@ from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import yaml
 
+from .image_reference import parse_image_reference
+
 from .config_errors import StudyLaunchInputsError
 from .parameter_values import (
     apply_parameter_defaults,
@@ -866,9 +868,23 @@ def _validate_runtime(runtime: Any, location: str) -> None:
         container = runtime.get("container", {}) or {}
         if not isinstance(container, dict):
             raise ValueError(f"{location}.container must be an object.")
-        build = container.get("build", {}) if isinstance(container.get("build", {}), dict) else {}
-        if not (container.get("image") or build.get("tag")):
-            raise ValueError(f"{location}.container requires image or build.tag.")
+        if container.get("build") is not None:
+            raise ValueError(
+                f"{location}.container cannot declare a build. An image must "
+                "already exist and be named by fingerprint, because a build "
+                "fetches software from the network and what it fetches can "
+                "differ between builds."
+            )
+        parse_image_reference(
+            container.get("image"), subject=f"{location}.container.image"
+        )
+        platform = container.get("platform")
+        if not isinstance(platform, str) or not platform.strip():
+            raise ValueError(
+                f"{location}.container.platform is required, for example "
+                "linux/amd64. The same image reference on a machine of a "
+                "different architecture is different bytes."
+            )
         network = container.get("network", "disabled")
         if network not in {"enabled", "disabled"}:
             raise ValueError(f"{location}.container.network must be enabled or disabled.")

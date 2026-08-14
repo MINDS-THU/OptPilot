@@ -1641,7 +1641,13 @@ class MvpIntegrationTest(unittest.TestCase):
                         "id": "container-env",
                         "runtime": {
                             "sandbox": "container",
-                            "container": {"image": "example/img:latest"},
+                            # Pinned and platform-bearing, so the declaration is
+                            # well formed and the test reaches the refusal it is
+                            # about: environments do not run in containers yet.
+                            "container": {
+                                "image": "ghcr.io/example/img@sha256:" + "a" * 64,
+                                "platform": "linux/amd64",
+                            },
                         },
                         "evaluator": {"python": "evaluator:evaluate", "pythonPath": ["."]},
                         "candidate": {
@@ -1716,6 +1722,9 @@ class MvpIntegrationTest(unittest.TestCase):
         empty_editable["candidate"]["files"]["editable"] = []
         self.assertFalse(validate_public_config_schema(empty_editable).valid)
 
+        # An image must already exist and be named by fingerprint: building
+        # fetches software from the network, and what it fetches can differ
+        # between builds, so a record naming a build would not describe what ran.
         container_build = deepcopy(environment)
         container_build["runtime"] = {
             "sandbox": "container",
@@ -1726,15 +1735,26 @@ class MvpIntegrationTest(unittest.TestCase):
                 }
             },
         }
-        self.assertTrue(validate_public_config_schema(container_build).valid)
+        self.assertFalse(validate_public_config_schema(container_build).valid)
 
-        missing_tag = deepcopy(container_build)
-        del missing_tag["runtime"]["container"]["build"]["tag"]
-        self.assertFalse(validate_public_config_schema(missing_tag).valid)
+        pinned_digest = "sha256:" + "a" * 64
+        container_image = deepcopy(environment)
+        container_image["runtime"] = {
+            "sandbox": "container",
+            "container": {
+                "image": f"ghcr.io/example/env@{pinned_digest}",
+                "platform": "linux/amd64",
+            },
+        }
+        self.assertTrue(validate_public_config_schema(container_image).valid)
 
-        non_string_build_arg = deepcopy(container_build)
-        non_string_build_arg["runtime"]["container"]["build"]["args"]["PYTHON_VERSION"] = 3.12
-        self.assertFalse(validate_public_config_schema(non_string_build_arg).valid)
+        tagged_image = deepcopy(container_image)
+        tagged_image["runtime"]["container"]["image"] = "ghcr.io/example/env:latest"
+        self.assertFalse(validate_public_config_schema(tagged_image).valid)
+
+        missing_platform = deepcopy(container_image)
+        del missing_platform["runtime"]["container"]["platform"]
+        self.assertFalse(validate_public_config_schema(missing_platform).valid)
 
         command_session_method = {
             "apiVersion": "optpilot.io/v1",
