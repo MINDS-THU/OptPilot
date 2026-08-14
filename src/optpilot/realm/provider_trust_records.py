@@ -14,6 +14,7 @@ from typing import Any, Dict, Mapping
 
 from ._validation import finite_time, positive_int, required_text
 from .errors import RealmIntegrityError
+from ..image_reference import IMAGE_REFERENCE_RE
 
 
 JsonDict = Dict[str, Any]
@@ -24,11 +25,11 @@ PROVIDER_TRUST_POLICY_OWNER_KIND = "provider-trust-policy"
 PROVIDER_TRUST_GATEWAY_CONTRACT = "optpilot-stdlib-gateway-v1"
 PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE = "python3"
 
-IMMUTABLE_IMAGE_RE = re.compile(
-    r"^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$"
-)
+# One home for this pattern; see optpilot.image_reference for why the two pinned
+# shapes name different digests.
+IMMUTABLE_IMAGE_RE = IMAGE_REFERENCE_RE
 # Retained for callers that predate the exported name.
-_IMMUTABLE_IMAGE_RE = IMMUTABLE_IMAGE_RE
+_IMMUTABLE_IMAGE_RE = IMAGE_REFERENCE_RE
 _CONTAINER_EXECUTABLE_RE = re.compile(
     r"^(?:/[A-Za-z0-9_.+-]+)+$|^[A-Za-z0-9_.+-]+$"
 )

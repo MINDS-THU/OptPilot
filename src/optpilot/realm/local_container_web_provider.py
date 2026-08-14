@@ -34,11 +34,10 @@ from urllib.parse import urlsplit
 from ._validation import lower_hex_digest, required_text
 from .errors import RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
 from .refs import canonical_json_bytes
+from ..image_reference import IMAGE_REFERENCE_RE
 
 
-_IMMUTABLE_IMAGE_RE = re.compile(
-    r"^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$"
-)
+_IMMUTABLE_IMAGE_RE = IMAGE_REFERENCE_RE
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _CONTAINER_EXECUTABLE_RE = re.compile(r"^(?:/[A-Za-z0-9_.+-]+)+$|^[A-Za-z0-9_.+-]+$")
 _CONTAINER_PLATFORM_RE = re.compile(

@@ -40,6 +40,7 @@ from .run_closure import (
     WebPresentationSpec,
 )
 from .selections import SelectionRef
+from ..image_reference import IMAGE_REFERENCE_RE
 
 
 JsonDict = Dict[str, Any]
@@ -62,9 +63,7 @@ _MAX_ENVIRONMENT_ITEMS = 256
 _MAX_COMMAND_ITEMS = 256
 _MAX_RECORD_BYTES = 1024 * 1024
 
-_IMMUTABLE_IMAGE_RE = re.compile(
-    r"^(?:sha256:[0-9a-f]{64}|[^\s@]+@sha256:[0-9a-f]{64})$"
-)
+_IMMUTABLE_IMAGE_RE = IMAGE_REFERENCE_RE
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 _SECRET_ENV_RE = re.compile(

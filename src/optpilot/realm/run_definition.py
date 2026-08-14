@@ -31,6 +31,7 @@ from ._validation import (
 from .errors import RealmIntegrityError
 from .refs import PhysicalContentRef, canonical_json_bytes, request_digest
 from .run_closure import RunEvaluationClosure, ScopeLayer, ScopePath
+from ..image_reference import IMAGE_DIGEST_RE
 
 
 JsonDict = Dict[str, Any]
@@ -45,7 +46,7 @@ RUN_DEFINITION_MANIFEST_SCHEMA = "optpilot.run-definition-manifest.v1"
 RUN_METHOD_SOURCE_ROLE = "run-method-source"
 RUN_PREPARED_METHOD_RUNTIME_ROLE = "run-prepared-method-runtime"
 
-_OCI_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_OCI_DIGEST_RE = IMAGE_DIGEST_RE
 _RUNTIME_KINDS = frozenset({"process", "container"})
 _PORTABILITY_VALUES = frozenset({"portable", "provider-scoped"})
 _MAX_RECORD_BYTES = 1024 * 1024

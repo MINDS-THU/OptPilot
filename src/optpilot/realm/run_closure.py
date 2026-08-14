@@ -33,6 +33,7 @@ from .errors import RealmIntegrityError
 from .manifests import validate_portable_path
 from .owners import OwnerMembership
 from .refs import PhysicalContentRef, SnapshotRef, canonical_json_bytes, request_digest
+from ..image_reference import IMAGE_DIGEST_RE
 
 
 JsonDict = Dict[str, Any]
@@ -52,7 +53,7 @@ _MEDIA_TYPE_RE = re.compile(
     r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+(?:;[ -~]*)?$"
 )
 _WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_OCI_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_OCI_DIGEST_RE = IMAGE_DIGEST_RE
 _RUNTIME_KINDS = frozenset({"process", "container"})
 _PORTABILITY_VALUES = frozenset({"portable", "provider-scoped"})
 _INTERFACE_NETWORK_GRANTS = frozenset({"disabled", "enabled"})
