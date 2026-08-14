@@ -105,7 +105,7 @@ class StudioRealmCatalogCutoverTest(unittest.TestCase):
             consumer_kind="studio-catalog-cutover-test",
         )
 
-    def test_apply_publishes_without_a_durable_filesystem_catalog_copy(self) -> None:
+    def test_apply_writes_the_package_into_a_durable_editable_folder(self) -> None:
         state, runtime = self._open_state()
         package_id = "realm-only-package"
         workspace, plan = self._resource_plan(
@@ -121,10 +121,19 @@ class StudioRealmCatalogCutoverTest(unittest.TestCase):
 
         self.assertTrue(applied["applied"], applied)
         self.assertIsNotNone(head)
-        self.assertFalse(
-            (self.studio_root / "catalog").exists(),
-            "Studio must not materialize a second durable catalog tree.",
+        # A package is a folder you can open and edit; registering writes it.
+        package_folder = self.studio_root / "catalog" / package_id
+        self.assertTrue(
+            package_folder.is_dir(),
+            "Registering must write the package into its catalog folder.",
         )
+        written = sorted(
+            path for path in package_folder.rglob("*") if path.is_file()
+        )
+        self.assertTrue(written, "The package folder must not be empty.")
+        # ...and it must be editable, not a read-only copy.
+        editable = written[0]
+        editable.write_text(editable.read_text() + "\n# edited\n")
         self.assertTrue(
             any(
                 item["id"] == "realm-tool"
@@ -160,7 +169,10 @@ class StudioRealmCatalogCutoverTest(unittest.TestCase):
             ),
             catalog,
         )
-        self.assertFalse((self.studio_root / "catalog").exists())
+        self.assertTrue(
+            (self.studio_root / "catalog" / package_id).is_dir(),
+            "The package folder must survive a restart.",
+        )
 
     def test_multi_plan_composition_replacement_and_collision(self) -> None:
         state, runtime = self._open_state()

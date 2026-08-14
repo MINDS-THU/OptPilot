@@ -3510,7 +3510,11 @@ class MvpIntegrationTest(unittest.TestCase):
             indexed = _list_ui_workspaces(state)
 
             self.assertTrue(applied["applied"])
-            self.assertFalse(destination.exists())
+            # Registering writes the package into an editable folder.
+            self.assertTrue(destination.exists(), destination)
+            written = sorted(p for p in destination.rglob("*") if p.is_file())
+            self.assertTrue(written, destination)
+            written[0].write_text(written[0].read_text() + "\n# edited\n")
             entry = next(
                 entry
                 for entry in catalog["resources"]

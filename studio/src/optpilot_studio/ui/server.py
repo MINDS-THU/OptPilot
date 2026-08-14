@@ -43,7 +43,7 @@ import yaml
 
 from optpilot.attempts import EvaluationSpec
 from optpilot.container_utils import network_args
-from optpilot.package_settings import package_identity
+from optpilot.package_settings import ensure_package_identity, package_identity
 from optpilot.dependency_closure import DEPENDENCY_HOST_PROVISIONED_CODE
 from optpilot.locked_python_runtime_contract import (
     LockedPythonRuntimeError,
@@ -33069,6 +33069,12 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
                 raise RealmIntegrityError(
                     "Published catalog head has no matching Studio realization."
                 )
+            _mirror_published_package_to_folder(
+                state,
+                plan=plan,
+                package_id=package_id,
+                projection_root=Path(str(projection_record["root"])),
+            )
         except Exception as error:
             plan["publication"]["realization"] = {
                 "status": "pending",
@@ -33244,6 +33250,123 @@ def _package_plan_owned_paths(plan: JsonDict) -> List[str]:
                     f"Package plan owned paths overlap: {path!r} and {other!r}."
                 )
     return ordered
+
+
+def _bundled_catalog_root() -> Optional[Path]:
+    """The catalog that ships inside OptPilot's own source tree, if present.
+
+    Only exists in a source checkout -- catalog content is excluded from built
+    distributions -- so this is normally None for an installed OptPilot.
+    """
+
+    try:
+        import optpilot
+
+        module_root = Path(optpilot.__file__).resolve().parent  # .../src/optpilot
+        return module_root.parent.parent / CATALOG_DIR_NAME
+    except Exception:
+        return None
+
+
+def _is_bundled_catalog_package(package_root: Path) -> bool:
+    """Whether this folder is one of the packages shipped with OptPilot.
+
+    Those are tracked in OptPilot's own repository, so registering into one
+    would edit OptPilot itself rather than the author's work. They are
+    read-only registration targets: registering creates a package of the
+    author's own instead.
+    """
+
+    bundled = _bundled_catalog_root()
+    if bundled is None:
+        return False
+    try:
+        package_root.resolve().relative_to(bundled.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _package_plan_catalog_folder(
+    state: UiState, plan: JsonDict, package_id: str
+) -> Optional[Path]:
+    """Where this registration's package folder lives, or None to write none.
+
+    A whole-package registration from a configured folder already has the
+    folder as its source, so writing one back would be circular.
+    """
+
+    if _is_configured_whole_package_plan(plan):
+        return None
+    folder = (state.cwd / CATALOG_DIR_NAME / package_id).resolve()
+    elsewhere = [
+        root
+        for root in state.catalog_roots
+        if root.name == package_id and root.resolve() != folder
+    ]
+    if elsewhere:
+        # The package already has a folder somewhere the author chose. Writing a
+        # second one under the project's own catalog directory would leave two
+        # folders claiming the same package, which reads as an ambiguous
+        # identity and forks the package in two.
+        return None
+    if _is_bundled_catalog_package(folder):
+        raise RealmConflict(
+            f"{package_id} ships with OptPilot and cannot be registered into. "
+            "Register into a package of your own instead."
+        )
+    return folder
+
+
+#: All registrations write the whole published tree, so ownership is recorded
+#: once per package rather than once per plan. Keeping it per-plan would leave a
+#: folder holding only the most recent registration's files while the published
+#: package held more, and nothing would ever reconcile the two.
+CATALOG_FOLDER_OWNER_WORKSPACE = "catalog"
+CATALOG_FOLDER_OWNER_PLAN = "published-head"
+
+
+def _mirror_published_package_to_folder(
+    state: UiState,
+    *,
+    plan: JsonDict,
+    package_id: str,
+    projection_root: Path,
+) -> Optional[Path]:
+    """Copy the published package into its catalog folder, and return it.
+
+    The folder mirrors the published package as a whole -- not just the files
+    this registration contributed -- so that a package built from two different
+    workspaces is complete on disk rather than holding whichever piece was
+    registered last.
+    """
+
+    folder = _package_plan_catalog_folder(state, plan, package_id)
+    if folder is None:
+        return None
+    owned_paths = sorted(
+        {entry.name for entry in projection_root.iterdir()},
+        key=lambda value: value.encode("utf-8"),
+    )
+    if not owned_paths:
+        raise ValueError("Published catalog package is empty.")
+    # The installer stages beside the package folder, so the catalog directory
+    # has to exist before it runs. For a package being registered for the first
+    # time it does not.
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    _apply_package_artifact_transaction(
+        state,
+        plan={
+            "workspace_id": CATALOG_FOLDER_OWNER_WORKSPACE,
+            "id": CATALOG_FOLDER_OWNER_PLAN,
+        },
+        package_root=folder,
+        owned_paths=owned_paths,
+        artifact_root=projection_root,
+    )
+    ensure_package_identity(folder)
+    _refresh_catalog_package_roots(state)
+    return folder
 
 
 def _apply_package_artifact_transaction(
@@ -35546,12 +35669,33 @@ def _default_catalog_roots(cwd: Path) -> List[Path]:
     return [cwd]
 
 
+def _drop_catalog_roots_containing_others(roots: Iterable[Path]) -> List[Path]:
+    """Drop any root that contains another, so a package is scanned once.
+
+    The project directory itself is used as a catalog root when no catalog
+    folder exists yet. Nothing ever created one, so that was harmless; now
+    registering a package does. Left alone, the project root then contains the
+    new package folder and every component in it is found twice -- the second
+    time attributed to a package named after the project directory.
+    """
+
+    resolved = _dedupe_paths([Path(root).resolve() for root in roots])
+    return [
+        root
+        for root in resolved
+        if not any(
+            other != root and other.is_relative_to(root) for other in resolved
+        )
+    ]
+
+
 def _refresh_catalog_package_roots(state: UiState) -> None:
     catalog_root = state.cwd / CATALOG_DIR_NAME
     if catalog_root.exists():
         state.catalog_roots = _dedupe_paths(
             [*state.catalog_roots, *_expand_catalog_roots([catalog_root])]
         )
+    state.catalog_roots = _drop_catalog_roots_containing_others(state.catalog_roots)
     state._configured_catalog_source_roots = {
         _configured_catalog_source_id(root): root for root in state.catalog_roots
     }
