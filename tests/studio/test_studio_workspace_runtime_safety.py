@@ -1541,3 +1541,75 @@ class WorkspacePackageImageTest(unittest.TestCase):
                     )
                 for call in run.call_args_list:
                     self.assertNotIn("pull", call.args[0])
+
+
+class WorkspaceSoftwareInventoryTest(unittest.TestCase):
+    """The baseline the "nothing was installed" comparison reads.
+
+    File changes cannot decide whether software was installed -- editing
+    anything leaves history and caches behind -- so the inventory lists what
+    the package managers know: every interpreter's Python packages and the
+    system packages. Matching inventories mean nothing was installed.
+    """
+
+    def _manager_and_workspace(self, root: Path):
+        from tests.studio.test_mvp import _write_fake_workspace_container
+
+        fake = _write_fake_workspace_container(root)
+        studio_root = root / "studio"
+        studio_root.mkdir(parents=True, exist_ok=True)
+        manager = WorkspaceRuntimeManager(
+            studio_root=studio_root,
+            runtime_root=studio_root / ".optpilot-ui" / "runtime",
+            options=WorkspaceRuntimeOptions(
+                executable=str(fake), build_image=False
+            ),
+        )
+        workspace_root = root / "ws"
+        workspace_root.mkdir()
+        return manager, {"id": "ws_inventory", "root": str(workspace_root)}
+
+    def test_a_fresh_start_records_a_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, workspace = self._manager_and_workspace(Path(tmp))
+            manager.start(workspace)
+            record = manager._read_record("ws_inventory")
+            self.assertEqual(record.get("software_inventory_state"), "recorded")
+            self.assertTrue(record.get("software_inventory_digest"))
+            listing = (
+                manager._workspace_runtime_dir("ws_inventory")
+                / "software-inventory.json"
+            )
+            self.assertTrue(listing.is_file())
+            payload = json.loads(listing.read_text())
+            self.assertIn("python", payload)
+            self.assertIn("system", payload)
+
+    def test_an_unchanged_container_matches_its_baseline(self) -> None:
+        # The property everything later rests on: taking the inventory twice
+        # with nothing installed in between yields the same digest.
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, workspace = self._manager_and_workspace(Path(tmp))
+            manager.start(workspace)
+            baseline = manager._read_record("ws_inventory").get(
+                "software_inventory_digest"
+            )
+            fresh = manager.software_inventory("ws_inventory")
+            self.assertIsNotNone(fresh)
+            self.assertEqual(fresh["digest"], baseline)
+
+    def test_a_failed_probe_is_recorded_as_unavailable_not_invented(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager, workspace = self._manager_and_workspace(Path(tmp))
+            manager.start(workspace)
+            from unittest.mock import patch
+
+            with patch.object(
+                WorkspaceRuntimeManager, "software_inventory", return_value=None
+            ):
+                manager.record_baseline_inventory("ws_inventory")
+            record = manager._read_record("ws_inventory")
+            self.assertEqual(
+                record.get("software_inventory_state"), "unavailable"
+            )
+            self.assertNotIn("software_inventory_digest", record)

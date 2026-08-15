@@ -1115,6 +1115,74 @@ def _check_interface_launch_cancelled(
         raise RuntimeError("Interface launch was stopped.")
 
 
+#: Runs inside a workspace container and prints one canonical JSON document
+#: describing the software present: the Python packages of every interpreter on
+#: the path -- not only the default one, because software installed into a
+#: second interpreter is still software the code may need -- and the system
+#: packages. The comparison of two of these is how registration decides whether
+#: anything was installed: file changes cannot decide it, because editing
+#: anything leaves shell history and caches behind, but package managers are
+#: how software actually arrives.
+_SOFTWARE_INVENTORY_PROBE = r"""
+import json, os, re, subprocess, sys
+
+def interpreters():
+    seen, found = set(), []
+    for directory in (os.environ.get("PATH") or "").split(os.pathsep):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            if name == "python" or re.fullmatch(r"python\d(?:\.\d+)?", name):
+                path = os.path.join(directory, name)
+                real = os.path.realpath(path)
+                if real not in seen and os.access(path, os.X_OK):
+                    seen.add(real)
+                    found.append(real)
+    return found
+
+def python_packages(interpreter):
+    try:
+        listing = subprocess.run(
+            [interpreter, "-m", "pip", "list", "--format=json",
+             "--disable-pip-version-check"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if listing.returncode != 0:
+            return []
+        return sorted(
+            (str(item.get("name", "")), str(item.get("version", "")))
+            for item in json.loads(listing.stdout or "[]")
+        )
+    except Exception:
+        return []
+
+def system_packages():
+    try:
+        listing = subprocess.run(
+            ["dpkg-query", "-W", "-f", "${Package}\t${Version}\n"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if listing.returncode != 0:
+            return []
+        return sorted(
+            tuple(line.split("\t", 1))
+            for line in listing.stdout.splitlines()
+            if "\t" in line
+        )
+    except Exception:
+        return []
+
+inventory = {
+    "python": {path: python_packages(path) for path in interpreters()},
+    "system": system_packages(),
+    "schema": "optpilot.workspace-software-inventory.v1",
+}
+print(json.dumps(inventory, sort_keys=True, separators=(",", ":")))
+"""
+
+
 class WorkspaceRuntimeManager:
     """Owns one long-lived container runtime per Studio workspace."""
 
@@ -1692,6 +1760,11 @@ class WorkspaceRuntimeManager:
                 }
             )
             self._write_record(workspace_id, record)
+            # The baseline the design's "nothing was installed" comparison
+            # reads. Taken at the fresh start, because that is the moment the
+            # container provably holds exactly what its image holds; an attach
+            # to an already-running container keeps the existing baseline.
+            self.record_baseline_inventory(workspace_id)
             _check_interface_launch_cancelled(should_stop)
         else:
             _check_interface_launch_cancelled(should_stop)
@@ -1702,6 +1775,72 @@ class WorkspaceRuntimeManager:
             record["updated_at"] = _now_iso()
             self._write_record(workspace_id, record)
         return self.status(workspace)
+
+    def software_inventory(self, workspace_id: str) -> Optional[JsonDict]:
+        """What software the workspace's container holds, right now.
+
+        Returns None when the probe cannot run -- a workspace stays usable
+        without an inventory; what is lost is only the later proof that
+        nothing was installed, so registration must then assume something was.
+        """
+
+        executable = self._container_executable()
+        if not executable:
+            return None
+        container_name = self._container_name(workspace_id)
+        try:
+            probe = subprocess.run(
+                [
+                    executable,
+                    "exec",
+                    container_name,
+                    "python3",
+                    "-c",
+                    _SOFTWARE_INVENTORY_PROBE,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if probe.returncode != 0:
+            return None
+        payload = (probe.stdout or "").strip().splitlines()
+        if not payload:
+            return None
+        try:
+            listing = json.loads(payload[-1])
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(listing, dict):
+            return None
+        canonical = json.dumps(listing, sort_keys=True, separators=(",", ":"))
+        return {
+            "digest": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "listing": listing,
+        }
+
+    def record_baseline_inventory(self, workspace_id: str) -> Optional[str]:
+        """Take and store the starting inventory; later comparisons read it."""
+
+        inventory = self.software_inventory(workspace_id)
+        record = self._read_record(workspace_id)
+        if inventory is None:
+            record.pop("software_inventory_digest", None)
+            record["software_inventory_state"] = "unavailable"
+        else:
+            record["software_inventory_digest"] = inventory["digest"]
+            record["software_inventory_state"] = "recorded"
+            runtime_dir = self._ensure_workspace_runtime_dir(workspace_id)
+            (runtime_dir / "software-inventory.json").write_text(
+                json.dumps(inventory["listing"], sort_keys=True, indent=1)
+                + "\n",
+                encoding="utf-8",
+            )
+        record["updated_at"] = _now_iso()
+        self._write_record(workspace_id, record)
+        return None if inventory is None else inventory["digest"]
 
     def start_code_server(
         self,
@@ -32976,6 +33115,17 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
     ):
         raise RealmConflict("Package smoke result does not belong to this artifact.")
     package_id = _package_plan_package_id(plan.get("package_id"))
+    software_change = _workspace_software_change(state, workspace_id)
+    plan["software_change"] = software_change
+    if software_change.get("state") != "unchanged":
+        # Image capture is not built yet. Saying so on the registration is the
+        # honest alternative to silently recording an image that no longer
+        # matches what the workspace actually holds.
+        plan.setdefault("warnings", []).append(
+            "Software may have been installed in this workspace since it "
+            "started; capturing it as an image is not supported yet, so the "
+            "registered component records the workspace's starting image."
+        )
     # Before anything is published: was this work built on the package as it now
     # stands? If not, it would replace work it never saw. Checked here rather
     # than at the folder write, which happens after publication and treats its
@@ -33455,6 +33605,33 @@ def _is_bundled_catalog_package(package_root: Path) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+def _workspace_software_change(state: "UiState", workspace_id: str) -> JsonDict:
+    """Whether software was installed in this workspace since it started.
+
+    Three honest answers. "unchanged": the inventories match, so registering
+    needs no image capture -- the starting image already describes what the
+    code needs. "changed": something was installed; until capture is built,
+    the registration says so rather than silently recording an image that no
+    longer matches the workspace. "unknown": no baseline or no probe, which
+    registration must treat as possibly-changed, never as clean.
+    """
+
+    manager = state.workspace_runtime
+    try:
+        record = manager._read_record(workspace_id)
+    except Exception:
+        return {"state": "unknown", "reason": "no workspace runtime record"}
+    baseline = str(record.get("software_inventory_digest") or "")
+    if not baseline:
+        return {"state": "unknown", "reason": "no starting inventory"}
+    current = manager.software_inventory(workspace_id)
+    if current is None:
+        return {"state": "unknown", "reason": "inventory probe failed"}
+    if current["digest"] == baseline:
+        return {"state": "unchanged"}
+    return {"state": "changed", "baseline": baseline, "current": current["digest"]}
 
 
 def _package_plan_catalog_folder(
