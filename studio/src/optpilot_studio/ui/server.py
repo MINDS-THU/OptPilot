@@ -1381,7 +1381,15 @@ class WorkspaceRuntimeManager:
             else False
         )
         current_image = str(record.get("image") or "")
-        image_matches = (not current_image) or current_image == self.options.image
+        # A workspace on its package's image is compared against that image,
+        # which the record carries; only default-image workspaces are compared
+        # against the operator's configured default.
+        expected_image = (
+            current_image
+            if record.get("image_source") == "package" and current_image
+            else self.options.image
+        )
+        image_matches = (not current_image) or current_image == expected_image
         host_port = int(record.get("host_port") or 0) or None
         code_url = self._code_server_base_url(host_port) if host_port else ""
         code_reachable = bool(code_url and _code_server_reachable(code_url))
@@ -1402,7 +1410,10 @@ class WorkspaceRuntimeManager:
             )
         elif running and not image_matches:
             status = "stale"
-            message = f"Workspace container uses {current_image}; restart it to use {self.options.image}."
+            message = (
+                f"Workspace container uses {current_image}; restart it to "
+                f"use {expected_image}."
+            )
         return {
             "target": "per-workspace-container",
             "status": status,
@@ -1503,9 +1514,23 @@ class WorkspaceRuntimeManager:
         self,
         workspace: JsonDict,
         *,
+        image: Optional[str] = None,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> JsonDict:
+        """Start one workspace container.
+
+        ``image`` is the package's own image when the workspace belongs to a
+        package that declares one -- the design has a workspace run in the
+        image its code will run in, so what works while building works in a
+        run. The caller has already put it through the same checks a run
+        performs (pinned, approved for execution, present with the right
+        fingerprint and architecture), which is why the operator allowlist --
+        the policy for the DEFAULT image -- does not apply to it.
+        """
+
         _check_interface_launch_cancelled(should_stop)
+        resolved_image = image or self.options.image
+        explicit_image = image is not None
         workspace_id = str(workspace.get("id") or "")
         if not workspace_id:
             raise ValueError("Workspace id is required to start a runtime container.")
@@ -1513,7 +1538,8 @@ class WorkspaceRuntimeManager:
         if not root.exists() or not root.is_dir():
             raise FileNotFoundError(f"Workspace root not found: {root}")
         executable = self._require_container_executable()
-        self._enforce_image_policy()
+        if not explicit_image:
+            self._enforce_image_policy()
         container_name = self._container_name(workspace_id)
         # A valid claim is the ownership boundary. The first runtime record is
         # written only after container absence has been proven, so a claimed
@@ -1547,10 +1573,11 @@ class WorkspaceRuntimeManager:
                     "was removed before a fresh start."
                 )
             running = False
+        record_image_source = "package" if explicit_image else "default"
         if (
             running
             and record.get("image")
-            and str(record.get("image")) != self.options.image
+            and str(record.get("image")) != resolved_image
         ):
             removal_before_fresh_start = self._remove_container(container_name)
             if not (
@@ -1590,14 +1617,17 @@ class WorkspaceRuntimeManager:
                 }
             )
             self._write_record(workspace_id, record)
-            self._ensure_image_available(executable)
+            self._ensure_image_available(
+                executable, resolved_image, pullable=not explicit_image
+            )
             # Image preparation may take minutes. A Stop requested while it
             # was running must leave the durable pre-start proof intact and
             # must never fall through to ``docker run``.
             _check_interface_launch_cancelled(should_stop)
             host_port = self._host_port(workspace_id)
             command = self._container_run_command(
-                executable, workspace, container_name, host_port
+                executable, workspace, container_name, host_port,
+                image=resolved_image,
             )
             _check_interface_launch_cancelled(should_stop)
             record.pop("terminal_proof", None)
@@ -1607,7 +1637,8 @@ class WorkspaceRuntimeManager:
                     "host_port": host_port,
                     "status": "starting",
                     "updated_at": _now_iso(),
-                    "image": self.options.image,
+                    "image": resolved_image,
+                    "image_source": record_image_source,
                     "workspace_root": str(root),
                     # This is intentionally set before ``docker run``. A
                     # timeout or interrupted subprocess may still have created
@@ -1648,7 +1679,8 @@ class WorkspaceRuntimeManager:
                     "started_at": time.time(),
                     "updated_at": _now_iso(),
                     "last_used_at": _now_iso(),
-                    "image": self.options.image,
+                    "image": resolved_image,
+                    "image_source": record_image_source,
                     "base_image": self.options.base_image,
                     "dockerfile": str(self._image_dockerfile()),
                     "cpu_limit": self.options.cpu_limit,
@@ -1675,6 +1707,7 @@ class WorkspaceRuntimeManager:
         self,
         workspace: JsonDict,
         *,
+        image: Optional[str] = None,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> JsonDict:
         _check_interface_launch_cancelled(should_stop)
@@ -1684,9 +1717,9 @@ class WorkspaceRuntimeManager:
                 "Code Server requires workspace runtime network access; configure the workspace runtime network as bridge/default."
             )
         runtime_status = (
-            self.start(workspace)
+            self.start(workspace, image=image)
             if should_stop is None
-            else self.start(workspace, should_stop=should_stop)
+            else self.start(workspace, image=image, should_stop=should_stop)
         )
         _check_interface_launch_cancelled(should_stop)
         executable = self._require_container_executable()
@@ -2193,7 +2226,13 @@ class WorkspaceRuntimeManager:
             os.close(parent_fd)
 
     def _container_run_command(
-        self, executable: str, workspace: JsonDict, container_name: str, host_port: int
+        self,
+        executable: str,
+        workspace: JsonDict,
+        container_name: str,
+        host_port: int,
+        *,
+        image: Optional[str] = None,
     ) -> List[str]:
         workspace_id = str(workspace["id"])
         root = Path(str(workspace["root"])).resolve()
@@ -2240,7 +2279,7 @@ class WorkspaceRuntimeManager:
         command.extend(self._prepared_runtime_mount_args(workspace))
         command.extend(
             [
-                self.options.image,
+                image or self.options.image,
                 "-lc",
                 "trap 'exit 0' TERM INT; while true; do sleep 3600; done",
             ]
@@ -2326,10 +2365,18 @@ class WorkspaceRuntimeManager:
                 reserved.add(port)
         return reserved
 
-    def _ensure_image_available(self, executable: str) -> None:
-        self._enforce_image_policy()
+    def _ensure_image_available(
+        self,
+        executable: str,
+        image: Optional[str] = None,
+        *,
+        pullable: bool = True,
+    ) -> None:
+        target = image or self.options.image
+        if pullable:
+            self._enforce_image_policy()
         inspect = subprocess.run(
-            [executable, "image", "inspect", self.options.image],
+            [executable, "image", "inspect", target],
             capture_output=True,
             text=True,
             timeout=15,
@@ -2337,6 +2384,13 @@ class WorkspaceRuntimeManager:
         )
         if inspect.returncode == 0:
             return
+        if not pullable:
+            # A package's own image is fetched deliberately, never as a side
+            # effect of opening a workspace -- the same rule a run applies.
+            raise RuntimeError(
+                f"The package's image {target} is not on this machine. "
+                "Fetch it first, then open the workspace."
+            )
         if self._should_build_image():
             dockerfile = self._image_dockerfile()
             if not dockerfile.exists():
@@ -3424,7 +3478,9 @@ class UiState:
                 raise ValueError("Workspace Code Server source is not open.")
             workspace_root = _safe_code_server_folder(self, Path(root_text))
             workspace["root"] = str(workspace_root)
-            status = self.workspace_runtime.start_code_server(workspace)
+            status = self.workspace_runtime.start_code_server(
+                workspace, image=_workspace_package_image(self, workspace)
+            )
             self.active_code_workspace_id = workspace_id
             self.code_server.started_at = time.time()
             self.code_server.workspace_root = workspace_root
@@ -3492,11 +3548,12 @@ class UiState:
 
         if port < 1 or port > 65535:
             raise ValueError("Preview port must be between 1 and 65535.")
+        preview_image = _workspace_package_image(self, workspace)
         code_server = (
-            self.workspace_runtime.start_code_server(workspace)
+            self.workspace_runtime.start_code_server(workspace, image=preview_image)
             if should_stop is None
             else self.workspace_runtime.start_code_server(
-                workspace, should_stop=should_stop
+                workspace, image=preview_image, should_stop=should_stop
             )
         )
         _check_interface_launch_cancelled(should_stop)
@@ -33301,6 +33358,68 @@ def _package_plan_owned_paths(plan: JsonDict) -> List[str]:
                     f"Package plan owned paths overlap: {path!r} and {other!r}."
                 )
     return ordered
+
+
+def _workspace_package_image(state: "UiState", workspace: JsonDict) -> Optional[str]:
+    """The image this workspace should run in, or None for the default.
+
+    A workspace runs in the image its package's code will run in, so what works
+    while building works in a run. The image passes the same checks a run
+    performs -- declared pinned, approved for study execution, present on this
+    machine with the declared fingerprint and architecture -- because opening a
+    workspace on an image executes that image just as surely as a run does.
+    """
+
+    root_text = str(workspace.get("root") or "")
+    if not root_text:
+        return None
+    try:
+        settings = load_package_settings(Path(root_text))
+    except (ValueError, OSError):
+        # A malformed settings file is reported by the catalog view; opening
+        # the workspace on the default image keeps the folder reachable so the
+        # file can be fixed from inside it.
+        return None
+    if settings is None or settings.container is None:
+        return None
+    container = settings.container
+    from optpilot.container_engine import (
+        ContainerEngineError,
+        resolve_container_engine,
+        verify_image_available,
+    )
+    from optpilot.realm.provider_trust_records import (
+        PROVIDER_TRUST_EXECUTION_CONTRACT,
+    )
+
+    try:
+        engine = resolve_container_engine()
+    except ContainerEngineError as error:
+        raise RuntimeError(
+            f"This package declares an image, and {error}"
+        ) from error
+    runtime = _require_realm_runtime(state)
+    approval = None
+    trust = getattr(runtime, "provider_trust_policy", None)
+    if trust is not None:
+        try:
+            approval = trust.read_active(
+                image_ref=container.image.raw,
+                contract=PROVIDER_TRUST_EXECUTION_CONTRACT,
+            )
+        except Exception:
+            approval = None
+    if approval is None:
+        raise RuntimeError(
+            f"The package's image {container.image.raw} has not been approved "
+            "for study execution, and a workspace runs it just as surely as a "
+            "run does. Approve the image first."
+        )
+    try:
+        verify_image_available(engine, container.image.raw, container.platform)
+    except ContainerEngineError as error:
+        raise RuntimeError(str(error)) from error
+    return container.image.raw
 
 
 def _bundled_catalog_root() -> Optional[Path]:

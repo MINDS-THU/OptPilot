@@ -18,6 +18,7 @@ import optpilot_studio.ui.server as studio_server
 import optpilot_studio.ui.runtime_supervisor as runtime_supervisor
 from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot_studio.ui.server import (
+    DEFAULT_WORKSPACE_RUNTIME_IMAGE,
     UiState,
     WorkspaceRuntimeStorageIdentityChanged,
     WorkspaceRuntimeManager,
@@ -998,7 +999,9 @@ class StudioWorkspaceRuntimeSafetyTest(unittest.TestCase):
             remove_container.assert_called_once_with(
                 manager._container_name("workspace")
             )
-            ensure_image.assert_called_once_with("docker")
+            ensure_image.assert_called_once_with(
+                    "docker", DEFAULT_WORKSPACE_RUNTIME_IMAGE, pullable=True
+                )
             run_command.assert_called_once()
             self.assertEqual(
                 [
@@ -1445,3 +1448,96 @@ class StudioWorkspaceRuntimeHealthProbeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspacePackageImageTest(unittest.TestCase):
+    """A workspace runs in the image its package declares.
+
+    The design's reason: what works while you are building works in a run,
+    because both happen in the same image. The image passes the same checks a
+    run performs -- opening a workspace on an image executes it just as surely
+    as a run does -- so the operator allowlist, which governs the default
+    image, does not apply to a package's own.
+    """
+
+    DIGEST = "sha256:" + "a" * 64
+
+    def _manager_and_workspace(self, root: Path):
+        from tests.studio.test_mvp import _write_fake_workspace_container
+
+        fake = _write_fake_workspace_container(root)
+        studio_root = root / "studio"
+        studio_root.mkdir(parents=True, exist_ok=True)
+        manager = WorkspaceRuntimeManager(
+            studio_root=studio_root,
+            runtime_root=studio_root / ".optpilot-ui" / "runtime",
+            options=WorkspaceRuntimeOptions(
+                executable=str(fake),
+                build_image=False,
+                image_allowlist_patterns=["trusted/*"],
+            ),
+        )
+        workspace_root = root / "ws"
+        workspace_root.mkdir()
+        workspace = {"id": "ws_pkg_image", "root": str(workspace_root)}
+        return fake, manager, workspace
+
+    def test_an_explicit_image_reaches_the_container_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake, manager, workspace = self._manager_and_workspace(root)
+            image = f"ghcr.io/example/pkg@{self.DIGEST}"
+            manager.start(workspace, image=image)
+            calls = [
+                json.loads(line)
+                for line in (root / "fake_workspace_container_calls.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            run_calls = [c for c in calls if c and c[0] == "run"]
+            self.assertTrue(run_calls, calls)
+            self.assertIn(image, run_calls[0])
+            record = manager._read_record("ws_pkg_image")
+            self.assertEqual(record.get("image"), image)
+            self.assertEqual(record.get("image_source"), "package")
+
+    def test_an_explicit_image_is_not_subject_to_the_default_allowlist(
+        self,
+    ) -> None:
+        # The allowlist governs the operator's default; the package image was
+        # gated by the caller with the same checks a run performs.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _fake, manager, workspace = self._manager_and_workspace(root)
+            manager.start(
+                workspace, image=f"ghcr.io/unlisted/pkg@{self.DIGEST}"
+            )  # must not raise "not allowed"
+
+    def test_the_default_image_still_obeys_the_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _fake, manager, workspace = self._manager_and_workspace(root)
+            with self.assertRaisesRegex(RuntimeError, "not allowed"):
+                manager.start(workspace)
+
+    def test_a_missing_package_image_is_never_pulled(self) -> None:
+        # A package's image is fetched deliberately, never as a side effect of
+        # opening a workspace -- the same rule a run applies.
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _fake, manager, _workspace = self._manager_and_workspace(root)
+            image = f"ghcr.io/example/pkg@{self.DIGEST}"
+            with patch(
+                "optpilot_studio.ui.server.subprocess.run"
+            ) as run:
+                run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout="", stderr="no such image"
+                )
+                with self.assertRaisesRegex(RuntimeError, "Fetch it first"):
+                    manager._ensure_image_available(
+                        "docker", image, pullable=False
+                    )
+                for call in run.call_args_list:
+                    self.assertNotIn("pull", call.args[0])

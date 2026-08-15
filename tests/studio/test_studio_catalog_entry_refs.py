@@ -589,7 +589,7 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
             marker="revision-two",
         )
 
-        def start_code_server(workspace: dict[str, object]) -> dict[str, object]:
+        def start_code_server(workspace: dict[str, object], **_kwargs: object) -> dict[str, object]:
             return {
                 "workspace_id": workspace["id"],
                 "folder": workspace["root"],
@@ -667,7 +667,7 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
         runtime_calls: list[str] = []
         results: list[dict[str, object]] = []
 
-        def slow_start(source: dict[str, object]) -> dict[str, object]:
+        def slow_start(source: dict[str, object], **_kwargs: object) -> dict[str, object]:
             runtime_calls.append(str(source["id"]))
             if len(runtime_calls) == 1:
                 first_entered.set()
@@ -738,7 +738,7 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
         )
         workspace_id = str(workspace["id"])
 
-        def start_code_server(source: dict[str, object]) -> dict[str, object]:
+        def start_code_server(source: dict[str, object], **_kwargs: object) -> dict[str, object]:
             return {
                 "workspace_id": source["id"],
                 "folder": source["root"],
