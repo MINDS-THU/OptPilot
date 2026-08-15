@@ -34447,11 +34447,20 @@ def _normalize_registered_study(
 def _select_plan_study(
     package_root: Path, plan: JsonDict, requested: str
 ) -> Optional[Path]:
+    registered_paths = {
+        str(item.get("registered_config_path") or "")
+        for item in plan.get("studies", []) or []
+        if isinstance(item, dict)
+    }
     if requested:
         requested = requested.strip()
         requested_path = _safe_relative_plan_path(requested, "smoke study path")
         candidate = _contained_output_path(package_root, requested_path)
-        if candidate.is_file():
+        # The path must be one this work registers. The package now holds every
+        # component, not just this plan's, so accepting any file that happens to
+        # exist would let a test of somebody else's component be recorded as
+        # evidence for this one -- permanently, and looking entirely legitimate.
+        if candidate.is_file() and requested_path.as_posix() in registered_paths:
             return candidate
         normalized_requested = _slug_text(requested)
         for item in plan.get("studies", []) or []:

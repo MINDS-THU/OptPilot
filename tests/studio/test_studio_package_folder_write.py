@@ -335,3 +335,59 @@ class FastForwardOnlyTests(unittest.TestCase):
             self._mirror()
         target.write_text(original)
         self._mirror()  # the refusal is not sticky
+
+
+class SmokeTargetMustBelongToThisWorkTests(unittest.TestCase):
+    """A test result is evidence, so it has to be about the thing registered.
+
+    The package a registration is checked against now holds every component in
+    it, not only the one being registered. Choosing what to run by path used to
+    accept any file that existed, which would let a passing test of somebody
+    else's component be recorded permanently as evidence for this one.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "studies").mkdir()
+        for name in ("mine.yaml", "someone-elses.yaml"):
+            (self.root / "studies" / name).write_text(
+                "apiVersion: optpilot.io/v1\nconfig: study\n"
+            )
+        self.plan = {
+            "studies": [
+                {
+                    "id": "mine",
+                    "registered_config_path": "studies/mine.yaml",
+                    "smoke": True,
+                }
+            ]
+        }
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_a_registered_study_is_selected_by_path(self) -> None:
+        selected = server._select_plan_study(
+            self.root, self.plan, "studies/mine.yaml"
+        )
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.name, "mine.yaml")
+
+    def test_a_file_this_work_does_not_register_is_refused(self) -> None:
+        self.assertTrue((self.root / "studies" / "someone-elses.yaml").is_file())
+        self.assertIsNone(
+            server._select_plan_study(
+                self.root, self.plan, "studies/someone-elses.yaml"
+            )
+        )
+
+    def test_selection_by_name_still_works(self) -> None:
+        selected = server._select_plan_study(self.root, self.plan, "mine")
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.name, "mine.yaml")
+
+    def test_the_default_is_this_work_s_smoke_study(self) -> None:
+        selected = server._select_plan_study(self.root, self.plan, "")
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.name, "mine.yaml")
