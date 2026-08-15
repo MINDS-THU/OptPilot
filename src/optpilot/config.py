@@ -1455,11 +1455,32 @@ def _compile_accepts(accepts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _compile_method_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
+    sandbox = runtime.get("sandbox", "process")
+    if sandbox == "container":
+        # The canonical compiled form keeps the container declaration as its
+        # own sub-map. The old flattening dropped it, so a container method
+        # declared in an actual settings file was refused downstream as having
+        # declared no container -- while every test that built its runtime in
+        # Python passed. The shape here is the one the retained compiler reads
+        # and the one an environment's contract retains.
+        container = dict(runtime.get("container", {}) or {})
+        compiled: Dict[str, Any] = {
+            "type": "container",
+            "container": {
+                "image": container.get("image"),
+                "platform": container.get("platform"),
+                "network": container.get("network", "disabled"),
+            },
+        }
+        if runtime.get("env"):
+            compiled["env"] = dict(runtime["env"])
+        if runtime.get("envFromHost"):
+            compiled["envFromHost"] = list(runtime["envFromHost"])
+        return compiled
     compiled = _compile_runtime(runtime, base_path)
     if not compiled:
         return {}
-    sandbox = runtime.get("sandbox", "process")
-    compiled["type"] = "container" if sandbox == "container" else "process"
+    compiled["type"] = "process"
     return compiled
 
 
