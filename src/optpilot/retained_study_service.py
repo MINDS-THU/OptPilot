@@ -1147,8 +1147,17 @@ class RetainedStudyService:
             or environment_runtime.builder_fingerprint
             != self._provider.builder_fingerprint
             or environment_runtime.platform != self._provider.platform
-            or method_runtime.builder_fingerprint != self._provider.builder_fingerprint
-            or method_runtime.platform != self._provider.platform
+            or (
+                # A portable manifest is host-independent by construction: an
+                # image names its contents exactly, so no builder fingerprint
+                # exists and the platform is the image's, not this machine's.
+                method_runtime.portability == "provider-scoped"
+                and (
+                    method_runtime.builder_fingerprint
+                    != self._provider.builder_fingerprint
+                    or method_runtime.platform != self._provider.platform
+                )
+            )
         ):
             raise RealmConflict("Retained study definition compilation facts changed.")
         package = RetainedStudyPackage(

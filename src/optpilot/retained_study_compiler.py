@@ -690,7 +690,13 @@ def _method_container_declaration(method: Mapping[str, Any]):
             "container_runtime_unsupported",
             "A container method runtime must name an image and a platform.",
         )
-    return image, platform
+    network = container.get("network", "disabled")
+    if network not in ("enabled", "disabled"):
+        _fail(
+            "container_runtime_unsupported",
+            "A container method runtime network grant must be enabled or disabled.",
+        )
+    return image, platform, network
 
 
 def _oci_digest_of(image: str) -> str:
@@ -1574,13 +1580,19 @@ def compile_retained_process_study(
             builder_fingerprint=provider.builder_fingerprint,
         )
     else:
-        image, platform = method_container
+        image, platform, network = method_container
         # An image names its contents exactly, so this record means the same
         # thing on any machine of that architecture. A process runtime does not:
         # it describes what one machine happened to have installed, which is why
         # it is scoped to the provider that built it.
         settings = LogicalPythonRuntimeSettings(method_import_roots).to_dict()
         settings["container_platform"] = platform
+        # The record's own field holds the bare fingerprint; the full declared
+        # reference is carried here so the launch check can compare the same
+        # form the package named (a repository-qualified reference names a
+        # manifest digest, which a bare fingerprint comparison cannot verify).
+        settings["container_image_reference"] = image
+        settings["container_network"] = network
         method_runtime = PreparedMethodRuntimeManifest(
             method_revision_digest=method_revision.digest,
             runtime_kind="container",

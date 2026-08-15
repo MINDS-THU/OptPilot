@@ -3134,11 +3134,38 @@ def _method_context_binding(
 def _validate_batch_definition(definition: RunDefinitionManifest) -> None:
     if not isinstance(definition, RunDefinitionManifest):
         raise TypeError("run definition must be a RunDefinitionManifest.")
+    method_runtime = definition.prepared_method_runtime
     if (
         definition.method_revision.protocol != BATCH_PROTOCOL
-        or definition.prepared_method_runtime.runtime_kind != "process"
+        or method_runtime.runtime_kind not in ("process", "container")
     ):
         raise ValueError("retained method protocol/runtime is unsupported.")
+    if method_runtime.runtime_kind == "container":
+        settings = method_runtime.runtime_settings
+        reference = (
+            settings.get("container_image_reference")
+            if isinstance(settings, Mapping)
+            else None
+        )
+        platform = (
+            settings.get("container_platform")
+            if isinstance(settings, Mapping)
+            else None
+        )
+        network = (
+            settings.get("container_network")
+            if isinstance(settings, Mapping)
+            else None
+        )
+        if (
+            method_runtime.portability != "portable"
+            or not isinstance(reference, str)
+            or not reference
+            or not isinstance(platform, str)
+            or not platform
+            or network not in ("enabled", "disabled")
+        ):
+            raise ValueError("retained container method runtime is malformed.")
     implementation = definition.method_revision.method_contract.get("implementation")
     if not isinstance(implementation, Mapping) or implementation.get("type") not in {
         "python",

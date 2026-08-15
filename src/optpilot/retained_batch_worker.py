@@ -541,9 +541,31 @@ def _method_definition(method_id: str, contract: Mapping[str, Any]) -> dict[str,
     }
 
 
+#: A container manifest carries three facts a process manifest must not: the
+#: architecture the image was built for, the full reference it was declared by
+#: (the record's own field holds only the bare fingerprint), and whether the
+#: method was granted the network. Exact key sets per kind, so a process
+#: manifest that grew a container key is refused rather than half-read.
+_PROCESS_RUNTIME_SETTINGS_KEYS = frozenset({"import_roots", "schema"})
+_CONTAINER_RUNTIME_SETTINGS_KEYS = frozenset(
+    {
+        "import_roots",
+        "schema",
+        "container_platform",
+        "container_image_reference",
+        "container_network",
+    }
+)
+
+
 def _scope_paths_from_runtime(definition: RunDefinitionManifest) -> tuple[ScopePath, ...]:
     settings = definition.prepared_method_runtime.runtime_settings
-    if not isinstance(settings, Mapping) or set(settings) != {"import_roots", "schema"}:
+    expected_keys = (
+        _CONTAINER_RUNTIME_SETTINGS_KEYS
+        if definition.prepared_method_runtime.runtime_kind == "container"
+        else _PROCESS_RUNTIME_SETTINGS_KEYS
+    )
+    if not isinstance(settings, Mapping) or set(settings) != expected_keys:
         raise RetainedBatchWorkerConfigurationError(
             "prepared method runtime does not contain strict logical Python settings."
         )
@@ -1631,7 +1653,10 @@ class RetainedPythonBatchEngine:
     ) -> None:
         if not isinstance(run_definition, RunDefinitionManifest):
             raise TypeError("run_definition must be a RunDefinitionManifest.")
-        if run_definition.prepared_method_runtime.runtime_kind != "process":
+        if run_definition.prepared_method_runtime.runtime_kind not in (
+            "process",
+            "container",
+        ):
             raise RetainedBatchWorkerConfigurationError(
                 "retained batch worker requires a prepared process runtime."
             )
@@ -2336,14 +2361,15 @@ class RetainedBatchWorkerInit:
     run_definition: RunDefinitionManifest
     projection_root: str
     scope_roots: Mapping[str, str]
-    socket_path: str
+    socket_path: str | None
     diagnostic_path: str
     candidate_staging: FileCandidateStagingBinding | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_definition, RunDefinitionManifest):
             raise TypeError("run_definition must be a RunDefinitionManifest.")
-        if self.run_definition.prepared_method_runtime.runtime_kind != "process":
+        runtime_kind = self.run_definition.prepared_method_runtime.runtime_kind
+        if runtime_kind not in ("process", "container"):
             raise RetainedBatchWorkerConfigurationError(
                 "retained batch worker requires a prepared process runtime."
             )
@@ -2371,7 +2397,19 @@ class RetainedBatchWorkerInit:
         object.__setattr__(
             self, "projection_root", _absolute_path(self.projection_root, "projection root")
         )
-        object.__setattr__(self, "socket_path", _unix_socket_path(self.socket_path))
+        if runtime_kind == "container":
+            # A containerised worker answers on the stream it was started with;
+            # a socket path here would name a transport that does not exist,
+            # and the init's bytes are part of the run's evidence.
+            if self.socket_path is not None:
+                raise RetainedBatchWorkerConfigurationError(
+                    "a container worker uses its own standard streams; "
+                    "it takes no socket path."
+                )
+        else:
+            object.__setattr__(
+                self, "socket_path", _unix_socket_path(self.socket_path)
+            )
         object.__setattr__(
             self,
             "diagnostic_path",
