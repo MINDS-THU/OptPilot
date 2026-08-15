@@ -32035,6 +32035,16 @@ def _prepare_package_plan(
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+    placement = payload.get("image_placement")
+    if placement is not None:
+        if placement not in ("component", "package"):
+            raise ValueError(
+                "image_placement must be 'component' or 'package'."
+            )
+        # Where captured software goes when the package already has an image.
+        # Carried on the plan because the capture records it at Check; a client
+        # that never sets it gets the default, which is the component.
+        plan["image_placement"] = placement
     # What the parts of the package this work covers looked like when it began.
     # Registering compares against it and refuses if they moved, so a stale
     # workspace can never quietly replace a newer version of its own component.
