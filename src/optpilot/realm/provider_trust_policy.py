@@ -16,6 +16,7 @@ from .ledger import RealmLedger
 from .provider_trust_records import (
     PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE,
     PROVIDER_TRUST_GATEWAY_CONTRACT,
+    validate_provider_contract,
     PROVIDER_TRUST_POLICY_OWNER_ID,
     ProviderTrustDecision,
     ProviderTrustHead,
@@ -146,18 +147,41 @@ class RealmProviderTrustPolicyService:
             actor_principal_id=self._actor_principal_id
         )
 
-    def list_active(self) -> tuple[ProviderTrustHead, ...]:
+    def list_active(
+        self, *, contract: str = PROVIDER_TRUST_GATEWAY_CONTRACT
+    ) -> tuple[ProviderTrustHead, ...]:
+        """Approvals for one purpose only.
+
+        Required rather than optional-and-unfiltered: an approval to host a
+        preview window is not an approval to run a package's own code, and a
+        caller that forgot to say which it meant would silently get both.
+        """
+
         self._require_open()
-        return self._ledger.list_active_provider_trust(
-            actor_principal_id=self._actor_principal_id
+        contract = validate_provider_contract(contract)
+        return tuple(
+            head
+            for head in self._ledger.list_active_provider_trust(
+                actor_principal_id=self._actor_principal_id
+            )
+            if head.decision.contract == contract
         )
 
-    def read_active(self, *, image_ref: str) -> ProviderTrustHead | None:
+    def read_active(
+        self,
+        *,
+        image_ref: str,
+        contract: str = PROVIDER_TRUST_GATEWAY_CONTRACT,
+    ) -> ProviderTrustHead | None:
         self._require_open()
-        return self._ledger.read_active_provider_trust(
+        contract = validate_provider_contract(contract)
+        head = self._ledger.read_active_provider_trust(
             actor_principal_id=self._actor_principal_id,
             image_ref=image_ref,
         )
+        if head is None or head.decision.contract != contract:
+            return None
+        return head
 
     def close(self) -> None:
         if self._closed:

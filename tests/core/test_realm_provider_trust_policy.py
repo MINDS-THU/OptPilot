@@ -229,7 +229,7 @@ class RealmProviderTrustPolicyMigrationTest(unittest.TestCase):
                 with sqlite3.connect(database) as connection:
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        35,
+                        36,
                     )
                     self.assertEqual(
                         connection.execute(

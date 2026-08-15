@@ -374,7 +374,7 @@ def _sqlite_catalog_paths_overlap(left: object, right: object) -> int:
     return int(catalog_paths_overlap(left, right))
 
 
-_CURRENT_SCHEMA_VERSION = 35
+_CURRENT_SCHEMA_VERSION = 36
 _MIGRATION_DIRECTORY = Path(__file__).with_name("migrations")
 _MIGRATIONS = (
     (1, _MIGRATION_DIRECTORY / "0001_realm_core.sql"),
@@ -421,6 +421,7 @@ _MIGRATIONS = (
     (33, _MIGRATION_DIRECTORY / "0033_workspace_metadata_revision.sql"),
     (34, _MIGRATION_DIRECTORY / "0034_selection_owner_adoptions.sql"),
     (35, _MIGRATION_DIRECTORY / "0035_provider_trust_policy.sql"),
+    (36, _MIGRATION_DIRECTORY / "0036_provider_trust_contract.sql"),
 )
 _ID_NAMESPACE = uuid.UUID("a811e801-fdc1-43c8-b985-dcab229ffcea")
 _MAX_OPERATION_ID_BYTES = 512
@@ -1764,10 +1765,12 @@ class RealmLedger(
                 "FROM provider_trust_heads head "
                 "JOIN provider_trust_decisions decision "
                 "ON decision.policy_id = head.policy_id "
+                "AND decision.contract = head.contract "
                 "AND decision.image_ref = head.image_ref "
                 "AND decision.decision_id = head.decision_id "
-                "WHERE head.policy_id = ? AND head.image_ref = ?",
-                (PROVIDER_TRUST_POLICY_ID, image_ref),
+                "WHERE head.policy_id = ? AND head.contract = ? "
+                "AND head.image_ref = ?",
+                (PROVIDER_TRUST_POLICY_ID, contract, image_ref),
             ).fetchone()
             if (
                 state is ProviderTrustState.REVOKED
@@ -1825,10 +1828,12 @@ class RealmLedger(
             if current is None:
                 connection.execute(
                     "INSERT INTO provider_trust_heads("
-                    "policy_id, image_ref, decision_id, updated_txn_id, updated_at"
-                    ") VALUES (?, ?, ?, ?, ?)",
+                    "policy_id, contract, image_ref, decision_id, "
+                    "updated_txn_id, updated_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         PROVIDER_TRUST_POLICY_ID,
+                        contract,
                         image_ref,
                         decision_id,
                         txn_id,
@@ -1839,12 +1844,14 @@ class RealmLedger(
                 updated = connection.execute(
                     "UPDATE provider_trust_heads SET decision_id = ?, "
                     "updated_txn_id = ?, updated_at = ? "
-                    "WHERE policy_id = ? AND image_ref = ? AND decision_id = ?",
+                    "WHERE policy_id = ? AND contract = ? AND image_ref = ? "
+                    "AND decision_id = ?",
                     (
                         decision_id,
                         txn_id,
                         now,
                         PROVIDER_TRUST_POLICY_ID,
+                        contract,
                         image_ref,
                         previous_decision_id,
                     ),
@@ -2092,7 +2099,8 @@ class RealmLedger(
             "FROM provider_trust_decisions decision "
             "JOIN ledger_transactions txn ON txn.txn_id = decision.created_txn_id "
             "WHERE decision.policy_id = ? "
-            "ORDER BY CAST(decision.image_ref AS BLOB), decision.sequence",
+            "ORDER BY decision.contract, CAST(decision.image_ref AS BLOB), "
+            "decision.sequence",
             (PROVIDER_TRUST_POLICY_ID,),
         ).fetchall()
         policy_txn = connection.execute(
@@ -2113,9 +2121,14 @@ class RealmLedger(
                 "Provider trust policy is not anchored to its first decision."
             )
         decisions = tuple(self._provider_trust_decision_from_row(row) for row in rows)
-        by_image: Dict[str, list[ProviderTrustDecision]] = {}
+        # One image may be approved for two different purposes, and each has its
+        # own history. Grouping by image alone would read two independent
+        # sequences as one interleaved sequence and reject it as broken.
+        by_image: Dict[tuple[str, str], list[ProviderTrustDecision]] = {}
         for decision in decisions:
-            by_image.setdefault(decision.image_ref, []).append(decision)
+            by_image.setdefault(
+                (decision.contract, decision.image_ref), []
+            ).append(decision)
         for image_decisions in by_image.values():
             previous: ProviderTrustDecision | None = None
             for decision in image_decisions:
@@ -2144,12 +2157,13 @@ class RealmLedger(
             "FROM provider_trust_heads head "
             "LEFT JOIN provider_trust_decisions decision "
             "ON decision.policy_id = head.policy_id "
+            "AND decision.contract = head.contract "
             "AND decision.image_ref = head.image_ref "
             "AND decision.decision_id = head.decision_id "
             "LEFT JOIN ledger_transactions txn "
             "ON txn.txn_id = decision.created_txn_id "
             "WHERE head.policy_id = ? "
-            "ORDER BY CAST(head.image_ref AS BLOB)",
+            "ORDER BY head.contract, CAST(head.image_ref AS BLOB)",
             (PROVIDER_TRUST_POLICY_ID,),
         ).fetchall()
         heads: list[ProviderTrustHead] = []
@@ -2175,12 +2189,16 @@ class RealmLedger(
                     "Provider trust head does not match its decision transaction."
                 ) from error
             heads.append(head)
-        if {head.image_ref for head in heads} != set(by_image):
+        # Keyed by purpose as well as image, matching how the histories above are
+        # grouped: each purpose has its own head and its own latest decision.
+        if {
+            (head.decision.contract, head.image_ref) for head in heads
+        } != set(by_image):
             raise RealmIntegrityError(
                 "Provider trust heads do not cover the decision histories."
             )
         for head in heads:
-            if head.decision != by_image[head.image_ref][-1]:
+            if head.decision != by_image[(head.decision.contract, head.image_ref)][-1]:
                 raise RealmIntegrityError(
                     "Provider trust head is not the latest decision."
                 )

@@ -22,7 +22,15 @@ JsonDict = Dict[str, Any]
 PROVIDER_TRUST_POLICY_ID = "local-container-gateway-images-v1"
 PROVIDER_TRUST_POLICY_OWNER_ID = "realm-policy:local-container-gateway-images-v1"
 PROVIDER_TRUST_POLICY_OWNER_KIND = "provider-trust-policy"
+#: Approving an image to host a preview window.
 PROVIDER_TRUST_GATEWAY_CONTRACT = "optpilot-stdlib-gateway-v1"
+#: Approving an image to run a package's own code during a study. A larger thing
+#: to agree to, and therefore never satisfied by a gateway approval.
+PROVIDER_TRUST_EXECUTION_CONTRACT = "optpilot-study-execution-v1"
+PROVIDER_TRUST_CONTRACTS = (
+    PROVIDER_TRUST_GATEWAY_CONTRACT,
+    PROVIDER_TRUST_EXECUTION_CONTRACT,
+)
 PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE = "python3"
 
 # One home for this pattern; see optpilot.image_reference for why the two pinned
@@ -64,7 +72,7 @@ def validate_provider_python_executable(value: Any) -> str:
 
 def validate_provider_contract(value: Any) -> str:
     contract = required_text(value, "provider trust contract", max_bytes=128)
-    if contract != PROVIDER_TRUST_GATEWAY_CONTRACT:
+    if contract not in PROVIDER_TRUST_CONTRACTS:
         raise ValueError("provider trust contract is unsupported.")
     return contract
 
@@ -288,6 +296,8 @@ class ProviderTrustHead:
 
 __all__ = [
     "PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE",
+    "PROVIDER_TRUST_CONTRACTS",
+    "PROVIDER_TRUST_EXECUTION_CONTRACT",
     "PROVIDER_TRUST_GATEWAY_CONTRACT",
     "PROVIDER_TRUST_POLICY_ID",
     "PROVIDER_TRUST_POLICY_OWNER_ID",

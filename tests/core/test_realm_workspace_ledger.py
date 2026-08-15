@@ -920,7 +920,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
 
 
 class RealmWorkspaceMigrationTest(unittest.TestCase):
-    def test_v1_database_upgrades_through_current_v35_with_all_checksums(self) -> None:
+    def test_v1_database_upgrades_through_current_v36_with_all_checksums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "realm.sqlite3"
             v1_path = (
@@ -954,13 +954,13 @@ class RealmWorkspaceMigrationTest(unittest.TestCase):
             connection = sqlite3.connect(database)
             try:
                 self.assertEqual(
-                    connection.execute("PRAGMA user_version").fetchone()[0], 35
+                    connection.execute("PRAGMA user_version").fetchone()[0], 36
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT version FROM schema_migrations ORDER BY version"
                     ).fetchall(),
-                    [(version,) for version in range(1, 36)],
+                    [(version,) for version in range(1, 37)],
                 )
                 self.assertIsNotNone(
                     connection.execute(
