@@ -2708,7 +2708,9 @@ if __name__ == "__main__":
     unittest.main()
 
 
-def _container_definition(image_digest: str, platform: str) -> Any:
+def _container_definition(
+    image_digest: str, platform: str, env_names: tuple[str, ...] = ()
+) -> Any:
     """The process fixture's definition, re-declared to run in an image."""
 
     import dataclasses
@@ -2719,6 +2721,8 @@ def _container_definition(image_digest: str, platform: str) -> Any:
     contract = dict(base.method_revision.method_contract)
     contract["runtime_requirements"] = {"type": "container"}
     contract["sandbox_spec"] = {"runtimeType": "container"}
+    if env_names:
+        contract["runtime_requirements"]["envFromHost"] = list(env_names)
     method = dataclasses.replace(base.method_revision, method_contract=contract)
     settings = dict(base.prepared_method_runtime.runtime_settings)
     settings["container_platform"] = platform
@@ -2886,6 +2890,107 @@ class Method:
         )
         self.assertEqual(result.candidates[0]["spec"], {"ok": True})
         handle.close()
+
+
+class ContainerMethodSecretsTest(unittest.TestCase):
+    """A declared value reaches the method inside its image -- and only there.
+
+    The value rides a private file the engine client reads while creating the
+    container, never the command line, and the file is gone once the worker has
+    answered its first exchange.
+    """
+
+    def setUp(self) -> None:
+        for name in ("_fake_socket_probe", "_cleanup_handles", "_realize"):
+            setattr(
+                self, name, getattr(RetainedBatchRuntimeTest, name).__get__(self)
+            )
+        RetainedBatchRuntimeTest.setUp(self)
+        from optpilot.container_engine import (
+            ContainerEngineError,
+            inspect_image,
+            resolve_container_engine,
+        )
+
+        try:
+            self.engine = resolve_container_engine()
+            inspection = inspect_image(self.engine, "python:3.12-slim")
+        except ContainerEngineError as error:
+            self.skipTest(f"container engine unavailable: {error}")
+        if inspection is None:
+            self.skipTest("python:3.12-slim is not present locally")
+        self.definition = _container_definition(
+            inspection.config_digest,
+            inspection.platform,
+            env_names=("OPTPILOT_TEST_SECRET",),
+        )
+        self.snapshot = _snapshot(self.definition)
+        self.ledger.current = self.snapshot
+        self.ledger.memberships = _memberships(self.definition)
+        self.ledger.leases[self.snapshot.controller_lease.lease_id] = (
+            self.snapshot.controller_lease
+        )
+        self.graph.provider_trust_policy = SimpleNamespace(
+            read_active=lambda **_kw: SimpleNamespace(state="approved")
+        )
+        method_root = (
+            self.projection_root / "scopes" / "study-package-source" / "methods"
+        )
+        (method_root / "method_impl.py").write_text(
+            """
+import os
+class Method:
+    def __init__(self, definition, study_spec, rng): pass
+    def propose(self, n_candidates, study_state, evidence_view):
+        return [{
+            "format": "parameters",
+            "spec": {"secret_seen": os.environ.get("OPTPILOT_TEST_SECRET", "")},
+        }]
+""",
+            encoding="utf-8",
+        )
+        from optpilot.method_launch_environment import MethodLaunchEnvironment
+
+        self.provider = RetainedBatchRuntimeProvider(
+            self.graph,
+            method_environment=MethodLaunchEnvironment.for_definition(
+                self.definition,
+                {"OPTPILOT_TEST_SECRET": "the-value-itself"},
+                binding_revision="settings-revision-1",
+            ),
+            socket_parent=Path(self.socket_temporary.name),
+            python_executable=Path(sys.executable),
+        )
+
+    def test_the_declared_value_arrives_and_the_file_is_gone(self) -> None:
+        handle = self._realize()
+        result = handle.propose(
+            "exchange-1",
+            exchange_sequence=1,
+            n_candidates=1,
+            study_state={},
+            evidence={},
+        )
+        self.assertEqual(
+            result.candidates[0]["spec"], {"secret_seen": "the-value-itself"}
+        )
+        leftovers = [
+            path
+            for path in Path(self.socket_temporary.name).rglob("mw-env-*")
+        ]
+        self.assertEqual(leftovers, [], "the value's file is gone after start")
+        handle.close()
+
+    def test_without_the_values_nothing_starts(self) -> None:
+        provider = RetainedBatchRuntimeProvider(
+            self.graph,
+            socket_parent=Path(self.socket_temporary.name),
+            python_executable=Path(sys.executable),
+        )
+        from optpilot.method_launch_environment import MethodLaunchEnvironmentError
+
+        with self.assertRaises(MethodLaunchEnvironmentError):
+            provider.realize(self.snapshot)
 
 
 def _worker_coordinates_for(test: ContainerMethodRealizeTest) -> str:

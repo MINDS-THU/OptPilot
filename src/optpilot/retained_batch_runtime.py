@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -163,8 +164,8 @@ _PUBLIC_MESSAGES = {
     "container_untrusted": (
         "The method's image has not been approved for study execution."
     ),
-    "container_grants_unsupported": (
-        "Containerised methods cannot receive host environment values yet."
+    "container_environment_value_unsupported": (
+        "A declared environment value cannot be carried into a container."
     ),
     "container_worker_unrecoverable": (
         "A method container from this controller generation already exists; "
@@ -1133,11 +1134,18 @@ class RetainedBatchRuntimeProvider:
         network = settings["container_network"] == "enabled"
 
         descriptor = self._method_environment_descriptor_for(definition)
-        if descriptor.names:
-            # Secret delivery into a container is not built; failing here is
-            # deliberate, because silently starting without the declared
-            # values would run the method in a state its author never meant.
-            raise RetainedBatchRuntimeError("container_grants_unsupported")
+        values_binding = self._method_environment_values
+        if descriptor.names and (
+            values_binding is None or not values_binding.values_available
+        ):
+            # Checked before anything is written: starting without the declared
+            # values would run the method in a state its author never meant,
+            # and a container has no attach path that could supply them later.
+            raise MethodLaunchEnvironmentError(
+                "method_environment_values_unavailable",
+                "Method environment values are required to start this Run.",
+                names=descriptor.names,
+            )
 
         try:
             engine = resolve_container_engine()
@@ -1388,6 +1396,38 @@ class RetainedBatchRuntimeProvider:
                 import_paths=("/optpilot/launcher",),
                 interactive=True,
             )
+            env_file: Path | None = None
+            if descriptor.names:
+                assert values_binding is not None
+                values = values_binding.take_process_environment()
+                self._method_environment_values = None
+                try:
+                    for name, value in values.items():
+                        if "\n" in value or "\x00" in value or "\n" in name:
+                            # The env-file format has no escaping: one line per
+                            # value. Refusing beats delivering a truncated
+                            # secret that fails much later, far from its cause.
+                            raise RetainedBatchRuntimeError(
+                                "container_environment_value_unsupported"
+                            )
+                    # Host-private, outside every mount, gone again right after
+                    # the engine client has read it. The value never touches the
+                    # command line, where any process on the machine could read
+                    # it for as long as the exchange lives.
+                    private_root = Path(self._socket_parent)
+                    private_root.mkdir(parents=True, exist_ok=True)
+                    env_file = private_root / f"mw-env-{coordinates.coordinate[:24]}"
+                    descriptor_fd = os.open(
+                        env_file,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                    )
+                    with os.fdopen(descriptor_fd, "w", encoding="utf-8") as handle:
+                        for name in sorted(values):
+                            handle.write(f"{name}={values[name]}\n")
+                    spec = dataclasses.replace(spec, env_file=env_file)
+                finally:
+                    values.clear()
             stderr_log = open(control_root / "worker-stderr.log", "ab")
             try:
                 process = ContainerMethodProcess(
@@ -1406,7 +1446,14 @@ class RetainedBatchRuntimeProvider:
             )
             if ready.get("ok") is not True:
                 raise RetainedBatchRuntimeError("worker_start_failed")
+            if env_file is not None:
+                # The engine client read it while creating the container; the
+                # readiness answer proves that point is past.
+                env_file.unlink(missing_ok=True)
+                env_file = None
         except RetainedBatchRuntimeError:
+            if env_file is not None:
+                env_file.unlink(missing_ok=True)
             self._cleanup_failed_container(
                 projection=projection,
                 volume=volume,
@@ -1415,6 +1462,8 @@ class RetainedBatchRuntimeProvider:
             )
             raise
         except Exception:
+            if env_file is not None:
+                env_file.unlink(missing_ok=True)
             self._cleanup_failed_container(
                 projection=projection,
                 volume=volume,
