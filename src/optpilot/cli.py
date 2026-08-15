@@ -17,6 +17,7 @@ from .runner import run_study
 from .realm.config import default_realm_root
 from .realm.provider_trust_policy import RealmProviderTrustPolicyService
 from .realm.provider_trust_records import (
+    PROVIDER_TRUST_EXECUTION_CONTRACT,
     PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE,
     PROVIDER_TRUST_GATEWAY_CONTRACT,
     ProviderTrustDecision,
@@ -219,6 +220,44 @@ def build_parser() -> argparse.ArgumentParser:
         confirmation=False,
     )
     trust_list_parser.set_defaults(handler=_environment_preview_trust_list_command)
+
+    image_parser = subparsers.add_parser(
+        "image",
+        help="Approve, list, and revoke images for study execution",
+    )
+    image_subparsers = image_parser.add_subparsers(
+        dest="image_command", required=True
+    )
+    image_approve = image_subparsers.add_parser(
+        "approve",
+        help=(
+            "Approve one digest-pinned image to execute a package's code. "
+            "Approving is how you say you are willing to run software "
+            "someone else built."
+        ),
+    )
+    image_approve.add_argument("image", help="sha256:<64 hex> or repo@sha256:<64 hex>")
+    image_approve.add_argument("--realm-root", default=None)
+    image_approve.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation prompt"
+    )
+    image_approve.set_defaults(handler=_image_trust_command_factory("approve"))
+    image_revoke = image_subparsers.add_parser(
+        "revoke",
+        help=(
+            "Withdraw an execution approval. A run already under way is not "
+            "stopped; the next container does not start."
+        ),
+    )
+    image_revoke.add_argument("image")
+    image_revoke.add_argument("--realm-root", default=None)
+    image_revoke.add_argument("--yes", action="store_true")
+    image_revoke.set_defaults(handler=_image_trust_command_factory("revoke"))
+    image_list = image_subparsers.add_parser(
+        "list", help="List images currently approved for study execution"
+    )
+    image_list.add_argument("--realm-root", default=None)
+    image_list.set_defaults(handler=_image_trust_list_command)
 
     _load_command_providers(subparsers)
 
@@ -496,6 +535,61 @@ def _add_environment_preview_trust_arguments(
             action="store_true",
             help="Apply the trust change without an interactive confirmation",
         )
+
+
+def _image_trust_command_factory(action: str):
+    def _handler(args) -> int:
+        image_ref = validate_provider_image_ref(args.image)
+        if not bool(args.yes):
+            verb = (
+                "approve for STUDY EXECUTION"
+                if action == "approve"
+                else "revoke the execution approval of"
+            )
+            print(f"About to {verb}:\n  {image_ref}")
+            if action == "approve":
+                print(
+                    "An approved image runs a package's own code with "
+                    "whatever network and credentials that code declares."
+                )
+            answer = input("Proceed? [y/N] ").strip().lower()
+            if answer not in ("y", "yes"):
+                print("Cancelled; nothing was changed.")
+                return 1
+        root = _environment_preview_trust_realm_root(args.realm_root)
+        with RealmProviderTrustPolicyService.open_local(root) as service:
+            operation = getattr(service, action)
+            operation(
+                operation_id=f"cli/image/trust/{action}/{uuid.uuid4().hex}",
+                image_ref=image_ref,
+                python_executable=PROVIDER_TRUST_DEFAULT_PYTHON_EXECUTABLE,
+                contract=PROVIDER_TRUST_EXECUTION_CONTRACT,
+                reason=f"Requested by optpilot image {action}.",
+            )
+            active = service.read_active(
+                image_ref=image_ref,
+                contract=PROVIDER_TRUST_EXECUTION_CONTRACT,
+            )
+        state = "approved" if active is not None else "not approved"
+        print(f"{image_ref}: {state} for study execution.")
+        return 0
+
+    return _handler
+
+
+def _image_trust_list_command(args) -> int:
+    root = _environment_preview_trust_realm_root(args.realm_root)
+    with RealmProviderTrustPolicyService.open_local(root) as service:
+        active = service.list_active(
+            contract=PROVIDER_TRUST_EXECUTION_CONTRACT
+        )
+    if not active:
+        print("No images are approved for study execution.")
+        return 0
+    print("Approved for study execution:")
+    for head in active:
+        print(f"  {head.image_ref}")
+    return 0
 
 
 def _environment_preview_trust_approve_command(args) -> int:
