@@ -33661,6 +33661,43 @@ def _is_bundled_catalog_package(package_root: Path) -> bool:
     return True
 
 
+def _append_component_runtime_override(
+    config_path: Path, *, image: str, platform: str
+) -> None:
+    """Record a component's image by appending to its settings file.
+
+    Appending, never rewriting: a settings file a person wrote holds comments
+    and formatting that a rewrite through the settings machinery would destroy,
+    and the loss would be invisible to everything except the person who wrote
+    them. The one case appending cannot handle -- the file already has a
+    runtime section -- refuses with the exact lines to add, rather than writing
+    a second section that contradicts the first.
+    """
+
+    text = config_path.read_text(encoding="utf-8")
+    addition = (
+        "\n"
+        "# Recorded at registration: the software installed in the workspace,\n"
+        "# captured as an image for this component only.\n"
+        "runtime:\n"
+        "  sandbox: container\n"
+        "  container:\n"
+        f"    image: {image}\n"
+        f"    platform: {platform}\n"
+    )
+    if re.search(r"^runtime\s*:", text, re.MULTILINE):
+        raise RealmConflict(
+            f"{config_path.name} already has a runtime section, so the "
+            "captured image cannot be recorded automatically without "
+            "rewriting your file. Add these lines to its runtime section "
+            "yourself, then check again:\n"
+            f"    container:\n      image: {image}\n      platform: {platform}"
+        )
+    config_path.write_text(
+        text.rstrip("\n") + "\n" + addition, encoding="utf-8"
+    )
+
+
 def _capture_installed_software(
     state: "UiState", plan: JsonDict, workspace_id: str
 ) -> None:
@@ -33689,15 +33726,28 @@ def _capture_installed_software(
         existing = load_package_settings(state.cwd / CATALOG_DIR_NAME / package_id)
     except (ValueError, OSError):
         existing = None
-    if existing is not None and existing.container is not None:
-        # The prompt case: the author must choose, and asking is not built yet.
-        return
+    placement = str(plan.get("image_placement") or "component")
+    if placement not in ("component", "package"):
+        raise RealmConflict(
+            "image_placement must be 'component' or 'package'."
+        )
     captured = state.workspace_runtime.capture_workspace_image(
         workspace_id, tag=f"optpilot-capture-{_slug_text(package_id)[:40]}"
     )
     if captured is None:
         return
     plan["captured_image"] = captured
+    if existing is not None and existing.container is not None:
+        # The package already has an image, so where the addition goes is the
+        # author's decision. The default is the narrower, reversible act:
+        # record it on the components being registered, leaving everything
+        # else in the package on the image it already uses. Unattended
+        # registration takes the default without asking.
+        plan["captured_image_placement"] = placement
+    else:
+        # No existing image: the capture becomes the package's, automatically,
+        # because there is nothing else in the package for a choice to affect.
+        plan["captured_image_placement"] = "package"
 
 
 def _workspace_software_change(state: "UiState", workspace_id: str) -> JsonDict:
@@ -34628,7 +34678,10 @@ def _write_composed_package_settings(
         container = existing.container
         description = existing.description
     captured = plan.get("captured_image")
-    if container is None and isinstance(captured, Mapping):
+    if (
+        isinstance(captured, Mapping)
+        and plan.get("captured_image_placement") == "package"
+    ) or (container is None and isinstance(captured, Mapping)):
         # The software installed in the workspace, captured at Check, becomes
         # the package's image -- recorded in the same settings file that
         # carries the package's identity, sealed and validated with the rest.
@@ -34670,6 +34723,13 @@ def _materialize_package_plan(
             "registered study config path",
         )
     package_root.mkdir(parents=True, exist_ok=True)
+    captured = plan.get("captured_image")
+    component_override = (
+        captured
+        if isinstance(captured, Mapping)
+        and plan.get("captured_image_placement") == "component"
+        else None
+    )
     for item in plan.get("components", []) or []:
         if not isinstance(item, dict):
             continue
@@ -34678,6 +34738,18 @@ def _materialize_package_plan(
             Path(str(item.get("component_root") or "")),
         )
         _copy_plan_target(root, item, destination)
+        if component_override is not None and str(item.get("kind")) in (
+            "environment",
+            "method",
+        ):
+            _append_component_runtime_override(
+                _contained_output_path(
+                    destination,
+                    Path(str(item.get("registered_config_path") or "")),
+                ),
+                image=str(component_override.get("image")),
+                platform=str(component_override.get("platform")),
+            )
     for item in plan.get("resources", []) or []:
         if not isinstance(item, dict):
             continue

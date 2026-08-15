@@ -391,3 +391,145 @@ class SmokeTargetMustBelongToThisWorkTests(unittest.TestCase):
         selected = server._select_plan_study(self.root, self.plan, "")
         self.assertIsNotNone(selected)
         self.assertEqual(selected.name, "mine.yaml")
+
+
+class ImagePlacementTest(unittest.TestCase):
+    """Where captured software goes when the package already has an image.
+
+    The author chooses; the default is the narrower, reversible act -- record
+    it on the component being registered. The component's settings file is
+    APPENDED to, never rewritten: a rewrite through the settings machinery
+    destroys comments and formatting, invisibly to everything but the person
+    who wrote them.
+    """
+
+    DIGEST = "sha256:" + "b" * 64
+
+    def test_appending_preserves_every_byte_the_author_wrote(self) -> None:
+        from optpilot_studio.ui.server import _append_component_runtime_override
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "method.yaml"
+            authored = (
+                "apiVersion: optpilot.io/v1\n"
+                "config: method\n"
+                "# Tuned on the 2026-08 benchmark set. Do not raise batchSize\n"
+                "# past 16 -- the simulator's queue overflows above that.\n"
+                "id: my-search-method\n"
+                "settings:\n"
+                "  batchSize: 16\n"
+            )
+            config.write_text(authored)
+            _append_component_runtime_override(
+                config, image=self.DIGEST, platform="linux/arm64"
+            )
+            result = config.read_text()
+            self.assertTrue(result.startswith(authored.rstrip("\n")))
+            self.assertIn("queue overflows", result)
+            self.assertIn("runtime:", result)
+            self.assertIn(f"    image: {self.DIGEST}", result)
+            self.assertIn("    platform: linux/arm64", result)
+
+    def test_an_existing_runtime_section_refuses_with_the_exact_lines(
+        self,
+    ) -> None:
+        from optpilot_studio.ui.server import _append_component_runtime_override
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "method.yaml"
+            authored = (
+                "apiVersion: optpilot.io/v1\n"
+                "config: method\n"
+                "id: m\n"
+                "runtime:\n"
+                "  sandbox: process\n"
+            )
+            config.write_text(authored)
+            with self.assertRaises(RealmConflict) as caught:
+                _append_component_runtime_override(
+                    config, image=self.DIGEST, platform="linux/arm64"
+                )
+            message = str(caught.exception)
+            self.assertIn("already has a runtime section", message)
+            self.assertIn(self.DIGEST, message)
+            self.assertIn("linux/arm64", message)
+            # And the author's file was not touched.
+            self.assertEqual(config.read_text(), authored)
+
+    def _capture_state(self, tmp: Path, *, package_has_image: bool):
+        from optpilot.image_reference import parse_image_reference
+        from optpilot.package_settings import (
+            ContainerImageDeclaration,
+            new_package_identity,
+            write_package_settings,
+        )
+
+        folder = tmp / "catalog" / "prompt_pkg"
+        write_package_settings(
+            folder,
+            identity=new_package_identity(),
+            container=(
+                ContainerImageDeclaration(
+                    image=parse_image_reference("sha256:" + "c" * 64),
+                    platform="linux/arm64",
+                )
+                if package_has_image
+                else None
+            ),
+        )
+
+        class _Runtime:
+            def _read_record(self, _workspace_id):
+                return {"software_inventory_digest": "base"}
+
+            def software_inventory(self, _workspace_id):
+                return {"digest": "different", "listing": {}}
+
+            def capture_workspace_image(self, _workspace_id, *, tag):
+                return {
+                    "image": ImagePlacementTest.DIGEST,
+                    "platform": "linux/arm64",
+                }
+
+        class _State:
+            cwd = tmp
+            workspace_runtime = _Runtime()
+
+        return _State()
+
+    def test_the_default_placement_is_the_component(self) -> None:
+        from optpilot_studio.ui.server import _capture_installed_software
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._capture_state(Path(tmp), package_has_image=True)
+            plan = {"package_id": "prompt_pkg"}
+            _capture_installed_software(state, plan, "ws-1")
+            self.assertEqual(plan["captured_image_placement"], "component")
+            self.assertEqual(plan["captured_image"]["image"], self.DIGEST)
+
+    def test_the_author_may_move_the_package_image_forward(self) -> None:
+        from optpilot_studio.ui.server import _capture_installed_software
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._capture_state(Path(tmp), package_has_image=True)
+            plan = {"package_id": "prompt_pkg", "image_placement": "package"}
+            _capture_installed_software(state, plan, "ws-1")
+            self.assertEqual(plan["captured_image_placement"], "package")
+
+    def test_an_image_less_package_takes_the_capture_automatically(self) -> None:
+        from optpilot_studio.ui.server import _capture_installed_software
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._capture_state(Path(tmp), package_has_image=False)
+            plan = {"package_id": "prompt_pkg"}
+            _capture_installed_software(state, plan, "ws-1")
+            self.assertEqual(plan["captured_image_placement"], "package")
+
+    def test_a_malformed_placement_is_refused(self) -> None:
+        from optpilot_studio.ui.server import _capture_installed_software
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._capture_state(Path(tmp), package_has_image=True)
+            plan = {"package_id": "prompt_pkg", "image_placement": "everywhere"}
+            with self.assertRaises(RealmConflict):
+                _capture_installed_software(state, plan, "ws-1")
