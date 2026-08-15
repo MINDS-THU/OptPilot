@@ -43,7 +43,18 @@ import yaml
 
 from optpilot.attempts import EvaluationSpec
 from optpilot.container_utils import network_args
-from optpilot.package_settings import ensure_package_identity, package_identity
+from optpilot.package_settings import (
+    PACKAGE_SETTINGS_FILENAMES,
+    ensure_package_identity,
+    load_package_settings,
+    new_package_identity,
+    package_identity,
+    write_package_settings,
+)
+from optpilot.realm.configured_package_ingress import (
+    configured_package_publisher_id,
+    configured_package_source_identity_digest,
+)
 from optpilot.dependency_closure import DEPENDENCY_HOST_PROVISIONED_CODE
 from optpilot.locked_python_runtime_contract import (
     LockedPythonRuntimeError,
@@ -31734,14 +31745,20 @@ def _prepare_package_plan(
         )
     classification = _package_plan_classification(components, resources)
     readiness = "draft" if selected or resources else "not-yet-classifiable"
+    package_identity_value = _package_identity_for(state, package_id)
     plan = {
         "id": plan_id,
         "workspace_id": workspace_id,
         "package_id": package_id,
+        "package_identity": package_identity_value,
+        # What the package looked like when this work started. Registering
+        # compares against it: if the folder moved on since, this work was built
+        # on an older version and is refused rather than replacing what moved it.
+        "catalog_selection_fingerprint": None,  # set once the selection is known
         "publisher_id": (
             str(configured_authority["publisher_id"])
             if configured_authority is not None
-            else f"studio-package-plan/{workspace_id}/{plan_id}"
+            else _package_folder_publisher_id(package_id, package_identity_value)
         ),
         "publication_scope": (
             CONFIGURED_SOURCE_PLAN_SCOPE
@@ -31772,6 +31789,13 @@ def _prepare_package_plan(
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+    # What the parts of the package this work covers looked like when it began.
+    # Registering compares against it and refuses if they moved, so a stale
+    # workspace can never quietly replace a newer version of its own component.
+    plan["catalog_selection_fingerprint"] = _package_selection_fingerprint(
+        state.cwd / CATALOG_DIR_NAME / package_id,
+        _package_plan_selection_paths(plan),
+    )
     _write_package_plan(state, workspace_id, plan)
     setup = _record_registration_configuring(
         state, workspace=workspace, plan=plan
@@ -32070,9 +32094,11 @@ def _package_plan_publisher_id(plan: JsonDict) -> str:
             str(authority.get("source_id") or ""),
         )
     else:
-        expected = (
-            f"studio-package-plan/{str(plan.get('workspace_id') or '')}/"
-            f"{str(plan.get('id') or '')}"
+        identity = plan.get("package_identity")
+        if not isinstance(identity, str) or not identity:
+            raise RealmConflict("Package plan has no package identity.")
+        expected = _package_folder_publisher_id(
+            _package_plan_package_id(plan.get("package_id")), identity
         )
     if plan.get("publisher_id") != expected:
         raise RealmConflict("Package plan publisher identity changed.")
@@ -32249,12 +32275,15 @@ def _seal_package_plan_artifact(
             "source": _package_plan_workspace_anchor(state, plan),
             "sealed_at": _now_iso(),
         }
-        if _is_configured_whole_package_plan(plan):
-            from optpilot.realm.configured_package_ingress import (
-                whole_tree_catalog_paths,
-            )
+        # Curated and whole-package registrations both seal a complete package
+        # now -- one composed from the folder plus this work -- so both claim the
+        # whole tree. One publisher owns the package, and each registration
+        # replaces what the last one claimed.
+        from optpilot.realm.configured_package_ingress import (
+            whole_tree_catalog_paths,
+        )
 
-            result["owned_paths"] = list(whole_tree_catalog_paths(seal.manifest))
+        result["owned_paths"] = list(whole_tree_catalog_paths(seal.manifest))
         return result
     finally:
         if not committed:
@@ -32336,7 +32365,7 @@ def _assert_package_plan_source_unchanged(state: UiState, plan: JsonDict) -> Non
             candidate_root = _contained_output_path(
                 Path(tmp_dir), Path(str(plan.get("package_id") or LOCAL_PACKAGE_NAME))
             )
-            _materialize_package_plan(state, plan, candidate_root)
+            _compose_package_candidate(state, plan, candidate_root)
         attempt = uuid.uuid4().hex
         change = runtime.ledger.begin_owner_change(
             operation_id=f"studio/package-plan/{plan['id']}/probe/{attempt}/begin",
@@ -32468,7 +32497,7 @@ def _validate_package_plan(state: UiState, workspace_id: str, plan_id: str) -> J
                 raise RealmConflict("Configured source package authority is unavailable.")
             capture_root = Path(authority["root"])
         else:
-            _materialize_package_plan(state, plan, package_root)
+            _compose_package_candidate(state, plan, package_root)
             capture_root = package_root
         artifact = _seal_package_plan_artifact(state, plan, capture_root)
         if _is_configured_whole_package_plan(plan):
@@ -32890,6 +32919,14 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
     ):
         raise RealmConflict("Package smoke result does not belong to this artifact.")
     package_id = _package_plan_package_id(plan.get("package_id"))
+    # Before anything is published: was this work built on the package as it now
+    # stands? If not, it would replace work it never saw. Checked here rather
+    # than at the folder write, which happens after publication and treats its
+    # own failures as non-fatal.
+    if not _is_configured_whole_package_plan(plan):
+        _assert_package_selection_not_moved_on(
+            state.cwd / CATALOG_DIR_NAME / package_id, plan, package_id=package_id
+        )
     publisher_id = _package_plan_publisher_id(plan)
     owned_paths = _package_plan_owned_paths(plan)
     runtime = _package_plan_realm_runtime(state)
@@ -33081,6 +33118,14 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
                 package_id=package_id,
                 projection_root=Path(str(projection_record["root"])),
             )
+            # This registration is now the version of its own paths that the
+            # package holds, so its base advances to match. Without this, an
+            # author registering an update to their own component would be
+            # refused for having moved the package on themselves.
+            plan["catalog_selection_fingerprint"] = _package_selection_fingerprint(
+                state.cwd / CATALOG_DIR_NAME / package_id,
+                _package_plan_selection_paths(plan),
+            )
         except Exception as error:
             plan["publication"]["realization"] = {
                 "status": "pending",
@@ -33206,7 +33251,7 @@ def _package_plan_workspace_registration_entries(
 
 
 def _package_plan_owned_paths(plan: JsonDict) -> List[str]:
-    if _is_configured_whole_package_plan(plan):
+    if True:  # every plan now seals a complete package
         artifact = plan.get("artifact")
         paths = (
             artifact.get("owned_paths")
@@ -33350,6 +33395,69 @@ def _package_folder_fingerprint(package_root: Path) -> str:
             relative = path.relative_to(package_root).as_posix()
             entries.append(f"{relative}:{hashlib.sha256(path.read_bytes()).hexdigest()}")
     return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
+def _package_selection_fingerprint(
+    package_root: Path, selection_paths: Iterable[str]
+) -> str:
+    """Fingerprint only the parts of a package that one piece of work covers."""
+
+    entries: List[str] = []
+    for relative in sorted(selection_paths):
+        target = package_root / relative
+        if target.is_dir():
+            for path in sorted(target.rglob("*")):
+                if any(
+                    part in CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS
+                    for part in path.parts
+                ):
+                    continue
+                if not path.is_file() or path.is_symlink():
+                    continue
+                entries.append(
+                    f"{path.relative_to(package_root).as_posix()}:"
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}"
+                )
+        elif target.is_file():
+            entries.append(
+                f"{relative}:{hashlib.sha256(target.read_bytes()).hexdigest()}"
+            )
+        else:
+            entries.append(f"{relative}:absent")
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+
+
+def _assert_package_selection_not_moved_on(
+    package_root: Path, plan: JsonDict, *, package_id: str
+) -> None:
+    """Refuse when what this work covers changed after the work started.
+
+    Registering composes the package from the folder as it stands and replaces
+    only the paths this work covers, so anything it does not cover is carried
+    through untouched -- a second piece of work can never destroy an unrelated
+    one. What it can destroy is a change made to its own paths since it began:
+    an edit in the folder, or another registration of the same component.
+
+    Scoping the comparison to those paths is what makes editing one component in
+    the folder while registering a different one work, which it must, since the
+    author may be holding an editable copy of a single component rather than the
+    whole package.
+    """
+
+    base = plan.get("catalog_selection_fingerprint")
+    if not isinstance(base, str):
+        return
+    current = _package_selection_fingerprint(
+        package_root, _package_plan_selection_paths(plan)
+    )
+    if current == base:
+        return
+    raise RealmConflict(
+        f"Part of the {package_id} package that this work changes has itself "
+        "changed since the work started, so this was built on an older version "
+        "of it. Nothing has been written. Bring your changes onto the current "
+        "package and register again."
+    )
 
 
 def _assert_package_folder_not_moved_on(
@@ -33963,6 +34071,176 @@ def _package_dependency_closure_capability(
         return None
     capability = capabilities.get("dependency_closure")
     return dict(capability) if isinstance(capability, Mapping) else None
+
+
+def _package_identity_for(state: UiState, package_id: str) -> str:
+    """The package's identity, settling it now if the package is new.
+
+    This writes the identity file if there is none, which claims the package's
+    name on disk before anything else is registered into it. It has to be
+    settled here rather than generated on demand: the publisher that owns the
+    package is derived from it, so a fresh value each time would give the same
+    package a different owner every time a registration was prepared.
+
+    An existing identity always wins, so this never renames a package.
+    """
+
+    folder = state.cwd / CATALOG_DIR_NAME / package_id
+    if _is_bundled_catalog_package(folder):
+        raise RealmConflict(
+            f"{package_id} ships with OptPilot and cannot be registered into. "
+            "Register into a package of your own instead."
+        )
+    try:
+        identity = ensure_package_identity(folder)
+    except OSError as error:
+        raise RealmConflict(
+            f"The {package_id} package folder could not be created: {error}"
+        ) from error
+    # Record that the settings file just written belongs to OptPilot. Without
+    # this the first folder write refuses it as pre-existing content it does not
+    # own -- which is the check that protects the author's own files, doing its
+    # job on a file we put there ourselves a moment earlier.
+    ownership = _read_package_plan_ownership(folder)
+    if not _package_plan_application(
+        ownership,
+        workspace_id=CATALOG_FOLDER_OWNER_WORKSPACE,
+        plan_id=CATALOG_FOLDER_OWNER_PLAN,
+    ):
+        ownership = _updated_package_plan_ownership(
+            ownership,
+            workspace_id=CATALOG_FOLDER_OWNER_WORKSPACE,
+            plan_id=CATALOG_FOLDER_OWNER_PLAN,
+            owned_paths=[PACKAGE_SETTINGS_FILENAMES[0]],
+        )
+        path = _package_plan_ownership_path(folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(ownership, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return identity
+
+
+def _package_folder_publisher_id(package_id: str, identity: str) -> str:
+    """One publisher per package, derived from the package's own identity.
+
+    A catalog belongs to one person, so a package has one lineage and each
+    registration replaces what the last one claimed rather than composing beside
+    it. Deriving this from the workspace and plan made every registration a
+    separate contributor, so two of them both claimed the package's settings file
+    and publication refused the overlap.
+    """
+
+    return configured_package_publisher_id(
+        package_id,
+        configured_package_source_identity_digest(f"package-identity:{identity}"),
+    )
+
+
+def _package_plan_selection_paths(plan: JsonDict) -> List[str]:
+    """The paths this work covers: one component, or the whole package."""
+
+    paths: List[str] = []
+    for item in [
+        *(plan.get("components", []) or []),
+        *(plan.get("resources", []) or []),
+    ]:
+        if not isinstance(item, dict):
+            continue
+        paths.append(
+            _safe_relative_plan_path(
+                str(item.get("component_root") or ""),
+                "package-plan owned component path",
+            ).as_posix()
+        )
+    for item in plan.get("studies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        paths.append(
+            _safe_relative_plan_path(
+                str(item.get("registered_config_path") or ""),
+                "package-plan owned study path",
+            ).as_posix()
+        )
+    return sorted(set(paths))
+
+
+def _compose_package_candidate(
+    state: UiState, plan: JsonDict, destination: Path
+) -> None:
+    """Build the package as it would be after registering, without touching it.
+
+    The author may be editing the whole package or one component in it. Either
+    way the answer is the same shape: start from the package as it stands, then
+    replace whatever this work covers. Composing into a scratch directory rather
+    than the real folder is what lets Check validate exactly the bytes that
+    registering will publish while leaving the catalog untouched.
+    """
+
+    package_id = str(plan.get("package_id") or LOCAL_PACKAGE_NAME)
+    folder = state.cwd / CATALOG_DIR_NAME / package_id
+    destination.mkdir(parents=True, exist_ok=True)
+
+    if folder.is_dir():
+        for entry in folder.iterdir():
+            if entry.name in CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS:
+                continue
+            target = destination / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, target, symlinks=True)
+            else:
+                shutil.copy2(entry, target)
+
+    with tempfile.TemporaryDirectory() as staged_dir:
+        staged = Path(staged_dir) / package_id
+        _materialize_package_plan(state, plan, staged)
+        for relative in _package_plan_selection_paths(plan):
+            source = _contained_output_path(staged, Path(relative))
+            target = _contained_output_path(destination, Path(relative))
+            if not source.exists():
+                raise RuntimeError(
+                    f"Package plan did not materialize its own path: {relative}."
+                )
+            _remove_package_plan_path(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target)
+
+    _write_composed_package_settings(state, plan, destination)
+    _make_tree_user_writable(destination)
+
+
+def _write_composed_package_settings(
+    state: UiState, plan: JsonDict, destination: Path
+) -> None:
+    """Put the package's own settings into the tree that gets sealed.
+
+    They are part of the package -- they carry its identity and the image its
+    components run in -- so a snapshot that omitted them could never equal the
+    folder. Any image already declared is carried across; dropping it would
+    silently change what the package's components run in.
+    """
+
+    identity = plan.get("package_identity")
+    if not isinstance(identity, str) or not identity:
+        identity = _package_identity_for(
+            state, str(plan.get("package_id") or LOCAL_PACKAGE_NAME)
+        )
+        plan["package_identity"] = identity
+    container = None
+    description = None
+    try:
+        existing = load_package_settings(destination)
+    except (ValueError, OSError):
+        existing = None
+    if existing is not None:
+        container = existing.container
+        description = existing.description
+    write_package_settings(
+        destination, identity=identity, description=description, container=container
+    )
 
 
 def _materialize_package_plan(

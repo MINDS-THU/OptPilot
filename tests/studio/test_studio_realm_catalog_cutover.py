@@ -19,6 +19,7 @@ from optpilot_studio.ui.server import (
     _create_ui_workspace,
     _prepare_package_plan,
     _read_package_plan,
+    _write_package_plan,
     _validate_package_plan,
 )
 
@@ -231,18 +232,29 @@ class StudioRealmCatalogCutoverTest(unittest.TestCase):
         finally:
             projection.close()
 
-        contender_workspace, contender_plan = self._resource_plan(
+        # A workspace that started before the last registration landed is
+        # working from an older version of the package, so registering it is
+        # refused rather than replacing what it never saw. This replaces an
+        # older expectation of a cross-owner collision: a catalog belongs to one
+        # person, so a package has one owner and there is no one to collide with.
+        # What can still go wrong is registering stale work, and that is what is
+        # checked here.
+        stale_workspace, stale_plan = self._resource_plan(
             state,
             package_id=package_id,
             resource_id="tool-a",
-            content="must-not-replace-tool-a\n",
-            title="Conflicting publisher",
+            content="built-before-the-others\n",
+            title="Stale workspace",
         )
+        # As if this workspace had been prepared before tool-a existed: the part
+        # of the package it changes has moved on since.
+        stale_plan["catalog_selection_fingerprint"] = "0" * 64
+        _write_package_plan(state, stale_workspace["id"], stale_plan)
         with self.assertRaises((ValueError, RealmConflict)):
             _apply_package_plan(
                 state,
-                contender_workspace["id"],
-                contender_plan["id"],
+                stale_workspace["id"],
+                stale_plan["id"],
             )
         unchanged_head = runtime.catalog.read_head(package_id=package_id)
         assert unchanged_head is not None
