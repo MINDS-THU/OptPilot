@@ -1613,3 +1613,42 @@ class WorkspaceSoftwareInventoryTest(unittest.TestCase):
                 record.get("software_inventory_state"), "unavailable"
             )
             self.assertNotIn("software_inventory_digest", record)
+
+
+class WorkspaceImageCaptureTest(unittest.TestCase):
+    """Committing the workspace container and naming its fingerprint."""
+
+    def _manager(self, root: Path):
+        from tests.studio.test_mvp import _write_fake_workspace_container
+
+        fake = _write_fake_workspace_container(root)
+        studio_root = root / "studio"
+        studio_root.mkdir(parents=True, exist_ok=True)
+        return WorkspaceRuntimeManager(
+            studio_root=studio_root,
+            runtime_root=studio_root / ".optpilot-ui" / "runtime",
+            options=WorkspaceRuntimeOptions(
+                executable=str(fake), build_image=False
+            ),
+        )
+
+    def test_a_running_workspace_captures_to_a_pinned_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = self._manager(root)
+            workspace_root = root / "ws"
+            workspace_root.mkdir()
+            manager.start({"id": "ws_cap", "root": str(workspace_root)})
+            captured = manager.capture_workspace_image(
+                "ws_cap", tag="optpilot-capture-test"
+            )
+            self.assertIsNotNone(captured)
+            self.assertTrue(captured["image"].startswith("sha256:"))
+            self.assertEqual(captured["platform"], "linux/amd64")
+
+    def test_nothing_running_means_nothing_to_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = self._manager(Path(tmp))
+            self.assertIsNone(
+                manager.capture_workspace_image("ws_absent", tag="t")
+            )

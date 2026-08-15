@@ -1842,6 +1842,56 @@ class WorkspaceRuntimeManager:
         self._write_record(workspace_id, record)
         return None if inventory is None else inventory["digest"]
 
+    def capture_workspace_image(
+        self, workspace_id: str, *, tag: str
+    ) -> Optional[JsonDict]:
+        """Commit the workspace container as an image and name its fingerprint.
+
+        Returns the bare fingerprint and the platform the image reports, or
+        None when there is nothing to capture -- no engine, no running
+        container, or a commit the engine refused. The image lands in the
+        machine's local store; making it shareable is the separate, explicit
+        publish step the design describes.
+        """
+
+        executable = self._container_executable()
+        if not executable:
+            return None
+        container_name = self._container_name(workspace_id)
+        if not self._container_running(container_name):
+            return None
+        try:
+            commit = subprocess.run(
+                [executable, "commit", container_name, tag],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if commit.returncode != 0:
+                return None
+            inspect = subprocess.run(
+                [executable, "image", "inspect", tag],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if inspect.returncode != 0:
+            return None
+        try:
+            payload = json.loads(inspect.stdout or "[]")
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, list):
+            payload = payload[0] if payload else {}
+        digest = str(payload.get("Id") or "")
+        os_name = str(payload.get("Os") or "linux")
+        architecture = str(payload.get("Architecture") or "")
+        if not digest.startswith("sha256:") or not architecture:
+            return None
+        return {"image": digest, "platform": f"{os_name}/{architecture}"}
+
     def start_code_server(
         self,
         workspace: JsonDict,
@@ -32672,6 +32722,7 @@ def _validate_package_plan(state: UiState, workspace_id: str, plan_id: str) -> J
         )
         workspace = committed["workspace"]
         plan["source_root"] = str(Path(str(workspace["root"])).resolve())
+    _capture_installed_software(state, plan, workspace_id)
     previous_artifact = (
         plan.get("artifact") if isinstance(plan.get("artifact"), dict) else {}
     )
@@ -33115,16 +33166,19 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
     ):
         raise RealmConflict("Package smoke result does not belong to this artifact.")
     package_id = _package_plan_package_id(plan.get("package_id"))
-    software_change = _workspace_software_change(state, workspace_id)
-    plan["software_change"] = software_change
-    if software_change.get("state") != "unchanged":
-        # Image capture is not built yet. Saying so on the registration is the
-        # honest alternative to silently recording an image that no longer
-        # matches what the workspace actually holds.
+    software_change = dict(plan.get("software_change") or {"state": "unknown"})
+    if (
+        software_change.get("state") != "unchanged"
+        and not plan.get("captured_image")
+    ):
+        # The package already holds an image, so where this addition goes is
+        # the author's decision, and asking is not built yet. Saying so beats
+        # silently placing it either way.
         plan.setdefault("warnings", []).append(
             "Software may have been installed in this workspace since it "
-            "started; capturing it as an image is not supported yet, so the "
-            "registered component records the workspace's starting image."
+            "started, and the package already declares an image. Choosing "
+            "where the addition goes is not supported yet, so the registered "
+            "component records the package's existing image."
         )
     # Before anything is published: was this work built on the package as it now
     # stands? If not, it would replace work it never saw. Checked here rather
@@ -33605,6 +33659,45 @@ def _is_bundled_catalog_package(package_root: Path) -> bool:
     except (ValueError, OSError):
         return False
     return True
+
+
+def _capture_installed_software(
+    state: "UiState", plan: JsonDict, workspace_id: str
+) -> None:
+    """Registration's automatic image branch: capture into an image-less package.
+
+    The design's step three has two halves. When the package has no image, the
+    captured software BECOMES the package's image -- automatic, no question to
+    ask, because there is nothing else in the package for the answer to affect.
+    When the package already has an image, where the addition goes is the
+    author's decision; that prompt is not built, so the change is reported
+    rather than silently placed.
+
+    Runs at Check rather than at Register, because the fingerprint lands in the
+    package's own settings file, which is part of the sealed, validated bytes.
+    Capturing later would publish a package whose settings the validation never
+    saw.
+    """
+
+    change = _workspace_software_change(state, workspace_id)
+    plan["software_change"] = change
+    plan.pop("captured_image", None)
+    if change.get("state") == "unchanged":
+        return
+    package_id = _package_plan_package_id(plan.get("package_id"))
+    try:
+        existing = load_package_settings(state.cwd / CATALOG_DIR_NAME / package_id)
+    except (ValueError, OSError):
+        existing = None
+    if existing is not None and existing.container is not None:
+        # The prompt case: the author must choose, and asking is not built yet.
+        return
+    captured = state.workspace_runtime.capture_workspace_image(
+        workspace_id, tag=f"optpilot-capture-{_slug_text(package_id)[:40]}"
+    )
+    if captured is None:
+        return
+    plan["captured_image"] = captured
 
 
 def _workspace_software_change(state: "UiState", workspace_id: str) -> JsonDict:
@@ -34534,6 +34627,18 @@ def _write_composed_package_settings(
     if existing is not None:
         container = existing.container
         description = existing.description
+    captured = plan.get("captured_image")
+    if container is None and isinstance(captured, Mapping):
+        # The software installed in the workspace, captured at Check, becomes
+        # the package's image -- recorded in the same settings file that
+        # carries the package's identity, sealed and validated with the rest.
+        from optpilot.image_reference import parse_image_reference
+        from optpilot.package_settings import ContainerImageDeclaration
+
+        container = ContainerImageDeclaration(
+            image=parse_image_reference(str(captured.get("image"))),
+            platform=str(captured.get("platform")),
+        )
     write_package_settings(
         destination, identity=identity, description=description, container=container
     )
