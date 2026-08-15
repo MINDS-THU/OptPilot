@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
-import yaml
 
 
 REQUIRED_TOP_LEVEL = {
@@ -108,6 +107,12 @@ class StudySpec:
         return (self.base_dir / candidate).resolve()
 
 def load_study_spec(path: str, *, launch_inputs=None) -> StudySpec:
+    # Imported where it is used, not at module level: this module is in the
+    # import closure of the code that runs inside a container, where an image
+    # is guaranteed a Python interpreter and nothing else. The functions that
+    # read settings files run on the host, which has OptPilot installed.
+    import yaml
+
     spec_path = Path(path).resolve()
     with spec_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
@@ -127,6 +132,8 @@ def load_expanded_study_spec(path: str) -> StudySpec:
     useful for tests, workers, and internal import/validation paths that already
     operate on the canonical execution representation.
     """
+
+    import yaml
 
     spec_path = Path(path).resolve()
     with spec_path.open("r", encoding="utf-8") as handle:

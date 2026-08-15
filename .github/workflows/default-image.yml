@@ -1,0 +1,64 @@
+# Publishes the default image -- the one every package runs in unless it names
+# its own. Held to stricter rules than any package image (design §4): published
+# only by this automated build, public from its first publication, and never
+# deleted, since every run that used it records its fingerprint.
+name: default-image
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ["images/default/**", ".github/workflows/default-image.yml"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/default
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/optpilot-default:latest
+          platforms: linux/amd64,linux/arm64
+
+      - name: Report the fingerprint a release must pin
+        run: |
+          echo "Published manifest digest: ${{ steps.push.outputs.digest }}"
+          echo "A release records ghcr.io/${{ github.repository_owner }}/optpilot-default@${{ steps.push.outputs.digest }}"
+
+      # The registry makes a new image private by default, and a private image
+      # answers strangers with the same refusal as a nonexistent one -- so the
+      # author sees it work while everyone else is told, in effect, that it
+      # does not exist. Publishing therefore ends by asking the registry, with
+      # no credentials at all, whether the image is readable (design §4).
+      - name: Verify a stranger can pull it
+        run: |
+          MANIFEST="https://ghcr.io/v2/${{ github.repository_owner }}/optpilot-default/manifests/latest"
+          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/optpilot-default:pull&service=ghcr.io" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            "$MANIFEST")
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Anonymous pull returned HTTP $STATUS. The image is" \
+              "most likely still private -- make the package public in the" \
+              "repository's package settings, or nobody but this account can" \
+              "run anything built on it."
+            exit 1
+          fi
+          echo "Anonymous pull OK."
