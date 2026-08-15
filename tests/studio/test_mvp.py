@@ -1622,10 +1622,13 @@ class MvpIntegrationTest(unittest.TestCase):
         container_on_process["runtime"] = {"sandbox": "process", "container": {"image": "python:3.12"}}
         self.assertFalse(validate_public_config_schema(container_on_process).valid)
 
-    def test_environment_container_sandbox_is_refused_at_compile(self) -> None:
-        # The legacy container execution backend is gone. An environment that
-        # asks for container isolation must fail closed here rather than
-        # compile to the process backend and silently run on the host.
+    def test_environment_container_sandbox_compiles_to_the_container_backend(
+        self,
+    ) -> None:
+        # A container environment compiles into the record as one: container
+        # backend, container sandbox, and the declaration kept as its own
+        # sub-map -- never silently the process backend, which would run an
+        # evaluator on the host that its author asked to be isolated.
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             (tmp_path / "evaluator.py").write_text(
@@ -1692,11 +1695,22 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaises(ValueError) as caught:
-                compile_authoring_config(study_path)
+            compiled = compile_authoring_config(study_path)
 
-        self.assertIn("not executable", str(caught.exception))
-        self.assertIn("only methods", str(caught.exception))
+        execution = compiled["execution"]
+        self.assertEqual(execution["backend"]["type"], "container")
+        self.assertEqual(
+            execution["backend"]["implementation"],
+            "builtin.local_container_backend",
+        )
+        self.assertEqual(
+            execution["defaults"]["sandboxSpec"]["runtimeType"], "container"
+        )
+        runtime = compiled["environment"]["runtime"]
+        self.assertEqual(runtime["type"], "container")
+        self.assertEqual(
+            sorted(runtime["container"]), ["image", "network", "platform"]
+        )
 
     def test_public_schema_rejects_unimplemented_runtime_and_candidate_shapes(self) -> None:
         environment = {

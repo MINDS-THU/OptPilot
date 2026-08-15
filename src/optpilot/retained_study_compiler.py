@@ -669,6 +669,36 @@ def _require_source_backed_callable(
         )
 
 
+def _environment_container_declaration(environment: Mapping[str, Any]):
+    """The image an environment declares, or None when it runs in a process."""
+
+    runtime = environment.get("runtime")
+    if not isinstance(runtime, Mapping):
+        return None
+    if runtime.get("type") != "container":
+        return None
+    container = runtime.get("container")
+    if not isinstance(container, Mapping):
+        _fail(
+            "container_runtime_unsupported",
+            "A container environment runtime must declare its container.",
+        )
+    image = container.get("image")
+    platform = container.get("platform")
+    if not isinstance(image, str) or not isinstance(platform, str) or not platform:
+        _fail(
+            "container_runtime_unsupported",
+            "A container environment runtime must name an image and a platform.",
+        )
+    network = container.get("network", "disabled")
+    if network not in ("enabled", "disabled"):
+        _fail(
+            "container_runtime_unsupported",
+            "A container environment network grant must be enabled or disabled.",
+        )
+    return image, platform, network
+
+
 def _method_container_declaration(method: Mapping[str, Any]):
     """The image a method declares, or None when it runs in a process."""
 
@@ -1051,25 +1081,30 @@ def _preflight_first_slice(
         sandbox.get("runtimeType", "process"),
     )
     environment_kind, method_kind, backend_kind, sandbox_kind = runtime_kinds
-    # A method may run in a container. An environment may not yet: it needs a
-    # provider that starts one container per proposed solution, which is not
-    # built, and compiling it to a host process instead would silently run an
-    # evaluator outside the isolation its author asked for.
-    if environment_kind != "process" or backend_kind != "process":
+    if environment_kind not in ("process", "container"):
         _fail(
             "container_runtime_unsupported",
-            "Environments do not run in containers yet. Only a method may "
-            "declare one.",
+            f"An environment runtime must be process or container, "
+            f"not {environment_kind!r}.",
+        )
+    # The backend is the environment's executor, so the two must agree: a
+    # container environment on the process backend would run an evaluator on
+    # the host that its author asked to be isolated, and the reverse would
+    # promise isolation the definition does not deliver.
+    if backend_kind != environment_kind:
+        _fail(
+            "container_runtime_unsupported",
+            "The execution backend and the environment runtime disagree.",
         )
     if method_kind not in ("process", "container"):
         _fail(
             "container_runtime_unsupported",
             f"A method runtime must be process or container, not {method_kind!r}.",
         )
-    if sandbox_kind != method_kind and sandbox_kind != "process":
+    if sandbox_kind not in (environment_kind, method_kind, "process"):
         _fail(
             "container_runtime_unsupported",
-            "The execution sandbox and the method runtime disagree.",
+            "The execution sandbox matches neither declared runtime.",
         )
 
     environment_runtime = _mapping(
@@ -1495,20 +1530,45 @@ def compile_retained_process_study(
             else ()
         )
     )
-    environment_runtime = PreparedEnvironmentRuntimeManifest(
-        environment_revision_digest=environment_revision.digest,
-        runtime_kind="process",
-        runtime_settings=LogicalPythonRuntimeSettings(
-            environment_import_roots
-        ).to_dict(),
-        prepared_layers=environment_prepared_layers,
-        workdir=ScopePath(
-            _PACKAGE_SCOPE, _config_parent(package.environment_config_path)
-        ),
-        platform=provider.platform,
-        portability="provider-scoped",
-        builder_fingerprint=provider.builder_fingerprint,
+    environment_container = _environment_container_declaration(
+        retained_study_spec.environment
     )
+    if environment_container is None:
+        environment_runtime = PreparedEnvironmentRuntimeManifest(
+            environment_revision_digest=environment_revision.digest,
+            runtime_kind="process",
+            runtime_settings=LogicalPythonRuntimeSettings(
+                environment_import_roots
+            ).to_dict(),
+            prepared_layers=environment_prepared_layers,
+            workdir=ScopePath(
+                _PACKAGE_SCOPE, _config_parent(package.environment_config_path)
+            ),
+            platform=provider.platform,
+            portability="provider-scoped",
+            builder_fingerprint=provider.builder_fingerprint,
+        )
+    else:
+        image, env_platform, env_network = environment_container
+        env_settings = LogicalPythonRuntimeSettings(
+            environment_import_roots
+        ).to_dict()
+        env_settings["container_platform"] = env_platform
+        env_settings["container_image_reference"] = image
+        env_settings["container_network"] = env_network
+        environment_runtime = PreparedEnvironmentRuntimeManifest(
+            environment_revision_digest=environment_revision.digest,
+            runtime_kind="container",
+            oci_image_digest=_oci_digest_of(image),
+            runtime_settings=env_settings,
+            prepared_layers=environment_prepared_layers,
+            workdir=ScopePath(
+                _PACKAGE_SCOPE, _config_parent(package.environment_config_path)
+            ),
+            platform=env_platform,
+            portability="portable",
+            builder_fingerprint=None,
+        )
 
     implementation = _mapping(
         retained_study_spec.method.get("implementation"), "method.implementation"
@@ -1529,6 +1589,19 @@ def compile_retained_process_study(
     # to provide, so a Study that works on the build machine fails on a clean
     # install.  The layer is shared read-only under its own Environment scope,
     # at lowest import precedence, so the Method's own locked layer still wins.
+    if (
+        environment_container is not None
+        and _requires_environment_capability(retained_study_spec)
+    ):
+        # A capability runs the environment's own callable inside the METHOD's
+        # process against host-prepared roots. A container environment's image
+        # is not present there, so the callable could import software the
+        # method's runtime does not hold. Refused rather than run wrong.
+        _fail(
+            "container_runtime_unsupported",
+            "A method that requires an environment capability cannot be "
+            "paired with a container environment yet.",
+        )
     capability_prepared_layers = (
         environment_prepared_layers
         if environment_prepared_runtime is not None

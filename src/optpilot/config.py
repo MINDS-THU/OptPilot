@@ -1043,7 +1043,9 @@ def _compile_environment(environment: Dict[str, Any], environment_path: Path | N
         "adapter": adapter,
         "accessPolicy": "CodeAwareReadOnly" if candidate["format"] == "files" else "SchemaAware",
         "mutationPolicy": "TrialWorkspaceOnly" if candidate["format"] in {"files", "opaque"} else "NoMutation",
-        "runtime": _compile_runtime(environment.get("runtime", {}) or {}, environment_path or Path.cwd()),
+        "runtime": _compile_environment_runtime(
+            environment.get("runtime", {}) or {}, environment_path or Path.cwd()
+        ),
         "runtimeContract": {
             "timeoutSeconds": int(evaluator.get("timeoutSeconds", 600) or 600),
         },
@@ -1454,6 +1456,30 @@ def _compile_accepts(accepts: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _compile_environment_runtime(
+    runtime: Dict[str, Any], base_path: Path
+) -> Dict[str, Any]:
+    """The canonical compiled form of an environment's runtime.
+
+    A container declaration keeps its own sub-map -- the same shape the method
+    side compiles to, the environment contract retains, and the attempt binding
+    compares against. One shape, defined by construction rather than by three
+    readers happening to agree.
+    """
+
+    if runtime.get("sandbox", "process") == "container":
+        container = dict(runtime.get("container", {}) or {})
+        return {
+            "type": "container",
+            "container": {
+                "image": container.get("image"),
+                "platform": container.get("platform"),
+                "network": container.get("network", "disabled"),
+            },
+        }
+    return _compile_runtime(runtime, base_path)
+
+
 def _compile_method_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
     sandbox = runtime.get("sandbox", "process")
     if sandbox == "container":
@@ -1506,18 +1532,24 @@ def _compile_execution(
     sandbox = runtime.get("sandbox", "process")
 
     if sandbox == "container":
-        # There is no container executor for environments. Failing here is
-        # deliberate: the alternative is compiling to the process backend,
-        # which would silently run an evaluator on the host that its author
-        # asked to be isolated.
-        raise ValueError(
-            "environment.runtime.sandbox: container is not executable. "
-            "Environment evaluators run in the process sandbox; only methods "
-            "may declare a container runtime."
-        )
-    backend_type = "local"
-    backend_impl = "builtin.local_subprocess_backend"
-    backend_config = _compile_runtime(runtime, environment_path or study_path)
+        # A container environment gives each proposed solution a fresh
+        # container, so nothing an evaluator carries between candidates: the
+        # grants that only make sense for a long-lived host process are
+        # refused rather than silently dropped.
+        for field in ("setup", "workdir", "env", "envFromHost"):
+            if runtime.get(field):
+                raise ValueError(
+                    f"environment.runtime.{field} is not supported for a "
+                    "container environment. The image already holds the "
+                    "software; the evaluator receives nothing from this host."
+                )
+        backend_type = "container"
+        backend_impl = "builtin.local_container_backend"
+        backend_config = {}
+    else:
+        backend_type = "local"
+        backend_impl = "builtin.local_subprocess_backend"
+        backend_config = _compile_runtime(runtime, environment_path or study_path)
 
     timeout = int(execution.get("timeoutSeconds") or environment.get("evaluator", {}).get("timeoutSeconds") or 600)
     parallelism = int(execution.get("parallelism", 1) or 1)
