@@ -41,7 +41,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, TextIO
+from typing import Any, BinaryIO, TextIO
 
 from .method_protocol_limits import (
     MAX_BATCH_EXCHANGE_ITEMS,
@@ -2641,23 +2641,151 @@ class UnixBatchWorkerServer:
                 return
 
     def _decode_request(self, payload: bytes) -> dict[str, Any]:
+        return _decode_protocol_frame(payload)
+
+
+def _decode_protocol_frame(payload: bytes) -> dict[str, Any]:
+    """One decoding for every transport, so the frame grammar cannot fork."""
+
+    try:
+        value = json.loads(payload.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise _RequestError(
+            "malformed_frame", "The protocol frame is not valid JSON."
+        ) from error
+    try:
+        _validate_json(value, "protocol frame")
+    except (TypeError, ValueError, RecursionError) as error:
+        raise _RequestError(
+            "malformed_frame", "The protocol frame contains invalid JSON."
+        ) from error
+    if not isinstance(value, dict) or canonical_json_bytes(value) != payload:
+        raise _RequestError(
+            "noncanonical_frame", "The protocol frame is not canonical JSON."
+        )
+    return value
+
+
+def _read_exact_stream(stream: BinaryIO, size: int) -> bytes | None:
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            if remaining == size:
+                return None
+            raise ConnectionError("stream frame ended early")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+class StdioBatchWorkerServer:
+    """Serve the frame protocol over a stream that stays open.
+
+    Used when the worker runs inside a container: the container's own standard
+    input and output are the stream, because a Unix socket cannot cross the
+    container boundary on every platform OptPilot runs on, and the design says
+    the method's container answers on the same stream it receives on.
+
+    The protocol must own that stream exclusively, and authored code cannot be
+    trusted to stay off it: redirecting Python's stdout object only reroutes
+    Python-level prints, while a subprocess or a compiled extension still
+    reaches the underlying descriptor. So :meth:`claim_stdio` takes the
+    descriptors at the operating-system level -- before any authored code has
+    been imported -- and after it runs, anything written to descriptor 1 lands
+    in the error stream and anything read from descriptor 0 sees end-of-file
+    instead of eating protocol bytes.
+    """
+
+    def __init__(
+        self,
+        engine: RetainedPythonBatchEngine,
+        protocol_input: BinaryIO,
+        protocol_output: BinaryIO,
+    ) -> None:
+        if not isinstance(engine, RetainedPythonBatchEngine):
+            raise TypeError("engine must be a RetainedPythonBatchEngine.")
+        self.engine = engine
+        self._input = protocol_input
+        self._output = protocol_output
+        self._stop = False
+
+    @staticmethod
+    def claim_stdio() -> tuple[BinaryIO, BinaryIO]:
+        """Take exclusive ownership of the process's standard streams.
+
+        Must run before authored code is imported. Descriptor 1 is repointed at
+        the error stream so an authored print -- from Python, a subprocess, or a
+        compiled extension -- is captured as diagnostics rather than corrupting
+        a frame. Descriptor 0 is repointed at an empty stream so authored code
+        that reads input gets end-of-file rather than the next frame.
+        """
+
+        protocol_in = os.fdopen(os.dup(0), "rb", buffering=0)
+        protocol_out = os.fdopen(os.dup(1), "wb", buffering=0)
+        devnull = os.open(os.devnull, os.O_RDONLY)
         try:
-            value = json.loads(payload.decode("utf-8", errors="strict"))
-        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
-            raise _RequestError(
-                "malformed_frame", "The protocol frame is not valid JSON."
-            ) from error
+            os.dup2(devnull, 0)
+        finally:
+            os.close(devnull)
+        os.dup2(2, 1)
+        return protocol_in, protocol_out
+
+    def _send(self, payload: bytes) -> None:
+        self._output.write(_HEADER.pack(len(payload)) + payload)
+        self._output.flush()
+
+    def serve_forever(self) -> None:
         try:
-            _validate_json(value, "protocol frame")
-        except (TypeError, ValueError, RecursionError) as error:
-            raise _RequestError(
-                "malformed_frame", "The protocol frame contains invalid JSON."
-            ) from error
-        if not isinstance(value, dict) or canonical_json_bytes(value) != payload:
-            raise _RequestError(
-                "noncanonical_frame", "The protocol frame is not canonical JSON."
-            )
-        return value
+            while not self._stop:
+                try:
+                    header = _read_exact_stream(self._input, _HEADER.size)
+                except (ConnectionError, OSError):
+                    return
+                if header is None:
+                    # End-of-file: the side holding the stream has gone away,
+                    # and a worker with nobody to answer has nothing to do.
+                    return
+                (size,) = _HEADER.unpack(header)
+                if size > self.engine.max_payload_bytes:
+                    self._send(
+                        _transport_error(
+                            "frame_too_large",
+                            "The protocol frame exceeds its size bound.",
+                        )
+                    )
+                    return
+                try:
+                    payload = _read_exact_stream(self._input, size)
+                except (ConnectionError, OSError):
+                    return
+                if payload is None:
+                    return
+                try:
+                    request = _decode_protocol_frame(payload)
+                except _RequestError as error:
+                    try:
+                        self._send(
+                            _transport_error(error.code, error.public_message)
+                        )
+                    except OSError:
+                        return
+                    continue
+                response = self.engine.handle(request)
+                try:
+                    self._send(canonical_json_bytes(response))
+                except OSError:
+                    return
+                if (
+                    request.get("op") == "shutdown"
+                    and response.get("ok") is True
+                    and response.get("result", {}).get("shutdown") is True
+                ):
+                    self._stop = True
+                    return
+        finally:
+            self.engine.close()
 
 
 def unix_batch_worker_request(
@@ -2708,8 +2836,18 @@ def _open_private_diagnostic(path: Path) -> TextIO:
 
 
 def _main(argv: Sequence[str]) -> int:
+    stdio = False
+    if argv and argv[0] == "--stdio":
+        stdio = True
+        argv = argv[1:]
     if len(argv) != 1:
-        raise SystemExit("Usage: python -m optpilot.retained_batch_worker INIT_JSON")
+        raise SystemExit(
+            "Usage: python -m optpilot.retained_batch_worker [--stdio] INIT_JSON"
+        )
+    if stdio:
+        # Before anything else: once authored code has been imported it is too
+        # late to keep it off the protocol stream.
+        protocol_in, protocol_out = StdioBatchWorkerServer.claim_stdio()
     init_path = Path(argv[0])
     if not init_path.is_absolute() or init_path.is_symlink():
         raise SystemExit("Worker initialization path must be a real absolute file.")
@@ -2739,7 +2877,10 @@ def _main(argv: Sequence[str]) -> int:
             diagnostic=record,
             user_stdout=diagnostic_stream,
         )
-        UnixBatchWorkerServer(engine, initialization.socket_path).serve_forever()
+        if stdio:
+            StdioBatchWorkerServer(engine, protocol_in, protocol_out).serve_forever()
+        else:
+            UnixBatchWorkerServer(engine, initialization.socket_path).serve_forever()
     return 0
 
 
@@ -2765,6 +2906,7 @@ __all__ = [
     "RetainedBatchWorkerInit",
     "RetainedPythonBatchEngine",
     "StaticEvidenceView",
+    "StdioBatchWorkerServer",
     "UnixBatchWorkerServer",
     "retained_batch_exchange_chain_digest",
     "unix_batch_worker_request",

@@ -1489,3 +1489,210 @@ json.dump({"candidates": []}, sys.stdout)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StdioBatchWorkerServerTest(unittest.TestCase):
+    """The frame protocol over a stream that stays open.
+
+    This is the transport a containerised method uses: the container's own
+    standard input and output. The property that matters most is exclusivity --
+    nothing authored code does may put bytes on the protocol stream, because a
+    single stray print corrupts a frame and ends the run.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.projection = self.root / "projection"
+        self.methods = self.projection / "methods"
+        self.methods.mkdir(parents=True)
+        (self.methods / "random.yaml").write_text("retained: true\n", encoding="utf-8")
+        sys.modules.pop("method_impl", None)
+        self.addCleanup(sys.modules.pop, "method_impl", None)
+
+    def _serve(self, engine) -> tuple[Any, Any]:
+        """Start the server on a pair of pipes; return (send, receive)."""
+
+        from optpilot.retained_batch_worker import StdioBatchWorkerServer
+
+        request_read, request_write = os.pipe()
+        response_read, response_write = os.pipe()
+        server = StdioBatchWorkerServer(
+            engine,
+            os.fdopen(request_read, "rb", buffering=0),
+            os.fdopen(response_write, "wb", buffering=0),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        sender = os.fdopen(request_write, "wb", buffering=0)
+        receiver = os.fdopen(response_read, "rb", buffering=0)
+        self.addCleanup(sender.close)
+        self.addCleanup(receiver.close)
+        return sender, receiver
+
+    @staticmethod
+    def _send(stream, payload: bytes, *, declared_size: int | None = None) -> None:
+        from optpilot.retained_batch_worker import _HEADER
+
+        stream.write(_HEADER.pack(declared_size if declared_size is not None else len(payload)))
+        stream.write(payload)
+
+    @staticmethod
+    def _receive(stream) -> dict[str, Any]:
+        from optpilot.retained_batch_worker import _HEADER
+
+        header = stream.read(_HEADER.size)
+        assert header and len(header) == _HEADER.size, "response ended early"
+        (size,) = _HEADER.unpack(header)
+        payload = b""
+        while len(payload) < size:
+            chunk = stream.read(size - len(payload))
+            assert chunk, "response payload ended early"
+            payload += chunk
+        return json.loads(payload.decode("utf-8"))
+
+    def _engine(self, **kwargs: Any) -> RetainedPythonBatchEngine:
+        engine = RetainedPythonBatchEngine(
+            run_definition=_definition(),
+            projection_root=self.projection,
+            scope_roots={"study-package-source": "."},
+            **kwargs,
+        )
+        self.addCleanup(engine.close)
+        return engine
+
+    def test_a_propose_exchange_rides_the_stream_and_shutdown_ends_it(self) -> None:
+        (self.methods / "method_impl.py").write_text(
+            """
+class Method:
+    def __init__(self, definition, study_spec, rng): pass
+    def propose(self, n_candidates, study_state, evidence_view):
+        print("authored output stays off the protocol")
+        return [{"candidate_id": "stdio-1", "format": "parameters", "spec": {"x": 1}}]
+""",
+            encoding="utf-8",
+        )
+        printed: list[str] = []
+
+        class Sink:
+            def write(self, value: str) -> int:
+                printed.append(value)
+                return len(value)
+
+            def flush(self) -> None:
+                return None
+
+        engine = self._engine(user_stdout=Sink())
+        sender, receiver = self._serve(engine)
+
+        self._send(sender, canonical_json_bytes(_propose("stdio-exchange-1")))
+        response = self._receive(receiver)
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(
+            response["result"]["candidates"][0]["candidate_id"], "stdio-1"
+        )
+        self.assertIn("authored output stays off the protocol", "".join(printed))
+
+        self._send(sender, canonical_json_bytes(_shutdown()))
+        stopped = self._receive(receiver)
+        self.assertTrue(stopped["result"]["shutdown"])
+        self.assertEqual(receiver.read(1), b"", "nothing follows shutdown")
+        self.assertTrue(engine._closed)
+
+    def test_transport_errors_answer_in_band_and_oversize_ends_the_stream(self) -> None:
+        (self.methods / "method_impl.py").write_text(
+            """
+class Method:
+    def __init__(self, definition, study_spec, rng): pass
+    def propose(self, n_candidates, study_state, evidence_view): return []
+""",
+            encoding="utf-8",
+        )
+        engine = self._engine()
+        sender, receiver = self._serve(engine)
+
+        self._send(sender, b"{")
+        self.assertEqual(self._receive(receiver)["error"]["code"], "malformed_frame")
+        self._send(sender, b"{} ")
+        self.assertEqual(
+            self._receive(receiver)["error"]["code"], "noncanonical_frame"
+        )
+        self._send(sender, b"", declared_size=MAX_BATCH_FRAME_BYTES + 1)
+        self.assertEqual(self._receive(receiver)["error"]["code"], "frame_too_large")
+        self.assertEqual(receiver.read(1), b"", "an oversized frame ends the stream")
+        self.assertTrue(engine._closed)
+
+    def test_end_of_file_closes_the_engine_quietly(self) -> None:
+        (self.methods / "method_impl.py").write_text(
+            """
+class Method:
+    def __init__(self, definition, study_spec, rng): pass
+    def propose(self, n_candidates, study_state, evidence_view): return []
+""",
+            encoding="utf-8",
+        )
+        engine = self._engine()
+        sender, receiver = self._serve(engine)
+        sender.close()
+        self.assertEqual(receiver.read(1), b"")
+        for _ in range(100):
+            if engine._closed:
+                break
+            time.sleep(0.05)
+        self.assertTrue(engine._closed)
+
+    def test_claiming_stdio_keeps_every_kind_of_authored_write_off_the_protocol(
+        self,
+    ) -> None:
+        """The one that matters: descriptor-level writes cannot corrupt a frame.
+
+        Redirecting Python's stdout object reroutes Python prints only; a
+        subprocess or a raw descriptor write still reaches descriptor 1. After
+        claim_stdio, all three land on the error stream, reading input hits
+        end-of-file, and the protocol stream carries exactly one frame.
+        """
+
+        script = self.root / "probe.py"
+        script.write_text(
+            """
+import os, subprocess, sys
+from optpilot.retained_batch_worker import StdioBatchWorkerServer, _HEADER
+
+protocol_in, protocol_out = StdioBatchWorkerServer.claim_stdio()
+
+os.write(1, b"raw descriptor write\\n")
+print("python print")
+subprocess.run([sys.executable, "-c", "print('subprocess print')"], check=True)
+try:
+    input()
+    stdin_state = "readable"
+except EOFError:
+    stdin_state = "eof"
+
+payload = ('{"stdin": "' + stdin_state + '"}').encode("utf-8")
+protocol_out.write(_HEADER.pack(len(payload)) + payload)
+""",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            env={**os.environ, "PYTHONPATH": str(Path("src").resolve())},
+            timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+        from optpilot.retained_batch_worker import _HEADER
+
+        (size,) = _HEADER.unpack(result.stdout[: _HEADER.size])
+        frame = json.loads(result.stdout[_HEADER.size : _HEADER.size + size])
+        self.assertEqual(frame, {"stdin": "eof"})
+        self.assertEqual(
+            len(result.stdout), _HEADER.size + size,
+            "the protocol stream carries exactly one frame and nothing else",
+        )
+        error_text = result.stderr.decode()
+        for line in ("raw descriptor write", "python print", "subprocess print"):
+            self.assertIn(line, error_text)
