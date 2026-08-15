@@ -669,6 +669,43 @@ def _require_source_backed_callable(
         )
 
 
+def _method_container_declaration(method: Mapping[str, Any]):
+    """The image a method declares, or None when it runs in a process."""
+
+    runtime = method.get("runtime")
+    if not isinstance(runtime, Mapping):
+        return None
+    if runtime.get("type") != "container":
+        return None
+    container = runtime.get("container")
+    if not isinstance(container, Mapping):
+        _fail(
+            "container_runtime_unsupported",
+            "A container method runtime must declare its container.",
+        )
+    image = container.get("image")
+    platform = container.get("platform")
+    if not isinstance(image, str) or not isinstance(platform, str) or not platform:
+        _fail(
+            "container_runtime_unsupported",
+            "A container method runtime must name an image and a platform.",
+        )
+    return image, platform
+
+
+def _oci_digest_of(image: str) -> str:
+    """The bare fingerprint, which is all the record has room to hold.
+
+    Where to fetch the image from lives in the package's own settings, which are
+    captured in the same snapshot, so both halves are recorded -- just in the two
+    places each belongs.
+    """
+
+    from .image_reference import parse_image_reference
+
+    return parse_image_reference(image).digest
+
+
 def _capability_environment_roots(
     study_spec: StudySpec, package: RetainedStudyPackage
 ) -> tuple[str, ...]:
@@ -1007,10 +1044,26 @@ def _preflight_first_slice(
         "container" if backend.get("type") == "container" else "process",
         sandbox.get("runtimeType", "process"),
     )
-    if any(value != "process" for value in runtime_kinds):
+    environment_kind, method_kind, backend_kind, sandbox_kind = runtime_kinds
+    # A method may run in a container. An environment may not yet: it needs a
+    # provider that starts one container per proposed solution, which is not
+    # built, and compiling it to a host process instead would silently run an
+    # evaluator outside the isolation its author asked for.
+    if environment_kind != "process" or backend_kind != "process":
         _fail(
             "container_runtime_unsupported",
-            "The retained process-study slice does not prepare container runtimes.",
+            "Environments do not run in containers yet. Only a method may "
+            "declare one.",
+        )
+    if method_kind not in ("process", "container"):
+        _fail(
+            "container_runtime_unsupported",
+            f"A method runtime must be process or container, not {method_kind!r}.",
+        )
+    if sandbox_kind != method_kind and sandbox_kind != "process":
+        _fail(
+            "container_runtime_unsupported",
+            "The execution sandbox and the method runtime disagree.",
         )
 
     environment_runtime = _mapping(
@@ -1508,16 +1561,37 @@ def compile_retained_process_study(
             else ()
         )
     )
-    method_runtime = PreparedMethodRuntimeManifest(
-        method_revision_digest=method_revision.digest,
-        runtime_kind="process",
-        runtime_settings=LogicalPythonRuntimeSettings(method_import_roots).to_dict(),
-        prepared_layers=method_prepared_layers,
-        workdir=ScopePath(_PACKAGE_SCOPE, _config_parent(package.method_config_path)),
-        platform=provider.platform,
-        portability="provider-scoped",
-        builder_fingerprint=provider.builder_fingerprint,
-    )
+    method_container = _method_container_declaration(retained_study_spec.method)
+    if method_container is None:
+        method_runtime = PreparedMethodRuntimeManifest(
+            method_revision_digest=method_revision.digest,
+            runtime_kind="process",
+            runtime_settings=LogicalPythonRuntimeSettings(method_import_roots).to_dict(),
+            prepared_layers=method_prepared_layers,
+            workdir=ScopePath(_PACKAGE_SCOPE, _config_parent(package.method_config_path)),
+            platform=provider.platform,
+            portability="provider-scoped",
+            builder_fingerprint=provider.builder_fingerprint,
+        )
+    else:
+        image, platform = method_container
+        # An image names its contents exactly, so this record means the same
+        # thing on any machine of that architecture. A process runtime does not:
+        # it describes what one machine happened to have installed, which is why
+        # it is scoped to the provider that built it.
+        settings = LogicalPythonRuntimeSettings(method_import_roots).to_dict()
+        settings["container_platform"] = platform
+        method_runtime = PreparedMethodRuntimeManifest(
+            method_revision_digest=method_revision.digest,
+            runtime_kind="container",
+            oci_image_digest=_oci_digest_of(image),
+            runtime_settings=settings,
+            prepared_layers=method_prepared_layers,
+            workdir=ScopePath(_PACKAGE_SCOPE, _config_parent(package.method_config_path)),
+            platform=platform,
+            portability="portable",
+            builder_fingerprint=None,
+        )
 
     try:
         run_definition = compile_study_run_definition(
