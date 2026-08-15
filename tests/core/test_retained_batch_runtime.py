@@ -2706,3 +2706,194 @@ class Method:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _container_definition(image_digest: str, platform: str) -> Any:
+    """The process fixture's definition, re-declared to run in an image."""
+
+    import dataclasses
+
+    from optpilot.realm.run_definition import PreparedMethodRuntimeManifest
+
+    base = _definition()
+    contract = dict(base.method_revision.method_contract)
+    contract["runtime_requirements"] = {"type": "container"}
+    contract["sandbox_spec"] = {"runtimeType": "container"}
+    method = dataclasses.replace(base.method_revision, method_contract=contract)
+    settings = dict(base.prepared_method_runtime.runtime_settings)
+    settings["container_platform"] = platform
+    settings["container_image_reference"] = image_digest
+    settings["container_network"] = "disabled"
+    runtime = PreparedMethodRuntimeManifest(
+        method_revision_digest=method.digest,
+        runtime_kind="container",
+        oci_image_digest=image_digest,
+        runtime_settings=settings,
+        prepared_layers=base.prepared_method_runtime.prepared_layers,
+        workdir=base.prepared_method_runtime.workdir,
+        platform=platform,
+        portability="portable",
+        builder_fingerprint=None,
+    )
+    return dataclasses.replace(
+        base, method_revision=method, prepared_method_runtime=runtime
+    )
+
+
+class ContainerMethodRealizeTest(unittest.TestCase):
+    """The whole thing, against real container software.
+
+    Everything the process tests fake stays fake -- ledger, projection and
+    volume services -- while everything container-shaped is real: the engine,
+    the image checks, the started container, the stream it answers on, and the
+    method proposing from inside it. Skipped where no engine is installed,
+    like the code-server-gated Studio tests.
+
+    Borrows the process fixture rather than inheriting it, so the thirty-odd
+    process tests do not silently rerun against a container definition.
+    """
+
+    IMAGE = "python:3.12-slim"
+
+    def setUp(self) -> None:
+        for name in ("_fake_socket_probe", "_cleanup_handles", "_realize"):
+            setattr(
+                self, name, getattr(RetainedBatchRuntimeTest, name).__get__(self)
+            )
+        RetainedBatchRuntimeTest.setUp(self)
+        from optpilot.container_engine import (
+            ContainerEngineError,
+            inspect_image,
+            resolve_container_engine,
+        )
+
+        try:
+            self.engine = resolve_container_engine()
+            inspection = inspect_image(self.engine, self.IMAGE)
+        except ContainerEngineError as error:
+            self.skipTest(f"container engine unavailable: {error}")
+        if inspection is None:
+            self.skipTest(f"{self.IMAGE} is not present locally")
+        self.inspection = inspection
+        self.definition = _container_definition(
+            inspection.config_digest, inspection.platform
+        )
+        self.snapshot = _snapshot(self.definition)
+        self.ledger.current = self.snapshot
+        self.ledger.memberships = _memberships(self.definition)
+        self.ledger.leases[self.snapshot.controller_lease.lease_id] = (
+            self.snapshot.controller_lease
+        )
+        # An approval for study execution; the trust service itself has its own
+        # tests, so a stand-in that answers "approved" is honest here.
+        self.graph.provider_trust_policy = SimpleNamespace(
+            read_active=lambda **_kw: SimpleNamespace(state="approved")
+        )
+
+    def test_a_method_proposes_from_inside_its_image(self) -> None:
+        handle = self._realize()
+        def _ack(exchange, previous_chain):
+            return handle.ack(
+                f"ack-{exchange.exchange_id}",
+                exchange=RetainedBatchExchangeCoordinate(
+                    exchange.exchange_id,
+                    exchange.exchange_sequence,
+                    exchange.request_digest,
+                    exchange.response_digest,
+                ),
+                previous_acknowledged_chain=previous_chain,
+            )
+
+        first = handle.propose(
+            "exchange-1",
+            exchange_sequence=1,
+            n_candidates=1,
+            study_state={},
+            evidence={},
+        )
+        self.assertEqual(
+            first.candidates[0]["spec"], {"observed": 0}, first.candidates
+        )
+        chain = _ack(first, INITIAL_BATCH_EXCHANGE_CHAIN).acknowledged_chain
+        observation = handle.observe(
+            "exchange-2",
+            exchange_sequence=2,
+            observations=[{"candidate_id": "candidate-one", "value": 1.0}],
+        )
+        chain = _ack(observation, chain).acknowledged_chain
+        second = handle.propose(
+            "exchange-3",
+            exchange_sequence=3,
+            n_candidates=1,
+            study_state={},
+            evidence={},
+        )
+        # State survives between rounds: one container for the whole run.
+        self.assertEqual(second.candidates[0]["spec"], {"observed": 1})
+        handle.close()
+        import subprocess as _sp
+
+        name = f"optpilot-mw-{_worker_coordinates_for(self)}"
+        probe = _sp.run(
+            [self.engine, "container", "inspect", name],
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertNotEqual(probe.returncode, 0, "the container is gone after close")
+
+    def test_an_unapproved_image_is_refused_before_anything_starts(self) -> None:
+        del self.graph.provider_trust_policy
+        with self.assertRaises(RetainedBatchRuntimeError) as caught:
+            self.provider.realize(self.snapshot)
+        self.assertEqual(caught.exception.code, "container_untrusted")
+
+    def test_an_absent_image_is_refused_by_name(self) -> None:
+        absent = "sha256:" + "e" * 64
+        self.definition = _container_definition(absent, self.inspection.platform)
+        self.snapshot = _snapshot(self.definition)
+        self.ledger.current = self.snapshot
+        self.ledger.memberships = _memberships(self.definition)
+        self.ledger.leases[self.snapshot.controller_lease.lease_id] = (
+            self.snapshot.controller_lease
+        )
+        with self.assertRaises(RetainedBatchRuntimeError) as caught:
+            self.provider.realize(self.snapshot)
+        self.assertEqual(caught.exception.code, "container_image_unavailable")
+
+    def test_authored_prints_reach_diagnostics_not_the_stream(self) -> None:
+        method_root = (
+            self.projection_root / "scopes" / "study-package-source" / "methods"
+        )
+        (method_root / "method_impl.py").write_text(
+            """
+import os, sys
+class Method:
+    def __init__(self, definition, study_spec, rng): pass
+    def propose(self, n_candidates, study_state, evidence_view):
+        os.write(1, b"raw descriptor write from authored code\\n")
+        print("python print from authored code")
+        return [{"format": "parameters", "spec": {"ok": True}}]
+""",
+            encoding="utf-8",
+        )
+        handle = self._realize()
+        result = handle.propose(
+            "exchange-1",
+            exchange_sequence=1,
+            n_candidates=1,
+            study_state={},
+            evidence={},
+        )
+        self.assertEqual(result.candidates[0]["spec"], {"ok": True})
+        handle.close()
+
+
+def _worker_coordinates_for(test: ContainerMethodRealizeTest) -> str:
+    from optpilot.retained_batch_runtime import _worker_coordinates
+
+    return _worker_coordinates(
+        realm_id=test.ledger.realm_id,
+        run_id=test.snapshot.run.run_id,
+        controller_generation=test.snapshot.controller_term.generation,
+        run_definition_digest=test.definition.digest,
+    ).coordinate[:24]

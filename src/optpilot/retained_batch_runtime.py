@@ -153,6 +153,23 @@ _PUBLIC_MESSAGES = {
     "heartbeat_failed": "The retained batch runtime heartbeat failed.",
     "runtime_closed": "The retained batch runtime is closed.",
     "cleanup_failed": "The retained batch runtime cleanup did not complete.",
+    "container_engine_unavailable": (
+        "No container program is available to run this method's image."
+    ),
+    "container_image_unavailable": (
+        "The method's image is absent, does not match its fingerprint, or was "
+        "built for a different architecture."
+    ),
+    "container_untrusted": (
+        "The method's image has not been approved for study execution."
+    ),
+    "container_grants_unsupported": (
+        "Containerised methods cannot receive host environment values yet."
+    ),
+    "container_worker_unrecoverable": (
+        "A method container from this controller generation already exists; "
+        "launch again under a new generation."
+    ),
 }
 
 
@@ -668,6 +685,16 @@ class RetainedBatchRuntimeProvider:
             definition = current.definition
             stage = "definition_unsupported"
             _validate_batch_definition(definition)
+            if definition.prepared_method_runtime.runtime_kind == "container":
+                # The container path raises only typed runtime errors, so the
+                # generic wrap-as-stage handler below cannot mislabel one.
+                return self._realize_container(
+                    current=current,
+                    definition=definition,
+                    ttl=ttl,
+                    start_wait=start_wait,
+                    request_wait=request_wait,
+                )
             method_environment_descriptor = (
                 self._method_environment_descriptor_for(definition)
             )
@@ -1066,6 +1093,380 @@ class RetainedBatchRuntimeProvider:
             request_timeout=request_wait,
             attachment_kind=attachment_kind,
         )
+
+    def _realize_container(
+        self,
+        *,
+        current: Any,
+        definition: RunDefinitionManifest,
+        ttl: float,
+        start_wait: float,
+        request_wait: float,
+    ) -> "RetainedPythonBatchRuntime":
+        """Start the one method container selected by the current term.
+
+        Gates come first and nothing is written until they pass: the engine
+        must exist, the image must be approved for study execution, and the
+        image on this machine must be the one the record names, built for the
+        declared architecture. A replayed definition passes through here
+        exactly like a fresh one, which is the point of gating at realization
+        rather than at compilation.
+        """
+
+        from .container_engine import (
+            ContainerEngineError,
+            resolve_container_engine,
+            verify_image_available,
+        )
+        from .container_launch import ContainerMount, LaunchSpec
+        from .container_method_process import (
+            ContainerMethodProcess,
+            remove_container_if_present,
+        )
+        from .realm.provider_trust_records import (
+            PROVIDER_TRUST_EXECUTION_CONTRACT,
+        )
+
+        settings = definition.prepared_method_runtime.runtime_settings
+        reference = str(settings["container_image_reference"])
+        platform = str(settings["container_platform"])
+        network = settings["container_network"] == "enabled"
+
+        descriptor = self._method_environment_descriptor_for(definition)
+        if descriptor.names:
+            # Secret delivery into a container is not built; failing here is
+            # deliberate, because silently starting without the declared
+            # values would run the method in a state its author never meant.
+            raise RetainedBatchRuntimeError("container_grants_unsupported")
+
+        try:
+            engine = resolve_container_engine()
+        except ContainerEngineError:
+            raise RetainedBatchRuntimeError(
+                "container_engine_unavailable"
+            ) from None
+
+        trust = getattr(self._runtime, "provider_trust_policy", None)
+        approval = None
+        if trust is not None:
+            try:
+                approval = trust.read_active(
+                    image_ref=reference,
+                    contract=PROVIDER_TRUST_EXECUTION_CONTRACT,
+                )
+            except Exception:
+                approval = None
+        if approval is None:
+            # No policy service, or no approval: both fail closed. Running
+            # someone's image without a recorded approval is the thing the
+            # trust ledger exists to prevent.
+            raise RetainedBatchRuntimeError("container_untrusted")
+
+        try:
+            verify_image_available(engine, reference, platform)
+        except ContainerEngineError:
+            raise RetainedBatchRuntimeError(
+                "container_image_unavailable"
+            ) from None
+
+        uses_file_candidates = _definition_candidate_format(definition) == "files"
+        memberships = self._ledger.list_owner_memberships(
+            actor_principal_id=self._actor_principal_id,
+            owner_id=current.run.owner_id,
+            permission=OwnerPermission.DERIVE,
+        )
+        binding = _build_projection_binding(
+            definition=definition,
+            owner_id=current.run.owner_id,
+            memberships=memberships,
+            available_store_ids=self._projection_service.available_store_ids,
+        )
+        if binding.store_id != self._store_id:
+            raise RealmNotFound("Entity not found.")
+
+        coordinates = _worker_coordinates(
+            realm_id=self._ledger.realm_id,
+            run_id=current.run.run_id,
+            controller_generation=current.controller_term.generation,
+            run_definition_digest=definition.digest,
+        )
+        container_name = f"optpilot-mw-{coordinates.coordinate[:24]}"
+
+        # Leftovers from earlier controller generations are removed, never
+        # adopted: their stream died with their controller. A container already
+        # holding THIS generation's name means this controller cannot know what
+        # it is -- refuse rather than guess, and a new generation removes it.
+        for generation in range(1, coordinates.controller_generation):
+            stale = _worker_coordinates(
+                realm_id=self._ledger.realm_id,
+                run_id=current.run.run_id,
+                controller_generation=generation,
+                run_definition_digest=definition.digest,
+            )
+            remove_container_if_present(
+                engine, f"optpilot-mw-{stale.coordinate[:24]}"
+            )
+        import subprocess as _subprocess
+
+        probe = _subprocess.run(
+            [engine, "container", "inspect", container_name],
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if probe.returncode == 0:
+            raise RetainedBatchRuntimeError("container_worker_unrecoverable")
+
+        operation_prefix = f"retained-batch-runtime/{coordinates.coordinate}"
+        holder_id = f"method-worker-{coordinates.coordinate[:40]}"
+        consumer_metadata = {
+            "controller_generation": coordinates.controller_generation,
+            "run_definition_digest": definition.digest,
+            "run_id": current.run.run_id,
+            "schema": "optpilot.retained-batch-projection-consumer.v1",
+        }
+        projection: ManagedReadOnlyProjection | None = None
+        volume: ManagedEphemeralVolume | None = None
+        candidate_volume: ManagedEphemeralVolume | None = None
+        process: ContainerMethodProcess | None = None
+        try:
+            try:
+                projection = (
+                    self._projection_service.recover_existing_private_read_only(
+                        operation_id=f"{operation_prefix}/projection",
+                        actor_principal_id=self._actor_principal_id,
+                        store_id=binding.store_id,
+                        spec=binding.spec,
+                        holder_id=holder_id,
+                        ttl_seconds=ttl,
+                        consumer_kind="retained-batch-method",
+                        consumer_metadata=consumer_metadata,
+                    )
+                )
+            except RealmNotFound:
+                projection = self._projection_service.project_read_only(
+                    operation_id=f"{operation_prefix}/projection",
+                    actor_principal_id=self._actor_principal_id,
+                    store_id=binding.store_id,
+                    spec=binding.spec,
+                    holder_id=holder_id,
+                    ttl_seconds=ttl,
+                    consumer_kind="retained-batch-method",
+                    consumer_metadata=consumer_metadata,
+                    sharing_policy="private",
+                )
+            try:
+                volume = self._volume_service.recover_existing(
+                    operation_id=f"{operation_prefix}/control-volume",
+                    actor_principal_id=self._actor_principal_id,
+                    parent_lease=current.controller_lease,
+                    holder_id=holder_id,
+                    quota=_CONTROL_QUOTA,
+                    quota_enforcement="advisory",
+                    ttl_seconds=ttl,
+                )
+            except RealmNotFound:
+                volume = self._volume_service.create(
+                    operation_id=f"{operation_prefix}/control-volume",
+                    actor_principal_id=self._actor_principal_id,
+                    parent_lease=current.controller_lease,
+                    holder_id=holder_id,
+                    quota=_CONTROL_QUOTA,
+                    quota_enforcement="advisory",
+                    ttl_seconds=ttl,
+                )
+            host_staging: FileCandidateStagingBinding | None = None
+            container_staging: FileCandidateStagingBinding | None = None
+            if uses_file_candidates:
+                try:
+                    candidate_volume = self._volume_service.recover_existing(
+                        operation_id=(
+                            f"{operation_prefix}/candidate-staging-volume"
+                        ),
+                        actor_principal_id=self._actor_principal_id,
+                        parent_lease=current.controller_lease,
+                        holder_id=holder_id,
+                        quota=CANDIDATE_STAGING_QUOTA,
+                        quota_enforcement="advisory",
+                        ttl_seconds=ttl,
+                    )
+                except RealmNotFound:
+                    candidate_volume = self._volume_service.create(
+                        operation_id=(
+                            f"{operation_prefix}/candidate-staging-volume"
+                        ),
+                        actor_principal_id=self._actor_principal_id,
+                        parent_lease=current.controller_lease,
+                        holder_id=holder_id,
+                        quota=CANDIDATE_STAGING_QUOTA,
+                        quota_enforcement="advisory",
+                        ttl_seconds=ttl,
+                    )
+                candidate_root = _prepare_candidate_staging_root(
+                    candidate_volume.path
+                )
+                shared = dict(
+                    run_id=current.run.run_id,
+                    controller_generation=coordinates.controller_generation,
+                    volume_id=candidate_volume.record.volume_id,
+                    usage_lease_id=candidate_volume.lease.lease_id,
+                    usage_fencing_token=candidate_volume.lease.fencing_token,
+                )
+                # Two views of one directory: the worker sees the mount, the
+                # host keeps reading frozen candidates at its own path.
+                host_staging = FileCandidateStagingBinding(
+                    root_path=str(candidate_root), **shared
+                )
+                container_staging = FileCandidateStagingBinding(
+                    root_path="/optpilot/candidates/staging", **shared
+                )
+
+            control_root = volume.path
+            init_path = control_root / _INIT_FILE
+            diagnostic_path = control_root / _DIAGNOSTIC_FILE
+            initialization = RetainedBatchWorkerInit(
+                run_definition=definition,
+                projection_root="/optpilot/projection",
+                scope_roots=binding.scope_roots,
+                socket_path=None,
+                diagnostic_path=f"/optpilot/control/{_DIAGNOSTIC_FILE}",
+                candidate_staging=container_staging,
+            )
+            init_bytes = initialization.to_bytes()
+            _publish_or_verify_private_file(init_path, init_bytes)
+            _prepare_private_append_file(diagnostic_path)
+
+            evidence_fingerprint = request_digest(
+                {
+                    "coordinate": coordinates.coordinate,
+                    "format": _EVIDENCE_FORMAT,
+                    "initialization_digest": hashlib.sha256(
+                        init_bytes
+                    ).hexdigest(),
+                    "projection_spec_digest": binding.spec.digest,
+                    "run_definition_digest": definition.digest,
+                }
+            )
+            del evidence_fingerprint  # recorded via the init bytes themselves
+
+            import optpilot as _optpilot_package
+
+            launcher_root = (
+                Path(_optpilot_package.__file__).resolve().parent.parent
+            )
+            mounts = [
+                ContainerMount(launcher_root, "/optpilot/launcher"),
+                ContainerMount(projection.root_path, "/optpilot/projection"),
+                ContainerMount(control_root, "/optpilot/control", read_only=False),
+            ]
+            if candidate_volume is not None:
+                mounts.append(
+                    ContainerMount(
+                        candidate_volume.path,
+                        "/optpilot/candidates",
+                        read_only=False,
+                    )
+                )
+            spec = LaunchSpec(
+                image=reference,
+                platform=platform,
+                name=container_name,
+                command=(
+                    "python3",
+                    "-m",
+                    "optpilot.retained_batch_worker",
+                    "--stdio",
+                    f"/optpilot/control/{_INIT_FILE}",
+                ),
+                mounts=mounts,
+                workdir="/optpilot/control",
+                network=network,
+                env={
+                    **_MINIMAL_ENV,
+                    "PYTHONHASHSEED": str(int(definition.digest[:8], 16)),
+                },
+                import_paths=("/optpilot/launcher",),
+                interactive=True,
+            )
+            stderr_log = open(control_root / "worker-stderr.log", "ab")
+            try:
+                process = ContainerMethodProcess(
+                    engine, spec, stderr_target=stderr_log
+                )
+            finally:
+                stderr_log.close()
+            ready = process.request(
+                {
+                    "exchange_id": "container-ready",
+                    "op": "status",
+                    "payload": {},
+                    "schema": BATCH_REQUEST_SCHEMA,
+                },
+                timeout=start_wait,
+            )
+            if ready.get("ok") is not True:
+                raise RetainedBatchRuntimeError("worker_start_failed")
+        except RetainedBatchRuntimeError:
+            self._cleanup_failed_container(
+                projection=projection,
+                volume=volume,
+                candidate_volume=candidate_volume,
+                process=process,
+            )
+            raise
+        except Exception:
+            self._cleanup_failed_container(
+                projection=projection,
+                volume=volume,
+                candidate_volume=candidate_volume,
+                process=process,
+            )
+            raise RetainedBatchRuntimeError("worker_start_failed") from None
+
+        assert projection is not None and volume is not None
+        assert process is not None
+        return RetainedPythonBatchRuntime(
+            identity=RetainedBatchRuntimeIdentity(
+                run_id=current.run.run_id,
+                controller_generation=coordinates.controller_generation,
+                launch_token=coordinates.launch_token,
+                binding_id=coordinates.binding_id,
+                run_definition_digest=definition.digest,
+            ),
+            projection=projection,
+            volume=volume,
+            candidate_volume=candidate_volume,
+            candidate_staging=host_staging,
+            supervisor=None,
+            process=None,
+            reservation=None,
+            socket_path=None,
+            request_client=process.request_client(),
+            request_timeout=request_wait,
+            attachment_kind="started",
+            container_process=process,
+        )
+
+    def _cleanup_failed_container(
+        self,
+        *,
+        projection: ManagedReadOnlyProjection | None,
+        volume: ManagedEphemeralVolume | None,
+        candidate_volume: ManagedEphemeralVolume | None,
+        process: Any,
+    ) -> None:
+        if process is not None:
+            try:
+                process.stop(grace_seconds=5.0)
+            except Exception:
+                pass
+        for resource in (candidate_volume, volume, projection):
+            if resource is None:
+                continue
+            try:
+                resource.close()
+            except Exception:
+                pass
 
     def _method_environment_descriptor_for(
         self, definition: RunDefinitionManifest
@@ -2125,16 +2526,24 @@ class RetainedPythonBatchRuntime:
         volume: ManagedEphemeralVolume,
         candidate_volume: ManagedEphemeralVolume | None,
         candidate_staging: FileCandidateStagingBinding | None,
-        supervisor: LocalProcessSupervisor,
-        process: SupervisedProcess,
-        reservation: ProcessLaunchReservation,
-        socket_path: Path,
+        supervisor: LocalProcessSupervisor | None,
+        process: SupervisedProcess | None,
+        reservation: ProcessLaunchReservation | None,
+        socket_path: Path | None,
         request_client: Callable[..., Mapping[str, Any]],
         request_timeout: float,
         attachment_kind: Literal["started", "attached"],
+        container_process: Any | None = None,
     ) -> None:
         if attachment_kind not in {"started", "attached"}:
             raise ValueError("attachment_kind is unsupported.")
+        # Exactly one of the two worker shapes: a supervised process with its
+        # reservation and socket, or a held container with its stream.
+        if (container_process is None) == (reservation is None):
+            raise ValueError(
+                "a runtime holds either a supervised process or a container."
+            )
+        self._container_process = container_process
         self.identity = identity
         self.attachment_kind = attachment_kind
         self._projection = projection
@@ -2733,6 +3142,10 @@ class RetainedPythonBatchRuntime:
             raise protocol_error() from None
 
     def _lookup_terminal_proof(self) -> WorkerTerminalProof | None:
+        if self._reservation is None:
+            # A container worker leaves no terminal proof: its death is its
+            # exit status, already surfaced by the exchange that noticed.
+            return None
         try:
             proof = self._supervisor.lookup_terminal_proof(
                 launch_token=self._reservation.launch_token,
@@ -2759,6 +3172,10 @@ class RetainedPythonBatchRuntime:
     ) -> None:
         grace = _nonnegative_finite(grace_period, "grace_period")
         wait = _positive_finite(timeout, "timeout")
+        if self._container_process is not None:
+            return self._terminate_container(
+                orderly=orderly, grace=grace, wait=wait
+            )
         with self._termination_lock:
             with self._state_lock:
                 if self._closed:
@@ -2870,6 +3287,67 @@ class RetainedPythonBatchRuntime:
                     _require_socket_absent(self._socket_path)
                 except Exception:
                     failed = True
+                try:
+                    if self._candidate_volume is not None:
+                        self._candidate_volume.close()
+                except Exception:
+                    failed = True
+                try:
+                    self._volume.close()
+                except Exception:
+                    failed = True
+                try:
+                    self._projection.close()
+                except Exception:
+                    failed = True
+            if failed:
+                raise RetainedBatchRuntimeError("cleanup_failed")
+            with self._state_lock:
+                self._closed = True
+
+    def _terminate_container(
+        self, *, orderly: bool, grace: float, wait: float
+    ) -> None:
+        """End the held container and release what it was using.
+
+        The polite path asks the worker to shut down over its own stream, so
+        state is closed by the code that owns it; the stop that follows covers
+        a worker wedged inside authored code. There are no terminal proofs to
+        validate -- the container's exit status is its account of itself.
+        """
+
+        with self._termination_lock:
+            with self._state_lock:
+                if self._closed:
+                    return
+                self._stopping = True
+            try:
+                if orderly:
+                    acquired = self._request_lock.acquire(blocking=False)
+                    if acquired:
+                        try:
+                            self._request_locked(
+                                f"shutdown-{self.identity.launch_token[-40:]}",
+                                "shutdown",
+                                {},
+                                allow_stopping=True,
+                                timeout_override=min(self._request_timeout, wait),
+                            )
+                        except (
+                            RetainedBatchRuntimeError,
+                            RetainedBatchMethodError,
+                            RetainedBatchProtocolError,
+                        ):
+                            pass
+                        finally:
+                            self._request_lock.release()
+                self._container_process.stop(grace_seconds=max(grace, 1.0))
+            except Exception:
+                with self._state_lock:
+                    self._stopping = False
+                raise RetainedBatchRuntimeError("cleanup_failed") from None
+            with self._resource_lock:
+                failed = False
                 try:
                     if self._candidate_volume is not None:
                         self._candidate_volume.close()
@@ -3048,10 +3526,16 @@ def _required_method_scopes(definition: RunDefinitionManifest) -> set[str]:
     if runtime.workdir is None:
         raise ValueError("retained method workdir is absent.")
     settings = runtime.runtime_settings
-    if not isinstance(settings, Mapping) or set(settings) != {
-        "import_roots",
-        "schema",
-    }:
+    expected_keys = {"import_roots", "schema"}
+    if runtime.runtime_kind == "container":
+        # The same three container facts the worker itself expects; the two
+        # exact key sets are defined beside each other there.
+        expected_keys = expected_keys | {
+            "container_platform",
+            "container_image_reference",
+            "container_network",
+        }
+    if not isinstance(settings, Mapping) or set(settings) != expected_keys:
         raise ValueError("retained method runtime settings are unsupported.")
     if settings.get("schema") != "optpilot.logical-python-process-runtime-settings.v1":
         raise ValueError("retained method runtime settings schema is unsupported.")
