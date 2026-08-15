@@ -1144,9 +1144,17 @@ class RetainedStudyService:
             != RETAINED_PROCESS_STUDY_COMPILER_VERSION
             or method.compiler_id != RETAINED_PROCESS_STUDY_COMPILER_ID
             or method.compiler_version != RETAINED_PROCESS_STUDY_COMPILER_VERSION
-            or environment_runtime.builder_fingerprint
-            != self._provider.builder_fingerprint
-            or environment_runtime.platform != self._provider.platform
+            or (
+                # Mirrors the method guard below: a portable manifest is
+                # host-independent by construction, so only a provider-scoped
+                # one is compared against this machine.
+                environment_runtime.portability == "provider-scoped"
+                and (
+                    environment_runtime.builder_fingerprint
+                    != self._provider.builder_fingerprint
+                    or environment_runtime.platform != self._provider.platform
+                )
+            )
             or (
                 # A portable manifest is host-independent by construction: an
                 # image names its contents exactly, so no builder fingerprint

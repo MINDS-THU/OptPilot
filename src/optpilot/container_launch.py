@@ -92,6 +92,12 @@ class LaunchSpec:
     import_paths: Sequence[str] = ()
     limits: ContainerLimits = ContainerLimits()
     interactive: bool = False
+    #: Run as this identity ("uid:gid"). The environment worker checks that it
+    #: owns its directories, and bind-mounted volumes keep the host owner's
+    #: identity -- so the worker must run AS that identity, or its own integrity
+    #: checks would refuse the mounts and root-owned residue would land in host
+    #: volumes. None keeps the image's own default user.
+    user: Optional[str] = None
 
 
 def build_container_command(engine: str, spec: LaunchSpec) -> list[str]:
@@ -133,6 +139,9 @@ def build_container_command(engine: str, spec: LaunchSpec) -> list[str]:
     argv += ["--cpus", str(spec.limits.cpus)]
     argv += ["--memory", str(spec.limits.memory)]
     argv += ["--pids-limit", str(spec.limits.pids)]
+
+    if spec.user:
+        argv += ["--user", spec.user]
 
     argv += ["--cap-drop", "ALL"]
     argv += ["--security-opt", "no-new-privileges"]

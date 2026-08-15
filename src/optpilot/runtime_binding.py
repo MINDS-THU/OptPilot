@@ -90,7 +90,7 @@ _SAFE_PROVIDER_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+!~-]*$")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+!~-]*$")
 _SHA256_REF_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ACCESS_VALUES = frozenset({"read", "read-write"})
-_NETWORK_POLICIES = frozenset({"disabled"})
+_NETWORK_POLICIES = frozenset({"disabled", "enabled"})
 _CLEANUP_POLICIES = frozenset({"always"})
 _QUOTA_ENFORCEMENTS = frozenset({"advisory", "enforced"})
 _READ_ONLY_ENFORCEMENTS = frozenset({"advisory", "enforced"})
@@ -2103,6 +2103,26 @@ def _compile_file_materialization(
     return result
 
 
+def _expected_container_runtime_requirements(
+    settings: Mapping[str, Any],
+) -> dict[str, Any]:
+    """The one shape a container environment's contract must carry.
+
+    Defined beside the check that consumes it so the compiler and the binding
+    cannot drift apart: the compiler emits this, the contract retains it, and
+    the binding re-derives it from the manifest's own settings.
+    """
+
+    return {
+        "type": "container",
+        "container": {
+            "image": settings.get("container_image_reference"),
+            "platform": settings.get("container_platform"),
+            "network": settings.get("container_network"),
+        },
+    }
+
+
 def compile_retained_process_attempt_runtime(
     *,
     owner_id: str,
@@ -2110,8 +2130,15 @@ def compile_retained_process_attempt_runtime(
     evaluation_spec: EvaluationSpec,
     provider: ProcessProviderIdentity,
     candidate_input: CandidateRuntimeInput | None = None,
+    container_execution_supported: bool = False,
 ) -> PortableAttemptRuntimeSpec:
-    """Compile one strict retained process invocation without resolving paths."""
+    """Compile one strict retained process invocation without resolving paths.
+
+    ``container_execution_supported`` is an explicit opt-in from the one caller
+    that can actually run a container. Every other caller -- operator debug
+    jobs, Studio probes -- keeps refusing, so a surface that cannot start a
+    container never reports a container study as runnable.
+    """
 
     try:
         _safe_identifier(owner_id, "runtime projection owner id")
@@ -2209,21 +2236,43 @@ def compile_retained_process_attempt_runtime(
                 "Evaluation candidate semantics differ from the retained environment contract.",
             )
 
-    if runtime.runtime_kind != "process" or runtime.oci_image_digest is not None:
-        _fail("runtime_kind_unsupported", "The first binding slice supports process only.")
-    if runtime.portability != "provider-scoped":
-        _fail(
-            "runtime_portability_unsupported",
-            "The retained process runtime must be provider-scoped.",
-        )
-    if (
-        runtime.platform != provider.platform
-        or runtime.builder_fingerprint != provider.builder_fingerprint
+    is_container = (
+        container_execution_supported
+        and runtime.runtime_kind == "container"
+        and runtime.oci_image_digest is not None
+    )
+    if not is_container and (
+        runtime.runtime_kind != "process" or runtime.oci_image_digest is not None
     ):
-        _fail(
-            "provider_mismatch",
-            "Current process provider differs from the retained runtime requirement.",
-        )
+        _fail("runtime_kind_unsupported", "The first binding slice supports process only.")
+    if is_container:
+        # An image names its contents exactly, so the manifest is portable and
+        # carries no builder: the platform to check is the image's, and it is
+        # checked against the machine at launch, not here.
+        if runtime.portability != "portable":
+            _fail(
+                "runtime_portability_unsupported",
+                "A retained container runtime must be portable.",
+            )
+        if runtime.builder_fingerprint is not None:
+            _fail(
+                "provider_mismatch",
+                "A portable container runtime carries no builder fingerprint.",
+            )
+    else:
+        if runtime.portability != "provider-scoped":
+            _fail(
+                "runtime_portability_unsupported",
+                "The retained process runtime must be provider-scoped.",
+            )
+        if (
+            runtime.platform != provider.platform
+            or runtime.builder_fingerprint != provider.builder_fingerprint
+        ):
+            _fail(
+                "provider_mismatch",
+                "Current process provider differs from the retained runtime requirement.",
+            )
     prepared_layers = tuple(runtime.prepared_layers)
     if len(prepared_layers) > 1:
         _fail(
@@ -2308,12 +2357,28 @@ def compile_retained_process_attempt_runtime(
         )
 
     settings = _mapping(runtime.runtime_settings, "prepared runtime settings")
-    if set(settings) != {"import_roots", "schema"} or settings.get(
+    expected_settings_keys = {"import_roots", "schema"}
+    if is_container:
+        expected_settings_keys = expected_settings_keys | {
+            "container_platform",
+            "container_image_reference",
+            "container_network",
+        }
+    if set(settings) != expected_settings_keys or settings.get(
         "schema"
     ) != LOGICAL_PYTHON_RUNTIME_SETTINGS_SCHEMA:
         _fail(
             "runtime_settings_unsupported",
             "Prepared process runtime settings schema is unsupported.",
+        )
+    if is_container and (
+        runtime.platform != settings.get("container_platform")
+        or settings.get("container_network") not in ("enabled", "disabled")
+        or not isinstance(settings.get("container_image_reference"), str)
+    ):
+        _fail(
+            "runtime_settings_unsupported",
+            "Prepared container runtime settings are malformed.",
         )
     raw_roots = _sequence(settings.get("import_roots"), "runtime import roots")
     roots = []
@@ -2415,7 +2480,8 @@ def compile_retained_process_attempt_runtime(
         contract.get("schema") != "optpilot.retained-study-environment-contract.v1"
         or contract.get("access_policy") != expected_access_policy
         or contract.get("mutation_policy") != expected_mutation_policy
-        or contract.get("runtime_requirements") != {}
+        or contract.get("runtime_requirements")
+        != (_expected_container_runtime_requirements(settings) if is_container else {})
         or adapter.get("type") != "configured_environment"
         or adapter.get("implementation") != "builtin.configured_environment"
         or evaluate.get("type") != "python"
@@ -2470,18 +2536,35 @@ def compile_retained_process_attempt_runtime(
         {"cleanupPolicy", "environmentVariables", "networkPolicy", "runtimeType"},
         "evaluation sandbox",
     )
+    expected_backend = (
+        {
+            "type": "container",
+            "implementation": "builtin.local_container_backend",
+            "config": {},
+        }
+        if is_container
+        else {
+            "type": "local",
+            "implementation": "builtin.local_subprocess_backend",
+            "config": {},
+        }
+    )
     if (
-        backend.get("type") != "local"
-        or backend.get("implementation") != "builtin.local_subprocess_backend"
+        backend.get("type") != expected_backend["type"]
+        or backend.get("implementation") != expected_backend["implementation"]
         or backend.get("config") != {}
     ):
         _fail(
             "backend_unsupported",
             "The first process binding slice requires the builtin local backend.",
         )
+    expected_sandbox_runtime = "container" if is_container else "process"
+    expected_network = (
+        settings.get("container_network") if is_container else "disabled"
+    )
     if (
-        sandbox.get("runtimeType") != "process"
-        or sandbox.get("networkPolicy") != "disabled"
+        sandbox.get("runtimeType") != expected_sandbox_runtime
+        or sandbox.get("networkPolicy") != expected_network
         or sandbox.get("environmentVariables") != {}
         or sandbox.get("cleanupPolicy") != "always"
     ):
@@ -2631,7 +2714,9 @@ def compile_retained_process_attempt_runtime(
         resources=resources,
         read_only_scope_enforcement="advisory",
         timeout_seconds=_effective_timeout(evaluate, evaluation_spec),
-        requested_network_policy="disabled",
+        requested_network_policy=(
+            str(expected_network) if is_container else "disabled"
+        ),
         cleanup_policy="always",
     )
 

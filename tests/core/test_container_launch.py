@@ -185,3 +185,17 @@ class DeterminismTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserIdentityTests(unittest.TestCase):
+    def test_no_user_keeps_the_command_byte_identical(self) -> None:
+        # The method path passes no user; adding the field must not move a
+        # single byte of its command.
+        with_default = build_container_command("docker", _spec())
+        with_none = build_container_command("docker", _spec(user=None))
+        self.assertEqual(with_default, with_none)
+        self.assertNotIn("--user", with_default)
+
+    def test_a_user_identity_is_emitted(self) -> None:
+        argv = build_container_command("docker", _spec(user="501:20"))
+        self.assertEqual(_pairs(argv, "--user"), ["501:20"])
