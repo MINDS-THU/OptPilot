@@ -2679,6 +2679,18 @@ def compile_retained_process_attempt_runtime(
         prepared_runtime_digest=runtime.digest,
         provider=RuntimeProviderRequirement(
             kind="process",
+            # The executing provider is this host's process provider either
+            # way: for a container attempt it is what supervises the engine
+            # client. The image's identity is pinned separately through the
+            # prepared-runtime digest, so recording host facts here keeps the
+            # durable record shape unchanged and truthful about who ran.
+            portability="provider-scoped",
+            platform=provider.platform,
+            builder_fingerprint=provider.builder_fingerprint,
+        )
+        if is_container
+        else RuntimeProviderRequirement(
+            kind="process",
             portability=runtime.portability,
             platform=runtime.platform,
             builder_fingerprint=runtime.builder_fingerprint,

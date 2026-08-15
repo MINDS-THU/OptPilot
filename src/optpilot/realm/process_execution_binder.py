@@ -14,6 +14,8 @@ release method additionally requires the canonical attempt to be terminal.
 
 from __future__ import annotations
 
+import os
+
 import math
 import threading
 import time
@@ -348,6 +350,31 @@ class _InitializationLeasePulse:
         return time.monotonic() + min(self._interval, remaining / 3.0)
 
 
+@dataclass(frozen=True)
+class ContainerAttemptPlan:
+    """Everything the launcher needs to start one attempt in a container.
+
+    Never persisted: fully re-derivable from the run definition, and re-derived
+    on every bind and every recovery -- which is what makes the gates run again
+    each time, so an image removed mid-run fails the next attempt honestly.
+    """
+
+    engine_path: str
+    image_reference: str
+    platform: str
+    network: bool
+    user: str
+    #: Host variables the engine client itself needs (finding its daemon).
+    #: Captured once at gating so a recompile is byte-identical.
+    engine_env: tuple[tuple[str, str], ...]
+
+
+#: What the engine client may see of this host's environment. The client is the
+#: program talking to the container daemon, not the evaluator; it needs its
+#: daemon coordinates and nothing else.
+_ENGINE_ENV_ALLOWLIST = ("HOME", "DOCKER_HOST", "DOCKER_CONFIG", "XDG_RUNTIME_DIR")
+
+
 class PreparedProcessExecutionBinding:
     """Realized resources authenticated for a not-yet-committed launch.
 
@@ -367,7 +394,9 @@ class PreparedProcessExecutionBinding:
         authority: RunAttemptHeartbeatAuthorityReceipt,
         draft: ExecutionBindingDraft,
         resources: RealizedProcessRuntimeResources,
+        container_plan: "ContainerAttemptPlan | None" = None,
     ) -> None:
+        self.container_plan = container_plan
         if not isinstance(authority, RunAttemptHeartbeatAuthorityReceipt):
             raise TypeError(
                 "authority must be a RunAttemptHeartbeatAuthorityReceipt."
@@ -487,7 +516,9 @@ class ManagedProcessExecutionBinding:
         actor_principal_id: str,
         receipt: RunAttemptBindingReceipt | RunAttemptBindingAuthorityReceipt,
         resources: RealizedProcessRuntimeResources,
+        container_plan: "ContainerAttemptPlan | None" = None,
     ) -> None:
+        self.container_plan = container_plan
         if not isinstance(
             receipt, (RunAttemptBindingReceipt, RunAttemptBindingAuthorityReceipt)
         ):
@@ -661,6 +692,7 @@ class RealmProcessExecutionBinder:
         volume_service: RealmEphemeralVolumeService,
         provider: ProcessProviderIdentity,
         *,
+        trust_policy: object | None = None,
         launch_reservation_verifier: (
             Callable[[object, PreparedProcessExecutionBinding], str] | None
         ) = None,
@@ -692,8 +724,67 @@ class RealmProcessExecutionBinder:
         self._projection_service = projection_service
         self._volume_service = volume_service
         self._provider = provider
+        self._trust_policy = trust_policy
         self._launch_reservation_verifier = launch_reservation_verifier
         self._terminal_proof_verifier = terminal_proof_verifier
+
+    def _container_attempt_plan(self, definition) -> "ContainerAttemptPlan | None":
+        """Gate and describe a container attempt, or None for a process one.
+
+        Runs on every bind and every recovery -- there is no cached approval,
+        so revoking trust or removing the image stops the next attempt rather
+        than being discovered much later.
+        """
+
+        runtime = definition.evaluation_closure.prepared_runtime
+        if runtime.runtime_kind != "container":
+            return None
+        from ..container_engine import (
+            ContainerEngineError,
+            resolve_container_engine,
+            verify_image_available,
+        )
+        from .provider_trust_records import PROVIDER_TRUST_EXECUTION_CONTRACT
+
+        settings = runtime.runtime_settings
+        reference = str(settings["container_image_reference"])
+        platform = str(settings["container_platform"])
+        try:
+            engine = resolve_container_engine()
+        except ContainerEngineError as error:
+            raise RealmConflict(
+                f"This environment runs in a container, and {error}"
+            ) from error
+        approval = None
+        if self._trust_policy is not None:
+            try:
+                approval = self._trust_policy.read_active(
+                    image_ref=reference,
+                    contract=PROVIDER_TRUST_EXECUTION_CONTRACT,
+                )
+            except Exception:
+                approval = None
+        if approval is None:
+            raise RealmConflict(
+                "The environment's image has not been approved for study "
+                "execution."
+            )
+        try:
+            verify_image_available(engine, reference, platform)
+        except ContainerEngineError as error:
+            raise RealmConflict(str(error)) from error
+        return ContainerAttemptPlan(
+            engine_path=engine,
+            image_reference=reference,
+            platform=platform,
+            network=settings["container_network"] == "enabled",
+            user=f"{os.getuid()}:{os.getgid()}",
+            engine_env=tuple(
+                (name, os.environ[name])
+                for name in _ENGINE_ENV_ALLOWLIST
+                if name in os.environ
+            ),
+        )
 
     def prepare_binding(
         self,
@@ -780,7 +871,9 @@ class RealmProcessExecutionBinder:
             evaluation_spec=attempt.evaluation_spec,
             provider=self._provider,
             candidate_input=candidate_input,
+            container_execution_supported=True,
         )
+        container_plan = self._container_attempt_plan(definition)
         if spec.run_definition_digest != definition.digest:
             raise RealmIntegrityError(
                 "Compiled runtime plan differs from the retained run definition."
@@ -896,6 +989,7 @@ class RealmProcessExecutionBinder:
         return PreparedProcessExecutionBinding(
             binder=self,
             actor_principal_id=actor_principal_id,
+            container_plan=container_plan,
             authority=current_authority,
             draft=draft,
             resources=resources,
@@ -944,9 +1038,25 @@ class RealmProcessExecutionBinder:
             actor_principal_id=actor_principal_id,
             authority=authority,
         )
+        try:
+            recovered_plan = self._container_attempt_plan(
+                self._ledger.read_run_definition(
+                    actor_principal_id=actor_principal_id,
+                    run_id=run_id,
+                )
+            )
+        except (RealmNotFound, RealmConflict):
+            # An actor authorized for the binding but not the definition can
+            # still recover a PROCESS attempt, whose command needs no plan. If
+            # the attempt was a container one, recovering without its plan
+            # compiles the process command, whose digest cannot match the
+            # reservation -- so this falls closed at verification rather than
+            # running the wrong thing.
+            recovered_plan = None
         return ManagedProcessExecutionBinding(
             binder=self,
             actor_principal_id=actor_principal_id,
+            container_plan=recovered_plan,
             receipt=authority,
             resources=resources,
         )
@@ -1129,6 +1239,7 @@ class RealmProcessExecutionBinder:
             actor_principal_id=prepared._actor_principal_id,
             receipt=receipt,
             resources=prepared._resources,
+            container_plan=prepared.container_plan,
         )
 
     @staticmethod

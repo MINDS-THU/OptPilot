@@ -18,6 +18,16 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
+# Inside a container this file runs from OptPilot's own mounted source, where no
+# interpreter has OptPilot installed. The worker locates its package from its
+# own position rather than from the import path, so the PYTHONPATH check below
+# stays what it is: strict equality with the declared evaluator import roots and
+# nothing else. On the host this insertion resolves to the same package the
+# interpreter already provides.
+_LAUNCHER_ROOT = str(Path(__file__).resolve().parents[2])
+if _LAUNCHER_ROOT not in sys.path:
+    sys.path.insert(0, _LAUNCHER_ROOT)
+
 from optpilot.attempts import AttemptExecutor, AttemptWorkspaceBinding
 from optpilot.candidate_materialization import (
     BoundsCandidateValidator,

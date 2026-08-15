@@ -8,6 +8,7 @@ and exact-replayable by :class:`LocalProcessSupervisor`.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import threading
@@ -534,6 +535,13 @@ class RealmLocalAttemptLauncher:
             )
         return control_root, trial_root, source_root, prepared_root, import_roots
 
+    @staticmethod
+    def container_attempt_name(launch_token: str) -> str:
+        """The one name this attempt's container carries, wherever derived."""
+
+        digest = hashlib.sha256(launch_token.encode("utf-8")).hexdigest()
+        return f"optpilot-ea-{digest[:24]}"
+
     def _compile(
         self, binding: _ProcessBinding
     ) -> _CompiledLocalAttemptLaunch:
@@ -545,6 +553,18 @@ class RealmLocalAttemptLauncher:
             prepared_root,
             import_roots,
         ) = self._scope_roots(binding)
+        container_plan = getattr(binding, "container_plan", None)
+        if container_plan is not None:
+            return self._compile_container(
+                binding,
+                worker_request=worker_request,
+                plan=container_plan,
+                control_root=control_root,
+                trial_root=trial_root,
+                source_root=source_root,
+                prepared_root=prepared_root,
+                import_roots=import_roots,
+            )
         worker_path = Path(__file__).with_name("_local_attempt_worker.py").resolve()
         executable = Path(sys.executable)
         if not executable.is_absolute() or not worker_path.is_file():
@@ -568,6 +588,118 @@ class RealmLocalAttemptLauncher:
             argv=(str(executable), str(worker_path), *worker_arguments),
             cwd=str(trial_root),
             env=env,
+        )
+        host_paths = (
+            control_root,
+            trial_root,
+            source_root,
+            *((prepared_root,) if prepared_root is not None else ()),
+            *import_roots,
+        )
+        require_host_paths_absent(worker_request.canonical_bytes, host_paths)
+        return _CompiledLocalAttemptLaunch(
+            worker_request=worker_request,
+            process_request=process_request,
+            control_root=control_root,
+            host_paths=host_paths,
+        )
+
+    def _compile_container(
+        self,
+        binding: _ProcessBinding,
+        *,
+        worker_request,
+        plan,
+        control_root: Path,
+        trial_root: Path,
+        source_root: Path,
+        prepared_root: Path | None,
+        import_roots,
+    ) -> _CompiledLocalAttemptLaunch:
+        """One bounded container per attempt; everything else unchanged.
+
+        The same supervision machinery starts this command, holds its liveness
+        lock, and collects its terminal proof -- the wrapper executes whatever
+        the manifest says. Only what runs differs: the engine client, whose
+        container mounts the same four directories at fixed paths and runs the
+        same worker against the same request file.
+        """
+
+        from ..container_launch import (
+            ContainerLimits,
+            ContainerMount,
+            LaunchSpec,
+            build_container_command,
+        )
+
+        targets = {
+            control_root: "/optpilot/control",
+            trial_root: "/optpilot/trial",
+            source_root: "/optpilot/environment_source",
+        }
+        mounts = [
+            ContainerMount(source_root, "/optpilot/environment_source"),
+            ContainerMount(trial_root, "/optpilot/trial", read_only=False),
+            ContainerMount(control_root, "/optpilot/control", read_only=False),
+        ]
+        if prepared_root is not None:
+            targets[prepared_root] = "/optpilot/environment_prepared_python"
+            mounts.append(
+                ContainerMount(
+                    prepared_root, "/optpilot/environment_prepared_python"
+                )
+            )
+        import optpilot as _optpilot_package
+
+        launcher_root = Path(_optpilot_package.__file__).resolve().parent.parent
+        mounts.insert(0, ContainerMount(launcher_root, "/optpilot/launcher"))
+
+        def _remap(path: Path) -> str:
+            for host_root, target in targets.items():
+                try:
+                    relative = Path(path).relative_to(host_root)
+                except ValueError:
+                    continue
+                return (
+                    target
+                    if str(relative) == "."
+                    else f"{target}/{relative.as_posix()}"
+                )
+            raise RealmIntegrityError(
+                "A container attempt import root lies outside its mounts."
+            )
+
+        worker_arguments = ["/optpilot/control", "/optpilot/trial",
+                            "/optpilot/environment_source"]
+        if prepared_root is not None:
+            worker_arguments.append("/optpilot/environment_prepared_python")
+        worker_arguments.append(worker_request.digest)
+        spec = LaunchSpec(
+            image=plan.image_reference,
+            platform=plan.platform,
+            name=self.container_attempt_name(worker_request.launch_token),
+            command=(
+                "python3",
+                "/optpilot/launcher/optpilot/realm/_local_attempt_worker.py",
+                *worker_arguments,
+            ),
+            mounts=mounts,
+            workdir="/optpilot/trial",
+            network=plan.network,
+            env={
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONHASHSEED": "0",
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONNOUSERSITE": "1",
+            },
+            import_paths=tuple(_remap(path) for path in import_roots),
+            limits=ContainerLimits(),
+            user=plan.user,
+        )
+        process_request = ProcessLaunchRequest(
+            argv=tuple(build_container_command(plan.engine_path, spec)),
+            cwd=str(trial_root),
+            env=dict(plan.engine_env),
         )
         host_paths = (
             control_root,

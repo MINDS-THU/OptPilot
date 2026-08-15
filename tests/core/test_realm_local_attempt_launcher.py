@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import json
 import os
 import tempfile
@@ -1135,3 +1136,152 @@ class RealmLocalAttemptLauncherTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContainerEnvironmentAttemptTest(unittest.TestCase):
+    """Each candidate evaluates inside a fresh container.
+
+    Real container software, real retained package, real supervision: the same
+    wrapper that runs a host evaluator runs the engine client here, holding the
+    same liveness lock and publishing the same terminal proof. The freshness
+    canary is the point of the whole design: the evaluator RAISES if it can see
+    anything a previous candidate wrote to the container's filesystem, so two
+    green attempts prove nothing carries over.
+    """
+
+    def setUp(self) -> None:
+        from optpilot.container_engine import (
+            ContainerEngineError,
+            inspect_image,
+            resolve_container_engine,
+        )
+
+        try:
+            self.engine = resolve_container_engine()
+            inspection = inspect_image(self.engine, "python:3.12-slim")
+        except ContainerEngineError as error:
+            self.skipTest(f"container engine unavailable: {error}")
+        if inspection is None:
+            self.skipTest("python:3.12-slim is not present locally")
+        runtime_yaml = (
+            "runtime:\n"
+            "  sandbox: container\n"
+            "  container:\n"
+            f"    image: {inspection.config_digest}\n"
+            f"    platform: {inspection.platform}\n"
+        )
+        canary = (
+            "from pathlib import Path\n"
+            "def evaluate(candidate, context):\n"
+            "    marker = Path('/tmp/optpilot-fresh-canary')\n"
+            "    if marker.exists():\n"
+            "        raise RuntimeError('container was reused between candidates')\n"
+            "    marker.write_text('seen')\n"
+            "    return {'score': candidate['x']}\n"
+        )
+        self.fixture = _RetainedRuntimeFixture(
+            evaluator_source=canary,
+            environment_interface=runtime_yaml,
+            include_second_candidate=True,
+        )
+        self.addCleanup(self.fixture.temporary.cleanup)
+        self.supervisor = LocalProcessSupervisor(
+            self.fixture.root / "process-provider"
+        )
+        self.launcher = RealmLocalAttemptLauncher(self.supervisor)
+        self.binder = RealmProcessExecutionBinder(
+            self.fixture.ledger,
+            self.fixture.projection_service,
+            self.fixture.volume_service,
+            self.fixture.provider,
+            trust_policy=SimpleNamespace(
+                read_active=lambda **_kw: SimpleNamespace(state="approved")
+            ),
+            launch_reservation_verifier=self.launcher.verify_launch_reservation,
+            terminal_proof_verifier=(
+                self.launcher._validate_supervisor_terminal_proof
+            ),
+        )
+
+    def _evaluate(self, preparation):
+        prepared = self.binder.prepare_binding(
+            actor_principal_id="operator", preparation=preparation
+        )
+        self.assertIsNotNone(prepared.container_plan)
+        compiled = self.launcher._compile(prepared)
+        argv = compiled.process_request.argv
+        self.assertEqual(argv[0], self.engine)
+        self.assertIn("--pull", argv)
+        self.assertIn("--network", argv)
+        reservation = self.launcher._reserve(compiled)
+        binding = prepared._commit_reserved_launch(reservation)
+        self.launcher._publish(compiled)
+        process = self.launcher._start_reserved(reservation)
+
+        def reconcile():
+            return self.supervisor.reconcile_terminal_launch(
+                launch_token=reservation.launch_token,
+                binding_id=reservation.binding_id,
+                evidence_fingerprint=reservation.evidence_fingerprint,
+                launch_request_digest=reservation.launch_request_digest,
+                grace_period=0.25,
+                timeout=30.0,
+            )
+
+        self.addCleanup(reconcile)
+        handle = self.launcher._attach(
+            binding=binding, compiled=compiled, process=process
+        )
+        return binding, handle.collect(timeout=120.0)
+
+    def test_two_candidates_get_two_fresh_containers(self) -> None:
+        binding, first = self._evaluate(self.fixture.preparation)
+        self.assertEqual(first.outcome, "success", first)
+        self.assertEqual(dict(first.metric_values), {"score": 0.5})
+
+        current = self.fixture.ledger.read_run_snapshot(
+            actor_principal_id="operator",
+            run_id=self.fixture.created.run.run_id,
+        )
+        second_preparation = self.fixture.ledger.prepare_run_attempt(
+            operation_id="local-attempt/attempt/prepare-b",
+            actor_principal_id="operator",
+            run_id=self.fixture.created.run.run_id,
+            logical_trial_id="trial-b",
+            attempt_id="attempt-b",
+            expected_run_revision=current.revision.revision,
+            attempt_ttl_seconds=300,
+            **self.fixture.controller_arguments(),
+        )
+        _, second = self._evaluate(second_preparation)
+        # The canary raises on any residue; success here IS the freshness proof.
+        self.assertEqual(second.outcome, "success", second)
+
+        import subprocess as _sp
+
+        for token in (
+            self.fixture.preparation.attempt.launch_token,
+            second_preparation.attempt.launch_token,
+        ):
+            name = RealmLocalAttemptLauncher.container_attempt_name(token)
+            probe = _sp.run(
+                [self.engine, "container", "inspect", name],
+                capture_output=True,
+                timeout=60,
+            )
+            self.assertNotEqual(probe.returncode, 0, f"{name} is gone after use")
+
+    def test_without_an_approval_nothing_starts(self) -> None:
+        binder = RealmProcessExecutionBinder(
+            self.fixture.ledger,
+            self.fixture.projection_service,
+            self.fixture.volume_service,
+            self.fixture.provider,
+            launch_reservation_verifier=self.launcher.verify_launch_reservation,
+        )
+        with self.assertRaises(RealmConflict) as caught:
+            binder.prepare_binding(
+                actor_principal_id="operator",
+                preparation=self.fixture.preparation,
+            )
+        self.assertIn("approved for study execution", str(caught.exception))

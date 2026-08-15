@@ -311,6 +311,7 @@ class LocalRealmRuntime:
                 projection_service,
                 volume_service,
                 process_provider,
+                trust_policy=provider_trust_policy,
                 launch_reservation_verifier=(
                     attempt_launcher.verify_launch_reservation
                 ),

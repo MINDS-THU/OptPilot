@@ -719,6 +719,40 @@ class LocalProcessAttemptProvider:
                 change_id=attempt.capture_change_id,
             )
 
+    def _remove_container_orphan(self, attempt) -> None:
+        """Best-effort removal of a container the client never got to remove.
+
+        --rm covers every exit the engine client lives to see. The one orphan
+        case is the client being killed outright -- the watchdog's escalation
+        path -- which leaves the container running with nobody holding its
+        stream. Only container definitions pay the lookup; failure to remove
+        is not failure to clean up, because the name is deterministic and the
+        next generation removes it too.
+        """
+
+        try:
+            definition = self._ledger.read_run_definition(
+                actor_principal_id=self._actor_principal_id,
+                run_id=attempt.run_id,
+            )
+            if (
+                definition.evaluation_closure.prepared_runtime.runtime_kind
+                != "container"
+            ):
+                return
+            from ..container_engine import resolve_container_engine
+            from ..container_method_process import remove_container_if_present
+            from .local_attempt_launcher import RealmLocalAttemptLauncher
+
+            remove_container_if_present(
+                resolve_container_engine(),
+                RealmLocalAttemptLauncher.container_attempt_name(
+                    attempt.launch_token
+                ),
+            )
+        except Exception:
+            return
+
     def resume_cleanup(
         self, *, run_id: str, attempt_id: str
     ) -> LocalAttemptCleanupResult:
@@ -748,6 +782,7 @@ class LocalProcessAttemptProvider:
                 raise RealmConflict(
                     "Provider cleanup requires a terminal canonical attempt."
                 )
+            self._remove_container_orphan(attempt)
             try:
                 self._ledger.read_run_attempt_binding(
                     actor_principal_id=self._actor_principal_id,

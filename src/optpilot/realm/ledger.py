@@ -20003,6 +20003,10 @@ class RealmLedger(
             evaluation_spec=attempt.evaluation_spec,
             provider=provider,
             candidate_input=candidate_input,
+            # The ledger's preflight re-derives what the binder compiled, so
+            # the two must accept the same definitions. The engine, trust and
+            # image gates already ran in the binder before anything durable.
+            container_execution_supported=True,
         )
         if spec.run_definition_digest != run_definition_digest:
             raise RealmIntegrityError(
