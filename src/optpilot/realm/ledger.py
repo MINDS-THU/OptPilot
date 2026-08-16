@@ -14,6 +14,7 @@ import hmac
 import json
 import math
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -55,6 +56,7 @@ from .errors import (
     RealmExpired,
     RealmIntegrityError,
     RealmNotFound,
+    RunRecordDeleted,
 )
 from .evaluation_compiler import compile_candidate_evaluation_spec
 from .leases import LeaseRecord, LeaseState
@@ -297,6 +299,7 @@ from .run_records import (
     RunLogicalTrialTransitionReceipt,
     RunNamespaceRecord,
     RunRevisionRecord,
+    RunDeletionRecord,
     RunRetirementRecord,
     RunRetirementReceipt,
 )
@@ -374,7 +377,7 @@ def _sqlite_catalog_paths_overlap(left: object, right: object) -> int:
     return int(catalog_paths_overlap(left, right))
 
 
-_CURRENT_SCHEMA_VERSION = 36
+_CURRENT_SCHEMA_VERSION = 37
 _MIGRATION_DIRECTORY = Path(__file__).with_name("migrations")
 _MIGRATIONS = (
     (1, _MIGRATION_DIRECTORY / "0001_realm_core.sql"),
@@ -422,6 +425,7 @@ _MIGRATIONS = (
     (34, _MIGRATION_DIRECTORY / "0034_selection_owner_adoptions.sql"),
     (35, _MIGRATION_DIRECTORY / "0035_provider_trust_policy.sql"),
     (36, _MIGRATION_DIRECTORY / "0036_provider_trust_contract.sql"),
+    (37, _MIGRATION_DIRECTORY / "0037_run_deletion.sql"),
 )
 _ID_NAMESPACE = uuid.UUID("a811e801-fdc1-43c8-b985-dcab229ffcea")
 _MAX_OPERATION_ID_BYTES = 512
@@ -14555,8 +14559,10 @@ class RealmLedger(
                 "SELECT rn.run_id, rn.state, rn.retention_state, "
                 "rn.current_revision, rr.last_sequence AS head_sequence, "
                 "rn.max_trials, rn.accepted_logical_trials, rn.created_txn_id, "
-                "rn.created_at, rn.updated_at "
+                "rn.created_at, rn.updated_at, "
+                "(rd.run_id IS NOT NULL) AS deleted "
                 "FROM run_namespaces AS rn "
+                "LEFT JOIN run_deletions AS rd ON rd.run_id = rn.run_id "
                 "JOIN owners AS o ON o.owner_id = rn.owner_id "
                 "JOIN run_revisions AS rr "
                 "ON rr.run_id = rn.run_id AND rr.revision = rn.current_revision "
@@ -14697,6 +14703,26 @@ class RealmLedger(
         finally:
             connection.close()
 
+    def _raise_if_run_deleted(
+        self, connection: sqlite3.Connection, run_id: str
+    ) -> None:
+        """Refuse to read a record that was deliberately erased.
+
+        The skeleton rows a deleted run keeps (its head, revisions, note)
+        would otherwise flow into readers whose invariants assume the full
+        record, and fail as integrity errors instead of an honest answer.
+        """
+
+        if (
+            connection.execute(
+                "SELECT 1 FROM run_deletions WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            is not None
+        ):
+            raise RunRecordDeleted(
+                "Run record was deliberately deleted; only its note remains."
+            )
+
     def read_run_snapshot(
         self, *, actor_principal_id: str, run_id: str
     ) -> RunLedgerSnapshot:
@@ -14723,6 +14749,7 @@ class RealmLedger(
                 owner_id=run_row["owner_id"],
                 permission=OwnerPermission.METADATA_READ,
             )
+            self._raise_if_run_deleted(connection, run_id)
             run = _run_namespace_from_row(run_row)
             revision = _run_revision_from_row(
                 connection.execute(
@@ -22988,6 +23015,7 @@ class RealmLedger(
                 owner_id=run_row["owner_id"],
                 permission=permission,
             )
+            self._raise_if_run_deleted(connection, run_id)
             result = self._load_verified_run_terminal_seal(connection, run_row=run_row)
             connection.commit()
             return result
@@ -23546,6 +23574,191 @@ class RealmLedger(
             )
         )
 
+    def delete_run_record(
+        self,
+        *,
+        operation_id: str,
+        actor_principal_id: str,
+        run_id: str,
+        expected_run_revision: int,
+        named_image_digests: Sequence[str] = (),
+    ) -> RunDeletionRecord:
+        """Erase a retired run's record, leaving an immutable note in its place.
+
+        Retirement released the run's bytes; this removes the rows that
+        describe what ran and what came out. The note is written first, in the
+        same transaction -- the schema's delete triggers only permit erasure
+        for a run whose note exists, so a crash can never leave rows gone
+        without the note saying so.
+        """
+
+        operation_id = _text(operation_id, "operation_id")
+        actor_principal_id = _text(actor_principal_id, "actor principal_id")
+        run_id = _bounded_text(run_id, "run id", max_bytes=512)
+        expected_run_revision = _positive_input_int(
+            expected_run_revision, "expected run revision"
+        )
+        digests = tuple(
+            sorted(
+                {
+                    _bounded_text(item, "named image digest", max_bytes=512)
+                    for item in named_image_digests
+                }
+            )
+        )
+
+        request = {
+            "actor_principal_id": actor_principal_id,
+            "run_id": run_id,
+            "expected_run_revision": expected_run_revision,
+            "named_image_digests": list(digests),
+        }
+
+        def body(
+            connection: sqlite3.Connection, txn_id: int, now: float
+        ) -> Mapping[str, Any]:
+            run_row = connection.execute(
+                "SELECT * FROM run_namespaces WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run_row is None:
+                raise _missing()
+            owner = self._authorize_owner(
+                connection,
+                actor_principal_id=actor_principal_id,
+                owner_id=run_row["owner_id"],
+                permission=OwnerPermission.DERIVE,
+            )
+            self._require_active_owner(owner)
+            if (
+                connection.execute(
+                    "SELECT 1 FROM run_deletions WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                is not None
+            ):
+                raise RealmConflict("Run record is already deleted.")
+            if run_row["retention_state"] != "retired":
+                raise RealmConflict(
+                    "Run deletion requires a retired run: retire it first."
+                )
+            if int(run_row["current_revision"]) != expected_run_revision:
+                raise RealmConflict("Run revision changed.")
+            retirement_row = connection.execute(
+                "SELECT 1 FROM run_retirements WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if retirement_row is None:
+                raise RealmIntegrityError(
+                    "Retired run has no retirement record."
+                )
+            manifest_row = connection.execute(
+                "SELECT definition_digest, definition_json "
+                "FROM run_definition_manifests WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            definition_digest = (
+                None if manifest_row is None else manifest_row["definition_digest"]
+            )
+            named_images = set(digests)
+            if manifest_row is not None:
+                # The definition is about to be erased, so the note must carry
+                # the container images it named -- they decide when an image
+                # becomes removable (design SS12: only once no remaining
+                # record names it).
+                named_images.update(
+                    _image_references_in_text(manifest_row["definition_json"])
+                )
+            counts: dict[str, int] = {}
+            for table in _RUN_DELETION_ERASE_ORDER:
+                counts[table] = int(
+                    connection.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE run_id = ?",
+                        (run_id,),
+                    ).fetchone()[0]
+                )
+            connection.execute(
+                "INSERT INTO run_deletions("
+                "run_id, run_revision, owner_revision, txn_id, "
+                "actor_principal_id, run_definition_digest, run_terminal_state, "
+                "run_created_at, deleted_counts_json, named_image_digests_json, "
+                "created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id,
+                    expected_run_revision,
+                    int(owner["revision"]),
+                    txn_id,
+                    actor_principal_id,
+                    definition_digest,
+                    run_row["state"],
+                    float(run_row["created_at"]),
+                    canonical_json_bytes(
+                        {table: counts[table] for table in sorted(counts)}
+                    ).decode("utf-8"),
+                    canonical_json_bytes(sorted(named_images)).decode("utf-8"),
+                    now,
+                ),
+            )
+            for table in _RUN_DELETION_ERASE_ORDER:
+                connection.execute(
+                    f"DELETE FROM {table} WHERE run_id = ?", (run_id,)
+                )
+            return _run_deletion_from_row(
+                connection.execute(
+                    "SELECT * FROM run_deletions WHERE run_id = ?", (run_id,)
+                ).fetchone()
+            ).to_dict()
+
+        return RunDeletionRecord.from_dict(
+            self._operate(
+                operation_id=operation_id,
+                operation_kind="run.delete",
+                request=request,
+                body=body,
+            )
+        )
+
+    def read_run_deletion(
+        self, *, actor_principal_id: str, run_id: str
+    ) -> Optional[RunDeletionRecord]:
+        """The deletion note for a run, or None when the record still exists."""
+
+        actor_principal_id = _text(actor_principal_id, "actor principal_id")
+        run_id = _bounded_text(run_id, "run id", max_bytes=512)
+        connection = self._connect()
+        run_row = connection.execute(
+            "SELECT owner_id FROM run_namespaces WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if run_row is None:
+            raise _missing()
+        owner = self._authorize_owner(
+            connection,
+            actor_principal_id=actor_principal_id,
+            owner_id=run_row["owner_id"],
+            permission=OwnerPermission.METADATA_READ,
+        )
+        self._require_active_owner(owner)
+        row = connection.execute(
+            "SELECT * FROM run_deletions WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return None if row is None else _run_deletion_from_row(row)
+
+    def image_reference_still_named(self, image_reference: str) -> bool:
+        """Whether any remaining run definition names this container image.
+
+        Decides when an image becomes removable (design SS12): images are
+        shared across runs and packages, so one is offered for removal only
+        when the last record naming it is gone. Deleted runs' definitions are
+        erased, so they no longer count -- their notes list what they named.
+        """
+
+        image_reference = _text(image_reference, "image reference")
+        connection = self._connect()
+        row = connection.execute(
+            "SELECT 1 FROM run_definition_manifests "
+            "WHERE instr(definition_json, ?) > 0 LIMIT 1",
+            (image_reference,),
+        ).fetchone()
+        return row is not None
+
     def mint_run_candidate_selection(
         self,
         *,
@@ -23624,6 +23837,7 @@ class RealmLedger(
             ).fetchone()
             if run_row is None:
                 raise _missing()
+            self._raise_if_run_deleted(connection, selection.run_id)
             template_row = connection.execute(
                 "SELECT template_digest FROM run_evaluation_templates WHERE run_id = ?",
                 (selection.run_id,),
@@ -32872,6 +33086,91 @@ def _run_terminal_seal_from_row(
     except (KeyError, TypeError, ValueError) as error:
         raise RealmIntegrityError(
             "Persisted run terminal seal is malformed."
+        ) from error
+
+
+#: Children before parents, so every DELETE satisfies the foreign keys that
+#: remain mid-erasure. Derived from the live schema's foreign-key graph.
+_RUN_DELETION_ERASE_ORDER = (
+    "run_artifacts",
+    "run_attempt_execution_cleanup_authorizations",
+    "run_attempt_execution_projections",
+    "run_attempt_execution_volumes",
+    "run_attempt_transitions",
+    "run_cancellation_requests",
+    "run_candidate_refs",
+    "run_definition_refs",
+    "run_evaluation_refs",
+    "run_events",
+    "run_logical_trial_transitions",
+    "run_method_exchange_completions",
+    "run_submission_control_records",
+    "run_submission_handles",
+    "run_terminal_seals",
+    "study_launch_controller_confirmations",
+    "run_attempt_execution_terminal_evidence",
+    "run_control_manifests",
+    "run_definition_manifests",
+    "run_evaluation_templates",
+    "run_method_exchange_preparations",
+    "run_observations",
+    "study_launch_handoffs",
+    "run_attempt_execution_launch_intents",
+    "run_attempt_execution_bindings",
+    "run_attempts",
+    "run_logical_trials",
+    "run_candidates",
+)
+
+
+_IMAGE_REFERENCE_PATTERN = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._/:-]*@sha256:[0-9a-f]{64}"
+)
+
+
+def _image_references_in_text(text: str) -> set[str]:
+    """Every pinned container-image reference appearing in a JSON document.
+
+    Pinned references have the unmistakable repository@sha256:digest shape;
+    bare content digests never carry the repository prefix, so they are not
+    matched.
+    """
+
+    return set(_IMAGE_REFERENCE_PATTERN.findall(text or ""))
+
+
+def _run_deletion_from_row(row: Optional[sqlite3.Row]) -> RunDeletionRecord:
+    if row is None:
+        raise _missing()
+    try:
+        return RunDeletionRecord(
+            run_id=_text(row["run_id"], "run id"),
+            run_revision=_positive_int(row["run_revision"], "deletion revision"),
+            owner_revision=_nonnegative_int(
+                row["owner_revision"], "deletion owner revision"
+            ),
+            txn_id=_positive_int(row["txn_id"], "deletion transaction id"),
+            actor_principal_id=_text(
+                row["actor_principal_id"], "deletion actor"
+            ),
+            run_definition_digest=(
+                None
+                if row["run_definition_digest"] is None
+                else _text(row["run_definition_digest"], "definition digest")
+            ),
+            run_terminal_state=_text(
+                row["run_terminal_state"], "deleted run state"
+            ),
+            run_created_at=float(row["run_created_at"]),
+            deleted_counts=json.loads(row["deleted_counts_json"]),
+            named_image_digests=tuple(
+                json.loads(row["named_image_digests_json"])
+            ),
+            created_at=float(row["created_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RealmIntegrityError(
+            "Persisted run deletion note is malformed."
         ) from error
 
 

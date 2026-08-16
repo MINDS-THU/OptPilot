@@ -559,7 +559,7 @@ class RealmRunDefinitionLedgerTest(unittest.TestCase):
 
 
 class RealmRunDefinitionMigrationTest(unittest.TestCase):
-    def test_empty_v7_realm_upgrades_to_current_v36(self) -> None:
+    def test_empty_v7_realm_upgrades_to_current_v37(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "realm.sqlite3"
             migration_directory = (
@@ -601,19 +601,19 @@ class RealmRunDefinitionMigrationTest(unittest.TestCase):
             connection = sqlite3.connect(database)
             try:
                 self.assertEqual(
-                    connection.execute("PRAGMA user_version").fetchone()[0], 36
+                    connection.execute("PRAGMA user_version").fetchone()[0], 37
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT value FROM realm_meta WHERE key = 'schema_version'"
                     ).fetchone()[0],
-                    "36",
+                    "37",
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT version FROM schema_migrations ORDER BY version"
                     ).fetchall(),
-                    [(version,) for version in range(1, 37)],
+                    [(version,) for version in range(1, 38)],
                 )
             finally:
                 connection.close()

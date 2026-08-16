@@ -4,10 +4,14 @@ Written to be read without prior knowledge of OptPilot; every term is defined
 where it first appears.
 
 **What is described here.** Packages, the catalog, the archive and fingerprints
-(§§1–3) exist today. The execution model — everything running in a container,
-images named by fingerprint, and registration capturing an image (§§4–8) — is a
-target design, not built. Anything else not yet built is marked where it
-appears. Dated 2026-08-14.
+(§§1–3) exist today. The execution model of §§4–8 — everything running in a
+container, images named by fingerprint, per-purpose approvals, one method
+container per run, a fresh environment container per candidate, workspaces
+running the package's image, and registration detecting installed software and
+capturing it as an image — was built 2026-08-14/16, as was §12's deliberate
+deletion of runs (`optpilot runs delete`, which leaves the note). Publishing
+and sharing remain unbuilt; anything else not yet built is marked where it
+appears. Dated 2026-08-14; status updated 2026-08-16.
 
 ## 1. What OptPilot does, and what it promises
 
@@ -736,6 +740,16 @@ Two rules keep this from undermining §1. A removal leaves a **note in place of
 the record**, naming what was removed and when, so a deleted run is
 distinguishable from one that never existed. And removal is always a person's
 explicit act — nothing expires, and nothing is cleaned up automatically.
+(Built 2026-08-16: `optpilot runs list` and `optpilot runs delete <run-id>`.
+The confirmation is retyping the run id at a terminal; there is no flag that
+skips it, and a script gets a refusal. The note is written in the same
+database transaction that erases the rows, and the schema's own triggers
+forbid erasing anything before its note exists — so no crash can lose rows
+without the note saying so. Reclamation runs a no-grace collection epoch that
+computes liveness across every record, so bytes shared with a surviving run —
+a review decision, another run's identical candidate — are never touched. The
+command ends by naming which container images no remaining record names;
+removing those from the container engine stays a manual act.)
 
 A run's image may be removed the same way, but **only once no remaining record
 names it**. Images are shared: one image typically serves every run of a package

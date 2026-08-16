@@ -23,6 +23,15 @@ class RealmNotFound(RealmError):
     """A requested or authorized entity was not available."""
 
 
+class RunRecordDeleted(RealmNotFound):
+    """The run's record was deliberately deleted; only its note remains.
+
+    Subclasses :class:`RealmNotFound` so a caller unaware of deletion treats
+    the run as missing rather than crashing on a partially readable record.
+    A caller that wants the note reads it via ``read_run_deletion``.
+    """
+
+
 class RealmExpired(RealmError):
     """A provisional owner change or lease expired."""
 

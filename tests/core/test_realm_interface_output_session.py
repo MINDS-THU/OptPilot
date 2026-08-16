@@ -1245,14 +1245,14 @@ class RealmInterfaceOutputSessionMigrationTest(unittest.TestCase):
                 with sqlite3.connect(database) as connection:
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        36,
+                        37,
                     )
                     self.assertEqual(
                         connection.execute(
                             "SELECT value FROM realm_meta "
                             "WHERE key = 'schema_version'"
                         ).fetchone(),
-                        ("36",),
+                        ("37",),
                     )
                     self.assertEqual(
                         connection.execute(

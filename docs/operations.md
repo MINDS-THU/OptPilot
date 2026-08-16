@@ -321,7 +321,26 @@ tails. Studio removes launch-private paths and values declared through
 Very short declared secrets may cause an affected diagnostic string to be
 withheld entirely rather than risk disclosure.
 
-There is currently no user-facing Run archive/deletion action, whole-Realm
+### Deleting a chosen Run
+
+A finished Run's record can be deliberately deleted from a terminal:
+
+```
+optpilot runs list
+optpilot runs delete <run-id>
+```
+
+Deletion erases the Run's results, code snapshots, and history, then reclaims
+whatever stored bytes only that Run kept alive; bytes shared with anything
+else — another Run, a saved review decision — are never touched. A note stays
+in the Run's place naming what was removed and when, so a deleted Run is
+never mistaken for one that never existed. There is no undo and no flag that
+skips confirmation: the command refuses to run non-interactively, and the
+confirmation is retyping the Run id. The command ends by naming any container
+images that no remaining record references; removing those from Docker or
+Podman is a separate manual step (`docker rmi …`), never automatic.
+
+There is currently no whole-Realm
 reset, prepared-cache clear, or container-image cleanup. Stopping a Run stops
 work but intentionally preserves its evidence. Do not reclaim those areas by
 deleting internal subdirectories. For disposable tests, select a dedicated

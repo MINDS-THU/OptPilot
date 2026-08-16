@@ -35,6 +35,8 @@ class RunCatalogEntry:
     accepted_logical_trials: int
     created_at: float
     updated_at: float
+    #: True when the record was deliberately deleted and only its note remains.
+    deleted: bool = False
 
     def __post_init__(self) -> None:
         required_text(self.run_id, "run id", max_bytes=512)
@@ -77,6 +79,7 @@ class RunCatalogEntry:
             },
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "deleted": self.deleted,
         }
 
     @classmethod
@@ -93,6 +96,7 @@ class RunCatalogEntry:
             accepted_logical_trials=row["accepted_logical_trials"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            deleted=bool(row["deleted"]),
         )
 
 

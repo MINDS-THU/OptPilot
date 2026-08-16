@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from ._validation import (
     finite_time,
@@ -918,6 +918,71 @@ class RunRetirementRecord:
     def from_dict(cls, payload: Mapping[str, Any]) -> "RunRetirementRecord":
         _exact_keys(payload, set(cls.__dataclass_fields__), "run retirement")
         return cls(**dict(payload))
+
+
+@dataclass(frozen=True)
+class RunDeletionRecord:
+    """The note left where a deleted run's record used to be.
+
+    A deleted run must stay distinguishable from one that never existed, so
+    the note names what was removed and when: the run's terminal state, its
+    definition digest when one was recorded, how many rows of each kind were
+    erased, and which container images the record named at the moment it was
+    erased.
+    """
+
+    run_id: str
+    run_revision: int
+    owner_revision: int
+    txn_id: int
+    actor_principal_id: str
+    run_definition_digest: Optional[str]
+    run_terminal_state: str
+    run_created_at: float
+    deleted_counts: Mapping[str, int]
+    named_image_digests: tuple[str, ...]
+    created_at: float
+
+    def __post_init__(self) -> None:
+        required_text(self.run_id, "run id")
+        positive_int(self.run_revision, "run deletion revision")
+        nonnegative_int(self.owner_revision, "run deletion owner revision")
+        positive_int(self.txn_id, "run deletion transaction id")
+        required_text(self.actor_principal_id, "run deletion actor")
+        if self.run_definition_digest is not None:
+            required_text(self.run_definition_digest, "run definition digest")
+        required_text(self.run_terminal_state, "run terminal state")
+        object.__setattr__(
+            self,
+            "run_created_at",
+            finite_time(self.run_created_at, "run created_at"),
+        )
+        counts = dict(self.deleted_counts)
+        for table, count in counts.items():
+            required_text(table, "deleted table name")
+            nonnegative_int(count, f"deleted count for {table}")
+        object.__setattr__(self, "deleted_counts", counts)
+        digests = tuple(self.named_image_digests)
+        for digest in digests:
+            required_text(digest, "named image digest")
+        object.__setattr__(self, "named_image_digests", digests)
+        object.__setattr__(
+            self, "created_at", finite_time(self.created_at, "created_at")
+        )
+
+    def to_dict(self) -> JsonDict:
+        payload = dict(self.__dict__)
+        payload["deleted_counts"] = dict(self.deleted_counts)
+        payload["named_image_digests"] = list(self.named_image_digests)
+        return payload
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "RunDeletionRecord":
+        payload = _without_receipt_version(payload, "run deletion")
+        _exact_keys(payload, set(cls.__dataclass_fields__), "run deletion")
+        values = dict(payload)
+        values["named_image_digests"] = tuple(values["named_image_digests"])
+        return cls(**values)
 
 
 @dataclass(frozen=True)

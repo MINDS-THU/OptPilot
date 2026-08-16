@@ -259,6 +259,29 @@ def build_parser() -> argparse.ArgumentParser:
     image_list.add_argument("--realm-root", default=None)
     image_list.set_defaults(handler=_image_trust_list_command)
 
+    runs_parser = subparsers.add_parser(
+        "runs",
+        help="List archived runs and deliberately delete chosen ones",
+    )
+    runs_subparsers = runs_parser.add_subparsers(
+        dest="runs_command", required=True
+    )
+    runs_list = runs_subparsers.add_parser(
+        "list", help="List runs in the archive, newest first"
+    )
+    runs_list.add_argument("--realm-root", default=None)
+    runs_list.set_defaults(handler=_runs_list_command)
+    runs_delete = runs_subparsers.add_parser(
+        "delete",
+        help=(
+            "Erase one run's record and reclaim the bytes only it kept. "
+            "A note stays in its place; there is no undo."
+        ),
+    )
+    runs_delete.add_argument("run_id", help="The run to delete, as shown by 'optpilot runs list'")
+    runs_delete.add_argument("--realm-root", default=None)
+    runs_delete.set_defaults(handler=_runs_delete_command)
+
     _load_command_providers(subparsers)
 
     return parser
@@ -589,6 +612,112 @@ def _image_trust_list_command(args) -> int:
     print("Approved for study execution:")
     for head in active:
         print(f"  {head.image_ref}")
+    return 0
+
+
+def _runs_list_command(args) -> int:
+    root = _environment_preview_trust_realm_root(args.realm_root)
+    from .realm.local_runtime import LocalRealmRuntime
+
+    with LocalRealmRuntime.open(realm_root=root) as runtime:
+        entries = []
+        page_token = None
+        while True:
+            page = runtime.ledger.list_runs(
+                actor_principal_id=runtime.actor_principal_id,
+                page_token=page_token,
+            )
+            entries.extend(page.items)
+            page_token = page.next_page_token
+            if page_token is None or len(entries) >= 500:
+                break
+    if not entries:
+        print("No runs in the archive.")
+        return 0
+    print(f"{'RUN':<44} {'STATE':<10} {'TRIALS':>6}  NOTE")
+    for entry in entries:
+        if entry.deleted:
+            note = "deleted; note remains"
+        elif entry.retention_state == "retired":
+            note = "retired"
+        else:
+            note = ""
+        trials = str(entry.accepted_logical_trials)
+        print(f"{entry.run_id:<44} {entry.state:<10} {trials:>6}  {note}")
+    return 0
+
+
+def _runs_delete_command(args) -> int:
+    run_id = str(args.run_id).strip()
+    if not run_id:
+        print("A run id is required.", file=sys.stderr)
+        return 2
+    if not sys.stdin.isatty():
+        # Deletion is always a person's explicit act (design SS12): there is
+        # no flag that skips the typed confirmation, so a script cannot
+        # delete records.
+        print(
+            "Deleting a run erases its results permanently and must be "
+            "confirmed by a person at a terminal. Run this command "
+            "interactively.",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"About to permanently delete the record of run:\n  {run_id}")
+    print(
+        "Its results, code snapshots, and history will be erased; a note "
+        "saying the record existed and was removed stays in its place. "
+        "There is no undo."
+    )
+    typed = input("Type the run id to confirm: ").strip()
+    if typed != run_id:
+        print("The typed id does not match; nothing was changed.")
+        return 1
+    from .realm.errors import RealmConflict, RealmNotFound
+    from .realm.local_runtime import LocalRealmRuntime
+    from .realm.run_deletion_service import delete_run_and_reclaim
+
+    root = _environment_preview_trust_realm_root(args.realm_root)
+    with LocalRealmRuntime.open(realm_root=root) as runtime:
+        try:
+            outcome = delete_run_and_reclaim(
+                ledger=runtime.ledger,
+                content_store=runtime.content_store,
+                projection_service=runtime.projection_service,
+                actor_principal_id=runtime.actor_principal_id,
+                run_id=run_id,
+                # A run finished minutes ago can still hold short-lived read
+                # leases nobody will renew; wait them out rather than fail.
+                wait_for_leases_seconds=240.0,
+                on_wait=lambda: print(
+                    "A read model of this run is still leased; waiting for "
+                    "it to expire (up to a few minutes)..."
+                ),
+            )
+        except RealmConflict as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        except RealmNotFound:
+            print(
+                f"No run named {run_id!r} is in the archive.", file=sys.stderr
+            )
+            return 1
+    erased_rows = sum(outcome.note.deleted_counts.values())
+    print(
+        f"Deleted the record of {run_id}: {erased_rows} rows erased, "
+        f"{outcome.reclaimed_objects} stored objects reclaimed."
+    )
+    if outcome.removable_images:
+        print(
+            "No remaining record names these container images; remove them "
+            "from your container engine whenever you wish:"
+        )
+        for image in outcome.removable_images:
+            print(f"  {image}")
+    if outcome.still_named_images:
+        print("Still named by other records (keep them):")
+        for image in outcome.still_named_images:
+            print(f"  {image}")
     return 0
 
 
