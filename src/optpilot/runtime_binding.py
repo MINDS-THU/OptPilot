@@ -2113,13 +2113,18 @@ def _expected_container_runtime_requirements(
     the binding re-derives it from the manifest's own settings.
     """
 
+    container: dict[str, Any] = {
+        "image": settings.get("container_image_reference"),
+        "platform": settings.get("container_platform"),
+        "network": settings.get("container_network"),
+    }
+    if settings.get("container_limits"):
+        # Present only when the component raised a limit, mirroring the
+        # authoring compile -- an unraised component keeps its exact shape.
+        container["limits"] = dict(settings["container_limits"])
     return {
         "type": "container",
-        "container": {
-            "image": settings.get("container_image_reference"),
-            "platform": settings.get("container_platform"),
-            "network": settings.get("container_network"),
-        },
+        "container": container,
     }
 
 
@@ -2364,7 +2369,11 @@ def compile_retained_process_attempt_runtime(
             "container_image_reference",
             "container_network",
         }
-    if set(settings) != expected_settings_keys or settings.get(
+    observed_settings_keys = set(settings)
+    if is_container:
+        # container_limits appears only when the component raised a limit.
+        observed_settings_keys.discard("container_limits")
+    if observed_settings_keys != expected_settings_keys or settings.get(
         "schema"
     ) != LOGICAL_PYTHON_RUNTIME_SETTINGS_SCHEMA:
         _fail(

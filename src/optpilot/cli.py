@@ -560,6 +560,45 @@ def _add_environment_preview_trust_arguments(
         )
 
 
+def _raised_limits_for_image(root: Path, image_ref: str) -> list[str]:
+    """Raised resource limits declared by catalog components using this image.
+
+    Raising a limit is part of what approving agrees to, so it is shown at the
+    approval prompt. Best effort over the catalog beside the current
+    directory; a component elsewhere simply is not found.
+    """
+
+    lines: list[str] = []
+    catalog = root / "catalog"
+    if not catalog.is_dir():
+        return lines
+    for config in sorted(catalog.rglob("*.yaml")):
+        if config.stat().st_size > 1_000_000:
+            continue
+        try:
+            import yaml as _yaml
+
+            document = _yaml.safe_load(config.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(document, dict):
+            continue
+        container = (document.get("runtime") or {}).get("container") or {}
+        if not isinstance(container, dict) or container.get("image") != image_ref:
+            continue
+        limits = container.get("limits") or {}
+        if not isinstance(limits, dict) or not limits:
+            continue
+        raised = ", ".join(
+            f"{name} {limits[name]}" for name in ("cpus", "memory", "pids")
+            if name in limits
+        )
+        lines.append(
+            f"  {document.get('id') or config.name} raises limits: {raised}"
+        )
+    return lines
+
+
 def _image_trust_command_factory(action: str):
     def _handler(args) -> int:
         image_ref = validate_provider_image_ref(args.image)
@@ -575,6 +614,8 @@ def _image_trust_command_factory(action: str):
                     "An approved image runs a package's own code with "
                     "whatever network and credentials that code declares."
                 )
+                for line in _raised_limits_for_image(Path.cwd(), image_ref):
+                    print(line)
             answer = input("Proceed? [y/N] ").strip().lower()
             if answer not in ("y", "yes"):
                 print("Cancelled; nothing was changed.")

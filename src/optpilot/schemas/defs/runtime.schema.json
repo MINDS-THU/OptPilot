@@ -38,6 +38,26 @@
                 "enabled",
                 "disabled"
               ]
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Raised resource limits for this component's containers. OptPilot applies defaults; a raised limit is shown when the image is approved, because raising one is part of what is being agreed to.",
+              "properties": {
+                "cpus": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$"
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?[kmgKMG]i?[bB]?$"
+                },
+                "pids": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              }
             }
           }
         },

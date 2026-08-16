@@ -280,9 +280,13 @@ environment's declared `evaluator.timeoutSeconds` (or the run's execution
 policy, whichever is smaller; 600 seconds when neither is declared) now
 reaches the evaluation and ends it as a typed "timeout" result with its logs,
 and the supervisor stops a worker that cannot be interrupted 30 seconds past
-the limit. The `limits:` block on the container declaration — raising memory,
-processors, or the time limit per component, and showing a raised limit at
-approval — is *not built yet*; containers run under the defaults.)
+the limit. The `limits:` block is also built: a component's
+`runtime.container.limits` may raise `cpus`, `memory`, and `pids`; a raise
+rides the retained contract into every container launch, a component that
+raises nothing keeps its exact prior record shape, and `optpilot image
+approve` names catalog components that raise limits on this image. The time
+limit stays where it was already declared — `evaluator.timeoutSeconds` — so
+the container block does not duplicate it.)
 
 ### Architecture
 

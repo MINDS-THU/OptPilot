@@ -367,6 +367,9 @@ class ContainerAttemptPlan:
     #: Host variables the engine client itself needs (finding its daemon).
     #: Captured once at gating so a recompile is byte-identical.
     engine_env: tuple[tuple[str, str], ...]
+    #: Resource limits the component raised, as sorted (name, value) pairs;
+    #: empty means the defaults apply.
+    limits: tuple[tuple[str, str | int], ...] = ()
 
 
 #: What the engine client may see of this host's environment. The client is the
@@ -783,6 +786,9 @@ class RealmProcessExecutionBinder:
                 (name, os.environ[name])
                 for name in _ENGINE_ENV_ALLOWLIST
                 if name in os.environ
+            ),
+            limits=tuple(
+                sorted((dict(settings.get("container_limits") or {})).items())
             ),
         )
 

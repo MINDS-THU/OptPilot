@@ -669,6 +669,53 @@ def _require_source_backed_callable(
         )
 
 
+def _container_limits_declaration(
+    container: Mapping[str, Any], subject: str
+) -> Mapping[str, Any]:
+    """The declared limit raises, validated to the same bounded shapes the
+    authoring compiler accepts -- these values ride into the container
+    engine's command line, so nothing free-form passes."""
+
+    import re as _re
+
+    limits = container.get("limits")
+    if limits in (None, {}):
+        return {}
+    if not isinstance(limits, Mapping) or set(limits) - {"cpus", "memory", "pids"}:
+        _fail(
+            "container_runtime_unsupported",
+            f"A container {subject} limits block supports cpus, memory, and pids.",
+        )
+    declared: dict[str, Any] = {}
+    cpus = limits.get("cpus")
+    if cpus is not None:
+        if not isinstance(cpus, str) or not _re.fullmatch(r"[0-9]+(\.[0-9]+)?", cpus):
+            _fail(
+                "container_runtime_unsupported",
+                f"A container {subject} cpus limit must be a number string.",
+            )
+        declared["cpus"] = cpus
+    memory = limits.get("memory")
+    if memory is not None:
+        if not isinstance(memory, str) or not _re.fullmatch(
+            r"[0-9]+(\.[0-9]+)?[kmgKMG]i?[bB]?", memory
+        ):
+            _fail(
+                "container_runtime_unsupported",
+                f"A container {subject} memory limit must look like 8g or 8GiB.",
+            )
+        declared["memory"] = memory
+    pids = limits.get("pids")
+    if pids is not None:
+        if isinstance(pids, bool) or not isinstance(pids, int) or not 1 <= pids <= 65536:
+            _fail(
+                "container_runtime_unsupported",
+                f"A container {subject} pids limit must be an integer from 1 to 65536.",
+            )
+        declared["pids"] = pids
+    return declared
+
+
 def _environment_container_declaration(environment: Mapping[str, Any]):
     """The image an environment declares, or None when it runs in a process."""
 
@@ -696,7 +743,9 @@ def _environment_container_declaration(environment: Mapping[str, Any]):
             "container_runtime_unsupported",
             "A container environment network grant must be enabled or disabled.",
         )
-    return image, platform, network
+    return image, platform, network, _container_limits_declaration(
+        container, "environment"
+    )
 
 
 def _method_container_declaration(method: Mapping[str, Any]):
@@ -726,7 +775,9 @@ def _method_container_declaration(method: Mapping[str, Any]):
             "container_runtime_unsupported",
             "A container method runtime network grant must be enabled or disabled.",
         )
-    return image, platform, network
+    return image, platform, network, _container_limits_declaration(
+        container, "method"
+    )
 
 
 def _oci_digest_of(image: str) -> str:
@@ -1549,13 +1600,17 @@ def compile_retained_process_study(
             builder_fingerprint=provider.builder_fingerprint,
         )
     else:
-        image, env_platform, env_network = environment_container
+        image, env_platform, env_network, env_limits = environment_container
         env_settings = LogicalPythonRuntimeSettings(
             environment_import_roots
         ).to_dict()
         env_settings["container_platform"] = env_platform
         env_settings["container_image_reference"] = image
         env_settings["container_network"] = env_network
+        if env_limits:
+            # Only when raised, so a component raising nothing retains the
+            # exact settings shape (and digests) it had before limits existed.
+            env_settings["container_limits"] = dict(env_limits)
         environment_runtime = PreparedEnvironmentRuntimeManifest(
             environment_revision_digest=environment_revision.digest,
             runtime_kind="container",
@@ -1653,7 +1708,7 @@ def compile_retained_process_study(
             builder_fingerprint=provider.builder_fingerprint,
         )
     else:
-        image, platform, network = method_container
+        image, platform, network, method_limits = method_container
         # An image names its contents exactly, so this record means the same
         # thing on any machine of that architecture. A process runtime does not:
         # it describes what one machine happened to have installed, which is why
@@ -1666,6 +1721,8 @@ def compile_retained_process_study(
         # manifest digest, which a bare fingerprint comparison cannot verify).
         settings["container_image_reference"] = image
         settings["container_network"] = network
+        if method_limits:
+            settings["container_limits"] = dict(method_limits)
         method_runtime = PreparedMethodRuntimeManifest(
             method_revision_digest=method_revision.digest,
             runtime_kind="container",

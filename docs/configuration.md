@@ -809,8 +809,12 @@ choose the environment, method, objective, budget, evidence policy, and seed.
 For values that legitimately change per launch rather than per environment
 variant, declare per-launch `inputs` (see below).
 
-Containerized environment runtime (schema/target; not executable by the current
-retained runner):
+Containerized environment runtime. The image must already be built and is
+named by fingerprint — a tag can resolve to different bytes later, so a record
+naming one would not describe what ran. There is deliberately no way to
+declare a build: building fetches software from the network, and what it
+fetches can differ between builds. The image must be approved for study
+execution (`optpilot image approve`) before anything runs in it.
 
 Environment `runtime` fragment:
 
@@ -818,17 +822,23 @@ Environment `runtime` fragment:
 runtime:
   sandbox: container
   container:
-    image: python:3.11-slim
-    executable: docker
+    image: ghcr.io/example/pkg@sha256:<64 hex digits>
+    platform: linux/amd64
     network: disabled
-    build:
-      context: .
-      dockerfile: Dockerfile.environment
-      tag: my-env:latest
+    # Optional: raise resource limits for this component's containers.
+    # OptPilot applies defaults (2 cpus, 4g memory, 512 processes); a raise
+    # is shown when the image is approved, because raising one is part of
+    # what is being agreed to. The wall-clock limit per evaluation stays in
+    # evaluator.timeoutSeconds above.
+    limits:
+      cpus: "4"
+      memory: 8g
+      pids: 1024
 ```
 
-Relative `build.context` paths are resolved from the component config file.
-Relative `build.dockerfile` paths are resolved from `build.context`.
+Methods declare the same `runtime.container` shape. Each candidate evaluates
+in a fresh container from this image; a method gets one container for the
+whole run.
 
 ### Per-Launch Study Inputs
 

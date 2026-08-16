@@ -1132,6 +1132,7 @@ class RetainedBatchRuntimeProvider:
         reference = str(settings["container_image_reference"])
         platform = str(settings["container_platform"])
         network = settings["container_network"] == "enabled"
+        raised_limits = dict(settings.get("container_limits") or {})
 
         descriptor = self._method_environment_descriptor_for(definition)
         values_binding = self._method_environment_values
@@ -1394,6 +1395,7 @@ class RetainedBatchRuntimeProvider:
                     "PYTHONHASHSEED": str(int(definition.digest[:8], 16)),
                 },
                 import_paths=("/optpilot/launcher",),
+                limits=_method_container_limits(raised_limits),
                 interactive=True,
             )
             env_file: Path | None = None
@@ -3441,6 +3443,19 @@ class _WorkerBecameTerminal(Exception):
     pass
 
 
+def _method_container_limits(raised: Mapping[str, Any]):
+    """Defaults, with only the limits the component raised replaced."""
+
+    from .container_launch import ContainerLimits
+
+    defaults = ContainerLimits()
+    return ContainerLimits(
+        cpus=str(raised.get("cpus", defaults.cpus)),
+        memory=str(raised.get("memory", defaults.memory)),
+        pids=int(raised.get("pids", defaults.pids)),
+    )
+
+
 def _worker_coordinates(
     *,
     realm_id: str,
@@ -3584,7 +3599,11 @@ def _required_method_scopes(definition: RunDefinitionManifest) -> set[str]:
             "container_image_reference",
             "container_network",
         }
-    if not isinstance(settings, Mapping) or set(settings) != expected_keys:
+    observed_keys = set(settings) if isinstance(settings, Mapping) else set()
+    if runtime.runtime_kind == "container":
+        # Present only when the component raised a resource limit.
+        observed_keys.discard("container_limits")
+    if not isinstance(settings, Mapping) or observed_keys != expected_keys:
         raise ValueError("retained method runtime settings are unsupported.")
     if settings.get("schema") != "optpilot.logical-python-process-runtime-settings.v1":
         raise ValueError("retained method runtime settings schema is unsupported.")

@@ -556,16 +556,23 @@ _CONTAINER_RUNTIME_SETTINGS_KEYS = frozenset(
         "container_network",
     }
 )
+#: Appears only when the component raised a resource limit; every other key
+#: stays mandatory.
+_OPTIONAL_CONTAINER_RUNTIME_SETTINGS_KEYS = frozenset({"container_limits"})
 
 
 def _scope_paths_from_runtime(definition: RunDefinitionManifest) -> tuple[ScopePath, ...]:
     settings = definition.prepared_method_runtime.runtime_settings
+    is_container = definition.prepared_method_runtime.runtime_kind == "container"
     expected_keys = (
         _CONTAINER_RUNTIME_SETTINGS_KEYS
-        if definition.prepared_method_runtime.runtime_kind == "container"
+        if is_container
         else _PROCESS_RUNTIME_SETTINGS_KEYS
     )
-    if not isinstance(settings, Mapping) or set(settings) != expected_keys:
+    observed_keys = set(settings) if isinstance(settings, Mapping) else set()
+    if is_container:
+        observed_keys -= _OPTIONAL_CONTAINER_RUNTIME_SETTINGS_KEYS
+    if not isinstance(settings, Mapping) or observed_keys != expected_keys:
         raise RetainedBatchWorkerConfigurationError(
             "prepared method runtime does not contain strict logical Python settings."
         )

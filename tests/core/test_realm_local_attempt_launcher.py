@@ -1212,6 +1212,12 @@ class ContainerEnvironmentAttemptTest(unittest.TestCase):
             "  container:\n"
             f"    image: {inspection.config_digest}\n"
             f"    platform: {inspection.platform}\n"
+            # A raised limit rides the whole chain into the real engine:
+            # a dropped or malformed flag fails the run instead of passing
+            # silently under the defaults.
+            "    limits:\n"
+            "      memory: 5g\n"
+            "      pids: 1024\n"
         )
         canary = (
             "from pathlib import Path\n"

@@ -12,6 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+import re
 import yaml
 
 from .image_reference import parse_image_reference
@@ -852,6 +853,41 @@ def _validate_file_candidate(candidate: Dict[str, Any], location: str) -> None:
     _ensure_safe_relative(root, f"{location} candidate.materialize.root", allow_dot=True)
 
 
+def _validate_container_limits(limits: Any, location: str) -> None:
+    """A component may raise a container's resource limits, never lower trust.
+
+    Bounded shapes only: a free-form value would ride into the container
+    engine's command line.
+    """
+
+    if limits in (None, {}):
+        return
+    if not isinstance(limits, dict):
+        raise ValueError(f"{location} must be an object.")
+    unknown = set(limits) - {"cpus", "memory", "pids"}
+    if unknown:
+        raise ValueError(
+            f"{location} supports cpus, memory, and pids; "
+            f"unknown: {sorted(unknown)}."
+        )
+    cpus = limits.get("cpus")
+    if cpus is not None and not re.fullmatch(r"[0-9]+(\.[0-9]+)?", str(cpus)):
+        raise ValueError(f"{location}.cpus must be a number, like \"4\".")
+    memory = limits.get("memory")
+    if memory is not None and not re.fullmatch(
+        r"[0-9]+(\.[0-9]+)?[kmgKMG]i?[bB]?", str(memory)
+    ):
+        raise ValueError(f"{location}.memory must look like \"8g\" or \"8GiB\".")
+    pids = limits.get("pids")
+    if pids is not None and (
+        isinstance(pids, bool)
+        or not isinstance(pids, int)
+        or pids < 1
+        or pids > 65536
+    ):
+        raise ValueError(f"{location}.pids must be an integer from 1 to 65536.")
+
+
 def _validate_runtime(runtime: Any, location: str) -> None:
     if runtime in (None, {}):
         return
@@ -888,6 +924,9 @@ def _validate_runtime(runtime: Any, location: str) -> None:
         network = container.get("network", "disabled")
         if network not in {"enabled", "disabled"}:
             raise ValueError(f"{location}.container.network must be enabled or disabled.")
+        _validate_container_limits(
+            container.get("limits"), f"{location}.container.limits"
+        )
     elif runtime.get("container") is not None:
         raise ValueError(f"{location}.container requires sandbox container.")
     for key in ("env",):
@@ -1456,6 +1495,24 @@ def _compile_accepts(accepts: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _compiled_container_limits(container: Dict[str, Any]) -> Dict[str, Any]:
+    """The canonical compiled form of declared limit raises, or {} for none.
+
+    Only declared keys appear, so a component that raises nothing compiles
+    byte-identically to one written before limits existed.
+    """
+
+    limits = dict(container.get("limits", {}) or {})
+    compiled: Dict[str, Any] = {}
+    if limits.get("cpus") is not None:
+        compiled["cpus"] = str(limits["cpus"])
+    if limits.get("memory") is not None:
+        compiled["memory"] = str(limits["memory"])
+    if limits.get("pids") is not None:
+        compiled["pids"] = int(limits["pids"])
+    return compiled
+
+
 def _compile_environment_runtime(
     runtime: Dict[str, Any], base_path: Path
 ) -> Dict[str, Any]:
@@ -1469,13 +1526,17 @@ def _compile_environment_runtime(
 
     if runtime.get("sandbox", "process") == "container":
         container = dict(runtime.get("container", {}) or {})
+        compiled_container = {
+            "image": container.get("image"),
+            "platform": container.get("platform"),
+            "network": container.get("network", "disabled"),
+        }
+        limits = _compiled_container_limits(container)
+        if limits:
+            compiled_container["limits"] = limits
         return {
             "type": "container",
-            "container": {
-                "image": container.get("image"),
-                "platform": container.get("platform"),
-                "network": container.get("network", "disabled"),
-            },
+            "container": compiled_container,
         }
     return _compile_runtime(runtime, base_path)
 
@@ -1490,13 +1551,17 @@ def _compile_method_runtime(runtime: Dict[str, Any], base_path: Path) -> Dict[st
         # Python passed. The shape here is the one the retained compiler reads
         # and the one an environment's contract retains.
         container = dict(runtime.get("container", {}) or {})
+        compiled_container = {
+            "image": container.get("image"),
+            "platform": container.get("platform"),
+            "network": container.get("network", "disabled"),
+        }
+        limits = _compiled_container_limits(container)
+        if limits:
+            compiled_container["limits"] = limits
         compiled: Dict[str, Any] = {
             "type": "container",
-            "container": {
-                "image": container.get("image"),
-                "platform": container.get("platform"),
-                "network": container.get("network", "disabled"),
-            },
+            "container": compiled_container,
         }
         if runtime.get("env"):
             compiled["env"] = dict(runtime["env"])

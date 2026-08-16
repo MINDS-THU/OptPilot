@@ -537,6 +537,20 @@ class RealmLocalAttemptLauncher:
         return control_root, trial_root, source_root, prepared_root, import_roots
 
     @staticmethod
+    def _container_limits_from_plan(plan) -> ContainerLimits:
+        """Defaults, with only the limits the component raised replaced."""
+
+        from ..container_launch import ContainerLimits
+
+        raised = dict(getattr(plan, "limits", ()) or ())
+        defaults = ContainerLimits()
+        return ContainerLimits(
+            cpus=str(raised.get("cpus", defaults.cpus)),
+            memory=str(raised.get("memory", defaults.memory)),
+            pids=int(raised.get("pids", defaults.pids)),
+        )
+
+    @staticmethod
     def container_attempt_name(launch_token: str) -> str:
         """The one name this attempt's container carries, wherever derived."""
 
@@ -694,7 +708,7 @@ class RealmLocalAttemptLauncher:
                 "PYTHONNOUSERSITE": "1",
             },
             import_paths=tuple(_remap(path) for path in import_roots),
-            limits=ContainerLimits(),
+            limits=self._container_limits_from_plan(plan),
             user=plan.user,
         )
         process_request = ProcessLaunchRequest(
