@@ -685,6 +685,23 @@
         </section>
       </div>
 
+      <div id="imagePlacementModal" class="modal-backdrop" hidden>
+        <section id="imagePlacementDialog" class="registration-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="imagePlacementTitle" aria-describedby="imagePlacementIntro" tabindex="-1">
+          <header class="modal-header">
+            <div>
+              <h2 id="imagePlacementTitle">Software was installed in this workspace</h2>
+              <p id="imagePlacementIntro">Registering will capture the installed software as a new image so the package keeps running the same way everywhere. The package already has an image, so choose where the new one is recorded.</p>
+            </div>
+            <button id="imagePlacementCloseButton" class="ghost-button" type="button" aria-label="Close software placement question">Close</button>
+          </header>
+          <div id="imagePlacementBody" class="registration-confirmation-body"></div>
+          <footer class="modal-actions">
+            <button id="imagePlacementCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="imagePlacementSubmitButton" class="primary-button" type="button">Record and check</button>
+          </footer>
+        </section>
+      </div>
+
       <div id="candidateTryModal" class="modal-backdrop" hidden>
         <section id="candidateTryDialog" class="child-run-confirmation-modal" role="dialog" aria-modal="true" aria-labelledby="candidateTryTitle" aria-describedby="candidateTryIntro" tabindex="-1">
           <header class="modal-header">

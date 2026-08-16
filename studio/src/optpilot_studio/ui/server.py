@@ -31895,7 +31895,11 @@ def _prepare_package_plan(
     if requested_plan_id is None and not preparation_requested:
         try:
             return {
-                "package_plan": _read_package_plan(state, workspace_id, plan_id),
+                "package_plan": _decorate_plan_software_state(
+                    state,
+                    workspace_id,
+                    _read_package_plan(state, workspace_id, plan_id),
+                ),
                 "setup": _public_registration_setup(
                     _current_registration_setup(state, workspace_id)
                 ),
@@ -32052,6 +32056,7 @@ def _prepare_package_plan(
         state.cwd / CATALOG_DIR_NAME / package_id,
         _package_plan_selection_paths(plan),
     )
+    _decorate_plan_software_state(state, workspace_id, plan)
     _write_package_plan(state, workspace_id, plan)
     setup = _record_registration_configuring(
         state, workspace=workspace, plan=plan
@@ -32116,6 +32121,15 @@ def _update_package_plan(
 ) -> JsonDict:
     plan = _read_package_plan(state, workspace_id, plan_id)
     previous_semantic_digest = _package_plan_digest(plan)
+    placement = payload.get("image_placement")
+    if placement is not None:
+        if placement not in ("component", "package"):
+            raise ValueError(
+                "image_placement must be 'component' or 'package'."
+            )
+        # The browser's answer to the placement question, recorded on the
+        # stored plan without rebuilding it; Check reads it when capturing.
+        plan["image_placement"] = placement
     if payload.get("package_id"):
         if _is_configured_whole_package_plan(plan):
             authority = _assert_configured_package_plan_authority(state, plan)
@@ -32273,6 +32287,9 @@ def _package_plan_semantic_payload(plan: JsonDict) -> JsonDict:
             else []
         ),
         "source_authority": deepcopy(plan.get("source_authority")),
+        # Where captured software is recorded changes what Check composes, so
+        # a changed answer invalidates checked artifacts like any other edit.
+        "image_placement": str(plan.get("image_placement") or "component"),
         "classification": str(plan.get("classification") or ""),
         "components": selected(plan.get("components"), component_fields),
         "resources": selected(plan.get("resources"), component_fields),
@@ -33717,8 +33734,8 @@ def _capture_installed_software(
     captured software BECOMES the package's image -- automatic, no question to
     ask, because there is nothing else in the package for the answer to affect.
     When the package already has an image, where the addition goes is the
-    author's decision; that prompt is not built, so the change is reported
-    rather than silently placed.
+    author's decision: the browser asks before Check, and unattended
+    registration takes the default (the component).
 
     Runs at Check rather than at Register, because the fingerprint lands in the
     package's own settings file, which is part of the sealed, validated bytes.
@@ -33758,6 +33775,31 @@ def _capture_installed_software(
         # No existing image: the capture becomes the package's, automatically,
         # because there is nothing else in the package for a choice to affect.
         plan["captured_image_placement"] = "package"
+
+
+def _decorate_plan_software_state(
+    state: "UiState", workspace_id: str, plan: JsonDict
+) -> JsonDict:
+    """Tell the browser, at Setup time, whether the placement question applies.
+
+    The question -- where a captured image should be recorded -- is asked
+    before Check runs, so the browser needs two advisory facts up front:
+    whether software was installed since the workspace started, and whether
+    the package already has an image (an image-less package takes the capture
+    automatically, no question to ask). Check recomputes both; these are for
+    the dialog, not the record.
+    """
+
+    plan["software_change"] = _workspace_software_change(state, workspace_id)
+    package_id = _package_plan_package_id(plan.get("package_id"))
+    try:
+        existing = load_package_settings(state.cwd / CATALOG_DIR_NAME / package_id)
+        plan["package_has_image"] = (
+            existing is not None and existing.container is not None
+        )
+    except (ValueError, OSError):
+        plan["package_has_image"] = False
+    return plan
 
 
 def _workspace_software_change(state: "UiState", workspace_id: str) -> JsonDict:

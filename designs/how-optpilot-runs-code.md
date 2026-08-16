@@ -275,6 +275,15 @@ runtime:
 A raised limit is shown next to the image when you approve it, because raising
 one is part of what you are agreeing to.
 
+(Status 2026-08-16: the wall-clock limit per piece of work is enforced — the
+environment's declared `evaluator.timeoutSeconds` (or the run's execution
+policy, whichever is smaller; 600 seconds when neither is declared) now
+reaches the evaluation and ends it as a typed "timeout" result with its logs,
+and the supervisor stops a worker that cannot be interrupted 30 seconds past
+the limit. The `limits:` block on the container declaration — raising memory,
+processors, or the time limit per component, and showing a raised limit at
+approval — is *not built yet*; containers run under the defaults.)
+
 ### Architecture
 
 `platform` names the architecture the image is for. A machine of a different

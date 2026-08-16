@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -101,6 +102,10 @@ class LocalAttemptWorkerRequest:
     evaluator_settings: Mapping[str, Any]
     declared_metric_names: tuple[str, ...]
     file_materialization: FileCandidateMaterialization | None = None
+    #: The compiled wall-clock limit for this one evaluation (the min of the
+    #: evaluator's declared timeoutSeconds and the run's execution policy).
+    #: None means the compile produced no limit.
+    timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         _safe_token(self.attempt_id, "local attempt id")
@@ -253,6 +258,17 @@ class LocalAttemptWorkerRequest:
         object.__setattr__(self, "evaluator_settings", settings)
         object.__setattr__(self, "file_materialization", file_materialization)
         object.__setattr__(self, "declared_metric_names", metrics)
+        if self.timeout_seconds is not None:
+            if (
+                isinstance(self.timeout_seconds, bool)
+                or not isinstance(self.timeout_seconds, (int, float))
+                or not math.isfinite(float(self.timeout_seconds))
+                or float(self.timeout_seconds) <= 0
+            ):
+                raise ValueError(
+                    "local attempt timeout_seconds must be a positive finite number."
+                )
+            object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
         if len(self.canonical_bytes) > _MAX_RECORD_BYTES:
             raise ValueError("local attempt request exceeds its size bound.")
 
@@ -277,6 +293,7 @@ class LocalAttemptWorkerRequest:
                 item.to_dict() for item in self.python_import_roots
             ],
             "schema": LOCAL_ATTEMPT_REQUEST_SCHEMA,
+            "timeout_seconds": self.timeout_seconds,
         }
 
     @property
@@ -307,6 +324,7 @@ class LocalAttemptWorkerRequest:
             "python_import_roots",
             "request_digest",
             "schema",
+            "timeout_seconds",
         }
         _exact_keys(payload, expected, "local attempt request")
         if payload["schema"] != LOCAL_ATTEMPT_REQUEST_SCHEMA:
@@ -338,6 +356,7 @@ class LocalAttemptWorkerRequest:
                 )
             ),
             declared_metric_names=tuple(payload["declared_metric_names"]),
+            timeout_seconds=payload["timeout_seconds"],
         )
         if payload["request_digest"] != result.digest:
             raise ValueError("local attempt request digest is invalid.")

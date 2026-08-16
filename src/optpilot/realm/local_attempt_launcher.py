@@ -502,6 +502,7 @@ class RealmLocalAttemptLauncher:
             evaluator_settings=spec.evaluator_settings,
             file_materialization=spec.file_materialization,
             declared_metric_names=spec.declared_metric_names,
+            timeout_seconds=spec.timeout_seconds,
         )
 
     def _scope_roots(

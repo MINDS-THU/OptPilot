@@ -183,6 +183,8 @@ class _LocalAttemptSession:
     )
     heartbeat_identity: int
     heartbeat: RunAttemptHeartbeatCoordinator
+    #: Set when the provider's wall-clock backstop stopped this worker.
+    timed_out: bool = False
 
 
 @dataclass
@@ -202,10 +204,19 @@ class _LocalAttemptOpening:
     handle: ManagedLocalAttempt | None = None
 
 
+#: How long past the declared evaluation limit the provider waits before
+#: stopping the worker itself -- room for the in-worker deadline to produce
+#: its typed "timeout" envelope first.
+_EVALUATION_TIMEOUT_GRACE_SECONDS = 30.0
+
 _PLATFORM_FAILURES: dict[str, tuple[str, str]] = {
     "worker_never_started": (
         "The local attempt worker never crossed physical start.",
         "launch",
+    ),
+    "worker_timed_out": (
+        "The local attempt exceeded its evaluation time limit and was stopped.",
+        "evaluation",
     ),
     "worker_stopped": (
         "The local attempt worker was stopped before collection.",
@@ -392,7 +403,27 @@ class LocalProcessAttemptProvider:
             session = self._required_session(key)
         # Waiting must not hold the coordinate lock: cancellation and
         # controller-replacement fencing need to stop the same live writer.
-        proof = self._wait_terminal_with_heartbeat(session, timeout=timeout)
+        derived = None
+        if timeout is None:
+            # The wall-clock backstop: the in-worker deadline produces the
+            # honest "timeout" outcome, but it cannot interrupt code that
+            # never returns to the interpreter. Give it a grace margin, then
+            # stop the worker rather than wait forever.
+            declared = getattr(
+                session.binding.portable_spec, "timeout_seconds", None
+            )
+            if declared is not None:
+                derived = float(declared) + _EVALUATION_TIMEOUT_GRACE_SECONDS
+        try:
+            proof = self._wait_terminal_with_heartbeat(
+                session, timeout=timeout if timeout is not None else derived
+            )
+        except TimeoutError:
+            if derived is None:
+                raise
+            session.timed_out = True
+            session.handle.stop(grace_period=1.0, timeout=30.0)
+            proof = session.handle.wait(timeout=30.0)
         return self._record_terminal(session, proof)
 
     def stop_and_wait_terminal(
@@ -707,10 +738,15 @@ class LocalProcessAttemptProvider:
                     raise RealmIntegrityError(
                         "local platform failure differs from terminal evidence."
                     ) from None
+                code = error.code
+                if session.timed_out and code == "worker_stopped":
+                    # The stop was this provider's own wall-clock backstop,
+                    # so the record names the time limit, not a bare stop.
+                    code = "worker_timed_out"
                 return self._platform_failure(
                     session=session,
                     attempt=attempt,
-                    code=error.code,
+                    code=code,
                     disposition=terminal.disposition,
                 )
             return self._finalizer.finalize(

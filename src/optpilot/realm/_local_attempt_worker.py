@@ -11,10 +11,13 @@ from __future__ import annotations
 import hashlib
 import importlib
 import os
+import signal
 import stat
+import subprocess
 import sys
+import threading
 from collections.abc import Mapping, Sequence
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -483,6 +486,7 @@ class _RetainedConfiguredPythonAdapter:
         self, candidate_runtime: dict[str, Any], context: dict[str, Any]
     ) -> dict[str, Any]:
         callback = self._load()
+        deadline_seconds = self._request.timeout_seconds
         configured_context = {
             **context,
             # Request records freeze nested JSON lists and objects into tuples
@@ -490,7 +494,8 @@ class _RetainedConfiguredPythonAdapter:
             # shape, not that internal immutable representation.
             "settings": thaw_json(self._request.evaluator_settings),
         }
-        payload = callback(candidate_runtime, configured_context)
+        with _evaluation_deadline(deadline_seconds):
+            payload = callback(candidate_runtime, configured_context)
         if not isinstance(payload, dict):
             raise TypeError("Configured Python evaluator must return a dict.")
         if "metric_values" in payload:
@@ -535,6 +540,39 @@ class _RetainedConfiguredPythonAdapter:
             "output_files": list(output_files),
             "event_summary": dict(event_summary),
         }
+
+
+@contextmanager
+def _evaluation_deadline(seconds: float | None):
+    """Bound one evaluation by wall clock (design: a limit per piece of work).
+
+    Raises subprocess.TimeoutExpired when the limit passes, which the attempt
+    machinery already maps to the public "timeout" outcome -- so a slow
+    evaluator produces an honest typed result with its logs, not a killed
+    worker. A C extension that never returns to the interpreter cannot be
+    interrupted this way; the provider's coarser wait bound covers that.
+    """
+
+    if (
+        not seconds
+        or not hasattr(signal, "SIGALRM")
+        or threading.current_thread() is not threading.main_thread()
+    ):
+        yield
+        return
+
+    def _expired(_signum, _frame):
+        raise subprocess.TimeoutExpired(
+            cmd="environment evaluation", timeout=float(seconds)
+        )
+
+    previous = signal.signal(signal.SIGALRM, _expired)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _run(

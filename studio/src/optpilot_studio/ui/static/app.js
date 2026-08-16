@@ -259,6 +259,7 @@ const state = {
   pendingWorkspaceCleanup: null,
   workspaceCleanupReturnFocus: null,
   pendingRegistrationConfirmation: null,
+  pendingImagePlacement: null,
   pendingCandidateTry: null,
   candidateTryNotice: "",
   candidateTryReturnFocus: null,
@@ -593,6 +594,12 @@ function cacheElements() {
     "registrationConfirmationError",
     "registrationConfirmationCancelButton",
     "registrationConfirmationSubmitButton",
+    "imagePlacementModal",
+    "imagePlacementDialog",
+    "imagePlacementCloseButton",
+    "imagePlacementBody",
+    "imagePlacementCancelButton",
+    "imagePlacementSubmitButton",
     "candidateTryModal",
     "candidateTryDialog",
     "candidateTryTitle",
@@ -759,6 +766,14 @@ function bindEvents() {
     if (event.target === els.registrationConfirmationModal) closeRegistrationConfirmation();
   });
   on(els.registrationConfirmationModal, "keydown", handleRegistrationConfirmationKeydown);
+  on(els.imagePlacementCloseButton, "click", closeImagePlacementDialog);
+  on(els.imagePlacementCancelButton, "click", closeImagePlacementDialog);
+  on(els.imagePlacementSubmitButton, "click", confirmImagePlacement);
+  on(els.imagePlacementModal, "click", (event) => {
+    if (event.target === els.imagePlacementModal) closeImagePlacementDialog();
+  });
+  on(els.imagePlacementModal, "change", updateImagePlacementDialog);
+  on(els.imagePlacementModal, "keydown", handleImagePlacementKeydown);
   on(els.interfaceSessionBackButton, "click", leaveInterfaceSession);
   on(els.interfaceSessionOutputsButton, "click", () => setInterfaceSessionOutputsOpen(true));
   on(els.interfaceSessionOutputsCloseButton, "click", () => setInterfaceSessionOutputsOpen(false));
@@ -6993,6 +7008,8 @@ function buildRegistrationDraftFromPackagePlan(session, plan) {
     status: plan.status || "draft",
     packagePlanId: plan.id,
     packagePlan: plan,
+    imagePlacement: plan.image_placement || "component",
+    imagePlacementAnswered: Boolean(plan.image_placement),
     classification: plan.classification || "not-yet-classifiable",
     readiness: plan.readiness || "draft",
     configs,
@@ -7591,6 +7608,99 @@ function registrationTestConfirmation(plan) {
   return { label: "Skipped", detail: "Test is optional for this component and was not run." };
 }
 
+// Bound inside bindRegistrationMenu (it closes over that page's wiring);
+// module-level so the placement dialog's confirm can resume the Check.
+let performRegistrationCheck = async () => {};
+
+function openImagePlacementDialog(draft) {
+  state.pendingImagePlacement = {
+    workspaceId: draft.workspaceId,
+    selected_placement: draft.imagePlacement || "component",
+  };
+  renderImagePlacementDialog();
+  window.requestAnimationFrame(() => {
+    const checked = els.imagePlacementModal
+      && els.imagePlacementModal.querySelector("input[name='imagePlacementChoice']:checked");
+    if (checked) checked.focus();
+  });
+}
+
+function closeImagePlacementDialog(options = {}) {
+  state.pendingImagePlacement = null;
+  if (els.imagePlacementModal) els.imagePlacementModal.hidden = true;
+  if (options.restoreFocus !== false) {
+    window.requestAnimationFrame(() => {
+      const button = document.querySelector(".registration-validate");
+      if (button) button.focus();
+    });
+  }
+}
+
+function renderImagePlacementDialog() {
+  const pending = state.pendingImagePlacement;
+  if (!els.imagePlacementModal || !els.imagePlacementBody) return;
+  if (!pending) {
+    els.imagePlacementModal.hidden = true;
+    return;
+  }
+  const options = [
+    {
+      value: "component",
+      label: "Only the parts being registered",
+      detail: "The components you are registering use the new image; everything else in the package keeps the image it already uses. This is the narrower choice, and the usual one.",
+    },
+    {
+      value: "package",
+      label: "The whole package",
+      detail: "Every component in the package moves to the new image.",
+    },
+  ];
+  els.imagePlacementBody.innerHTML = `
+    <fieldset class="candidate-try-mode-list" aria-label="Where the captured software is recorded">
+      ${options.map((option) => `
+        <label class="candidate-try-mode">
+          <input type="radio" name="imagePlacementChoice" value="${option.value}" ${pending.selected_placement === option.value ? "checked" : ""}>
+          <span class="candidate-try-mode-copy">
+            <strong>${escapeHtml(option.label)}</strong>
+            <span>${escapeHtml(option.detail)}</span>
+          </span>
+        </label>
+      `).join("")}
+    </fieldset>`;
+  els.imagePlacementModal.hidden = false;
+}
+
+function updateImagePlacementDialog(event) {
+  const pending = state.pendingImagePlacement;
+  if (!pending) return;
+  const input = event.target.closest("input[name='imagePlacementChoice']");
+  if (!input) return;
+  pending.selected_placement = input.value === "package" ? "package" : "component";
+}
+
+async function confirmImagePlacement() {
+  const pending = state.pendingImagePlacement;
+  const draft = state.registrationDraft;
+  if (!pending || !draft) {
+    closeImagePlacementDialog();
+    return;
+  }
+  draft.imagePlacement = pending.selected_placement;
+  draft.imagePlacementAnswered = true;
+  closeImagePlacementDialog({ restoreFocus: false });
+  await performRegistrationCheck();
+}
+
+function handleImagePlacementKeydown(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeImagePlacementDialog();
+    return;
+  }
+  if (!els.imagePlacementModal || !els.imagePlacementDialog) return;
+  trapModalFocus(event, els.imagePlacementModal, els.imagePlacementDialog);
+}
+
 function buildRegistrationConfirmation(draft) {
   const plan = draft && draft.packagePlan || {};
   const artifact = plan.artifact || {};
@@ -7859,6 +7969,17 @@ function bindRegistrationMenu() {
   if (validate) validate.addEventListener("click", async () => {
     const draft = state.registrationDraft;
     if (!draft || state.registrationActionPending) return;
+    const plan = draft.packagePlan || {};
+    const change = plan.software_change || {};
+    if (change.state === "changed" && plan.package_has_image && !draft.imagePlacementAnswered) {
+      openImagePlacementDialog(draft);
+      return;
+    }
+    await performRegistrationCheck();
+  });
+  performRegistrationCheck = async function () {
+    const draft = state.registrationDraft;
+    if (!draft || state.registrationActionPending) return;
     const originalWorkspaceId = draft.workspaceId;
     keepWorkspaceSelected(originalWorkspaceId);
     if (!draft.backendWorkspaceId) {
@@ -7901,7 +8022,7 @@ function bindRegistrationMenu() {
       keepWorkspaceSelected(originalWorkspaceId);
       renderRegistrationExperience();
     }
-  });
+  };
   const smoke = document.querySelector(".registration-smoke");
   if (smoke) smoke.addEventListener("click", async () => {
     const draft = state.registrationDraft;
@@ -8066,6 +8187,7 @@ async function syncPackagePlanEdits(draft) {
       smoke: Boolean(study.smoke),
     })),
   };
+  if (draft.imagePlacementAnswered) payload.image_placement = draft.imagePlacement || "component";
   const updated = await postJson(`/api/workspaces/${encodeURIComponent(draft.backendWorkspaceId)}/package-plans/${encodeURIComponent(draft.packagePlanId)}/update`, payload);
   draft.packagePlan = updated.package_plan || plan;
   draft.packagePlanId = draft.packagePlan.id || draft.packagePlanId;

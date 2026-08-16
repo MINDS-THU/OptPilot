@@ -533,3 +533,109 @@ class ImagePlacementTest(unittest.TestCase):
             plan = {"package_id": "prompt_pkg", "image_placement": "everywhere"}
             with self.assertRaises(RealmConflict):
                 _capture_installed_software(state, plan, "ws-1")
+
+
+class PlacementQuestionContractTest(unittest.TestCase):
+    """The browser asks where captured software goes; the server carries it.
+
+    Three seams make the dialog work: the answer rides the plan update
+    endpoint (never a rebuild), the advisory facts the dialog needs are
+    decorated onto the plan at Setup time, and the browser gates Check on
+    them. Each is asserted separately so losing one is a visible failure.
+    """
+
+    def _stub_state(self, tmp: Path, *, package_has_image: bool):
+        helper = ImagePlacementTest()
+        return helper._capture_state(tmp, package_has_image=package_has_image)
+
+    def test_the_update_endpoint_records_the_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._stub_state(Path(tmp), package_has_image=True)
+            written = {}
+            with (
+                patch.object(
+                    server,
+                    "_read_package_plan",
+                    lambda *_args: {"id": "plan-1", "package_id": "prompt_pkg"},
+                ),
+                patch.object(
+                    server,
+                    "_write_package_plan",
+                    lambda _state, _workspace_id, plan: written.update(plan),
+                ),
+            ):
+                result = server._update_package_plan(
+                    state, "ws-1", "plan-1", {"image_placement": "package"}
+                )
+        self.assertEqual(result["package_plan"]["image_placement"], "package")
+        self.assertEqual(written["image_placement"], "package")
+
+    def test_a_changed_answer_invalidates_checked_evidence(self) -> None:
+        # The answer decides what Check composes, so changing it must clear
+        # the checked artifact exactly as editing a file selection would.
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._stub_state(Path(tmp), package_has_image=True)
+            plan = {
+                "id": "plan-1",
+                "package_id": "prompt_pkg",
+                "artifact": {"content_ref": "sealed"},
+                "validation": {"valid": True},
+            }
+            with (
+                patch.object(server, "_read_package_plan", lambda *_args: plan),
+                patch.object(
+                    server, "_write_package_plan", lambda *_args: None
+                ),
+            ):
+                result = server._update_package_plan(
+                    state, "ws-1", "plan-1", {"image_placement": "package"}
+                )
+        self.assertEqual(result["package_plan"]["artifact"], {})
+        self.assertEqual(result["package_plan"]["validation"], {})
+
+    def test_the_update_endpoint_refuses_a_malformed_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._stub_state(Path(tmp), package_has_image=True)
+            with patch.object(
+                server,
+                "_read_package_plan",
+                lambda *_args: {"id": "plan-1", "package_id": "prompt_pkg"},
+            ):
+                with self.assertRaises(ValueError):
+                    server._update_package_plan(
+                        state, "ws-1", "plan-1", {"image_placement": "everywhere"}
+                    )
+
+    def test_setup_decorates_the_facts_the_dialog_needs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = self._stub_state(Path(tmp), package_has_image=True)
+            plan = server._decorate_plan_software_state(
+                state, "ws-1", {"package_id": "prompt_pkg"}
+            )
+            self.assertEqual(plan["software_change"]["state"], "changed")
+            self.assertTrue(plan["package_has_image"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = self._stub_state(Path(tmp), package_has_image=False)
+            plan = server._decorate_plan_software_state(
+                bare, "ws-1", {"package_id": "prompt_pkg"}
+            )
+            self.assertFalse(plan["package_has_image"])
+
+    def test_the_browser_gates_check_on_the_question(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        app = (
+            root / "studio/src/optpilot_studio/ui/static/app.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("openImagePlacementDialog(draft)", app)
+        self.assertIn(
+            'change.state === "changed" && plan.package_has_image', app
+        )
+        self.assertIn(
+            'payload.image_placement = draft.imagePlacement || "component"', app
+        )
+        self.assertIn("input[name='imagePlacementChoice']", app)
+        index = (
+            root / "studio/src/optpilot_studio/ui/static/index.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("imagePlacementModal", index)

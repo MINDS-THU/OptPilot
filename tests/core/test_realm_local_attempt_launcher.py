@@ -313,6 +313,7 @@ class _RetainedRuntimeFixture:
         evaluation_delay_seconds: float = 0.0,
         evaluator_source: str | None = None,
         evaluator_settings_yaml: str | None = None,
+        evaluator_timeout_seconds: float | None = None,
         environment_interface: str | None = None,
         trial_workspace_seed: bool = False,
         include_second_candidate: bool = False,
@@ -366,6 +367,22 @@ trialWorkspace:
                 + "\n"
                 + environment_interface.strip()
                 + "\n",
+                encoding="utf-8",
+            )
+        if evaluator_timeout_seconds is not None:
+            environment_path = (
+                self.package_root
+                / "configs"
+                / "environments"
+                / "environment.yaml"
+            )
+            environment_path.write_text(
+                environment_path.read_text(encoding="utf-8").replace(
+                    "  settings: {}",
+                    "  settings: {}\n"
+                    f"  timeoutSeconds: {float(evaluator_timeout_seconds)!r}",
+                    1,
+                ),
                 encoding="utf-8",
             )
         if evaluator_settings_yaml is not None:
@@ -1016,6 +1033,32 @@ class RealmLocalAttemptLauncherTest(unittest.TestCase):
         self.assertNotIn(
             str(fixture.root).encode("utf-8"), result_path.read_bytes()
         )
+
+    def test_a_slow_evaluator_is_bounded_by_its_declared_time_limit(self) -> None:
+        # The design gives every piece of work a wall-clock limit. The limit
+        # compiled from the environment declaration must reach authored code
+        # and end it as a typed "timeout" result -- with logs, not a killed
+        # worker.
+        fixture = _RetainedRuntimeFixture(
+            evaluator_source=(
+                "import time\n"
+                "def evaluate(candidate, context):\n"
+                "    time.sleep(30)\n"
+                "    return {'score': 0.0}\n"
+            ),
+            evaluator_timeout_seconds=1.0,
+        )
+        self.addCleanup(fixture.close)
+        started = time.monotonic()
+        _supervisor, _launcher, _binder, _binding, handle = self._launch(
+            fixture=fixture
+        )
+        envelope = handle.collect(timeout=60.0)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(envelope.outcome, "timeout")
+        self.assertEqual(envelope.error["type"], "TimeoutExpired")
+        self.assertLess(elapsed, 25.0, "the limit did not interrupt the sleep")
 
     def test_noncanonical_lifecycle_reserves_before_start_and_replays_once(self) -> None:
         supervisor, launcher, binder = self._components()

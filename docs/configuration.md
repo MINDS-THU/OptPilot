@@ -244,6 +244,11 @@ evaluator:
   # adapter: adapter:MyAdapter
 
   # Optional evaluator controls.
+  # timeoutSeconds bounds each evaluation by wall clock. A slower evaluation
+  # ends as a typed "timeout" trial result with its logs; a worker that
+  # cannot be interrupted is stopped shortly after the limit. The effective
+  # limit is the smaller of this value and the study's execution
+  # timeoutSeconds; 600 when neither is declared.
   timeoutSeconds: 600
   pythonPath: [.]
   # Runtime working directory inside the trial workspace, not relative to this YAML file.
