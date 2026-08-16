@@ -85,6 +85,7 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_study_launch",
     "optpilot_run_list",
     "optpilot_run_detail",
+    "optpilot_job_stop",
     "optpilot_run_compare",
     "optpilot_smoke_test_study",
     "optpilot_docs_search",
@@ -627,6 +628,11 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
             "package_id": {"type": "string"},
             "config_paths": {"type": "array", "items": {"type": "string"}},
             "resource_id": {"type": "string"},
+            "image_placement": {
+                "type": "string",
+                "enum": ["component", "package"],
+                "description": "Where captured installed software is recorded when the package already has an image: only the components being registered (default) or the whole package. Ask the person before choosing 'package'.",
+            },
         }),
     },
     {
@@ -639,6 +645,11 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
             "components": {"type": "array", "items": {"type": "object"}},
             "resources": {"type": "array", "items": {"type": "object"}},
             "studies": {"type": "array", "items": {"type": "object"}},
+            "image_placement": {
+                "type": "string",
+                "enum": ["component", "package"],
+                "description": "Where captured installed software is recorded when the package already has an image: only the components being registered (default) or the whole package. Ask the person before choosing 'package'.",
+            },
         }, ["workspace_id", "plan_id"]),
     },
     {
