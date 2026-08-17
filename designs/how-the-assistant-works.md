@@ -5,8 +5,8 @@ where it first appears.
 
 **What is described here.** The architecture (§§1–2), today's tool surface
 (§3), and the approval gates it runs under exist. The rest — the task loop
-(§4), the knowledge model (§5), standing grants and the audit trail (§6) — is
-a target design, not built; it defines what would make the Assistant able to
+(§4), what the Assistant knows (§5), standing grants and the audit trail (§6)
+— is a target design, not built; it defines what would make the Assistant able to
 carry a real task ("generate a simulator of my clinic, then find a staffing
 policy that minimizes waiting time") from the first sentence to a result the
 person can trust, without the person steering every step. Anything already
@@ -28,14 +28,29 @@ application for all of it.
 The Assistant is a conversation inside Studio, built from two halves that
 never blur:
 
-- **The reasoning engine** — a language-model agent runtime (OpenHands),
-  running as a separate local process — decides what to do next and writes
-  the words the person reads.
+- **The reasoning engine** — a **language model** (the AI: whichever provider
+  is configured) running inside an agent runtime (OpenHands today) as a
+  separate local process — decides what to do next and writes the words the
+  person reads.
 - **The hands are Studio's.** Every action is a named **tool** that Studio
   executes on the engine's behalf under Studio's own permission checks, with
   the result recorded in the conversation. If a tool does not exist, the
   action cannot happen. The tool list *is* the Assistant's capability
   surface.
+
+> **A word of caution about "model".** OptPilot is full of models: the
+> simulator generator produces *simulation models*, the operations-research
+> package builds *mathematical models*, and the code has *read models*. This
+> document therefore never says "the model" on its own for the AI. It always
+> says **language model**, and everything else keeps its own name.
+
+**Why the language model's memory does not count as storage.** The language
+model holds the conversation so far in its own context, and that context is
+lost routinely: the agent process restarts, a provider rate limit forces a
+fresh session, the history outgrows the context limit and is trimmed, or
+Studio itself restarts. Anything that must survive the person walking away
+therefore lives in Studio's own records, never only in that context. §4 is
+largely a consequence of this one fact.
 
 ### The design goal
 
@@ -87,8 +102,8 @@ method "may still be preparing another Candidate." That person did not come
 back to progress. They came back to a false statement.
 
 Everything below serves this goal: the task loop (§4) makes a goal survive
-hours and restarts, the knowledge model (§5) makes the first attempt land on
-the right pieces, and the authority model (§6) makes a ten-step task cost one
+hours and restarts, the knowledge layer (§5) makes the first attempt land on
+the right pieces, and the authority rules (§6) make a ten-step task cost one
 decision instead of ten interruptions.
 
 ## 2. How one exchange flows *(built)*
@@ -98,11 +113,12 @@ decision instead of ten interruptions.
    or catalog item, attached workspaces, a catalog summary — so the Assistant
    answers about what the person is looking at.
 3. The agent server receives the message, the packet, the **guidance file**
-   (a system prompt telling the model how OptPilot wants it to behave), and
-   the tool list with parameters.
-4. The model replies with words, tool calls, or both. Studio executes each
-   call — asking the person for approval when the tool's permission requires
-   it — and returns results, repeating until a plain final message.
+   (a system prompt telling the language model how OptPilot wants it to
+   behave), and the tool list with parameters.
+4. The language model replies with words, tool calls, or both. Studio
+   executes each call — asking the person for approval when the tool's
+   permission requires it — and returns results, repeating until a plain
+   final message.
 
 Two operational facts. The agent server caches the tool list per process and
 must be restarted after the tools change. And when the agent runtime is not
@@ -112,9 +128,9 @@ not built yet)*.
 
 ## 3. The tools, by verb
 
-A test enforces two honesty rules: every tool advertised to the model is
-executable (an advertised-but-dead tool hangs the conversation), and the
-guidance file teaches only tools that exist. *(Built.)* Registration-time
+A test enforces two honesty rules: every tool advertised to the language
+model is executable (an advertised-but-dead tool hangs the conversation), and
+the guidance file teaches only tools that exist. *(Built.)* Registration-time
 validation of playbooks (§5) extends the same idea to package-declared
 knowledge: a package may only teach steps whose tools exist.
 
@@ -156,13 +172,13 @@ workflow engine that executes the steps, because between every stage sits a
 judgment call (is the generated simulator right? is 4.5 minutes of waiting
 good enough?), which is exactly the reasoning engine's job.
 
-**The model owns intent; Studio owns facts.** The model maintains the task
+**The language model owns intent; Studio owns facts.** It maintains the task
 file through a free, ungated tool (updating conversation-private state costs
-no approval). But Studio does not trust the model's bookkeeping: at the
+no approval). But Studio does not trust its bookkeeping: at the
 success return of every side-effectful tool, Studio itself stamps the
 resulting identifiers — the launch and run ids, the registered entry, the
 action run — into the matching step. The resumable record is complete even on
-the model's most forgetful day. Two details make this survive a crash between
+its most forgetful day. Two details make this survive a crash between
 the side effect and the stamp. First, the recovery source is the approvals
 record, not the event log: launches are approval-gated, and on that path the
 full tool result (carrying the launch) is stored with the approval, while the
@@ -175,8 +191,9 @@ waiting time, target 5.0" is a metric, a direction, and a number — not a
 sentence. This matters beyond tidiness: the loop's most important stop
 condition is "the goal is met, report instead of spending more", and Studio
 can only enforce that mechanically by comparing the run's best metric against
-a typed target. A prose goal would push that stop back onto model restraint,
-which is exactly what the autonomy budget exists to avoid relying on. Prose
+a typed target. A prose goal would push that stop back onto the language
+model's own restraint, which is exactly what the autonomy budget exists to
+avoid relying on. Prose
 intent is still welcome alongside it, as a note the person reads.
 
 **Watches, and three ways to notice.** When a launch succeeds, Studio records
@@ -191,7 +208,7 @@ firing the same idempotent settlement: the execution thread's terminal branch
 (live, the common case), startup reconciliation (for runs that ended while
 Studio was down), and a low-frequency sweep of active watches on the delivery
 thread (for the silent-exit gap). The sweep reads records only — it never
-wakes the model — so it costs nothing when nothing finished.
+wakes the language model — so it costs nothing when nothing finished.
 
 **Completion wakes the conversation through the front door.** A fired watch
 appends an item to the conversation's agenda; a dispatcher delivers it as a
@@ -219,9 +236,9 @@ These are the four things §1 promises a returning person can find:
 
 An **autonomy budget** on the task — a set number of unattended turns and
 launches — caps how far this loop can run with nobody watching; using it up
-parks the task. Iterating unsupervised spends money on paid model calls, so
-the budget is a number the owner sets and can see, never a judgment the model
-makes for itself.
+parks the task. Iterating unsupervised spends money on paid language-model calls, so
+the budget is a number the owner sets and can see, never a judgment the
+language model makes for itself.
 
 ## 5. What the Assistant knows *(target)*
 
@@ -261,7 +278,7 @@ every in-package reference must resolve, cross-package references must be
 declared, and — the registration-time twin of the tool-drift test — every
 step's action kind must map to a tool the Assistant actually has. Steps are
 deliberately advisory: no conditionals, no loops, no auto-execution. The
-reasoning model is the sequencer; the person still approves every gated step.
+language model is the sequencer; the person still approves every gated step.
 This is where "DEVS-Gen output can feed the policy search" lives as validated,
 retrievable knowledge instead of tribal prose.
 
@@ -310,9 +327,10 @@ consumption event into the transcript exactly where the card would have
 appeared. Everything else still asks.
 
 **What a grant matches on is the design's load-bearing detail.** The gate
-sees the arguments the *model* wrote — a run-setup reference it typed, a path
-it chose. Matching a grant against those would let the model widen its own
-authority by writing the right string. So a grant never matches model text:
+sees the arguments the *language model* wrote — a run-setup reference it
+typed, a path it chose. Matching a grant against those would let it widen its
+own authority by writing the right string. So a grant never matches text the
+language model produced:
 each grantable call site hands the gate the identities *Studio itself
 resolved* — the catalog revision it looked up, the compiled trial budget, the
 workspace root it validated — and matching happens only on those. The
@@ -349,8 +367,8 @@ Studio just created — never derived implicitly, because "the Assistant may
 stop this" deserves the person's eyes exactly once, on the card that started
 it. **Registration is never grantable** — every publication asks, always.
 
-**Plan approval is a grant-minting card, not a second executor.** The model
-may propose a plan: a typed step list where each step's scope *is* a grant
+**Plan approval is a grant-minting card, not a second executor.** The
+language model may propose a plan: a typed step list where each step's scope *is* a grant
 shape, with cost lines where money is involved. Studio renders it as one
 approval card showing exactly the authority it would mint; approving mints
 the grant bundle atomically; execution then proceeds through the completely
@@ -368,11 +386,11 @@ by human clicks on Studio's own surfaces); secret and host-variable
 management; and driving a package's browser console. Each exclusion gets a
 read-only complement so the Assistant can *show* what it cannot change — the
 image-approvals listing, and the conversation's active grants in the context
-packet, so the model knows "two launches left" instead of guessing.
+packet, so the language model knows "two launches left" instead of guessing.
 
 **Money is visible before it is spent.** Three layers, cheapest first: a
 spend marker derived from declarations Studio already has (a method that
-requests a known paid credential gets a card line: "calls a paid model;
+requests a known paid credential gets a card line: "calls a paid language model;
 budget max 25 exchanges"); an optional author-declared per-exchange cost
 estimate, labeled as the author's claim; and method-reported actual usage
 carried in the exchange envelope into the run's permanent record, summed on
@@ -401,7 +419,7 @@ then find a staffing policy that minimizes waiting time."*
    method it requires. The Assistant writes the task file (goal, success
    criterion: minimize mean waiting) and proposes a plan card: run the
    generate action with this clinic description (cost line: none), register
-   the output, pair and launch the policy search (cost line: paid model,
+   the output, pair and launch the policy search (cost line: paid language model,
    max 25 exchanges × N launches). One approval mints the grants.
 2. **Generate.** The action runs with its output rooted in the conversation's
    workspace; its declared `produces` contract tells the Assistant the bundle
@@ -423,7 +441,7 @@ then find a staffing policy that minimizes waiting time."*
 ## 8. Build order
 
 1. **Resource-action tools** with workspace-rooted output — unlocks the
-   flagship's first leg; designed against the grant model from day one.
+   flagship's first leg; designed against the grant rules from day one.
 2. **Remedy contract** on the refusals that exist today (image trust, missing
    inputs, validation failures) — cheapest large win for conversation flow.
 3. **Slim listing + task vocabulary + docs over packages** — first-attempt
@@ -450,7 +468,7 @@ needed a third observation point (the execution thread has silent exits, so
 two seams do not in fact catch every ending); crash recovery reads the
 approvals record rather than the event log (the event carries only an
 outcome flag on the approval path); and grant matching must use
-Studio-resolved identities rather than the model's own arguments, or the
-model could widen its authority by writing the right string. The knowledge
-model (§5) has had one such adversarial pass fewer than the other two
+Studio-resolved identities rather than arguments the language model wrote, or
+it could widen its own authority by writing the right string. The knowledge
+layer (§5) has had one such adversarial pass fewer than the other two
 sections; treat its seam claims as the least verified part of this document.
