@@ -6,6 +6,89 @@ exist and remain the destination: `designs/how-the-assistant-works.md` and
 question: *what is the smallest amount of work that produces a release we are
 not embarrassed by, and does not have to be undone later?* Dated 2026-08-16.
 
+**Revised 2026-08-17 after grounding every item against the code and running
+Studio against a fresh install.** Section 0 records what that changed. Several
+items were wrong, and — more importantly — the plan was missing an entire
+category of release blocker. **On the evidence below, the plan as first
+written would NOT have produced a releasable product.**
+
+---
+
+## 0. What grounding changed
+
+**Four items were misdiagnosed.**
+
+*The catalog cache already exists* and is tested (a five-second reuse window).
+The real costs are elsewhere: two requests that miss the cold cache both do
+the full build because the lock is released before the work starts; the
+compatibility endpoint has no cache at all and pays about a second on every
+cold call; and building it re-reads each method's settings file once per
+environment — 182 file parses where 13 would do. Separately, the 5–20 second
+figure is **not reproducible from computation** (measured 2.2 s on a local
+disk). The multiplier is almost certainly that this checkout lives in a
+cloud-synced folder, since the scan calls `resolve()` on ~13,000 paths. Move
+the checkout off the synced folder before optimizing anything.
+
+*Giving components human names is not content-only.* The environment and
+method settings schemas forbid unknown fields and have no name field, so this
+needs a schema change first. Worth doing anyway: every shipped run setup's
+name is its own identifier, which is why run titles read as slugs.
+
+*The resource-action tool's real work is not the tool.* Action output
+currently lands in Studio's private folder, not in the person's workspace, so
+the "generate then register without copying files" promise needs that root
+changed — that is the substantive part.
+
+*Splitting the smoke-test permission changes nothing on its own*: the
+permitted values would have to include "allowed without asking", or the
+prompts remain.
+
+**And the plan missed a whole category: the product cannot be installed.**
+See §0.1. Every first-hour improvement in this plan assumes the person has
+the five ready-made packages, and an installed user has none of them.
+
+### 0.1 The installation story does not work end to end
+
+| What was assumed | What is actually true |
+| --- | --- |
+| `pip install optpilot` gets you the product | It gets you **version 0.1.0**, the previous release. |
+| Studio can be installed | **`optpilot-studio` is not published at all.** There is no supported way to get the web app except cloning the repository. |
+| The five ready-made packages come with it | They are **deliberately excluded from every distribution** — the packaging rules group `catalog/` with research scratch. An installed user's catalog is empty, so nothing can be browsed, launched, or auto-set-up. |
+| The install is quick | The documented source install downloads **about 900 MB, 392 MB of it PyTorch**, for two dependencies nothing in the repository uses any more. |
+
+This is the largest single finding of the review. Until it is answered, the
+release has no delivery mechanism, and the decision already taken (set the
+ready-made packages up automatically on first start) applies only to people
+who clone the repository.
+
+### 0.2 Blockers found by running it, that the plan did not contain
+
+Each was reproduced live against a fresh install.
+
+| # | What a new user meets | Fix |
+| --- | --- | --- |
+| N1 | **Every shipped run setup is unlaunchable and the product refuses to fix it.** All 18 carry a red "Publish first" badge with Launch disabled. Worse, the code *actively refuses*: registering a shipped package raises "ships with OptPilot and cannot be registered into." | several days; part of making bundled packages work |
+| N2 | **The operations-research package cannot be registered at all** — sealing rejects macOS extended attributes, which every downloaded (rather than cloned) copy carries. | hours |
+| N3 | **The operations-research flagship cannot be launched** — Studio treats an optional setting (`COOPA_HOME`) as required, and the documentation correctly says it is optional. Studio has no concept of an optional declared value. | about a day |
+| N4 | **The home page's main invitation is a chat box that cannot answer.** It says "Queued locally — the OpenHands runtime is disabled", then sits at "Working" forever, across restarts. The README never mentions the Assistant or how to enable it. | about a day |
+| N5 | **The publish panel says "Package validation found blockers" before any validation has run.** All five packages are clean. A cautious user concludes the product ships broken packages. | hours |
+| N6 | **One click mounts the product's own package folder as a read-write project** — and it is the button Studio itself offers as the remedy for "Publish first". The catalog page's equivalent button is disabled, so two screens disagree. | about a day |
+| N7 | **After a Studio crash, a run shows a live "running" badge with no sign of recovery** for minutes, while no worker exists. Recovery does work; nothing says so. | about a day |
+| N8 | **The trial map silently caps at 114 chips**, so on a 135-trial run 18 finished trials are simply absent, with no "and more". | hours |
+| N9 | **The runs list contradicts the run page it links to** — 15/135 beside 68/135, "not available" beside a real result. | hours |
+| N10 | **The image-approval command Studio offers assumes a source checkout** (`uv run`) and omits the archive location, so it can silently approve into the wrong place. | hours |
+
+### 0.3 What was verified as genuinely good
+
+Worth stating, because it bounds the problem. All five packages validate
+clean. **The documented command-line first run works exactly as written** on
+a fresh archive, with no container engine and no model key: 2.9 seconds to a
+successful result with the documented summary. Distribution hygiene is
+correct — the published core contains no catalog, docs, or Studio content.
+The compatibility fix flips exactly the eight intended pairings and nothing
+else. The problem is not the engine. It is everything between a stranger and
+the engine.
+
 Every item below passed three tests:
 
 1. **Would a first-time user meet it in their first hour?** If not, it waits.
