@@ -33627,10 +33627,13 @@ def _workspace_package_image(state: "UiState", workspace: JsonDict) -> Optional[
 
 
 def _bundled_catalog_root() -> Optional[Path]:
-    """The catalog that ships inside OptPilot's own source tree, if present.
+    """The catalog inside OptPilot's own source tree, if this is a checkout.
 
-    Only exists in a source checkout -- catalog content is excluded from built
-    distributions -- so this is normally None for an installed OptPilot.
+    A checkout's catalog folder is OptPilot's own tracked files: registering
+    into one would edit OptPilot rather than the person's work, so it stays a
+    read-only registration target. The copies in the person's own packages
+    folder are not this, and are freely registerable -- which is the whole
+    point of copying them out.
     """
 
     try:
@@ -36528,12 +36531,49 @@ def _default_run_roots(cwd: Path) -> List[Path]:
 
 
 def _default_catalog_roots(cwd: Path) -> List[Path]:
+    """Where to look for packages when the operator names no roots.
+
+    Two places, in this order: a catalog folder beside the project (how a
+    source checkout and a project-local catalog work), and the person's own
+    packages folder, which is where the examples OptPilot ships are copied on
+    first use. Before this looked only beside the project, so an installed
+    OptPilot started onto an empty catalog no matter what it shipped with.
+    """
+
+    roots: List[Path] = []
     catalog_root = cwd / CATALOG_DIR_NAME
     if catalog_root.exists():
-        package_roots = _expand_catalog_roots([catalog_root])
-        if package_roots:
-            return package_roots
+        roots.extend(_expand_catalog_roots([catalog_root]))
+    # Only when it actually holds packages: an empty folder as a catalog root
+    # would be scanned forever and found to contain nothing.
+    user_packages = _prepared_user_packages_root()
+    if _catalog_package_roots(user_packages):
+        roots.extend(_expand_catalog_roots([user_packages]))
+    if roots:
+        return _dedupe_paths(roots)
     return [cwd]
+
+
+def _prepared_user_packages_root() -> Path:
+    """The person's packages folder, with the shipped examples copied in.
+
+    Copying happens here rather than at install time because an installer
+    cannot know which person will run it. It is safe to repeat: an existing
+    folder is left exactly as it is, including one the person edited or
+    deliberately emptied.
+    """
+
+    from optpilot.example_packages import install_example_packages
+    from optpilot.realm.config import default_packages_root
+
+    root = default_packages_root()
+    try:
+        install_example_packages(root)
+    except OSError:
+        # A read-only or full home directory must not stop Studio starting.
+        # The catalog is then simply emptier than it could have been.
+        pass
+    return root
 
 
 def _drop_catalog_roots_containing_others(roots: Iterable[Path]) -> List[Path]:
@@ -36561,6 +36601,15 @@ def _refresh_catalog_package_roots(state: UiState) -> None:
     if catalog_root.exists():
         state.catalog_roots = _dedupe_paths(
             [*state.catalog_roots, *_expand_catalog_roots([catalog_root])]
+        )
+    # A package added to the person's own folder appears without a restart,
+    # the same as one dropped beside the project.
+    from optpilot.realm.config import default_packages_root
+
+    user_packages = default_packages_root()
+    if _catalog_package_roots(user_packages):
+        state.catalog_roots = _dedupe_paths(
+            [*state.catalog_roots, *_expand_catalog_roots([user_packages])]
         )
     state.catalog_roots = _drop_catalog_roots_containing_others(state.catalog_roots)
     state._configured_catalog_source_roots = {
