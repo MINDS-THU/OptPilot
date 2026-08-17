@@ -1,6 +1,5 @@
 prune .agents
 prune .github
-prune catalog
 prune design
 prune designs
 prune docs
@@ -16,3 +15,12 @@ prune site
 prune runs
 prune workspace
 global-exclude .DS_Store
+# Bytecode from whoever last ran the tests is not part of a distribution.
+global-exclude *.pyc
+global-exclude *.pyo
+prune **/__pycache__
+recursive-exclude . __pycache__
+# Build metadata regenerated on every build; its file modes come from
+# whatever filesystem built it, not from the repository.
+prune src/optpilot.egg-info
+global-exclude *.egg-info

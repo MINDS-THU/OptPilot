@@ -1,0 +1,6 @@
+apiVersion: optpilot.io/v1
+config: package
+# Identifies this package wherever its folder is moved to. Do not edit:
+# changing it detaches the package from its own published history.
+identity: d834b1e85d56df5eaa0900148faf2371
+description: "Search for an operating rule that improves a simulated system, written and refined by a language model."

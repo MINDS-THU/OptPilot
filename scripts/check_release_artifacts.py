@@ -18,8 +18,10 @@ import zipfile
 from pathlib import Path
 
 
+#: Never distributable: working notes and untracked research trees. The
+#: example packages used to sit in this list, which is why nobody could
+#: install anything to run -- they are product, not scratch, and now ship.
 RESEARCH_SCRATCH_PREFIXES = (
-    "catalog/",
     "design/",
     "designs/",
     "resource/",
@@ -97,6 +99,20 @@ STUDIO_REQUIRED_SDIST_ENTRIES = {
     "src/optpilot_studio/ui/static/styles.css",
     "src/optpilot_studio/ui/workspace_runtime/Dockerfile",
 }
+
+#: The same launch scripts as they appear INSIDE a distribution. The wheel
+#: carries the example packages under optpilot_examples/, so an allowlisted
+#: script has two legitimate names; the source distribution keeps catalog/.
+#: Without this, a package that legitimately ships a launch script could
+#: never be distributed at all.
+def _distributed_executable_paths() -> set[str]:
+    paths = set()
+    for relative in ALLOWED_EXECUTABLE_PATHS:
+        paths.add(relative)
+        if relative.startswith("catalog/"):
+            paths.add("optpilot_examples/" + relative[len("catalog/"):])
+    return paths
+
 
 ALLOWED_EXECUTABLE_PATHS = {
     "catalog/devs_gallery/resources/devs-gen-interface/_optpilot_launch_interface.sh",
@@ -290,9 +306,14 @@ def _check_wheel(
         names = {member.filename for member in members}
         errors.extend(_missing_entries(path, required, names))
         errors.extend(_archive_hygiene_errors(path, names, forbidden_prefixes))
+        allowed_executables = _distributed_executable_paths()
         for member in members:
             mode = member.external_attr >> 16
-            if stat.S_ISREG(mode) and mode & 0o111:
+            if (
+                stat.S_ISREG(mode)
+                and mode & 0o111
+                and member.filename not in allowed_executables
+            ):
                 errors.append(
                     f"{path.name} contains unexpectedly executable file: "
                     f"{member.filename}"
@@ -330,9 +351,14 @@ def _check_sdist(
     with tarfile.open(path) as archive:
         members = archive.getmembers()
         names = {_strip_sdist_root(member.name) for member in members}
+        allowed_executables = _distributed_executable_paths()
         for member in members:
             normalized = _strip_sdist_root(member.name)
-            if member.isfile() and member.mode & 0o111:
+            if (
+                member.isfile()
+                and member.mode & 0o111
+                and normalized not in allowed_executables
+            ):
                 errors.append(
                     f"{path.name} contains unexpectedly executable file: {normalized}"
                 )
@@ -380,30 +406,44 @@ def _first_match(path: Path, pattern: str) -> str:
 
 
 def _check_source_modes(root: Path) -> list[str]:
+    """Check the mode git records, not the mode this filesystem reports.
+
+    What ships and what another machine checks out is git's recorded mode.
+    The working tree's own bits can differ for reasons that have nothing to do
+    with the repository -- a network or sync-managed folder may report
+    everything as executable -- and reading those produced a wall of failures
+    about files git considers perfectly ordinary.
+    """
+
     try:
         output = subprocess.check_output(
-            ["git", "ls-files", "-z"],
+            ["git", "ls-files", "-sz"],
             cwd=root,
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         return [f"Could not inspect tracked source modes: {exc}"]
     errors: list[str] = []
-    tracked = {
-        value.decode("utf-8")
-        for value in output.split(b"\0")
-        if value
-    }
-    for relative in sorted(tracked):
-        path = root / relative
-        if not path.exists() or not path.is_file():
+    recorded: dict[str, str] = {}
+    for value in output.split(b"\0"):
+        if not value:
             continue
-        executable = bool(path.stat().st_mode & 0o111)
+        try:
+            # "<mode> <object> <stage>\t<path>"
+            meta, relative = value.decode("utf-8").split("\t", 1)
+            mode = meta.split(" ", 1)[0]
+        except ValueError:
+            continue
+        recorded[relative] = mode
+    for relative, mode in sorted(recorded.items()):
+        if mode == "120000":  # a symlink records its own mode; not our concern
+            continue
+        executable = mode == "100755"
         expected = relative in ALLOWED_EXECUTABLE_PATHS
         if executable and not expected:
             errors.append(f"Tracked non-script file is executable: {relative}")
         elif expected and not executable:
             errors.append(f"Tracked launch script is not executable: {relative}")
-    missing = sorted(ALLOWED_EXECUTABLE_PATHS - tracked)
+    missing = sorted(ALLOWED_EXECUTABLE_PATHS - set(recorded))
     for relative in missing:
         errors.append(f"Expected tracked launch script is missing: {relative}")
     return errors

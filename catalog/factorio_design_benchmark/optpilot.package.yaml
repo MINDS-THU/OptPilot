@@ -1,0 +1,6 @@
+apiVersion: optpilot.io/v1
+config: package
+# Identifies this package wherever its folder is moved to. Do not edit:
+# changing it detaches the package from its own published history.
+identity: 3be8480be504bd83e66ad3f407e203a6
+description: A factory-layout design benchmark with a deterministic baseline designer.

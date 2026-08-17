@@ -1,0 +1,6 @@
+apiVersion: optpilot.io/v1
+config: package
+# Identifies this package wherever its folder is moved to. Do not edit:
+# changing it detaches the package from its own published history.
+identity: b71e65be04f97365c4239c07547a5954
+description: "Discrete-event simulators generated from plain-language descriptions, with studies that tune them."

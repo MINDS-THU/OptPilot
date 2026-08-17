@@ -11,6 +11,9 @@ from .errors import RealmIntegrityError
 
 
 REALM_ROOT_ENV = "OPTPILOT_REALM_ROOT"
+#: Where the person's own package folders live. Overridable so a project can
+#: keep its packages beside its code instead of in the per-user location.
+PACKAGES_ROOT_ENV = "OPTPILOT_PACKAGES_ROOT"
 
 
 def default_realm_root() -> Path:
@@ -27,6 +30,34 @@ def default_realm_root() -> Path:
         return (base / "OptPilot" / "realm").absolute()
     base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
     return (base / "optpilot" / "realm").absolute()
+
+
+def default_packages_root() -> Path:
+    """Where a person's own package folders live, when they do not say.
+
+    Deliberately beside the realm rather than inside it. The realm is private,
+    content-addressed storage that OptPilot owns; these are ordinary folders
+    the person edits, moves, and deletes. Putting editable work inside storage
+    that is meant to be opaque invites someone to edit the one place nothing
+    should be hand-edited.
+
+    The examples OptPilot ships are copied here on first use and are the
+    person's from then on -- the same folders as anything they write
+    themselves, with no second class of package.
+    """
+
+    override = os.environ.get(PACKAGES_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().absolute()
+    if sys.platform == "darwin":
+        return (
+            Path.home() / "Library" / "Application Support" / "OptPilot" / "packages"
+        ).absolute()
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        return (base / "OptPilot" / "packages").absolute()
+    base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+    return (base / "optpilot" / "packages").absolute()
 
 
 def prepare_private_directory(path: Path) -> Path:
