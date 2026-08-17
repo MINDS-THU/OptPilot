@@ -1,5 +1,24 @@
 # The first official release — what ships, what waits
 
+> **Progress, 2026-08-18.** The installation problem is solved end to end and
+> verified by installing rather than by reading code: a person runs
+> `pip install optpilot-studio`, opens Studio anywhere, and finds five working
+> packages they own — first start 3.2 s, later starts 0.01 s. Also done: the
+> flagship pairings pair; the Run setup list survives a slow start; unchecked
+> packages stop claiming blockers; the trial map opens candidates; every
+> trust refusal names its remedy; search reads descriptions; the README quick
+> start runs; failed Runs say why; stalled Runs admit it.
+>
+> Still open: catalog and compatibility performance (the real costs turned out
+> to be a request stampede, no cache at all on the compatibility endpoint, and
+> one method file parsed fourteen times over — not what this document first
+> assumed); human-readable component names; task vocabulary; de-emphasising
+> test fixtures; the Run page rebuilt around the trace; the documentation
+> truth pass including the operations-research walkthrough; the smallest
+> honest Assistant; and publishing itself, where the core must reach the
+> package index before Studio, which depends on it. The git-history purge
+> remains the one owner-only task and gates tagging.
+
 This is a **scope document**, not an architecture. Two target designs already
 exist and remain the destination: `designs/how-the-assistant-works.md` and
 `designs/how-the-assistant-works-codex.md`. This document answers a different
