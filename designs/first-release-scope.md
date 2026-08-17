@@ -83,6 +83,11 @@ Not the target Assistant. The smallest one that does not dead-end.
 
 ## 4. The two decisions only the owner can make
 
+**Both were decided on 2026-08-16: set the ready-made packages up
+automatically on first start, and ship the written instructions for the
+mathematical-solver route.** The reasoning is kept below because the costs
+named there are real and will matter again.
+
 ### Decision one: should OptPilot set up its own ready-made packages the first time it starts?
 
 **The situation.** OptPilot ships with five ready-made packages — a factory
@@ -118,7 +123,7 @@ result produced this way cannot point back to a permanent copy of the code
 that made it — which weakens the product's central promise for precisely the
 packages we ship as the examples of it.
 
-**Recommendation: set them up automatically on first start.**
+**Decided: set them up automatically on first start.**
 
 ### Decision two: does the "solve it as a mathematical problem" route ship in the first release?
 
@@ -149,8 +154,9 @@ nothing becomes automatic.
 way to improve a simulated system, and add the solver route in a later
 release once it can be done properly.
 
-**Recommendation: write the instructions.** They cost hours, and without them
-half of the headline story is a claim with nothing behind it.
+**Decided: write the instructions.** They cost hours, and without them half
+of the headline story is a claim with nothing behind it. Making the
+connection automatic is a later feature, not a release blocker.
 
 ---
 
@@ -200,8 +206,8 @@ explains itself.
 
 **Fourth pass — depth:** B7 (staged), C2, C3.
 
-**In parallel, owner-only:** the git-history purge before any release tag;
-the two decisions above before the third pass.
+**In parallel, owner-only:** the git-history purge, before any release tag.
+(Both product decisions in §4 are now settled.)
 
 A release could ship after the second pass. It would be honest, navigable,
 and useful, with an Assistant that answers and launches but does not yet
