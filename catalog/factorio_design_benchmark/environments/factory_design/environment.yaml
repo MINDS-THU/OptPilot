@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: factory-design
+name: "Factory layout benchmark"
 description: >-
   Factorio factory-design synthesis: propose a complete production line as
   JSON and have it statically validated against 22 executable checks

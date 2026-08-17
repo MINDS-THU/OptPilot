@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: coopa-solver
+name: "Operations-research solver (COOPA)"
 description: >-
   Solves one natural-language OR problem per Run using the COOPA pipeline:
   confidence-scored formulation extraction, routing to a mathematical /

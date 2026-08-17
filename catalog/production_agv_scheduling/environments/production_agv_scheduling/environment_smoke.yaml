@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-smoke
+name: "Production line with vehicles (quick check)"
 description: Short deterministic production-and-AGV policy evaluation for integration checks.
 tags: [production, agv, scheduling, files, simulation, smoke]
 

@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: ga-weighted-rule-search-smoke
+name: "Rule-weight search (quick check)"
 description: Four-policy, one-generation GA configuration for integration smoke tests.
 tags: [production, agv, baseline, ga, smoke, file-candidate, no-api]
 

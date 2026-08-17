@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: gallery-random-search
+name: "Random search"
 description: >-
   Seeded uniform random search over the environment's declared candidate
   parameter schema. A deliberately simple baseline for exploring the

@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: abp-protocol
+name: "Alternating-bit protocol simulator"
 description: >-
   DEVS-Gen generated Alternating Bit Protocol simulator: a sender and
   receiver exchange packets over lossy subnets with deterministic seeded

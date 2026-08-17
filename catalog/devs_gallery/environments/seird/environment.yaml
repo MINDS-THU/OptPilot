@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: seird-epidemic
+name: "Epidemic spread simulator (SEIRD)"
 description: >-
   DEVS-Gen generated SEIRD epidemic simulator (susceptible-exposed-
   infective-recovered-deceased compartments, xDEVS quantized integrator).

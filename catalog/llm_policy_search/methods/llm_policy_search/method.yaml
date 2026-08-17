@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: llm-policy-search
+name: "Operating-rule search (language model)"
 description: >-
   Trace-aware LLM policy search: a manager and parallel code editors
   iteratively improve executable decision policies from metrics and

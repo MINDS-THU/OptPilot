@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: direct-designer
+name: "Layout designer (language model)"
 description: >-
   The benchmark's Direct baseline: one LLM proposes a complete production
   line per trial, then revises it using the previous trial's validation

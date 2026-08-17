@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-variable-arrivals
+name: "Production line with vehicles (variable demand)"
 description: Ten-replication robustness evaluation with order intervals drawn uniformly from 5 to 15 minutes.
 tags: [production, agv, scheduling, files, simulation, robustness]
 

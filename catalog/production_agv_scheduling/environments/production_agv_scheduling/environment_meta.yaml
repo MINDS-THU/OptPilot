@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-meta
+name: "Production line with vehicles (tuning setup)"
 description: Paper-default 20-replication evaluation for GA, DE, and PSO rule-weight policies.
 tags: [production, agv, scheduling, files, simulation, metaheuristic]
 

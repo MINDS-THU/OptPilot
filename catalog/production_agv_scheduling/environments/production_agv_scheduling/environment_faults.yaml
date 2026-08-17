@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-faults
+name: "Production line with vehicles (machine faults)"
 description: Ten-replication robustness evaluation with random equipment faults enabled.
 tags: [production, agv, scheduling, files, simulation, robustness, faults]
 

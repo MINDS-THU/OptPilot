@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: or-problem
+name: "Operations-research problem checker"
 description: >-
   Accepts one natural-language operations-research problem per launch
   (study input `problem`) and validates the well-formedness of the returned

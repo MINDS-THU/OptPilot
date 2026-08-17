@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: queue-demo
+name: "Queue simulator (starter template)"
 description: >-
   Single-server job queue with class-dependent service times and lateness
   penalties. Candidates are executable dispatch policies (scheduler.py);

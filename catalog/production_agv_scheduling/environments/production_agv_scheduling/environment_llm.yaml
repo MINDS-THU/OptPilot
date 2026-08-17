@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: production-agv-scheduling-llm
+name: "Production line with vehicles (for rule search)"
 description: Paper-default 10-replication evaluation for trace-aware heuristic design.
 tags: [production, agv, scheduling, files, simulation, llm]
 

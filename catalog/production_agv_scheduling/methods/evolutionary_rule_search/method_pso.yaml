@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: pso-weighted-rule-search
+name: "Rule-weight search (particle swarm)"
 description: Paper-style particle swarm search over executable 14-weight scheduling policies.
 tags: [production, agv, baseline, pso, file-candidate, no-api]
 

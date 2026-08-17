@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: dispatch-station
+name: "Dispatch station simulator"
 description: >-
   DEVS-Gen generated dispatch station (one machine, quick and heavy jobs
   arriving over an 8-hour shift) whose dispatch decision delegates to an

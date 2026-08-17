@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: environment
 id: triage-clinic
+name: "Clinic triage simulator"
 description: >-
   DEVS-Gen generated walk-in clinic (one doctor, an 8-hour shift,
   patients arriving randomly with urgency 1-3 and urgency-dependent

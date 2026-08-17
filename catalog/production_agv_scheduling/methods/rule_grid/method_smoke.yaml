@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: default-rule-policy-smoke
+name: "Default dispatch rule (quick check)"
 description: Stages only the DEFAULT/DEFAULT/DEFAULT policy for a dependency-free smoke run.
 tags: [production, agv, baseline, smoke, file-candidate, no-api]
 

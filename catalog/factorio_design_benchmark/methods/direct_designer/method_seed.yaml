@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: direct-designer-seed
+name: "Layout designer (fixed baseline)"
 description: >-
   Deterministic twin of the Direct baseline, fixed to seed mode: it emits
   the environment's candidate template unchanged, so a Run needs no model,

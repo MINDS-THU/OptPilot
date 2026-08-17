@@ -3,88 +3,181 @@
   "$id": "https://optpilot.io/schemas/environment.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "config", "id", "evaluator", "candidate", "metrics"],
+  "required": [
+    "apiVersion",
+    "config",
+    "id",
+    "evaluator",
+    "candidate",
+    "metrics"
+  ],
   "properties": {
-    "apiVersion": {"$ref": "defs/common.schema.json#/definitions/apiVersion"},
-    "config": {"const": "environment"},
-    "id": {"$ref": "defs/common.schema.json#/definitions/identifier"},
-    "description": {"$ref": "defs/common.schema.json#/definitions/description"},
-    "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
-    "interface": {"$ref": "defs/common.schema.json#/definitions/interface"},
+    "apiVersion": {
+      "$ref": "defs/common.schema.json#/definitions/apiVersion"
+    },
+    "config": {
+      "const": "environment"
+    },
+    "id": {
+      "$ref": "defs/common.schema.json#/definitions/identifier"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How this is named for a person reading the Catalog. Without it the identifier is shown, which reads as a slug rather than a name."
+    },
+    "description": {
+      "$ref": "defs/common.schema.json#/definitions/description"
+    },
+    "tags": {
+      "$ref": "defs/common.schema.json#/definitions/tags"
+    },
+    "interface": {
+      "$ref": "defs/common.schema.json#/definitions/interface"
+    },
     "evaluator": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "python": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
-        "command": {"$ref": "defs/common.schema.json#/definitions/command"},
-        "adapter": {"$ref": "defs/common.schema.json#/definitions/pythonImport"},
-        "timeoutSeconds": {"type": "integer", "minimum": 1},
-        "pythonPath": {"$ref": "defs/common.schema.json#/definitions/stringList"},
-        "cwd": {"type": "string"},
-        "env": {"$ref": "defs/common.schema.json#/definitions/envObject"},
-        "settings": {"type": "object"},
-        "settingsSchema": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"}
+        "python": {
+          "$ref": "defs/common.schema.json#/definitions/pythonImport"
+        },
+        "command": {
+          "$ref": "defs/common.schema.json#/definitions/command"
+        },
+        "adapter": {
+          "$ref": "defs/common.schema.json#/definitions/pythonImport"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pythonPath": {
+          "$ref": "defs/common.schema.json#/definitions/stringList"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "defs/common.schema.json#/definitions/envObject"
+        },
+        "settings": {
+          "type": "object"
+        },
+        "settingsSchema": {
+          "$ref": "defs/candidate.schema.json#/definitions/parameterMap"
+        }
       },
       "oneOf": [
-        {"required": ["python"]},
-        {"required": ["command"]},
-        {"required": ["adapter"]}
+        {
+          "required": [
+            "python"
+          ]
+        },
+        {
+          "required": [
+            "command"
+          ]
+        },
+        {
+          "required": [
+            "adapter"
+          ]
+        }
       ]
     },
-    "runtime": {"$ref": "defs/runtime.schema.json#/definitions/runtime"},
+    "runtime": {
+      "$ref": "defs/runtime.schema.json#/definitions/runtime"
+    },
     "trialWorkspace": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["from", "to"],
+        "required": [
+          "from",
+          "to"
+        ],
         "properties": {
-          "from": {"type": "string"},
-          "to": {"type": "string"}
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
         }
       }
     },
-    "candidate": {"$ref": "defs/candidate.schema.json#/definitions/candidate"},
+    "candidate": {
+      "$ref": "defs/candidate.schema.json#/definitions/candidate"
+    },
     "methodContext": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "instructions": {"$ref": "defs/common.schema.json#/definitions/stringList"},
+        "instructions": {
+          "$ref": "defs/common.schema.json#/definitions/stringList"
+        },
         "references": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "path"],
+            "required": [
+              "name",
+              "path"
+            ],
             "properties": {
-              "name": {"type": "string"},
-              "path": {"type": "string"},
-              "description": {"type": "string"},
-              "type": {"type": "string"},
-              "mimeType": {"type": "string"}
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              }
             }
           }
         }
       }
     },
-    "metrics": {"$ref": "defs/metrics.schema.json#/definitions/metrics"},
+    "metrics": {
+      "$ref": "defs/metrics.schema.json#/definitions/metrics"
+    },
     "records": {
       "type": "array",
-      "items": {"$ref": "defs/metrics.schema.json#/definitions/record"}
+      "items": {
+        "$ref": "defs/metrics.schema.json#/definitions/record"
+      }
     },
     "outputFiles": {
       "type": "array",
-      "items": {"$ref": "defs/metrics.schema.json#/definitions/outputFile"}
+      "items": {
+        "$ref": "defs/metrics.schema.json#/definitions/outputFile"
+      }
     },
     "capabilities": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "properties": {
-          "id": {"type": "string"},
-          "description": {"type": "string"},
+          "id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
           "callable": {
             "description": "Environment-owned Python entry (module:object) that implements this capability. The module resolves against the environment's import roots; the runner exposes those roots to methods that require the capability.",
             "type": "string",
@@ -101,25 +194,46 @@
         "entrypoint": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["file", "callable"],
+          "required": [
+            "file",
+            "callable"
+          ],
           "properties": {
-            "file": {"type": "string", "minLength": 1},
-            "callable": {"type": "string", "minLength": 1},
-            "maxArguments": {"type": "integer", "minimum": 0, "maximum": 16},
-            "allowAsync": {"type": "boolean"}
+            "file": {
+              "type": "string",
+              "minLength": 1
+            },
+            "callable": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxArguments": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            },
+            "allowAsync": {
+              "type": "boolean"
+            }
           }
         },
         "forbiddenImports": {
           "type": "array",
           "maxItems": 64,
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "forbiddenNames": {
           "type": "array",
           "maxItems": 64,
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "lints": {
           "type": "array",
@@ -127,11 +241,24 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "forbiddenConstant", "message"],
+            "required": [
+              "id",
+              "forbiddenConstant",
+              "message"
+            ],
             "properties": {
-              "id": {"type": "string", "minLength": 1},
-              "forbiddenConstant": {"type": "string", "minLength": 1},
-              "message": {"type": "string", "minLength": 1}
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "forbiddenConstant": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }

@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: exhaustive-rule-grid
+name: "Rule grid sweep"
 description: Evaluates all 135 executable line, task-priority, and AGV-dispatch rule combinations.
 tags: [production, agv, baseline, exhaustive-search, file-candidate, no-api]
 

@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: direct-designer-llm
+name: "Layout designer (language model, full)"
 description: >-
   The Direct baseline wired to actually call a model (settings.mode is
   llm). Use direct-designer-seed for a deterministic, zero-key run.

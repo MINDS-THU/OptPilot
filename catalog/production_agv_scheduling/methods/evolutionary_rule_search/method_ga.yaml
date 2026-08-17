@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: method
 id: ga-weighted-rule-search
+name: "Rule-weight search (genetic algorithm)"
 description: Paper-style genetic search over executable 14-weight scheduling policies.
 tags: [production, agv, baseline, ga, file-candidate, no-api]
 
