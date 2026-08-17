@@ -105,3 +105,45 @@ class FirstHourStaticTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunHonestyStaticTest(unittest.TestCase):
+    """A Run must not describe itself in ways that stop being true.
+
+    Both defects here were observed live: four Runs showing a live "running"
+    badge, one silent for 135 hours while still reporting that the method
+    "may still be preparing another Candidate"; and failed Runs that never
+    said why.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = (_UI / "app.js").read_text(encoding="utf-8")
+
+    def test_a_long_silence_is_reported_as_stuck(self) -> None:
+        self.assertIn("RUN_STALLED_GUIDANCE_DELAY_MS", self.app)
+        body = _function_source(self.app, "runProgressGuidance")
+        self.assertIn("appears to be stuck", body)
+        # The stalled branch must be tested and returned from before the
+        # still-working wording can be reached. Compare against the LAST
+        # occurrence: the explanation above the branch quotes that wording.
+        guard = body.index("idleMilliseconds >= RUN_STALLED_GUIDANCE_DELAY_MS")
+        still_preparing = body.rindex("may still be preparing")
+        self.assertLess(
+            guard,
+            still_preparing,
+            "the stalled check must come before the still-working wording",
+        )
+
+    def test_a_failed_run_names_its_reason(self) -> None:
+        self.assertIn("RUN_STOP_REASONS", self.app)
+        for code in (
+            "max_failures",
+            "method_failed",
+            "protocol_error",
+            "method_completed",
+        ):
+            with self.subTest(code=code):
+                self.assertIn(f"{code}:", self.app)
+        body = _function_source(self.app, "runCompletionMessage")
+        self.assertIn("RUN_STOP_REASONS[stopCode]", body)

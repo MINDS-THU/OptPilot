@@ -24,6 +24,10 @@ const ASSISTANT_UI_CARD_OPERATIONS = new Set([
 ]);
 const ASSISTANT_UI_CARD_MAX_COUNT = 12;
 const RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS = 12_000;
+// Past this, a silent Run is reported as stuck rather than as still working.
+// Thirty minutes is long enough to cover a slow language-model exchange or a
+// heavy evaluation, and short enough that nobody watches a dead Run all day.
+const RUN_STALLED_GUIDANCE_DELAY_MS = 30 * 60_000;
 const CORE_REQUEST_TIMEOUT_MS = 20_000;
 const PLATFORM_STATUS_TIMEOUT_MS = 12_000;
 const RUNS_REQUEST_TIMEOUT_MS = 15_000;
@@ -12571,11 +12575,34 @@ function runProgressGuidance(status, plannedTrials, counts, trialCounts, recorde
     }
     clearRunHandoffGuidanceTimer();
     const lastRecordedUpdate = recordedUpdateValue ? formatRealmTime(recordedUpdateValue) : "";
+    const elapsed = escapeHtml(formatDuration(idleMilliseconds) || "a short while");
+    const lastUpdateSentence = lastRecordedUpdate
+      ? ` Last recorded Run update: ${escapeHtml(lastRecordedUpdate)}.`
+      : "";
+    // After a long enough silence, "the Method may still be preparing another
+    // Candidate" stops being a fair description and becomes a false one. A Run
+    // observed in this state had been silent for 135 hours while still saying
+    // it. OptPilot keeps retrying in the background either way, so the honest
+    // report is that it is stuck, plus the control that ends it.
+    if (idleMilliseconds >= RUN_STALLED_GUIDANCE_DELAY_MS) {
+      return `
+      <section class="run-progress-guidance run-progress-guidance-stalled" role="alert">
+        <div>
+          <strong>This Run appears to be stuck</strong>
+          <span>No trial is active and nothing has been recorded for ${elapsed}. OptPilot keeps trying to pick it up again in the background, but a wait this long usually means the work will not resume on its own.${lastUpdateSentence} The event history shows what happened last; Stop Run ends it and keeps everything already recorded.</span>
+        </div>
+        <div class="action-row">
+          <button class="ghost-button compact-action" data-run-tab="timeline" type="button">Open event history</button>
+          <button class="ghost-button compact-action" data-refresh-run-detail="detail" type="button">Refresh Run</button>
+        </div>
+      </section>
+    `;
+    }
     return `
       <section class="run-progress-guidance" role="status">
         <div>
           <strong>Waiting for the next trial</strong>
-          <span>No trial is active, and no progress has been recorded for ${escapeHtml(formatDuration(idleMilliseconds) || "a short while")}. The Method may still be preparing another Candidate.${lastRecordedUpdate ? ` Last recorded Run update: ${escapeHtml(lastRecordedUpdate)}.` : ""}</span>
+          <span>No trial is active, and no progress has been recorded for ${elapsed}. The Method may still be preparing another Candidate.${lastUpdateSentence}</span>
         </div>
         <div class="action-row">
           <button class="ghost-button compact-action" data-refresh-run-detail="detail" type="button">Refresh Run</button>
@@ -13950,12 +13977,29 @@ function runHeadlineResult(detail) {
   return { label: "Result", value: "Not available", candidateId: "", sampleCount: null };
 }
 
+//: Why a Run stopped, in the words a person would use. The Run already
+//: records this; it was simply never shown, so every failure read the same
+//: and none of them said what to do next.
+const RUN_STOP_REASONS = {
+  max_failures: "Too many trials failed, so the Run stopped early. Open a failed trial below to see what its evaluation reported.",
+  method_failed: "The method stopped working while proposing candidates. Its error is in the trial evidence below.",
+  protocol_error: "The method sent something OptPilot could not read. This usually means the method's code returned the wrong shape.",
+  method_completed: "The method finished proposing candidates before the budget was used up.",
+  max_trials: "The Run finished its planned trials.",
+};
+
 function runCompletionMessage(summary, status) {
   const stopCode = String(summary && summary.stop_code || "");
-  if (["failed"].includes(status)) return "This Run stopped before it could finish.";
+  const reason = RUN_STOP_REASONS[stopCode];
+  if (["failed"].includes(status)) {
+    return reason
+      ? `This Run stopped before it could finish. ${reason}`
+      : "This Run stopped before it could finish.";
+  }
   if (["cancelled", "canceled"].includes(status)) return "This Run was stopped. Results already recorded are still available.";
-  if (["completed", "succeeded"].includes(status) && stopCode === "max_trials") {
-    return "This Run finished its planned trials.";
+  if (["completed", "succeeded"].includes(status)) {
+    if (stopCode === "max_trials") return "This Run finished its planned trials.";
+    if (reason) return reason;
   }
   return "";
 }
