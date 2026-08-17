@@ -114,7 +114,7 @@ shipped with the install *updates* it rather than colliding with it.
 
 | Step | Note |
 | --- | --- |
-| Include the packages in what gets published | Reverses today's exclusion, which groups them with research scratch. Sub-question left open: whether to include the 22 MB three-dimensional animation inside the factory-scheduling package, or ship without it at about 9 MB. |
+| Include the packages in what gets published | Reverses today's exclusion, which groups them with research scratch. **Decided: include the three-dimensional animation** — the distribution carries all five packages at about 31 MB. |
 | Define the per-user packages folder | A location beside the existing permanent store, with an environment variable to override it. Small. |
 | Copy the shipped packages there once, on first run | Idempotent, so a repeat start does nothing. Never overwrites a package the person has edited. |
 | Teach Studio to look there | Studio currently looks only beside the directory it was started from; this is the one genuine code change, and it is needed under every option. |
@@ -126,6 +126,25 @@ Together this replaces the earlier item "make the bundled packages launchable
 out of the box" and absorbs most of the installation problem in §0.1. Estimated
 at about a week. It leaves untouched the separate problem that the published
 release is stale and the web application was never published at all.
+
+### 0.5 The remaining release decisions, settled 2026-08-17
+
+**The first release contains both the command-line tool and Studio.** The
+command-line path already works as documented; Studio's does not, so the
+blockers found by running it are on the critical path rather than deferred to a
+later release. Everything in §0.2 is therefore in scope.
+
+**A package does not declare which OptPilot version it needs.** The field is
+not worth its cost now; if it becomes necessary, versions released before it
+existed will not understand it, which is accepted.
+
+**Rough shape of the work**, with everything now decided: about a week to make
+the packages ship and set themselves up; three to four days for the
+correctness blockers; about a week for the first-hour experience; two days for
+the documentation truth pass; about a week for the smallest honest Assistant;
+plus publishing the software, which has never been done for Studio. Call it
+four to five weeks of focused work, with the git-history purge as the only
+strictly owner-side task.
 
 ### 0.3 What was verified as genuinely good
 
