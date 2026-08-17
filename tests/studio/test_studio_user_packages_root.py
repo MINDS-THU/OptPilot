@@ -11,6 +11,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from optpilot_studio.ui.server import _default_catalog_roots
@@ -76,3 +77,102 @@ class UserPackagesRootTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirstStartRegistrationTest(unittest.TestCase):
+    """A package must be launchable, not merely listed.
+
+    A Run setup can only be launched from a published version, because a run
+    records exactly which bytes produced its result. Nothing published the
+    examples, so a fresh install showed five packages and refused to run any.
+    """
+
+    def test_nothing_is_published_without_a_realm(self) -> None:
+        from optpilot_studio.ui.server import _register_user_packages
+
+        state = SimpleNamespace(realm_runtime=None)
+        self.assertEqual(_register_user_packages(state), [])
+
+    def test_already_published_packages_are_not_republished(self) -> None:
+        # Every start calls this. Re-sealing published packages each time
+        # would add seconds to startup for nothing.
+        from optpilot_studio.ui.server import _register_user_packages
+
+        with tempfile.TemporaryDirectory() as tmp:
+            packages = Path(tmp) / "packages"
+            _make_package(packages, "already_here")
+            published = SimpleNamespace(revision=1)
+            calls = []
+
+            runtime = SimpleNamespace(
+                catalog=SimpleNamespace(read_head=lambda **_k: published),
+                configured_package_ingress=SimpleNamespace(
+                    publish=lambda **kwargs: calls.append(kwargs)
+                ),
+            )
+            with patch(
+                "optpilot.realm.config.default_packages_root",
+                return_value=packages,
+            ):
+                result = _register_user_packages(
+                    SimpleNamespace(realm_runtime=runtime)
+                )
+            self.assertEqual(result, [])
+            self.assertEqual(calls, [], "a published package was published again")
+
+    def test_one_bad_package_does_not_stop_the_others(self) -> None:
+        from optpilot.realm.configured_package_ingress import (
+            ConfiguredPackageIngressOutcome,
+        )
+        from optpilot_studio.ui.server import _register_user_packages
+
+        with tempfile.TemporaryDirectory() as tmp:
+            packages = Path(tmp) / "packages"
+            _make_package(packages, "aaa_broken")
+            _make_package(packages, "zzz_fine")
+
+            def publish(**kwargs):
+                if kwargs["package_id"] == "aaa_broken":
+                    raise RuntimeError("cannot seal this one")
+                return SimpleNamespace(
+                    outcome=ConfiguredPackageIngressOutcome.PUBLISHED
+                )
+
+            runtime = SimpleNamespace(
+                catalog=SimpleNamespace(read_head=lambda **_k: None),
+                configured_package_ingress=SimpleNamespace(publish=publish),
+            )
+            with (
+                patch(
+                    "optpilot.realm.config.default_packages_root",
+                    return_value=packages,
+                ),
+                patch("sys.stderr"),
+            ):
+                result = _register_user_packages(
+                    SimpleNamespace(realm_runtime=runtime)
+                )
+        self.assertEqual(result, ["zzz_fine"])
+
+    def test_the_publishing_identity_follows_the_package_not_its_folder(self) -> None:
+        # This is what makes re-installing a package an update rather than a
+        # collision: the identity travels with the package.
+        from optpilot.package_settings import new_package_identity, write_package_settings
+        from optpilot_studio.ui.server import (
+            _configured_package_source_identity_digest,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = new_package_identity()
+            first = _make_package(root / "here", "pkg")
+            write_package_settings(first, identity=identity)
+            second = _make_package(root / "moved_elsewhere", "pkg")
+            write_package_settings(second, identity=identity)
+            self.assertEqual(
+                _configured_package_source_identity_digest(first),
+                _configured_package_source_identity_digest(second),
+            )
+            self.assertEqual(
+                len(_configured_package_source_identity_digest(first)), 64
+            )

@@ -3425,6 +3425,16 @@ class UiState:
         _reconcile_visible_study_launches(self)
         _reconcile_visible_operator_jobs(self)
         _reconcile_visible_run_executions(self)
+        # The person's packages must be launchable, not merely listed. Costs
+        # one cheap lookup each once they are published; never fatal.
+        try:
+            _register_user_packages(self)
+        except Exception as error:  # pragma: no cover - defensive
+            print(
+                "OptPilot could not set up its example packages: "
+                f"{type(error).__name__}: {error}",
+                file=sys.stderr,
+            )
 
     def launch_study(
         self,
@@ -36594,6 +36604,131 @@ def _drop_catalog_roots_containing_others(roots: Iterable[Path]) -> List[Path]:
             other != root and other.is_relative_to(root) for other in resolved
         )
     ]
+
+
+def _register_user_packages(state: UiState) -> List[str]:
+    """Make the person's own packages launchable, not merely visible.
+
+    A package folder has to be published -- captured as an immutable, numbered
+    version -- before a Run setup drafted from it can be launched, because a
+    launch records exactly which bytes produced its result. Nothing did that
+    for the examples OptPilot ships, so a fresh install showed five packages
+    and refused to run any of them.
+
+    Only the person's own packages folder is registered here. A source
+    checkout's catalog is OptPilot's own tracked files, and publishing those
+    on someone's behalf is not this function's business.
+
+    Already-published packages are skipped without being re-read, so a normal
+    start costs one cheap lookup per package and nothing else. Measured, a
+    genuine first start publishes all five in about two seconds, which is why
+    this runs before the UI is served rather than behind it: a person who
+    clicks Launch immediately should not be told to publish first while a
+    background thread is still working.
+    """
+
+    from optpilot.realm.config import default_packages_root
+
+    runtime = state.realm_runtime
+    if runtime is None:
+        # No realm open (a read-only or partially configured Studio). Packages
+        # stay visible; publishing is simply not possible here.
+        return []
+    packages_root = default_packages_root()
+    roots = [
+        root
+        for root in _catalog_package_roots(packages_root)
+        if _looks_like_catalog_package(root)
+    ]
+    if not roots:
+        return []
+
+    from optpilot.realm.configured_package_ingress import (
+        ConfiguredPackageIngressOutcome,
+    )
+    from optpilot.realm.content import AllowedTreeSource
+
+    registered: List[str] = []
+    for root in roots:
+        package_id = _package_plan_package_id(root.name)
+        try:
+            if runtime.catalog.read_head(package_id=package_id) is not None:
+                continue
+        except Exception:
+            # Never published, or unreadable: try to publish and let that
+            # attempt report the real problem.
+            pass
+        try:
+            receipt = runtime.configured_package_ingress.publish(
+                operation_id=f"studio/first-start/{package_id}",
+                package_id=package_id,
+                source_identity_digest=_configured_package_source_identity_digest(root),
+                validation_policy_digest=_configured_package_validation_policy_digest(),
+                source_resolver=lambda captured=root: AllowedTreeSource(
+                    captured.resolve(),
+                    excluded_directory_names=CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS,
+                ),
+                validator=_configured_package_static_validator,
+                excluded_directory_names=CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS,
+            )
+        except Exception as error:
+            # One unpublishable package must not stop Studio starting, nor
+            # stop the others being published. It stays visible and reports
+            # its own problem when the person tries to use it.
+            print(
+                f"OptPilot could not set up the package {package_id}: "
+                f"{type(error).__name__}: {error}",
+                file=sys.stderr,
+            )
+            continue
+        if receipt.outcome is ConfiguredPackageIngressOutcome.PUBLISHED:
+            registered.append(package_id)
+    return registered
+
+
+def _configured_package_source_identity_digest(root: Path) -> str:
+    """A stable identity for one package folder, for publishing purposes.
+
+    Derived from the identity the package declares, so the same package keeps
+    the same publishing authority after being copied to another machine or
+    moved to another folder -- which is what makes a later re-install update
+    the package instead of colliding with it. A package that declares no
+    identity falls back to its location, which is all there is to go on.
+    """
+
+    try:
+        identity = package_identity(root)
+    except ValueError:
+        identity = None
+    if identity is not None:
+        return request_digest(
+            {
+                "schema": "optpilot.configured-package-source.v2",
+                "identity": identity,
+            }
+        )
+    return request_digest(
+        {
+            "schema": "optpilot.configured-package-source.v1",
+            "root": str(root),
+        }
+    )
+
+
+def _configured_package_validation_policy_digest() -> str:
+    """Names the static checks a published package was accepted under.
+
+    Part of the published record, so a later change to what the checks do is
+    visible as a different policy rather than silently reinterpreting an old
+    acceptance.
+    """
+
+    return request_digest(
+        {
+            "schema": "optpilot.configured-package-validation-policy.v1",
+            "max_yaml_files": CONFIGURED_PACKAGE_MAX_YAML_FILES,
+        }
+    )
 
 
 def _refresh_catalog_package_roots(state: UiState) -> None:
