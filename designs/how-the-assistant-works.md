@@ -37,11 +37,59 @@ never blur:
   action cannot happen. The tool list *is* the Assistant's capability
   surface.
 
-The design goal, stated once: **a person should be able to hand the Assistant
-an outcome and come back to progress.** Everything below serves that — the
-task loop makes the goal survive hours and restarts, the knowledge model
-makes the first attempt land on the right pieces, and the grant model makes
-ten steps cost one decision instead of ten interruptions.
+### The design goal
+
+**A person should be able to describe the result they want, walk away, and
+come back to find real work done toward it.**
+
+Each part of that sentence rules something out, so it is worth spelling out
+in full.
+
+*Describe the result they want* — the person says what they want to be true
+("find a staffing policy that keeps average patient waiting under ten
+minutes"), not the sequence of steps that would achieve it ("generate a
+simulator, register it as an environment, pair it with the policy-search
+method, launch with these inputs"). Requiring the sequence means the person
+must already know which pieces exist, which fit together, and in what order —
+which is the knowledge they came to the Assistant to avoid needing.
+
+*Walk away* — the person is not sitting there watching. This is the demanding
+part, because runs take minutes to hours: they will close the laptop, go to
+lunch, come back tomorrow. Three consequences follow, and most of this
+document exists to handle them. The Assistant must have been given enough
+authority *before* the person left, or the work stalls overnight on an
+unclicked approval. The goal must survive Studio being restarted, because a
+goal that lives only in the language model's memory is gone by morning. And a
+finished run must reach the conversation by itself, because nobody is there
+to notice it finished.
+
+*Come back to find real work done* — what they see on return. Not a spinner.
+Not "waiting for your approval since 9pm." Not even a finished run that
+nothing has looked at. It means one of exactly four things, and §4 turns this
+list into the rules the Assistant follows when a run finishes: the goal was
+met, and here is the result; the first attempt fell short, so here is the
+second, already running; it stopped for a reason the Assistant can name, with
+what was learned; or the next move is genuinely the person's call, and here
+are the findings they need to make it.
+
+**What this deliberately does not mean.** It is not a promise of unattended
+autonomy. The person's involvement is not removed; it is *moved* — gathered
+into a few decisions they can judge well (approve this plan, this spending,
+this publication) instead of scattered across ten mechanical confirmations
+they will click through without reading. The autonomy budget (§4), the
+counted grants (§6), and the list of acts that are never tools (§6) exist so
+that coming back to work done never means coming back to a surprise.
+
+This goal is also a fair description of what is broken today, which is why it
+leads. In a walkthrough on 2026-08-16, four runs displayed a live "running"
+badge; one had been silent for 135 hours while still reporting that the
+method "may still be preparing another Candidate." That person did not come
+back to progress. They came back to a false statement.
+
+Everything below serves this goal: the task loop (§4) makes a goal survive
+hours and restarts, the knowledge model (§5) makes the first attempt land on
+the right pieces, and the authority model (§6) makes a ten-step task cost one
+decision instead of ten interruptions.
 
 ## 2. How one exchange flows *(built)*
 
@@ -155,17 +203,25 @@ woke it. Agenda items never interrupt: they wait until the conversation is
 idle with no approval pending, and a person's message always outranks them.
 
 **What the woken Assistant does** is written in the guidance file as
-prescriptively as its opening moves: read the run's results; compare them
-against the task's success criterion; then take one of four exits — *report
-and finish* (criterion met: summarize, mark the task done), *iterate* (a
-clearly better next candidate exists: propose it, spending existing authority
-(§6) or asking), *park* (ambiguous: state findings, mark the task waiting on
-the person), or *stop* (the run failed for a reason the Assistant can name:
-explain, with the remedy if one exists). An **autonomy budget** on the task —
-a bounded number of unattended turns and launches — caps how far the loop can
-run with nobody watching; exhausting it parks the task. Iterating
-unsupervised burns paid model calls, so the budget is a visible, owner-set
-number, not a vibe.
+prescriptively as its opening moves: read the run's results, compare them
+against the task's success criterion, then take exactly one of four exits.
+These are the four things §1 promises a returning person can find:
+
+- ***Report and finish*** — the criterion is met. Summarize the result and
+  mark the task done.
+- ***Iterate*** — the criterion is not met, but a clearly better next attempt
+  exists. Propose it, and run it if existing authority covers it (§6);
+  otherwise ask.
+- ***Stop*** — the run failed for a reason the Assistant can name. Explain
+  it, with the remedy if the failure carries one (§5).
+- ***Park*** — the outcome is ambiguous, or the next move is genuinely the
+  person's call. State the findings and mark the task as waiting on them.
+
+An **autonomy budget** on the task — a set number of unattended turns and
+launches — caps how far this loop can run with nobody watching; using it up
+parks the task. Iterating unsupervised spends money on paid model calls, so
+the budget is a number the owner sets and can see, never a judgment the model
+makes for itself.
 
 ## 5. What the Assistant knows *(target)*
 
