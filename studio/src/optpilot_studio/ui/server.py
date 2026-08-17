@@ -3253,6 +3253,8 @@ class UiState:
         )
         self._catalog_projections_refreshed_monotonic: Optional[float] = None
         self._catalog_index_cache: Optional[tuple[float, JsonDict]] = None
+        #: Compatibility pairs for one exact catalog index, same reuse window.
+        self._compatibility_cache: Optional[tuple[JsonDict, float, JsonDict]] = None
         # Study saves write into persistent managed checkouts before advancing
         # their retained heads.  Keyed critical sections keep that checkout
         # write, its optimistic revision fence, and the saved-draft record one
@@ -10138,20 +10140,46 @@ def _is_authorized_catalog_realization_path(state: UiState, path: Path) -> bool:
 
 def _compatibility_payload(state: UiState) -> JsonDict:
     catalog = _catalog_index_payload(state)
+    # Derived entirely from that index, and costing about a second to build,
+    # yet rebuilt on every request -- the Catalog page asks for both at once,
+    # so this was paid on every visit. Key the reuse on the identity of the
+    # index it came from, so a refreshed catalog rebuilds it and nothing else
+    # does.
+    ttl_seconds = state.catalog_refresh_ttl_seconds
+    if ttl_seconds > 0:
+        with state._catalog_projection_lock:
+            cached = state._compatibility_cache
+        if (
+            cached is not None
+            and cached[0] is catalog
+            and time.monotonic() - cached[1] < ttl_seconds
+        ):
+            return cached[2]
     pairs = []
+    # Each method's settings file was read once per environment: with the
+    # shipped packages that is 182 parses where 13 will do, and parsing is the
+    # dominant cost of this whole response. Read each file once.
+    method_raws = {
+        str(method["_source_path"]): _read_yaml(Path(str(method["_source_path"])))
+        for method in catalog["methods"]
+    }
     for environment in catalog["environments"]:
         env_raw = _read_yaml(Path(str(environment["_source_path"])))
         for method in catalog["methods"]:
-            method_raw = _read_yaml(Path(str(method["_source_path"])))
+            method_raw = method_raws[str(method["_source_path"])]
             result = _compatibility_result(environment, env_raw, method, method_raw)
             pairs.append(result)
-    return {
+    payload = {
         "environments": [
             _public_catalog_entry(item) for item in catalog["environments"]
         ],
         "methods": [_public_catalog_entry(item) for item in catalog["methods"]],
         "pairs": pairs,
     }
+    if ttl_seconds > 0:
+        with state._catalog_projection_lock:
+            state._compatibility_cache = (catalog, time.monotonic(), payload)
+    return payload
 
 
 def _compatibility_for_catalog_refs(

@@ -103,9 +103,6 @@ class FirstHourStaticTest(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class RunHonestyStaticTest(unittest.TestCase):
     """A Run must not describe itself in ways that stop being true.
@@ -147,3 +144,6 @@ class RunHonestyStaticTest(unittest.TestCase):
                 self.assertIn(f"{code}:", self.app)
         body = _function_source(self.app, "runCompletionMessage")
         self.assertIn("RUN_STOP_REASONS[stopCode]", body)
+
+if __name__ == "__main__":
+    unittest.main()
