@@ -768,9 +768,12 @@ class RealmProcessExecutionBinder:
             except Exception:
                 approval = None
         if approval is None:
+            from .provider_trust_records import image_approval_remedy
+
             raise RealmConflict(
                 "The environment's image has not been approved for study "
-                "execution."
+                f"execution. The image is {reference}. "
+                f"{image_approval_remedy(reference)}"
             )
         try:
             verify_image_available(engine, reference, platform)

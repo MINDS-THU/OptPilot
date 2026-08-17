@@ -186,11 +186,17 @@ class _LocalRuntimeGraph(Protocol):
 class RetainedBatchRuntimeError(RuntimeError):
     """Bounded, path-free provider/runtime failure."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, detail: str | None = None) -> None:
         if code not in _PUBLIC_MESSAGES:
             raise ValueError("retained batch runtime error code is unsupported.")
         self.code = code
-        super().__init__(_PUBLIC_MESSAGES[code])
+        message = _PUBLIC_MESSAGES[code]
+        # Bounded detail only -- an image reference and the command that
+        # clears it, never a host path. A refusal the person cannot act on is
+        # barely better than a silent one.
+        if detail:
+            message = f"{message} {detail}"
+        super().__init__(message)
 
 
 def _report_cleanup_diagnostic(
@@ -1169,7 +1175,12 @@ class RetainedBatchRuntimeProvider:
             # No policy service, or no approval: both fail closed. Running
             # someone's image without a recorded approval is the thing the
             # trust ledger exists to prevent.
-            raise RetainedBatchRuntimeError("container_untrusted")
+            from .realm.provider_trust_records import image_approval_remedy
+
+            raise RetainedBatchRuntimeError(
+                "container_untrusted",
+                f"The image is {reference}. {image_approval_remedy(reference)}",
+            )
 
         try:
             verify_image_available(engine, reference, platform)

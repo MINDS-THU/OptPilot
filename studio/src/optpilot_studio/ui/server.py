@@ -33612,10 +33612,12 @@ def _workspace_package_image(state: "UiState", workspace: JsonDict) -> Optional[
         except Exception:
             approval = None
     if approval is None:
+        from optpilot.realm.provider_trust_records import image_approval_remedy
+
         raise RuntimeError(
             f"The package's image {container.image.raw} has not been approved "
             "for study execution, and a workspace runs it just as surely as a "
-            "run does. Approve the image first."
+            f"run does. {image_approval_remedy(container.image.raw)}"
         )
     try:
         verify_image_available(engine, container.image.raw, container.platform)

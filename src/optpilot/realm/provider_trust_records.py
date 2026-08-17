@@ -48,6 +48,17 @@ class ProviderTrustState(str, Enum):
     REVOKED = "revoked"
 
 
+def image_approval_remedy(image_ref: str) -> str:
+    """The exact command that clears an execution-trust refusal.
+
+    Kept beside the contract so every refusal quotes the same words. A refusal
+    that names the rule but not the remedy leaves the person searching the
+    documentation for a command we could simply have printed.
+    """
+
+    return f"Approve it by running: optpilot image approve {image_ref}"
+
+
 def validate_provider_image_ref(value: Any) -> str:
     image_ref = required_text(
         value,

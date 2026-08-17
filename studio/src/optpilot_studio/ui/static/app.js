@@ -1050,6 +1050,20 @@ async function loadCatalogAndCompatibility(options = {}) {
     if (catalogResult.status === "fulfilled") {
       state.catalog = catalogResult.value;
       state.catalogLoaded = true;
+      state.catalogError = "";
+      // The Run setup list is built from the catalog. The first load can time
+      // out, and every later success used to update the catalog without ever
+      // rebuilding the list -- so one slow start hid every shipped Run setup
+      // until the page was reloaded. Rebuild here, keeping the person's own
+      // authored drafts, and deliberately not through rebuildDerivedState,
+      // which would also reset their current selection mid-session.
+      const authoredPlans = (state.plans || []).filter(
+        (item) => item && item.source === "draft config" && !item.draft,
+      );
+      state.plans = buildPlans();
+      authoredPlans.forEach((item) => {
+        if (!state.plans.some((candidate) => candidate.id === item.id)) state.plans.push(item);
+      });
       applyStudioRoute({ loadRun: false, render: false });
     } else {
       state.catalogError = boundedPublicActionError(
@@ -7463,6 +7477,16 @@ function targetSetupSummaryHtml(target) {
 }
 
 function packagePlanValidationHtml(validation) {
+  // A plan that has not been checked yet arrives as an empty object, which is
+  // truthy -- so this panel used to announce "Package validation found
+  // blockers." about a package nothing had looked at.
+  if (!validation || typeof validation.valid !== "boolean") {
+    return `
+    <div class="registration-plan-block">
+      <strong>Validation</strong>
+      <p>Not checked yet. Use Check files to validate these exact files.</p>
+    </div>`;
+  }
   const entries = validation.entries || [];
   const retainedExecution = validation.capabilities && validation.capabilities.retained_execution;
   const configuredStatic = validation.test_policy === "static-only";
@@ -11230,8 +11254,32 @@ function renderExperiments() {
       </div>
     `
     : "";
-  const emptyMessage = query ? "No Run setups match this search." : "No Run setups yet.";
-  els.planList.innerHTML = `${draftNotice}${plans.map(planButton).join("") || emptyInline(emptyMessage)}`;
+  // Without this the view says "No Run setups yet." when the truth is that
+  // the catalog never loaded -- an empty state where an error belongs.
+  const catalogNotice = state.catalogError
+    ? `
+      <div class="collection-refresh-notice" role="alert">
+        <div>
+          <strong>Catalog could not be loaded.</strong>
+          <span>Run setups that come from the Catalog are missing until it loads.</span>
+        </div>
+        <button class="ghost-button compact-action retry-catalog-plans" type="button">Try again</button>
+      </div>
+    `
+    : "";
+  const emptyMessage = query
+    ? "No Run setups match this search."
+    : state.catalogError
+    ? "No Run setups could be loaded."
+    : "No Run setups yet.";
+  els.planList.innerHTML = `${catalogNotice}${draftNotice}${plans.map(planButton).join("") || emptyInline(emptyMessage)}`;
+  els.planList.querySelectorAll(".retry-catalog-plans").forEach((button) => {
+    button.addEventListener("click", () => {
+      loadCatalogAndCompatibility({ strict: false })
+        .then(() => renderExperiments())
+        .catch(() => renderExperiments());
+    });
+  });
   els.planList.querySelectorAll("[data-plan-id]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedPlanId = button.dataset.planId;
@@ -11284,12 +11332,21 @@ function catalogSearchText(component) {
 }
 
 function planSearchText(plan) {
+  // Every Run setup carries a description and tags saying what it is for.
+  // Leaving them out meant searching for what a Run setup DOES matched
+  // nothing, and only its identifier worked -- the same defect the Catalog
+  // search had.
   return normalizeSearch([
     plan.title,
+    plan.name,
+    plan.description,
+    ...(Array.isArray(plan.tags) ? plan.tags : []),
     plan.source,
     plan.status,
     plan.environment && plan.environment.id,
+    plan.environment && plan.environment.label,
     plan.method && plan.method.id,
+    plan.method && plan.method.label,
     plan.metric,
     plan.direction,
   ].filter(Boolean).join(" "));
@@ -12912,8 +12969,20 @@ function bindRunTrialMap(runId) {
   });
   els.runDetail.querySelectorAll("[data-run-trial-open-candidate]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.routedCandidateId = button.dataset.runTrialOpenCandidate || null;
-      activateRunTab("candidate", { restoreFocus: false });
+      // Setting the route alone renders an empty pane: the candidate detail is
+      // fetched, not held. Follow the same path as the Candidates list links.
+      const candidateId = String(button.dataset.runTrialOpenCandidate || "");
+      if (!candidateId || !runId) return;
+      state.routedCandidateId = candidateId;
+      state.routedCandidateResolution = null;
+      state.routedCandidateFocusApplied = "";
+      state.activeRunTab = "candidate";
+      syncStudioRoute();
+      loadRunDetail(runId, {
+        keepTab: true,
+        skipListRender: true,
+        fromRoute: true,
+      }).catch(() => {});
     });
   });
   els.runDetail.querySelectorAll("[data-run-trial-open-tab]").forEach((button) => {

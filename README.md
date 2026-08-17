@@ -111,13 +111,20 @@ uv run optpilot --help
 uv run optpilot ui --open-browser
 ```
 
-Validate the bundled authoring package:
+Check one of the packages that ship with OptPilot, then run it:
 
 ```bash
-uv run optpilot validate \
-  catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml
-uv run optpilot package validate catalog/example_package --check-source
+uv run optpilot package validate catalog/devs_gallery --check-source
 ```
+
+```bash
+uv run optpilot run --package-root catalog/devs_gallery \
+  catalog/devs_gallery/studies/seird_minimize_deaths.yaml
+```
+
+That run needs no container software and no model provider key. It optimises
+an epidemic simulator and prints the result, including the best parameters it
+found.
 
 See [Getting Started](https://MINDS-THU.github.io/OptPilot/getting-started/)
 for the current run boundary and command shape.
@@ -174,9 +181,11 @@ concrete run plans.
 
 ```text
 catalog/
-  example_package/
-  local_package/
-  another_package/
+  devs_gallery/
+  llm_policy_search/
+  or_solving/
+  factorio_design_benchmark/
+  production_agv_scheduling/
 ```
 
 ## Documentation

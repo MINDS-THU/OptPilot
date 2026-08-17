@@ -199,3 +199,42 @@ class UserIdentityTests(unittest.TestCase):
     def test_a_user_identity_is_emitted(self) -> None:
         argv = build_container_command("docker", _spec(user="501:20"))
         self.assertEqual(_pairs(argv, "--user"), ["501:20"])
+
+
+class TrustRefusalRemedyTests(unittest.TestCase):
+    """A refusal must say what to run, not only what is forbidden.
+
+    Approving an image is deliberately a person's act at a terminal, so the
+    refusal is the only place the command can reach them.
+    """
+
+    def test_the_remedy_is_the_exact_command(self) -> None:
+        from optpilot.realm.provider_trust_records import image_approval_remedy
+
+        self.assertEqual(
+            image_approval_remedy(IMAGE),
+            f"Approve it by running: optpilot image approve {IMAGE}",
+        )
+
+    def test_the_method_refusal_names_the_image_and_the_command(self) -> None:
+        from optpilot.retained_batch_runtime import RetainedBatchRuntimeError
+        from optpilot.realm.provider_trust_records import image_approval_remedy
+
+        error = RetainedBatchRuntimeError(
+            "container_untrusted",
+            f"The image is {IMAGE}. {image_approval_remedy(IMAGE)}",
+        )
+        self.assertIn(IMAGE, str(error))
+        self.assertIn("optpilot image approve", str(error))
+        self.assertEqual(error.code, "container_untrusted")
+
+    def test_a_bare_code_still_works_unchanged(self) -> None:
+        # Every other caller passes a code alone; that must keep its exact
+        # message so nothing downstream that matches on it changes.
+        from optpilot.retained_batch_runtime import RetainedBatchRuntimeError
+
+        error = RetainedBatchRuntimeError("container_untrusted")
+        self.assertEqual(
+            str(error),
+            "The method's image has not been approved for study execution.",
+        )
