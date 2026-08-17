@@ -2012,8 +2012,25 @@ def _check_entry_count(nodes: Sequence[_InventoryNode], limits: SealLimits) -> N
 
 def _reject_xattrs(fd: int, path: str, *, ignored: frozenset[str]) -> None:
     attributes = _unsupported_xattrs(fd, path, ignored=ignored)
-    if attributes:
-        raise ContentRejected(f"Extended attributes are unsupported in v1 trees: {path!r}.")
+    if not attributes:
+        return
+    named = ", ".join(sorted(attributes))
+    remedy = ""
+    if sys.platform == "darwin" and "com.apple.quarantine" in attributes:
+        # By far the most likely way an ordinary person meets this: macOS marks
+        # anything arrived from a browser as quarantined, so a package
+        # downloaded rather than cloned cannot be captured. Naming the command
+        # turns a dead end into a one-line fix. The marker stays rejected
+        # rather than ignored: it is security metadata, and silently dropping
+        # it would strip a warning the operating system meant to keep.
+        remedy = (
+            " This usually means the files were downloaded. Clear the marker "
+            "with: xattr -dr com.apple.quarantine <folder>"
+        )
+    raise ContentRejected(
+        f"Extended attributes are unsupported in v1 trees: {path!r} "
+        f"carries {named}.{remedy}"
+    )
 
 
 def _unsupported_xattrs(

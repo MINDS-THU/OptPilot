@@ -2384,3 +2384,51 @@ class LocalContentStoreTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExtendedAttributeRefusalTest(unittest.TestCase):
+    """A refused capture must say why, and how to proceed.
+
+    macOS marks anything arrived from a browser as quarantined, so the most
+    likely person to meet this refusal is someone who downloaded a package
+    rather than cloning it. The marker stays rejected -- it is security
+    metadata the operating system meant to keep -- but the refusal now carries
+    the one command that clears it.
+    """
+
+    def test_the_refusal_names_the_attributes(self) -> None:
+        import sys as _sys
+        from unittest.mock import patch
+
+        from optpilot.realm.content import _reject_xattrs
+        from optpilot.realm.errors import ContentRejected
+
+        with patch(
+            "optpilot.realm.content._unsupported_xattrs",
+            return_value={"com.example.thing"},
+        ):
+            with self.assertRaises(ContentRejected) as caught:
+                _reject_xattrs(0, "some/file.py", ignored=frozenset())
+        message = str(caught.exception)
+        self.assertIn("some/file.py", message)
+        self.assertIn("com.example.thing", message)
+
+    def test_a_quarantined_download_is_told_how_to_clear_it(self) -> None:
+        import sys as _sys
+        from unittest.mock import patch
+
+        from optpilot.realm.content import _reject_xattrs
+        from optpilot.realm.errors import ContentRejected
+
+        with (
+            patch("optpilot.realm.content.sys.platform", "darwin"),
+            patch(
+                "optpilot.realm.content._unsupported_xattrs",
+                return_value={"com.apple.quarantine"},
+            ),
+        ):
+            with self.assertRaises(ContentRejected) as caught:
+                _reject_xattrs(0, "downloaded/thing.py", ignored=frozenset())
+        message = str(caught.exception)
+        self.assertIn("xattr -dr com.apple.quarantine", message)
+        self.assertIn("downloaded", message)
