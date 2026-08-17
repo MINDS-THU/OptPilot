@@ -1034,22 +1034,37 @@ def _public_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _candidate_context_paths(context: Dict[str, Any]) -> set:
+def declared_context_paths(declaration: Mapping[str, Any]) -> set:
+    """Every context token an environment offers the method paired with it.
+
+    ONE definition, shared by the compiler's compatibility rules and by
+    Studio's pairing check. They were separate copies once and drifted:
+    Studio's never learned about policyValidation, so every trace-aware
+    policy-search pairing was reported incompatible while the compiler
+    considered it fine. A method that requires a token the environment does
+    not offer cannot run, so a wrong answer here blocks a launch outright.
+
+    It reads the same names from either an environment's authored settings or
+    a compiled candidate context, because the two use the same names for the
+    same things.
+    """
+
     paths = {"candidate", "candidate.format", "evidence", "evidence.observations"}
-    candidate = context.get("candidate", {})
+    candidate = declaration.get("candidate", {})
     if isinstance(candidate, dict):
         _add_nested_paths(paths, "candidate", candidate)
-    method_context = context.get("methodContext", {})
-    if isinstance(method_context, dict) and method_context:
-        paths.add("methodContext")
-        _add_nested_paths(paths, "methodContext", method_context)
-    policy_validation = context.get("policyValidation", {})
-    if isinstance(policy_validation, dict) and policy_validation:
-        paths.add("policyValidation")
-        _add_nested_paths(paths, "policyValidation", policy_validation)
-    if context.get("capabilities"):
+    for block in ("methodContext", "policyValidation"):
+        value = declaration.get(block, {})
+        if isinstance(value, dict) and value:
+            paths.add(block)
+            _add_nested_paths(paths, block, value)
+    if declaration.get("capabilities"):
         paths.add("capabilities")
     return paths
+
+
+def _candidate_context_paths(context: Dict[str, Any]) -> set:
+    return declared_context_paths(context)
 
 
 def _add_nested_paths(paths: set, prefix: str, value: Any) -> None:

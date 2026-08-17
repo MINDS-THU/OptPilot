@@ -73,6 +73,7 @@ from optpilot.config import (
     candidate_contract_mismatch,
     compile_authoring_config,
     compile_interface_launch_profiles,
+    declared_context_paths,
     validate_authoring_config,
 )
 from optpilot.config_errors import CodedConfigError, StudyLaunchInputsError
@@ -10239,7 +10240,7 @@ def _compatibility_result(
     method_candidate_formats = list(accepts.get("formats", []) or [])
     required_context = list(requires.get("context", []) or [])
     required_capabilities = list(requires.get("capabilities", []) or [])
-    env_context = _environment_context_paths(env_raw)
+    env_context = declared_context_paths(env_raw)
     env_capabilities = {
         str(item.get("id"))
         for item in env_raw.get("capabilities", []) or []
@@ -10309,36 +10310,6 @@ def _compat_entity(entry: JsonDict) -> JsonDict:
 
 def _compat_check(ok: bool, success: str, failure: str) -> JsonDict:
     return {"ok": ok, "message": success if ok else failure}
-
-
-def _environment_context_paths(environment: JsonDict) -> set:
-    paths = {"candidate", "candidate.format", "evidence", "evidence.observations"}
-    candidate = (
-        environment.get("candidate", {})
-        if isinstance(environment.get("candidate"), dict)
-        else {}
-    )
-    _add_context_paths(paths, "candidate", candidate)
-    method_context = (
-        environment.get("methodContext", {})
-        if isinstance(environment.get("methodContext"), dict)
-        else {}
-    )
-    if method_context:
-        paths.add("methodContext")
-        _add_context_paths(paths, "methodContext", method_context)
-    return paths
-
-
-def _add_context_paths(paths: set, prefix: str, value: Any) -> None:
-    if isinstance(value, dict):
-        for key, child in value.items():
-            path = f"{prefix}.{key}"
-            if child not in (None, [], {}):
-                paths.add(path)
-            _add_context_paths(paths, path, child)
-    elif isinstance(value, list) and value:
-        paths.add(prefix)
 
 
 def _portable_relative_path(value: Any, label: str) -> str:
