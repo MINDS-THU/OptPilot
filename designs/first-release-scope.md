@@ -78,6 +78,55 @@ Each was reproduced live against a fresh install.
 | N9 | **The runs list contradicts the run page it links to** — 15/135 beside 68/135, "not available" beside a real result. | hours |
 | N10 | **The image-approval command Studio offers assumes a source checkout** (`uv run`) and omits the archive location, so it can silently approve into the wrong place. | hours |
 
+### 0.4 Decision: the example packages ship inside the install, as ordinary packages
+
+**Decided 2026-08-17.** The five example packages travel with the install, but
+they are not the install's property. On first run OptPilot copies them into a
+per-user packages folder — beside the permanent store it already keeps, which
+already has a correct location on each operating system — and from that moment
+they are ordinary packages: writable, carrying their own identity, registering
+through exactly the same path any contributed package uses.
+
+**Why this shape rather than the two obvious ones.** Leaving the packages
+inside the installed software would be cheapest to *"the packages are
+present"*, which is not the same as *"a person can use them"*: that location is
+read-only and is overwritten by the next upgrade, so adapting an example — the
+most natural thing an interested person does — means copying it out by hand
+into something OptPilot no longer recognises as related. It would also keep the
+special case that causes the worst visible defect today, where OptPilot refuses
+to register its own packages and every shipped run setup is therefore
+unlaunchable.
+
+Distributing each package from its own repository was the other candidate and
+is the right long-term shape, but it was measured at three to four and a half
+weeks, over half of that being repository and testing logistics rather than
+OptPilot code, with no offline installation at all until an archive route is
+also built. Critically, **choosing this does not give that up.** The reason to
+want separate repositories is to avoid shipped packages behaving differently
+from contributed ones — and that difference is caused by special-casing in
+code, not by how the packages travelled. Once every package lives in the same
+per-user folder with the same identity and the same registration path, adding
+a download command later is a pure addition: fetch a folder into a place that
+already works. Because identities are fixed, a later download of a package that
+shipped with the install *updates* it rather than colliding with it.
+
+**What this decision requires**, in the order it has to happen:
+
+| Step | Note |
+| --- | --- |
+| Include the packages in what gets published | Reverses today's exclusion, which groups them with research scratch. Sub-question left open: whether to include the 22 MB three-dimensional animation inside the factory-scheduling package, or ship without it at about 9 MB. |
+| Define the per-user packages folder | A location beside the existing permanent store, with an environment variable to override it. Small. |
+| Copy the shipped packages there once, on first run | Idempotent, so a repeat start does nothing. Never overwrites a package the person has edited. |
+| Teach Studio to look there | Studio currently looks only beside the directory it was started from; this is the one genuine code change, and it is needed under every option. |
+| Give each package an identity file | Now required, not optional: this is what lets a package be recognised as itself after it moves, so re-installing updates rather than collides. None of the five has one today. |
+| Remove the refusal to register shipped packages | The special case that makes all 18 shipped run setups unlaunchable. |
+| Ignore or strip macOS file marks when sealing | Without this the operations-research package cannot be registered at all, so the automatic setup would fail on it. |
+
+Together this replaces the earlier item "make the bundled packages launchable
+out of the box" and absorbs most of the installation problem in §0.1. Estimated
+at about a week. It leaves untouched the separate problem that the published
+release is stale and the web application was never published at all.
+
 ### 0.3 What was verified as genuinely good
 
 Worth stating, because it bounds the problem. All five packages validate
