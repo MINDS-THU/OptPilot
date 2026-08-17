@@ -53,8 +53,8 @@ forces cuts, cut from the bottom of this table, not the top.
 | --- | --- | --- | --- |
 | B1 | Give every component and run setup a human `name:` | S | Pure content, about 19 files, no code: the server already prefers `name` over the id. Today users browse "production-agv-scheduling-baselines" and the welcome page offers "Solve with coopa-solver". |
 | B2 | Make search read the description, and match word by word | S | The search box reads a field the entries do not fill, so "simulator" matches 0 of the 11 entries whose descriptions contain it; and whole-phrase matching means "factory design" matches nothing. The server already implements the correct word-by-word semantics — mirror it. |
-| B3 | Add a declared `tasks:` vocabulary and expand queries through a synonym table | M | "optimization", "solver", "layout" currently match nothing anywhere. Additive schema field; see rule 8 in §5 for why this shape and not tags. |
-| B4 | Make the bundled packages launchable out of the box | L | **The single largest unlock.** On a fresh install every bundled package is a local folder, so pairing and launching are blocked behind a per-package publish ceremony nothing explains. Either auto-register the bundled packages on first start, or let local-folder entries launch directly. Needs a decision (§4). |
+| B3 | Add a declared `tasks:` vocabulary and expand queries through a synonym table | M | "optimization", "solver", "layout" currently match nothing anywhere. An added settings field, not reused tags — the last rule in §5 says why. |
+| B4 | Make the bundled packages launchable out of the box | L | **The single largest unlock.** On a fresh install nothing has taken the permanent copy of each shipped package that OptPilot requires before it will run anything, so every bundled package is unrunnable and nothing on screen says why. Needs the first decision in §4. |
 | B5 | De-emphasize test fixtures and near-duplicate variants in the catalog list | S | Eight CI smoke configs and seven near-identical variants currently sit beside the flagships as equals. |
 | B6 | Name the image and the exact command when a launch is refused for trust | S | The refusal is correct but arrives without the image reference or the remedy. Add the same line as a pre-launch warning. |
 | B7 | Rebuild the Run page around the trace | L | Promote the trial map to the page's spine; selecting a trial fills the page below it with that trial's evidence; add a live panel for the running trial; fold the eight parallel views into the per-trial pane plus one record view; fix the silent 50-trial truncation and the "Planned" mislabel. |
@@ -83,21 +83,74 @@ Not the target Assistant. The smallest one that does not dead-end.
 
 ## 4. The two decisions only the owner can make
 
-**How bundled packages become launchable (B4).** Auto-registering them on
-first start is the smoother experience and keeps one code path, but it writes
-to the archive before the person has asked for anything. Allowing local
-folders to launch directly avoids that but creates a second path that must
-stay consistent with the registered one. Recommendation: **auto-register on
-first start**, because it also gives every bundled package a version and
-lineage from day one, which the target design assumes anyway.
+### Decision one: should OptPilot set up its own ready-made packages the first time it starts?
 
-**Whether the COOPA leg of the flagship story ships.** Nothing today connects
-a generated simulator to the operations-research solver — no extraction, no
-recipe, not even a cross-link between the two documentation pages. Either
-descope the claim for this release, or add a short documented bridge (**S**:
-a walkthrough section showing how to describe the generated system as the
-solver's problem input, cross-linked both ways). Recommendation: **ship the
-documented bridge, descope the automation.**
+**The situation.** OptPilot ships with five ready-made packages — a factory
+and vehicle scheduling simulator, a simulator generator, a solver for
+operations-research problems, a design benchmark, and a policy-search method.
+Each arrives as an ordinary folder of files.
+
+Before OptPilot will run anything from a folder, it takes a numbered,
+permanent copy of that folder's exact contents and keeps it forever. That
+permanent copy is what lets someone say later, with proof, *this exact code
+produced this exact result* — the copy never changes, even as the folder is
+edited. Making that copy is a deliberate step; nothing does it by itself.
+
+Nothing currently makes that copy for the five packages that ship with the
+product. So a person installs OptPilot, opens it, picks the factory
+simulator, and finds they cannot run it — with nothing on screen saying a
+setup step is missing or how to do it. This is the largest single reason a
+first session fails.
+
+**The two ways to fix it.**
+
+*Set them up automatically the first time OptPilot starts.* Everything works
+immediately and the person never has to learn that this step exists. Packages
+that ship with the product then behave exactly like packages the person makes
+themselves, so there is only one way things work. The cost: OptPilot spends a
+few seconds and some disk space storing those permanent copies before the
+person has asked for anything in particular.
+
+*Let a package run straight from its folder, with no permanent copy.* Nothing
+is stored until the person asks for it. The cost: there are now two different
+ways to run things, which have to be kept behaving identically forever; and a
+result produced this way cannot point back to a permanent copy of the code
+that made it — which weakens the product's central promise for precisely the
+packages we ship as the examples of it.
+
+**Recommendation: set them up automatically on first start.**
+
+### Decision two: does the "solve it as a mathematical problem" route ship in the first release?
+
+**The situation.** The product's headline story is: describe a system you want
+to study, get a working simulator of it, then improve how that system runs.
+There are two quite different ways to do the improving, and the product
+contains both.
+
+The first is search by trial and error: a language model writes a candidate
+operating rule (for example, which patient a clinic serves next), the
+simulator scores it, and better rules survive. This route works today, from
+one end to the other.
+
+The second is to restate the situation as a mathematical optimisation problem
+and solve it exactly. This route does not connect to the first. There is no
+way to turn a generated simulator into the problem statement the solver
+expects, no written instructions for a person to do it by hand, and the two
+documentation pages never mention each other.
+
+**The two ways forward.**
+
+*Write the missing instructions.* A short walkthrough showing a person how to
+describe their generated system in the terms the solver expects, plus links
+between the two pages. Costs a few hours. The route becomes possible by hand;
+nothing becomes automatic.
+
+*Do not claim the route yet.* Present trial-and-error search as the supported
+way to improve a simulated system, and add the solver route in a later
+release once it can be done properly.
+
+**Recommendation: write the instructions.** They cost hours, and without them
+half of the headline story is a claim with nothing behind it.
 
 ---
 
@@ -147,8 +200,8 @@ explains itself.
 
 **Fourth pass — depth:** B7 (staged), C2, C3.
 
-**In parallel, owner-only:** A1 before any tag; the two decisions in §4
-before the third pass.
+**In parallel, owner-only:** the git-history purge before any release tag;
+the two decisions above before the third pass.
 
 A release could ship after the second pass. It would be honest, navigable,
 and useful, with an Assistant that answers and launches but does not yet
