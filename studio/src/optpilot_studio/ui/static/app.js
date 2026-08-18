@@ -12800,6 +12800,7 @@ function renderRunDetail() {
         ${canStopRun ? `<button class="ghost-button stop-selected-run" type="button">Stop Run</button>` : ""}
       </div>
     </div>
+    ${runTrialMapHtml(detail)}
     ${runLineageHtml(detail.lineage, run.name)}
     ${refreshNotice}
     <div class="detail-stats run-headline-stats">
@@ -12810,7 +12811,6 @@ function renderRunDetail() {
     </div>
     ${completionMessage ? `<p class="muted-text run-stop-code">${escapeHtml(completionMessage)}</p>` : ""}
     ${progressGuidance}
-    ${runTrialMapHtml(detail)}
     <div class="tabs" ${runWorkbenchTabs(detail).some(([tab]) => tab === state.activeRunTab) ? 'role="tablist" aria-orientation="horizontal"' : ""} aria-label="Run result sections" data-run-tablist>
       ${runWorkbenchTabs(detail).map(([tab, label]) => runTabButtonHtml(tab, label, detail)).join("")}
     </div>
@@ -12921,7 +12921,12 @@ function runTrialMapHtml(detail) {
       best = node;
     }
   });
-  const selectedId = state.selectedRunTrialIds[runId] || "";
+  // With nothing chosen, show what is happening now rather than nothing: the
+  // running trial, or failing that the most recent one. A person opening a
+  // live Run wants the current trial, not an empty panel.
+  const liveNode = [...nodes].reverse().find((node) => node.status === "running");
+  const selectedId = state.selectedRunTrialIds[runId]
+    || (liveNode ? liveNode.id : (nodes.length ? nodes[nodes.length - 1].id : ""));
   const chips = nodes.map((node) => {
     const isBest = best && node.id === best.id;
     const label = node.ordinal || "?";
@@ -12940,9 +12945,14 @@ function runTrialMapHtml(detail) {
       </button>
     `;
   });
-  const ghostCount = Math.max(0, planned - nodes.length);
+  // Trials arrive one page at a time. When more are unloaded, the remaining
+  // budget is unknown -- drawing the difference as "planned" labelled trials
+  // that had already run and finished as though they had never started.
+  const trialPaging = (workbenchPage(detail, "logical_trial").page) || {};
+  const moreTrialsUnloaded = Boolean(trialPaging.has_more);
+  const ghostCount = moreTrialsUnloaded ? 0 : Math.max(0, planned - nodes.length);
   const ghosts = Array.from({ length: Math.min(ghostCount, 64) }, (_, index) => `
-    <span class="run-trial-node run-trial-planned" title="Planned trial">
+    <span class="run-trial-node run-trial-planned" title="Not started yet">
       <span class="run-trial-index">${nodes.length + index + 1}</span>
     </span>
   `);
@@ -12957,6 +12967,11 @@ function runTrialMapHtml(detail) {
         ${chips.join('<span class="run-trial-connector" aria-hidden="true"></span>')}
         ${ghosts.length ? `<span class="run-trial-connector" aria-hidden="true"></span>${ghosts.join('<span class="run-trial-connector" aria-hidden="true"></span>')}` : ""}
       </div>
+      ${moreTrialsUnloaded ? `
+      <p class="run-trial-map-truncated">
+        Showing the first ${escapeHtml(String(nodes.length))} trials.
+        <button class="ghost-button compact-action" data-run-page-more="logical_trial" type="button" ${state.runPageLoadingKind === "logical_trial" ? "disabled" : ""}>${state.runPageLoadingKind === "logical_trial" ? "Loading…" : "Load the rest"}</button>
+      </p>` : ""}
       ${selected ? runTrialInspectorHtml(detail, selected) : ""}
     </section>
   `;
@@ -12964,19 +12979,38 @@ function runTrialMapHtml(detail) {
 
 function runTrialInspectorHtml(detail, node) {
   const statusLabel = node.status === "running"
-    ? "Running"
+    ? "Running now"
     : node.status === "succeeded"
       ? "Succeeded"
       : `Failed${node.code ? ` (${node.code})` : ""}`;
+  // What a running trial is actually doing. Previously a live trial showed
+  // the same five facts as a finished one, three of them empty, and nothing
+  // said whether anything was happening.
+  const liveNote = node.status === "running"
+    ? `<p class="run-trial-live-note">${
+        node.attemptCount > 1
+          ? `This trial is on attempt ${escapeHtml(String(node.attemptCount))}; earlier attempts are listed under Attempts.`
+          : "Its evaluation is under way. The result appears here when the trial finishes."
+      }</p>`
+    : "";
   return `
     <div class="run-trial-inspector">
       <div class="run-trial-inspector-facts">
         <div><span>Trial</span><strong>#${escapeHtml(String(node.ordinal))}</strong></div>
         <div><span>Status</span><strong>${escapeHtml(statusLabel)}</strong></div>
-        <div><span>Result</span><strong>${escapeHtml(typeof node.value === "number" ? formatMetricNumber(node.value) : "not reported yet")}</strong></div>
+        <div><span>Result</span><strong>${escapeHtml(
+          typeof node.value === "number"
+            ? formatMetricNumber(node.value)
+            : node.status === "running"
+              ? "still running"
+              : node.status === "failed"
+                ? "none — this trial failed"
+                : "not reported"
+        )}</strong></div>
         <div><span>Attempts</span><strong>${escapeHtml(String(node.attemptCount || 1))}</strong></div>
         <div class="run-trial-inspector-candidate"><span>Candidate</span><strong title="${escapeHtml(node.candidateId)}">${escapeHtml(node.candidateId || "-")}</strong></div>
       </div>
+      ${liveNote}
       <div class="action-row">
         <button class="ghost-button compact-action" type="button" data-run-trial-open-candidate="${escapeHtml(node.candidateId)}">Open Candidate details</button>
         <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="attempt">Attempts</button>

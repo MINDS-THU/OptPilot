@@ -9641,6 +9641,28 @@ body.shell-v2.shell-conversation .timeline-item {
   gap: 2px;
 }
 
+/* The trace is the Run page's spine, so it reads as the primary element
+   rather than one panel among several. */
+.run-trial-map-panel {
+  margin-top: 4px;
+}
+
+.run-trial-map-truncated {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted-text, #666);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.run-trial-live-note {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--muted-text, #666);
+}
+
 .run-trial-map {
   display: flex;
   flex-wrap: wrap;
