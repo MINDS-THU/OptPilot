@@ -11,6 +11,8 @@ description: >-
   file-candidate environment that supplies those references. Set
   settings.mode to seed for a deterministic, zero-LLM run (used by the smoke
   study and CI); set it to llm to call a model.
+tasks:
+  - evaluate-design
 tags: [llm, factorio, factory-design, baseline, files, one-shot-per-trial]
 
 entrypoint:

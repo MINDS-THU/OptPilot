@@ -8,6 +8,9 @@ description: >-
   no API key and no network. This is the package's CI smoke method and the
   fixed reference point every LLM run is compared against. It shares its
   implementation with direct-designer; only the mode differs.
+tasks:
+  - evaluate-design
+  - benchmark-method
 tags: [factorio, factory-design, baseline, files, one-shot-per-trial]
 
 entrypoint:

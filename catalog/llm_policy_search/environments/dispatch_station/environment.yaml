@@ -11,6 +11,9 @@ description: >-
   converts the worst replication's event trace to SQLite, and reports
   aggregate and worst-seed scores (score = negated average waiting time,
   so higher is better).
+tasks:
+  - optimize-policy
+  - generate-simulator
 tags: [des, devs, dispatching, policy-search, generated]
 
 evaluator:

@@ -6986,6 +6986,11 @@ def _catalog_entry_search_text(entry: Mapping[str, Any]) -> str:
     tags = entry.get("tags")
     if isinstance(tags, list):
         parts.extend(item for item in tags if isinstance(item, str))
+    tasks = entry.get("tasks")
+    if isinstance(tasks, list):
+        from optpilot.task_vocabulary import task_search_words
+
+        parts.extend(task_search_words(tasks))
     return " ".join(parts).lower()
 
 
@@ -7002,6 +7007,14 @@ def _search_catalog_entries(
     and every requested tag must be declared on the entry exactly.
     """
 
+    from optpilot.task_vocabulary import expand_search_terms
+
+    # Each term also matches the kinds of work it could mean, so "optimize"
+    # reaches something that declared optimize-policy without containing the
+    # word itself.
+    expanded_terms = [
+        expand_search_terms(term) for term in query.split() if term
+    ]
     terms = [term.lower() for term in query.split() if term]
     results: list[JsonDict] = []
     for entry in entries:
@@ -7015,9 +7028,12 @@ def _search_catalog_entries(
             }
             if not set(tags).issubset(entry_tags):
                 continue
-        if terms:
+        if expanded_terms:
             haystack = _catalog_entry_search_text(entry)
-            if not all(term in haystack for term in terms):
+            if not all(
+                any(option in haystack for option in options)
+                for options in expanded_terms
+            ):
                 continue
         results.append(dict(entry))
     return results
@@ -7790,6 +7806,7 @@ def _catalog_entry(
         "_source_path": str(path.resolve()),
         "description": str(raw.get("description", "")),
         "tags": list(raw.get("tags", []) or []),
+        "tasks": list(raw.get("tasks", []) or []),
         "summary": {},
         "raw_config": deepcopy(raw),
         "yaml": yaml.safe_dump(raw, sort_keys=False),
@@ -7868,6 +7885,7 @@ def _catalog_entry(
             "name": raw.get("name"),
             "description": raw.get("description"),
             "tags": list(raw.get("tags", []) or []),
+        "tasks": list(raw.get("tasks", []) or []),
             "environment": environment_ref,
             "environmentRef": (
                 environment_entry_ref.to_dict()
@@ -36591,10 +36609,35 @@ def _default_catalog_roots(cwd: Path) -> List[Path]:
     # would be scanned forever and found to contain nothing.
     user_packages = _prepared_user_packages_root(cwd)
     if _catalog_package_roots(user_packages):
-        roots.extend(_expand_catalog_roots([user_packages]))
+        roots.extend(
+            _user_package_roots_not_shadowed(user_packages, roots)
+        )
     if roots:
         return _dedupe_paths(roots)
     return [cwd]
+
+
+def _user_package_roots_not_shadowed(
+    user_packages: Path, existing: Iterable[Path]
+) -> List[Path]:
+    """The person's packages, minus any the open project already provides.
+
+    Two folders claiming one package id is refused, and that refusal takes the
+    whole catalog down rather than one entry -- so a copy in the person's own
+    folder that shares a name with something in the project would leave them
+    with no catalog at all. That happens easily: the copies OptPilot itself
+    makes are named after the packages they came from.
+
+    The project wins. It is what the person opened, and it is the copy they
+    are more likely to be editing.
+    """
+
+    taken = {root.name for root in existing}
+    return [
+        root
+        for root in _expand_catalog_roots([user_packages])
+        if root.name not in taken
+    ]
 
 
 def _prepared_user_packages_root(cwd: Path | None = None) -> Path:
@@ -36800,7 +36843,12 @@ def _refresh_catalog_package_roots(state: UiState) -> None:
     user_packages = default_packages_root()
     if _catalog_package_roots(user_packages):
         state.catalog_roots = _dedupe_paths(
-            [*state.catalog_roots, *_expand_catalog_roots([user_packages])]
+            [
+                *state.catalog_roots,
+                *_user_package_roots_not_shadowed(
+                    user_packages, state.catalog_roots
+                ),
+            ]
         )
     state.catalog_roots = _drop_catalog_roots_containing_others(state.catalog_roots)
     state._configured_catalog_source_roots = {

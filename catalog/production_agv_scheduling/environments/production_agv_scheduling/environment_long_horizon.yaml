@@ -3,6 +3,9 @@ config: environment
 id: production-agv-scheduling-long-horizon
 name: "Production line with vehicles (long run)"
 description: Ten-replication robustness evaluation over a 3000-minute horizon.
+tasks:
+  - optimize-policy
+  - tune-parameters
 tags: [production, agv, scheduling, files, simulation, robustness]
 
 interface:

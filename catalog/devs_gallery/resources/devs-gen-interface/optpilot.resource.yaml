@@ -3,6 +3,8 @@ config: resource
 id: devs-gen-interface
 name: DEVS Simulation Generator Interface
 description: Natural-language interface for generating, running, and visualizing xDEVS discrete-event simulation projects.
+tasks:
+  - generate-simulator
 purpose: generator
 tags:
   - resource

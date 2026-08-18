@@ -8,6 +8,8 @@ description: >-
   worst-seed process traces. Fully contract-driven - the editable file
   set, policy interface, validation rules, domain wording, and replay
   capability all come from the environment's declarations.
+tasks:
+  - optimize-policy
 tags: [llm, heuristic-design, policy-search, files]
 
 entrypoint:

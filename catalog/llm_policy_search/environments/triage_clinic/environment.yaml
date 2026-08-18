@@ -12,6 +12,9 @@ description: >-
   replications, converts the worst replication's event trace to SQLite,
   and reports aggregate and worst-seed scores (score = negated average
   urgency-weighted waiting time, so higher is better).
+tasks:
+  - optimize-policy
+  - generate-simulator
 tags: [des, devs, triage, healthcare, policy-search, generated]
 
 evaluator:

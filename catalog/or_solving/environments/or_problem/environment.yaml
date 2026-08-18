@@ -8,6 +8,8 @@ description: >-
   solution artifact. It does not re-solve the problem; the retained artifact
   (formulation, confidence, routing, generated code, numeric answer) is the
   auditable evidence.
+tasks:
+  - solve-or-problem
 tags: [operations-research, one-time-solve, llm]
 
 evaluator:

@@ -8,6 +8,9 @@ description: >-
   Candidates set the epidemiological parameters; metrics report the final
   compartment populations after the simulated horizon. The simulator code
   is unmodified generator output from the DEVS-Gen gallery.
+tasks:
+  - tune-parameters
+  - generate-simulator
 tags: [devs, simulation, epidemic, generated]
 
 evaluator:

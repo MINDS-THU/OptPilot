@@ -12,6 +12,8 @@ description: >-
   Factorio game; it is what catches instantiation failures. Rate
   achievement is NOT evaluated here - no throughput number can be derived
   statically, it requires the game runtime (see the package README).
+tasks:
+  - evaluate-design
 tags: [factorio, factory-design, benchmark, files, static-validation, llm-agent]
 
 evaluator:

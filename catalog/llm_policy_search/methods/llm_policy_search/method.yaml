@@ -9,6 +9,8 @@ description: >-
   set, policy interface, validation rules, domain wording, and replay
   capability all come from the environment's declarations, so any DES
   environment that publishes the contracts can adopt it unchanged.
+tasks:
+  - optimize-policy
 tags: [llm, heuristic-design, policy-search, files]
 
 entrypoint:

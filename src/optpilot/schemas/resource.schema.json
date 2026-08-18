@@ -3,20 +3,55 @@
   "$id": "https://optpilot.io/schemas/resource.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "config", "id"],
+  "required": [
+    "apiVersion",
+    "config",
+    "id"
+  ],
   "properties": {
-    "apiVersion": {"$ref": "defs/common.schema.json#/definitions/apiVersion"},
-    "config": {"const": "resource"},
-    "id": {"$ref": "defs/common.schema.json#/definitions/identifier"},
-    "name": {"type": "string"},
-    "description": {"$ref": "defs/common.schema.json#/definitions/description"},
-    "tags": {"$ref": "defs/common.schema.json#/definitions/tags"},
+    "apiVersion": {
+      "$ref": "defs/common.schema.json#/definitions/apiVersion"
+    },
+    "config": {
+      "const": "resource"
+    },
+    "id": {
+      "$ref": "defs/common.schema.json#/definitions/identifier"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "$ref": "defs/common.schema.json#/definitions/description"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "What this is for, as short verb-object slugs such as optimize-policy or solve-or-problem. Searching expands ordinary words to these, so a person who types \"optimize\" finds work that does it."
+    },
+    "tags": {
+      "$ref": "defs/common.schema.json#/definitions/tags"
+    },
     "purpose": {
       "type": "string",
-      "enum": ["generator", "viewer", "template", "reference"]
+      "enum": [
+        "generator",
+        "viewer",
+        "template",
+        "reference"
+      ]
     },
-    "inputs": {"$ref": "defs/candidate.schema.json#/definitions/parameterMap"},
-    "actions": {"$ref": "defs/common.schema.json#/definitions/resourceActions"},
-    "interface": {"$ref": "defs/common.schema.json#/definitions/interface"}
+    "inputs": {
+      "$ref": "defs/candidate.schema.json#/definitions/parameterMap"
+    },
+    "actions": {
+      "$ref": "defs/common.schema.json#/definitions/resourceActions"
+    },
+    "interface": {
+      "$ref": "defs/common.schema.json#/definitions/interface"
+    }
   }
 }

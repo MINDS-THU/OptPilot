@@ -3,6 +3,9 @@ config: environment
 id: production-agv-scheduling-faults
 name: "Production line with vehicles (machine faults)"
 description: Ten-replication robustness evaluation with random equipment faults enabled.
+tasks:
+  - optimize-policy
+  - tune-parameters
 tags: [production, agv, scheduling, files, simulation, robustness, faults]
 
 interface:

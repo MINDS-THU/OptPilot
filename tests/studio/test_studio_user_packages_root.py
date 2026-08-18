@@ -176,3 +176,41 @@ class FirstStartRegistrationTest(unittest.TestCase):
             self.assertEqual(
                 len(_configured_package_source_identity_digest(first)), 64
             )
+
+
+class ProjectShadowsUserPackagesTest(unittest.TestCase):
+    """A name clash must not take the whole Catalog down.
+
+    Two folders claiming one package id is refused, and that refusal fails the
+    entire scan rather than one entry -- so a copy in the person's own folder
+    sharing a name with something in the open project would leave them with no
+    Catalog at all. That is easy to reach: the copies OptPilot makes are named
+    after the packages they came from.
+    """
+
+    def test_the_open_project_wins_over_a_copy_of_the_same_name(self) -> None:
+        from optpilot_studio.ui.server import _user_package_roots_not_shadowed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project" / "catalog"
+            _make_package(project, "devs_gallery")
+            user_packages = root / "packages"
+            _make_package(user_packages, "devs_gallery")
+            _make_package(user_packages, "only_mine")
+
+            kept = _user_package_roots_not_shadowed(
+                user_packages, [project / "devs_gallery"]
+            )
+        self.assertEqual([p.name for p in kept], ["only_mine"])
+
+    def test_nothing_is_dropped_when_there_is_no_clash(self) -> None:
+        from optpilot_studio.ui.server import _user_package_roots_not_shadowed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_packages = root / "packages"
+            _make_package(user_packages, "alpha")
+            _make_package(user_packages, "beta")
+            kept = _user_package_roots_not_shadowed(user_packages, [])
+        self.assertEqual(sorted(p.name for p in kept), ["alpha", "beta"])

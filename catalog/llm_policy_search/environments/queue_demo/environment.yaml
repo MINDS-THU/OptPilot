@@ -8,6 +8,9 @@ description: >-
   the evaluator runs seeded replications, retains the worst replication's
   SQLite trace, and reports aggregate and worst-seed scores. The
   executable instantiation of the bring-your-own-simulator DES template.
+tasks:
+  - optimize-policy
+  - generate-simulator
 tags: [des, queueing, policy-search, template]
 
 evaluator:

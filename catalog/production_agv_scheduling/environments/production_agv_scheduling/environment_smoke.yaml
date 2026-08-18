@@ -3,6 +3,9 @@ config: environment
 id: production-agv-scheduling-smoke
 name: "Production line with vehicles (quick check)"
 description: Short deterministic production-and-AGV policy evaluation for integration checks.
+tasks:
+  - optimize-policy
+  - tune-parameters
 tags: [production, agv, scheduling, files, simulation, smoke]
 
 interface:

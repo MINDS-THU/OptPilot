@@ -12,6 +12,8 @@ description: >-
   problem as a person, launch the solve-or-problem Run setup and enter the
   problem in its launch-inputs form; the answer and full audit artifact
   come back as retained Run evidence.
+tasks:
+  - solve-or-problem
 tags: [llm, operations-research, one-time-solve, command-method]
 
 entrypoint:

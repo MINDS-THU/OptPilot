@@ -3,6 +3,9 @@ config: method
 id: ga-weighted-rule-search-smoke
 name: "Rule-weight search (quick check)"
 description: Four-policy, one-generation GA configuration for integration smoke tests.
+tasks:
+  - optimize-policy
+  - benchmark-method
 tags: [production, agv, baseline, ga, smoke, file-candidate, no-api]
 
 entrypoint:

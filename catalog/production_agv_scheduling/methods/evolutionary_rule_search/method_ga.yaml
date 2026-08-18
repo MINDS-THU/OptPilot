@@ -3,6 +3,9 @@ config: method
 id: ga-weighted-rule-search
 name: "Rule-weight search (genetic algorithm)"
 description: Paper-style genetic search over executable 14-weight scheduling policies.
+tasks:
+  - optimize-policy
+  - tune-parameters
 tags: [production, agv, baseline, ga, file-candidate, no-api]
 
 entrypoint:

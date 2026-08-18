@@ -393,7 +393,13 @@ class RunAttemptSchedulerTest(unittest.TestCase):
             fixture, provider_root="parallel-scheduler-provider"
         )
         scheduler = self.scheduler(fixture, provider)
-        startup_barrier = threading.Barrier(2, timeout=5)
+        # Generous on purpose. The barrier forces both threads to be inside
+        # the provider at once, which is what this test is about; the timeout
+        # only stops a wedged test hanging forever. At 5s it broke under
+        # full-suite load -- two real evaluator subprocesses do not always
+        # start within five seconds on a busy machine -- and a broken barrier
+        # surfaces later as a failure at the result call, which hid the cause.
+        startup_barrier = threading.Barrier(2, timeout=60)
         start_or_attach = provider.start_or_attach
 
         def gated_start_or_attach(**kwargs):

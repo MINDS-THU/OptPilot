@@ -9,6 +9,9 @@ description: >-
   retransmission timeout); metrics report delivered packets,
   retransmissions, and channel drops. The simulator code is unmodified
   generator output from the DEVS-Gen gallery.
+tasks:
+  - tune-parameters
+  - generate-simulator
 tags: [devs, simulation, protocol, generated]
 
 evaluator:
