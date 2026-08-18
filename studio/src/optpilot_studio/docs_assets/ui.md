@@ -51,7 +51,7 @@ Start with this path:
 2. Review the Environment, Method, or Resource cards recommended by the
    Assistant. Open **Catalog** whenever you want to inspect the available
    components yourself.
-3. Ask to evaluate the bundled job-shop baseline, or find
+3. Ask to evaluate one of the ready-made run setups, or find
    `job_shop_rule_parameters_baseline.yaml` in Catalog.
 4. Review the **Run setup**: Environment, Method, objective, direction, and
    budget. Expand its detailed configuration only when needed.

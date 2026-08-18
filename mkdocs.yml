@@ -65,7 +65,7 @@ nav:
   - Installation: installation.md
   - Local Operations and Security: operations.md
   - Getting Started:
-      - First Job-Shop Run: getting-started.md
+      - Your First Run: getting-started.md
   - OptPilot Core:
       - Core Model: concepts.md
       - Candidate Contracts: candidate-contracts.md

@@ -98,7 +98,7 @@ replacement for domain-specific solvers and simulators.
 Read the docs in this order if you are new:
 
 1. [Installation](installation.md): choose Core CLI/SDK or full Studio.
-2. [First Job-Shop Run](getting-started.md): complete one small run and inspect
+2. [Your First Run](getting-started.md): complete one small run and inspect
    its evidence.
 3. [OptPilot Core](concepts.md): learn environments, methods, studies,
    candidates, runtime workspaces, and evidence.
@@ -116,9 +116,9 @@ fields and [How a Run Works](how-it-works.md) when you need the runtime sequence
 
 ## Bundled Capability Packages
 
-Beyond the job-shop tutorial, the source checkout ships four packages that each
+Beyond that first run, OptPilot ships five packages that each
 demonstrate a different kind of work. The "Where To Go Next" section of
-[First Job-Shop Run](getting-started.md) carries the exact launch command for
+[Your First Run](getting-started.md) carries the exact launch command for
 each; the pages below explain them.
 
 | Package | What it demonstrates | Runs without an API key? |
@@ -147,10 +147,11 @@ The source checkout also contains:
 - `studio/`: the OptPilot Studio UI package
 - docs, tests, and contributor tooling
 
-No catalog package is redistributed in the PyPI wheel. Third-party code that
-does ship inside a package carries its license text and a third-party notice
-inside that package. Code that cannot be redistributed is not bundled at all:
-`catalog/or_solving/` imports COOPA from a checkout you provide.
+The five ready-made packages ship with the install and are copied into a
+folder of your own the first time Studio starts. Third-party code inside a
+package carries its license text and a third-party notice in that package. Code that cannot be redistributed is not bundled at all:
+COOPA is bundled under Apache-2.0; only its native solver backends are
+installed by you.
 
 A package that works with the core CLI can be dropped into a Studio catalog root
 later. That is the intended path: integrate with the schema first, then use

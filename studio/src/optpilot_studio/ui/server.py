@@ -3232,6 +3232,11 @@ class UiState:
         self._runtime_supervisor_claim = runtime_supervisor_claim
         if runtime_supervisor_claim is not None:
             runtime_supervisor_claim.assert_active_for(self.cwd)
+        # An operator who names catalog roots means exactly those. Adding the
+        # person's own packages folder on top would quietly widen a deliberate
+        # choice -- and did, until a test that names its roots started seeing
+        # whatever happened to be installed on the machine.
+        self.catalog_roots_are_explicit = bool(catalog_roots)
         self.catalog_roots = (
             _expand_catalog_roots(catalog_roots)
             if catalog_roots
@@ -36584,7 +36589,7 @@ def _default_catalog_roots(cwd: Path) -> List[Path]:
         roots.extend(_expand_catalog_roots([catalog_root]))
     # Only when it actually holds packages: an empty folder as a catalog root
     # would be scanned forever and found to contain nothing.
-    user_packages = _prepared_user_packages_root()
+    user_packages = _prepared_user_packages_root(cwd)
     if _catalog_package_roots(user_packages):
         roots.extend(_expand_catalog_roots([user_packages]))
     if roots:
@@ -36592,21 +36597,37 @@ def _default_catalog_roots(cwd: Path) -> List[Path]:
     return [cwd]
 
 
-def _prepared_user_packages_root() -> Path:
+def _prepared_user_packages_root(cwd: Path | None = None) -> Path:
     """The person's packages folder, with the shipped examples copied in.
 
     Copying happens here rather than at install time because an installer
     cannot know which person will run it. It is safe to repeat: an existing
     folder is left exactly as it is, including one the person edited or
     deliberately emptied.
+
+    Not copied when the examples being shipped ARE the folder already being
+    scanned. In a source checkout with an editable install, the shipped
+    examples resolve to the repository's own catalog; copying them out would
+    produce a second copy of every package and the catalog would then refuse
+    to load at all, every package id being duplicated.
     """
 
-    from optpilot.example_packages import install_example_packages
+    from optpilot.example_packages import (
+        install_example_packages,
+        shipped_examples_root,
+    )
     from optpilot.realm.config import default_packages_root
 
     root = default_packages_root()
     try:
-        install_example_packages(root)
+        shipped = shipped_examples_root()
+        already_scanned = (
+            cwd is not None
+            and shipped is not None
+            and shipped.resolve() == (cwd / CATALOG_DIR_NAME).resolve()
+        )
+        if not already_scanned:
+            install_example_packages(root)
     except OSError:
         # A read-only or full home directory must not stop Studio starting.
         # The catalog is then simply emptier than it could have been.
@@ -36766,7 +36787,14 @@ def _refresh_catalog_package_roots(state: UiState) -> None:
             [*state.catalog_roots, *_expand_catalog_roots([catalog_root])]
         )
     # A package added to the person's own folder appears without a restart,
-    # the same as one dropped beside the project.
+    # the same as one dropped beside the project -- but only when the roots
+    # were not named explicitly.
+    if getattr(state, "catalog_roots_are_explicit", False):
+        state.catalog_roots = _drop_catalog_roots_containing_others(state.catalog_roots)
+        state._configured_catalog_source_roots = {
+            _configured_catalog_source_id(root): root for root in state.catalog_roots
+        }
+        return
     from optpilot.realm.config import default_packages_root
 
     user_packages = default_packages_root()

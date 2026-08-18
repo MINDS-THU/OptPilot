@@ -70,7 +70,30 @@ def shipped_examples_root() -> Path | None:
     if not location:
         return None
     root = Path(location).parent
-    return root if root.is_dir() else None
+    if not root.is_dir():
+        return None
+    if _is_source_checkout(root):
+        # Running from a checkout of OptPilot itself: these ARE the
+        # repository's catalog folder, which is already found where it sits.
+        # Copying them out would produce a second copy of every package, and
+        # a catalog holding two of everything refuses to load at all.
+        return None
+    return root
+
+
+def _is_source_checkout(examples_root: Path) -> bool:
+    """Whether this location is OptPilot's own repository rather than an install.
+
+    In a checkout, an editable install resolves the examples to the
+    repository's ``catalog`` directory, whose parent is the project itself.
+    An installed copy sits in the interpreter's packages directory, where no
+    project file is a sibling.
+    """
+
+    parent = examples_root.parent
+    return (parent / "pyproject.toml").is_file() and (
+        (parent / "src" / "optpilot").is_dir() or (parent / ".git").exists()
+    )
 
 
 def _package_dirs(root: Path) -> list[Path]:

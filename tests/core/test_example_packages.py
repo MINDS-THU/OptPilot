@@ -140,6 +140,37 @@ class ExamplePackagesTest(unittest.TestCase):
             self.assertEqual(result.installed, ())
             self.assertEqual(result.kept, ())
 
+class SourceCheckoutTest(unittest.TestCase):
+    """A checkout's own catalog is never copied anywhere.
+
+    With an editable install the shipped examples resolve to the repository's
+    own catalog directory, which Studio already finds where it sits. Copying
+    it out produced a second copy of every package, and a catalog holding two
+    of everything refuses to load at all -- so every developer working from a
+    checkout would have had an unusable Catalog page.
+    """
+
+    def test_a_repository_catalog_is_not_treated_as_shipped(self) -> None:
+        from optpilot.example_packages import _is_source_checkout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "OptPilot"
+            (repo / "src" / "optpilot").mkdir(parents=True)
+            (repo / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            catalog = repo / "catalog"
+            catalog.mkdir()
+            self.assertTrue(_is_source_checkout(catalog))
+
+    def test_an_installed_copy_is_treated_as_shipped(self) -> None:
+        from optpilot.example_packages import _is_source_checkout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp) / "site-packages"
+            examples = site / "optpilot_examples"
+            examples.mkdir(parents=True)
+            self.assertFalse(_is_source_checkout(examples))
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,7 +70,8 @@ missing wherever the package travels.
 
 This is reported as the `dependency_host_provisioned` capability code and as a
 per-component warning; it does not make the package invalid, because a
-component may be knowingly host-provisioned. The bundled job-shop methods are:
+component may be knowingly host-provisioned. The job-shop methods used in
+OptPilot's own test material are:
 they need native `ortools` and `torch` closures and are installed through the
 `examples` dependency group. To resolve a warning, vendor the dependency into
 the component's locked runtime, retain it as package source, or document the
@@ -111,7 +112,7 @@ Packages are the bridge between the core CLI and Studio:
   versions, edit eligible work in Workspaces, open interfaces,
   draft studies, and launch studies.
 
-The bundled job-shop tutorial is just one package:
+The packages that ship are just packages:
 
 ```text
 catalog/production_agv_scheduling/

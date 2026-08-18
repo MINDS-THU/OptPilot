@@ -1,26 +1,81 @@
 ---
 title: Installation
-description: Choose between the core CLI/SDK and a source checkout with Studio.
+description: Install OptPilot, and what you get.
 ---
 
 # Installation
 
-OptPilot has two installation modes.
-
-| Install | Best for | Includes |
-| --- | --- | --- |
-| Core CLI/SDK | Building, validating, and running your own OptPilot package. | Public schemas, package validation, Realm-backed `optpilot run`, and the Python SDK. |
-| Source checkout | Developing OptPilot or using local Studio/docs/examples. | Core plus Studio, the tutorial catalog, assistant integration, docs, and contributor tooling. |
-
 ## Prerequisites
 
-- Python 3.10 or newer
-- `uv` for the source-checkout workflow
-- Docker/Podman only for Studio workspace/assistant features that explicitly
-  require it; the current retained study runner executes its bounded local
-  process slice and does not execute container study configs
+- Python 3.10 or newer. (On macOS the built-in `python3` is older than this;
+  install a current Python first, or the install will refuse.)
+- Docker or Podman **only** if you use a package that declares a container
+  image. Nothing that ships with OptPilot requires one.
+
+## Install
+
+```bash
+python -m pip install optpilot-studio
+```
+
+That gives you three things: the `optpilot` command line, the Studio web
+application, and five ready-made packages to look at and run.
+
+To install only the command line, without the web application:
+
+```bash
+python -m pip install optpilot
+```
+
+## Start Studio
+
+```bash
+optpilot-studio --open-browser
+```
+
+The default address is `http://127.0.0.1:8765/`. Choose another port with
+`--port`.
+
+The first start takes a few seconds longer than later ones: OptPilot copies
+the ready-made packages into a folder of your own and records a version of
+each, so they can be run straight away. Those copies are yours — edit them,
+move them, delete the ones you do not want. They live beside OptPilot's own
+storage, in the standard per-user data location for your operating system, and
+`OPTPILOT_PACKAGES_ROOT` overrides where they go.
+
+## Run something without the web application
+
+Every package that ships works from the command line too. This one needs no
+container software and no model provider account:
+
+```bash
+optpilot run --package-root <packages>/devs_gallery \
+  <packages>/devs_gallery/studies/seird_minimize_deaths.yaml
+```
+
+Replace `<packages>` with the folder Studio reports on its Catalog page, or
+set `OPTPILOT_PACKAGES_ROOT` yourself so you know where it is.
+
+## Packages that need more
+
+Two of the ready-made packages need something extra before they run:
+
+- Anything that asks a language model to write candidates needs an API key.
+  Add it under Studio Settings → Local environment variables, or export it
+  before a command-line launch. OptPilot passes the value to that run's method
+  only, and never copies it into the run's record.
+- A package that declares a container image needs Docker or Podman, and the
+  image must be approved for execution first:
+
+  ```bash
+  optpilot image approve <image reference>
+  ```
+
+  Approving an image is how you say you are willing to run software someone
+  else built. A refused launch names the exact image and this command.
 
 ## Core CLI/SDK
+
 
 ```bash
 python -m pip install optpilot
@@ -49,15 +104,16 @@ Without `--realm-root`, the command uses OptPilot's private per-user Realm in
 the OS user-data location. Use an explicit Realm root only for deliberate local
 isolation/testing. It is not a Workspace or generated-output directory.
 
-The current retained execution slice supports parameter and bounded file
-candidates, Python batch methods/evaluators, local process runtime, and package-backed,
-environment-owned `methodContext.references`. Those references are captured
+OptPilot supports parameter and bounded file candidates, Python batch methods
+and evaluators, command methods, process and container runtimes, and
+package-backed, environment-owned `methodContext.references`. Those references are captured
 with the package and projected read-only into the method worker. Package-owned
 `trialWorkspace` files/directories are also supported as retained seed layers
 for attempts; every attempt receives a fresh writable trial volume. File
 candidates are frozen, sealed, and atomically admitted before their immutable
-tree is projected into that volume. The slice does not yet support setup/build,
-Environment/backend host-derived values, containers, or hostile native code.
+tree is projected into that volume. Running a package's code still assumes you trust that package: an image is
+executed only after you approve it, and authored code is never sandboxed
+against deliberate hostility.
 A process Method may declare `runtime.envFromHost`; the launcher selects only
 those names. Studio binds their current saved revisions to the new Run and
 sends the values transiently to its Method worker, leaving them out of the
@@ -87,14 +143,9 @@ uv run optpilot --help
 uv run optpilot package validate catalog/production_agv_scheduling --check-source
 ```
 
-Four bundled studies run without optional dependencies: the fixed weighted-rule
-baseline, deterministic tuner, dispatch-rule file baseline, and solver-code file
-baseline. With the example dependency group installed, the three JobShopLib
-solver studies and the Stable-Baselines study are retained-launchable too. Only
-the OpenAI editor needs additional local setup: add `OPENROUTER_API_KEY` under
-Studio Settings → Local environment variables, or export it before a CLI
-launch. OptPilot supplies the value only to the Method process for that Run and
-does not copy it into Run evidence.
+The five packages that ship are described under
+[Flagship Capabilities](devs-gallery.md). Most run with no extra setup; the
+ones that call a language model need an API key, as described above.
 
 Launch Studio:
 
@@ -112,24 +163,16 @@ Studio scans `catalog/` by default and reads runs from the same default Realm.
 See [Studio UI](ui.md), [Workspace Management](studio-workspaces.md), and
 [OptPilot Assistant](assistant.md).
 
-## Optional example dependencies
+## Optional test-catalog dependencies
 
 ```bash
 uv sync --all-packages --group examples
 ```
 
-These dependencies make the following package-backed `methodContext` studies
-retained-launchable:
-
-```text
-job_shop_lib_dispatching_rule.yaml
-job_shop_simulated_annealing.yaml
-job_shop_ortools_cpsat.yaml
-job_shop_rl_stable_baselines.yaml
-```
-
-They do not enable the separate file-candidate path; parameter
-`trialWorkspace` seeds need no optional runtime dependency.
+Only needed to run the job-shop studies under `test_catalog/`, which are part
+of OptPilot's own test material rather than something shipped to users. The
+group pulls in a deep-learning stack and several hundred megabytes; nothing in
+the five shipped packages needs it.
 
 ## Documentation server
 
