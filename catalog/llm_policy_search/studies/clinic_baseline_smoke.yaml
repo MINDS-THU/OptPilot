@@ -6,6 +6,7 @@ description: >-
   the TriagePolicy component file itself): one trial stages the baseline
   FIFO component (no LLM calls), runs the seeded replications of the
   DEVS-Gen simulator, and exercises the worst-seed replay.
+tags: [smoke]
 environmentConfig: ../environments/triage_clinic/environment.yaml
 methodConfig: ../methods/llm_policy_search/method.yaml
 objective:

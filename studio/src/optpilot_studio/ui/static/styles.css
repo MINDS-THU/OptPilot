@@ -10618,3 +10618,25 @@ body.shell-v2.shell-conversation .assistant-ui-card {
     align-items: flex-start;
   }
 }
+
+
+/* Entries that exist to check the machinery: still listed and findable, but
+   visibly not competing with the packages someone came to use. */
+.entity-button-test-material strong {
+  font-weight: 500;
+}
+
+.entity-button-test-material .entity-button-description {
+  opacity: 0.75;
+}
+
+.catalog-test-chip {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--muted-text, #666);
+  white-space: nowrap;
+}

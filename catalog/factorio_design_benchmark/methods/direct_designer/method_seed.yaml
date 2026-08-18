@@ -11,7 +11,7 @@ description: >-
 tasks:
   - evaluate-design
   - benchmark-method
-tags: [factorio, factory-design, baseline, files, one-shot-per-trial]
+tags: [factorio, factory-design, baseline, files, one-shot-per-trial, smoke]
 
 entrypoint:
   python: method:DirectDesignerMethod

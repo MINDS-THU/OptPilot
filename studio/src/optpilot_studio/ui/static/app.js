@@ -9470,6 +9470,11 @@ function renderCatalog() {
     const matchesSearch = !query || catalogSearchText(item).includes(query);
     return matchesFilter && matchesPackage && matchesSearch;
   });
+  // Entries that exist to check the machinery sit below the ones that do work
+  // someone wants done. They stay listed and findable -- a person looking for
+  // a quick check should still find one -- but they no longer stand between a
+  // newcomer and the flagship packages as equals.
+  components.sort((left, right) => isTestMaterial(left) - isTestMaterial(right));
   if (!components.some((item) => item.key === state.selectedComponentKey)) {
     state.selectedComponentKey = components[0] && components[0].key;
   }
@@ -11309,6 +11314,11 @@ function normalizeSearch(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isTestMaterial(component) {
+  const tags = [].concat((component.entry && component.entry.tags) || []);
+  return tags.some((tag) => String(tag).toLowerCase() === "smoke") ? 1 : 0;
+}
+
 function catalogSearchText(component) {
   const summary = component.entry && component.entry.summary || {};
   const interfaceProfiles = summarizedInterfaceProfiles(component.entry && component.entry.interface);
@@ -11323,6 +11333,8 @@ function catalogSearchText(component) {
     component.entry && component.entry.package_id,
     component.entry && component.entry.qualified_id,
     component.entry && component.entry.catalog_key,
+    component.entry && component.entry.description,
+    ...[].concat(component.entry && component.entry.tasks || []),
     summary.description,
     summary.goal,
     summary.candidate_format,
@@ -21627,11 +21639,16 @@ function componentButton(component) {
     : component.kind === "method"
     ? (summary.candidate_formats || []).join(", ")
     : resourcePurposeLabel(item);
+  // Said plainly rather than left to be inferred from a name ending in
+  // "-smoke": these exist to check the machinery, and a newcomer comparing
+  // options should not have to work that out.
+  const testMaterial = Boolean(isTestMaterial(component));
   return `
-    <button class="entity-button ${selected ? "selected" : ""}" data-component-key="${escapeHtml(component.key)}" type="button">
+    <button class="entity-button ${selected ? "selected" : ""}${testMaterial ? " entity-button-test-material" : ""}" data-component-key="${escapeHtml(component.key)}" type="button">
       <span class="entity-button-header">
         <strong>${escapeHtml(item.label)}</strong>
         <span class="catalog-kind-chip catalog-kind-${escapeHtml(component.kind)}">${escapeHtml(catalogKindLabel(component.kind, item))}</span>
+        ${testMaterial ? '<span class="catalog-test-chip" title="Exists to check that the machinery works, not to do optimisation work">check</span>' : ""}
       </span>
       ${item.description ? `<span class="entity-button-description">${escapeHtml(item.description)}</span>` : ""}
       <span class="tag-row">

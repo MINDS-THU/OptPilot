@@ -5,6 +5,7 @@ description: >-
   Contract smoke for the DES template: one trial stages the unmodified
   baseline policy (no LLM calls), runs the seeded replications, and
   exercises the worst-seed replay capability end to end.
+tags: [smoke]
 environmentConfig: ../environments/queue_demo/environment.yaml
 methodConfig: ../methods/llm_policy_search/method.yaml
 objective:

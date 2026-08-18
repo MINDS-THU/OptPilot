@@ -5,6 +5,7 @@ description: >-
   Deterministic one-trial run of the Factorio static validator through the
   retained pipeline. The Direct designer runs in seed mode, so no model is
   called and no network is needed - this is the CI smoke for the package.
+tags: [smoke]
 environmentConfig: ../environments/factory_design/environment.yaml
 methodConfig: ../methods/direct_designer/method_seed.yaml
 inputs:
