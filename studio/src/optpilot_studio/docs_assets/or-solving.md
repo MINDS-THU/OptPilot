@@ -11,6 +11,13 @@ the full artifact — formulation with provenance, confidence scores, routing
 decision, generated solver code, numeric answer. It demonstrates *applying one
 method to one problem, one time*, rather than searching a space.
 
+**Coming from a simulator?** If you have built or generated one and want to
+improve how the system runs, this route suits questions with a countable
+answer — how many staff, how many machines, how large a fleet. Questions about
+*which rule should decide the next action* are better served by the search loop
+in [Generate and Optimize](generate-and-optimize.md), whose closing section
+shows how to write a simulator down as the problem statement this page takes.
+
 ## The one-time-solve shape
 
 No search loop: the Run setup declares a budget of one trial and carries the

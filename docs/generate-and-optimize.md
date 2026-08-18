@@ -157,3 +157,70 @@ To adopt the loop for your own simulator — generated or hand-written —
 follow the "Bring your own simulator" section of
 `catalog/llm_policy_search/README.md`, or simply generate with a
 decision-naming spec and let the wizard emit the composition.
+
+## The other way to improve a simulated system
+
+Everything above searches for a good operating rule by trial and error: a
+language model writes a candidate rule, the simulator scores it, better rules
+survive. That suits questions where the rule itself is what you want — *which
+patient should we serve next?* — and where no formula tells you the answer in
+advance.
+
+Some questions are not like that. *How many staff should each shift have?* has
+a countable set of answers, a clear objective, and hard limits. For those,
+stating the problem mathematically and solving it exactly is faster and gives
+an answer you can prove is best. OptPilot ships that route too, in
+[Natural-Language OR Solving](or-solving.md), and you do not need to write any
+mathematics to use it: you describe the problem in ordinary words and the
+solver formulates it for you.
+
+Nothing derives one from the other automatically. Turning a simulator into a
+solvable mathematical problem is a modelling decision, and a wrong one gives a
+confident answer to the wrong question. So the translation is yours to make —
+but it is a short piece of writing, not a research project.
+
+### Writing your simulator down as a problem
+
+The solver's run setup takes a single input, `problem`: your situation in
+plain language. Three things have to be in it, and your simulator already
+tells you all three.
+
+**What you are trying to achieve.** The metric your simulator reports and
+whether you want it larger or smaller. This is the objective your run setup
+already names.
+
+**What you get to decide.** The quantities you are free to choose. In a
+simulator these are the parameters someone tunes, or the resources someone
+sizes — staff per shift, machines per station, vehicles in the fleet. If a
+decision is a *rule* rather than a *number*, it belongs in the trial-and-error
+route above, not here.
+
+**What limits you.** The bounds the simulator enforces: a total budget, a
+maximum wait, a shift length, a fixed headcount.
+
+For the triage clinic used above, that becomes:
+
+```text
+Minimise the average time a patient waits before being seen.
+Decide how many nurses are on each of the three daily shifts.
+Constraints: at most 24 nurse-shifts per day in total; at least two
+nurses on every shift; the average wait must not exceed 30 minutes for
+urgent patients.
+```
+
+Paste that into the `problem` input of the **solve-or-problem** run setup and
+launch it. The solver states the formulation it derived, and — in its
+interactive console — lets you correct it before solving, which is worth doing
+the first time: a formulation that mismatches your intent is the most likely
+way this route goes wrong.
+
+### Which route to use
+
+| Your question | Route |
+|---|---|
+| What rule should decide the next action? | Policy search, above |
+| How many, or how much, of something? | Solve as an OR problem |
+| Neither, or you are not sure | Start with policy search; it needs no modelling decision |
+
+The two are not exclusive. A common pattern is to size the resources exactly,
+then search for the best rule to operate them.
