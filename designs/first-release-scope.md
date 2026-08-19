@@ -266,7 +266,7 @@ Not the target Assistant. The smallest one that does not dead-end.
 | # | Item | Size | Note |
 | --- | --- | --- | --- |
 | C1 | Resource-action tools: list, approval-gated run, status — **done** | M | The flagship conversation's first leg. Output is rooted in an attached workspace so the generated bundle is immediately registerable (rule 5). |
-| C2 | Give existing refusals a machine-readable remedy | M | One shape carried by the refusals that already exist: image approval (with the command), missing launch inputs (with their declarations), validation failures (with the location), wrong front door (with the right tool). Refusals then teach their own fix instead of the guidance file reciting them. |
+| C2 | Give existing refusals a machine-readable remedy — **done 2026-08-19** | M | One shape carried by the refusals that already exist: image approval (with the command), missing launch inputs (with their declarations), validation failures (with the location), wrong front door (with the right tool). Refusals then teach their own fix instead of the guidance file reciting them. |
 | C3 | An edit-copy tool for updating a catalog entry — **dropped 2026-08-19**, see below | M | The safe counterpart to A8(a): the Assistant gets the front door at the same moment the unsafe path closes. |
 | C4 | Slim catalog listing for the Assistant — **done**, 348k → 60k characters | S | Today a bare listing call ships tens of kilobytes of raw settings into the first exchange. |
 | C5 | Say plainly when the Assistant is off — **done**; the turn also had to stop reporting itself as still working | S | Messages currently queue "locally" with no explanation and no path forward. |

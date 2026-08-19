@@ -16230,6 +16230,46 @@ def _unbound_required_study_inputs(
     )
 
 
+def _study_launch_block_remedy(blocked: Mapping[str, Any]) -> JsonDict:
+    """What would actually unblock this launch, by why it was blocked.
+
+    The two common reasons need opposite responses, and telling them apart
+    from the sentence alone is exactly what the Assistant used to get wrong:
+    missing values are something only the person can supply, while a study
+    that does not validate is something to go and fix.
+    """
+
+    code = str(blocked.get("code") or "")
+    if code == "study_inputs_required":
+        missing = [str(name) for name in blocked.get("missing_inputs", []) or []]
+        return _remedy(
+            "This run setup asks the person for "
+            f"{', '.join(missing) or 'values'} before it can start. Ask them "
+            "for the values -- never invent them -- then call this tool again "
+            "with them in `inputs`.",
+            tool="optpilot_study_launch",
+            arguments={"inputs": {name: "<ask the person>" for name in missing}},
+            details={
+                "missing_inputs": missing,
+                "input_declarations": deepcopy(
+                    dict(blocked.get("input_declarations") or {})
+                ),
+            },
+        )
+    if code == "study_invalid":
+        return _remedy(
+            "The run setup does not validate, so fix what it reports before "
+            "launching. Read the errors in `validation`, repair the config "
+            "they name, then check it with optpilot_config_validate.",
+            tool="optpilot_config_validate",
+            details={"code": code},
+        )
+    return _remedy(
+        str(blocked.get("reason") or "This launch cannot start as requested."),
+        details={"code": code or "unknown"},
+    )
+
+
 def _study_launch_block(
     validation: Mapping[str, Any],
     *,
@@ -18054,6 +18094,58 @@ def _assistant_tool_ui_cards(tool: str, data: Mapping[str, Any]) -> List[JsonDic
     return [card for card in cards if card is not None]
 
 
+#: The shape every refusal uses to say what would fix it.
+#:
+#: A refusal has always carried a sentence for a person to read, and the
+#: Assistant had to infer the fix from that English. Usually it guessed right;
+#: sometimes it apologised and stopped, or proposed a fix for a different
+#: problem. This carries the same answer a second time in a form that can be
+#: acted on without interpretation.
+#:
+#: Exactly one of `command` or `tool` is the *thing to do*, and either may be
+#: absent when the fix is neither -- editing a file, say. `details` carries the
+#: specifics the fix needs, such as the declarations of the missing values.
+REMEDY_SCHEMA = "optpilot.assistant-remedy.v1"
+
+
+def _remedy(
+    summary: str,
+    *,
+    command: str = "",
+    tool: str = "",
+    arguments: Optional[JsonDict] = None,
+    details: Optional[JsonDict] = None,
+) -> JsonDict:
+    """One machine-readable answer to "what would fix this?"."""
+
+    remedy: JsonDict = {"schema": REMEDY_SCHEMA, "summary": str(summary).strip()}
+    if command:
+        remedy["command"] = str(command).strip()
+    if tool:
+        remedy["tool"] = str(tool).strip()
+        remedy["arguments"] = dict(arguments or {})
+    if details:
+        remedy["details"] = dict(details)
+    return remedy
+
+
+def _with_remedy(error: BaseException, remedy: JsonDict) -> BaseException:
+    """Attach a remedy to the exception the code already raises.
+
+    Most tools reject a bad request by raising, and those refusals reached the
+    model as a bare sentence while returned ones could carry structure -- the
+    same refusal answering differently depending on how it happened to be
+    written.
+
+    The remedy rides on the existing exception rather than a new type of its
+    own, because the type carries meaning that must not change: thirty-five
+    handlers branch on RealmConflict alone, and it decides an HTTP status.
+    """
+
+    setattr(error, "remedy", remedy)
+    return error
+
+
 def _tool_result(
     tool: str,
     ok: bool,
@@ -18063,6 +18155,7 @@ def _tool_result(
     artifacts: Optional[List[JsonDict]] = None,
     events: Optional[List[JsonDict]] = None,
     ui_cards: Optional[List[JsonDict]] = None,
+    remedy: Optional[JsonDict] = None,
 ) -> JsonDict:
     result_data = data or {}
     projected_cards = (
@@ -18070,7 +18163,7 @@ def _tool_result(
         if ui_cards is None
         else ui_cards
     )
-    return {
+    result = {
         "ok": ok,
         "tool": tool,
         "summary": summary,
@@ -18079,6 +18172,11 @@ def _tool_result(
         "events": events or [],
         "ui_cards": sanitize_studio_ui_cards(projected_cards),
     }
+    # Only ever on a refusal: a remedy beside a success would read as "here is
+    # something else you should have done".
+    if remedy and not ok:
+        result["remedy"] = remedy
+    return result
 
 
 def _approval_display_payload(approval: JsonDict) -> JsonDict:
@@ -18485,14 +18583,34 @@ def _assistant_permission(state: UiState, key: str) -> str:
     return str(permissions.get(key) or DEFAULT_ASSISTANT_PERMISSIONS[key])
 
 
+#: How each permission reads on the Settings page, so a refusal can name the
+#: control rather than the key it is stored under.
+ASSISTANT_PERMISSION_LABELS = {
+    "file_write": "File writes",
+    "shell_run": "Shell commands",
+    "catalog_registration": "Catalog publishing",
+    "study_launch": "Study launch",
+    "job_stop": "Stop Runs and Candidate tries",
+    "smoke_test": "Smoke tests",
+    "resource_action": "Resource actions",
+}
+
+
 def _agent_permission_blocked_result(tool: str, key: str) -> JsonDict:
     summary = f"Assistant permission '{key}' is disabled in Studio settings."
+    label = ASSISTANT_PERMISSION_LABELS.get(key, key)
     return _tool_result(
         tool,
         False,
         summary,
         data={"permission": key, "permission_status": "disabled"},
         events=[{"level": "error", "message": summary}],
+        remedy=_remedy(
+            f"Only the person can lift this: ask them to open Settings and set "
+            f"\"{label}\" to something other than Disabled. Do not retry until "
+            "they say they have.",
+            details={"permission": key, "settings_label": label},
+        ),
     )
 
 
@@ -19613,6 +19731,7 @@ def _execute_agent_tool(
                 False,
                 f"Study launch blocked: {reason}",
                 data={"validation": validation, "capability": blocked},
+                remedy=_study_launch_block_remedy(blocked),
             )
         if launch_inputs:
             # The approver decides on the problem payload, not just the study
@@ -19716,6 +19835,12 @@ def _execute_agent_tool(
                 "reason": "raw_run_file_access_removed",
                 "guidance": "Use optpilot_run_detail and bounded Workbench selections.",
             },
+            remedy=_remedy(
+                "Read the Run through its own tool instead. Nothing is broken "
+                "and retrying this will not start working.",
+                tool="optpilot_run_detail",
+                arguments={"run_id": str(arguments.get("run_id") or "")},
+            ),
         )
     if tool == "optpilot_run_compare":
         requested = arguments.get("runs", [])
@@ -19849,11 +19974,21 @@ def _refuse_secret_file(path: Path, root: Path) -> None:
     if not _is_secret_file(path):
         return
     relative = _relative_path(path, root)
-    raise PermissionError(
-        f"{relative} holds credentials, so OptPilot will not read or change it "
-        "through the Assistant. Anything the Assistant reads is sent to the "
-        "configured model provider. Open it yourself if you need to see it, "
-        "and set values OptPilot should use in Studio Settings instead."
+    raise _with_remedy(
+        PermissionError(
+            f"{relative} holds credentials, so OptPilot will not read or "
+            "change it through the Assistant. Anything the Assistant reads is "
+            "sent to the configured model provider. Open it yourself if you "
+            "need to see it, and set values OptPilot should use in Studio "
+            "Settings instead."
+        ),
+        _remedy(
+            "There is no way to read this file through the Assistant, and no "
+            "point retrying. If a config needs one of these values, declare "
+            "the name it should be read from and ask the person to set it "
+            "under Local environment variables in Settings.",
+            details={"path": relative, "reason": "holds_credentials"},
+        ),
     )
 
 
@@ -20493,6 +20628,20 @@ def _agent_tool_smoke_test_study(
             False,
             "Study validation failed; smoke test blocked.",
             data={"validation": validation},
+            remedy=_remedy(
+                "Fix what the run setup reports before smoke testing it. The "
+                f"errors are in `validation`, for {study_path.name}.",
+                tool="optpilot_config_validate",
+                arguments={"path": str(study_path)},
+                details={
+                    "path": str(study_path),
+                    "errors": [
+                        str(item)
+                        for item in (validation.get("errors") or [])
+                        if str(item)
+                    ][:5],
+                },
+            ),
         )
     gate = _agent_permission_gate(
         state,
@@ -34003,10 +34152,19 @@ def _workspace_package_image(state: "UiState", workspace: JsonDict) -> Optional[
     if approval is None:
         from optpilot.realm.provider_trust_records import image_approval_remedy
 
-        raise RuntimeError(
-            f"The package's image {container.image.raw} has not been approved "
-            "for study execution, and a workspace runs it just as surely as a "
-            f"run does. {image_approval_remedy(container.image.raw)}"
+        raise _with_remedy(
+            RuntimeError(
+                f"The package's image {container.image.raw} has not been "
+                "approved for study execution, and a workspace runs it just as "
+                f"surely as a run does. "
+                f"{image_approval_remedy(container.image.raw)}"
+            ),
+            _remedy(
+                "Only the person can approve an image. Ask them to run this "
+                "command, and do not retry until they say they have.",
+                command=f"optpilot image approve {container.image.raw}",
+                details={"image": container.image.raw, "purpose": "execution"},
+            ),
         )
     try:
         verify_image_available(engine, container.image.raw, container.platform)
@@ -34218,9 +34376,17 @@ def _package_plan_catalog_folder(
         # identity and forks the package in two.
         return None
     if _is_bundled_catalog_package(folder):
-        raise RealmConflict(
-            f"{package_id} ships with OptPilot and cannot be registered into. "
-            "Register into a package of your own instead."
+        raise _with_remedy(
+            RealmConflict(
+                f"{package_id} ships with OptPilot and cannot be registered "
+                "into. Register into a package of your own instead."
+            ),
+            _remedy(
+                "Register into a package of your own. To build on this one, "
+                "copy its folder under a new name and give the copy a "
+                "different identity value, then register the copy.",
+                details={"package": package_id, "reason": "ships_with_optpilot"},
+            ),
         )
     return folder
 
@@ -34943,9 +35109,17 @@ def _package_identity_for(state: UiState, package_id: str) -> str:
 
     folder = state.cwd / CATALOG_DIR_NAME / package_id
     if _is_bundled_catalog_package(folder):
-        raise RealmConflict(
-            f"{package_id} ships with OptPilot and cannot be registered into. "
-            "Register into a package of your own instead."
+        raise _with_remedy(
+            RealmConflict(
+                f"{package_id} ships with OptPilot and cannot be registered "
+                "into. Register into a package of your own instead."
+            ),
+            _remedy(
+                "Register into a package of your own. To build on this one, "
+                "copy its folder under a new name and give the copy a "
+                "different identity value, then register the copy.",
+                details={"package": package_id, "reason": "ships_with_optpilot"},
+            ),
         )
     try:
         identity = ensure_package_identity(folder)

@@ -1785,6 +1785,11 @@ class OpenHandsAdapter:
                     "summary": str(exc),
                     "error": {"type": type(exc).__name__, "message": str(exc)},
                 }
+                # A refusal raised rather than returned still says what would
+                # fix it, when whoever raised it knew.
+                remedy = getattr(exc, "remedy", None)
+                if isinstance(remedy, dict) and remedy:
+                    result["remedy"] = remedy
             approval_data = result.get("data") if isinstance(result.get("data"), dict) else {}
             if approval_data.get("approval_required") or result.get("status") == "approval_required":
                 approval = approval_data.get("approval") if isinstance(approval_data.get("approval"), dict) else {}

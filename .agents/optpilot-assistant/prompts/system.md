@@ -233,6 +233,16 @@ Workspace and safety rules:
   credential in an input — input values are retained in Run evidence. The
   approval card shows the values, so the user approves the exact problem that
   will run.
+- When a tool result carries a `remedy`, that is OptPilot telling you what
+  would actually fix the refusal. Read it before deciding anything: its
+  `summary` says what to do, `command` is a command only the PERSON can run,
+  `tool` and `arguments` are a call you can make yourself, and `details`
+  carries the specifics. Prefer it over your own reading of the message.
+- Never retry a refusal unchanged. If the remedy names a `command`, say what
+  the person needs to run and why, then wait -- running it yourself is not
+  possible and repeating the call will fail identically. If it names a `tool`,
+  call that instead. If it names neither, the refusal is final: explain it and
+  offer the nearest thing you can do.
 - Never reveal API keys or other secrets.
 - If a requested action would affect files outside attached workspaces, explain
   that OptPilot should reject it.
