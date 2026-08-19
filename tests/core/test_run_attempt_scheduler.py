@@ -49,6 +49,9 @@ from tests.core.test_realm_local_attempt_launcher import (
     _RetainedRuntimeFixture,
     _SimulatedParentCrash,
 )
+from tests.core.test_run_attempt_heartbeat import (
+    _ConcurrentControllerRenewalLedger,
+)
 
 
 def _identity_normalizer(candidate: dict[str, object]) -> dict[str, object]:
@@ -365,6 +368,55 @@ class RunAttemptSchedulerTest(unittest.TestCase):
         self.assertEqual(result.logical_transition.to_state, "terminal")
         self.assertEqual(result.cleanup.state, "cleaned")
         self.assertTrue(result.physically_started)
+
+    def test_advance_survives_a_concurrent_shared_controller_renewal(self) -> None:
+        """One run has one controller lease and every live attempt renews it.
+
+        Two attempts advancing at once therefore renew the same lease, and so
+        does the run controller watchdog.  When one of those renewals lands
+        between an attempt supervisor's own controller renewal and the attempt
+        lease renewal that follows it, the ledger clamps the attempt lease to
+        the newer controller expiry -- past the controller record the same
+        round cached a step earlier.  That used to abort the round and reach
+        the caller as an opaque ``LocalAttemptProviderError``.
+
+        The interleaving is forced here rather than raced for, so this fails
+        every time on the unfixed code instead of roughly one run in twelve
+        under load.
+        """
+
+        fixture = self.runtime(fresh=True)
+        _supervisor, _launcher, _binder, _finalizer, provider = self.provider(
+            fixture, provider_root="shared-controller-renewal-provider"
+        )
+        renewal_ledgers: list[_ConcurrentControllerRenewalLedger] = []
+
+        def heartbeat_factory(receipt) -> RunAttemptHeartbeatCoordinator:
+            ledger = _ConcurrentControllerRenewalLedger(
+                fixture.ledger,
+                controller_lease=receipt.controller_lease,
+                actor_principal_id="operator",
+                ttl_seconds=60,
+            )
+            renewal_ledgers.append(ledger)
+            return RunAttemptHeartbeatCoordinator(
+                ledger,
+                actor_principal_id="operator",
+                receipt=receipt,
+                ttl_seconds=60,
+                interval_seconds=30.0,
+            )
+
+        result = self.advance(
+            self.scheduler(fixture, provider, heartbeat_factory=heartbeat_factory)
+        )
+
+        self.assertEqual(result.action, "adopted")
+        self.assertEqual(result.attempt.outcome, "success")
+        self.assertTrue(
+            any(ledger.foreign_renewals for ledger in renewal_ledgers),
+            "no concurrent controller renewal was injected",
+        )
 
     def test_shared_scheduler_overlaps_real_evaluator_processes(self) -> None:
         barrier_temporary = tempfile.TemporaryDirectory()

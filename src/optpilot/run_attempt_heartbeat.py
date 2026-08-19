@@ -13,6 +13,18 @@ One round renews the authority chain from parent to child::
 Each successful step replaces the corresponding fact in ``receipt`` before
 the next step begins.  Consequently, a later failure is explicit while the
 caller still has the newest durable facts from the successful prefix.
+
+``receipt`` is therefore a composite of several ledger transactions rather
+than one coherent snapshot, and it must not be read as one.  The run
+controller lease at its root is shared: every other live attempt in the run
+renews it, and so does the run controller watchdog.  A renewal by any of
+them between two of this round's steps legitimately moves the controller's
+expiry past the controller record this round already cached, and the ledger
+then clamps the child renewed next to that newer parent expiry.  Comparing a
+freshly renewed child against a cached parent across those instants proves
+nothing, which is why parent-first expiry ordering is asserted only where
+the whole chain is read in one transaction -- see
+``run_attempt_records.validate_run_attempt_heartbeat_expiry_chain``.
 """
 
 from __future__ import annotations

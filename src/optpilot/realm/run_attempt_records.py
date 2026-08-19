@@ -602,11 +602,49 @@ def _validate_heartbeat_authority(
         != f"owner-change:{capture_change.change_id}"
         or capture_retention_lease.state is not LeaseState.ACTIVE
         or capture_retention_lease.expires_at != capture_change.expires_at
-        or attempt_lease.expires_at > controller_lease.expires_at
-        or capture_retention_lease.expires_at > attempt_lease.expires_at
     ):
         raise ValueError(
             "Run attempt heartbeat authority anchors do not agree."
+        )
+
+
+def validate_run_attempt_heartbeat_expiry_chain(
+    *,
+    controller_lease: LeaseRecord,
+    attempt_lease: LeaseRecord,
+    capture_retention_lease: LeaseRecord,
+) -> None:
+    """Assert parent-first expiry ordering for one coherently read chain.
+
+    The ledger already enforces this at write time: renewing a child clamps
+    its expiry to its parent's current expiry.  The ordering is therefore a
+    property of three lease rows read in a single transaction, and it is
+    checked here rather than in the receipt anchors so that it is asserted
+    only where that coherence actually holds.
+
+    A live supervisor deliberately builds its view one renewal at a time --
+    controller, then attempt, then capture retention -- and each renewal is
+    its own ledger transaction.  A concurrent renewal of the shared run
+    controller lease (another attempt's supervisor, or the run controller
+    watchdog) lands between two of those steps, so the child a supervisor
+    just renewed can legitimately outlive the parent record it read moments
+    earlier.  Comparing across those instants proves nothing about the
+    ledger and turns a routine concurrent renewal into a run-killing error.
+    """
+
+    for value, label in (
+        (controller_lease, "controller_lease"),
+        (attempt_lease, "attempt_lease"),
+        (capture_retention_lease, "capture_retention_lease"),
+    ):
+        if not isinstance(value, LeaseRecord):
+            raise TypeError(f"{label} must be a LeaseRecord.")
+    if (
+        attempt_lease.expires_at > controller_lease.expires_at
+        or capture_retention_lease.expires_at > attempt_lease.expires_at
+    ):
+        raise ValueError(
+            "Run attempt heartbeat authority expiry chain does not agree."
         )
 
 

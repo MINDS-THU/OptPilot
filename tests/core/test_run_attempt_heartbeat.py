@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,9 @@ from types import SimpleNamespace
 from optpilot.realm.content import LocalContentStore
 from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.owners import OwnerChangeHeartbeatReceipt
+from optpilot.realm.run_attempt_records import (
+    validate_run_attempt_heartbeat_expiry_chain,
+)
 from optpilot.realm.run_records import (
     CandidateAdmission,
     LogicalTrialAdmission,
@@ -121,6 +125,50 @@ class _RecordingPreparedBinding:
     def heartbeat(self, *, operation_id: str, ttl_seconds: float) -> None:
         del ttl_seconds
         self.calls.append(("binding", operation_id, ""))
+
+
+class _ConcurrentControllerRenewalLedger:
+    """The real ledger, plus one foreign renewal of the shared controller.
+
+    A run has exactly one controller lease and every live attempt renews it,
+    as does the run controller watchdog.  This stands in for whichever of
+    them renews that shared lease in the window between a supervisor's own
+    controller renewal and the child renewal that follows it, without
+    needing two live attempts or a loaded machine to hit the window.
+    """
+
+    def __init__(
+        self,
+        ledger,
+        *,
+        controller_lease,
+        actor_principal_id: str,
+        ttl_seconds: float,
+    ) -> None:
+        self._ledger = ledger
+        self._controller_lease = controller_lease
+        self._actor_principal_id = actor_principal_id
+        self._ttl_seconds = ttl_seconds
+        self.foreign_renewals: list[float] = []
+
+    def heartbeat_lease(self, **arguments):
+        if "/attempt" in arguments["operation_id"]:
+            foreign = self._ledger.heartbeat_lease(
+                operation_id=(
+                    "concurrent-controller-renewal/"
+                    f"{len(self.foreign_renewals) + 1:016d}"
+                ),
+                actor_principal_id=self._actor_principal_id,
+                lease_id=self._controller_lease.lease_id,
+                holder_id=self._controller_lease.holder_id,
+                fencing_token=self._controller_lease.fencing_token,
+                ttl_seconds=self._ttl_seconds,
+            )
+            self.foreign_renewals.append(foreign.expires_at)
+        return self._ledger.heartbeat_lease(**arguments)
+
+    def heartbeat_owner_change(self, **arguments):
+        return self._ledger.heartbeat_owner_change(**arguments)
 
 
 class RunAttemptHeartbeatCoordinatorTest(unittest.TestCase):
@@ -449,6 +497,115 @@ class RunAttemptHeartbeatCoordinatorTest(unittest.TestCase):
             recovered.capture_retention_lease,
             receipt.capture_retention_lease,
         )
+
+    def test_concurrent_controller_renewal_does_not_break_a_round(self) -> None:
+        """A shared-controller renewal mid-round is routine, not a failure.
+
+        The supervisor renews the controller lease, caches that record, and
+        then renews its attempt lease.  The ledger clamps the attempt lease
+        to the controller's *current* expiry, which a concurrent renewal has
+        already moved past the cached record.  Comparing the two across that
+        window used to abort the round -- and, through the scheduler, killed
+        the run with an opaque provider error.
+        """
+
+        ledger = _ConcurrentControllerRenewalLedger(
+            self.ledger,
+            controller_lease=self.preparation.controller_lease,
+            actor_principal_id="operator",
+            ttl_seconds=10,
+        )
+        coordinator = RunAttemptHeartbeatCoordinator(
+            ledger,
+            actor_principal_id="operator",
+            receipt=self.preparation,
+            ttl_seconds=10,
+            interval_seconds=60,
+            session_id="concurrent-controller",
+        )
+
+        receipt = coordinator.heartbeat_once()
+
+        self.assertEqual(len(ledger.foreign_renewals), 1)
+        # The window really did open: the attempt lease this round renewed
+        # outlives the controller record the same round cached one step
+        # earlier.  Both facts are current; neither is authoritative about
+        # the other.
+        self.assertGreater(
+            receipt.attempt_lease.expires_at,
+            receipt.controller_lease.expires_at,
+        )
+        self.assertEqual(coordinator.completed_rounds, 1)
+        self.assertIsNone(coordinator.failure)
+
+        # One coherent read still orders the whole chain parent-first.
+        recovered = self.ledger.read_run_attempt_heartbeat_authority(
+            actor_principal_id="operator",
+            run_id=receipt.run.run_id,
+            attempt_id=receipt.attempt.attempt_id,
+        )
+        self.assertLessEqual(
+            recovered.attempt_lease.expires_at,
+            recovered.controller_lease.expires_at,
+        )
+
+    def test_background_rounds_survive_concurrent_controller_renewal(self) -> None:
+        ledger = _ConcurrentControllerRenewalLedger(
+            self.ledger,
+            controller_lease=self.preparation.controller_lease,
+            actor_principal_id="operator",
+            ttl_seconds=10,
+        )
+        coordinator = RunAttemptHeartbeatCoordinator(
+            ledger,
+            actor_principal_id="operator",
+            receipt=self.preparation,
+            ttl_seconds=10,
+            interval_seconds=0.01,
+            session_id="concurrent-background",
+        ).start()
+        self.addCleanup(coordinator.stop)
+
+        deadline = time.monotonic() + 5.0
+        while coordinator.completed_rounds < 3 and coordinator.failure is None:
+            if time.monotonic() >= deadline:
+                self.fail("background heartbeat did not complete three rounds")
+            time.sleep(0.01)
+
+        coordinator.stop()
+        coordinator.raise_if_failed()
+        self.assertGreaterEqual(coordinator.completed_rounds, 3)
+
+    def test_coherently_read_chain_still_requires_parent_first_expiry(self) -> None:
+        """The ordering check survives where it is actually meaningful."""
+
+        validate_run_attempt_heartbeat_expiry_chain(
+            controller_lease=self.preparation.controller_lease,
+            attempt_lease=self.preparation.attempt_lease,
+            capture_retention_lease=self.preparation.capture_retention_lease,
+        )
+
+        outlives_controller = replace(
+            self.preparation.attempt_lease,
+            expires_at=self.preparation.controller_lease.expires_at + 1.0,
+        )
+        with self.assertRaisesRegex(ValueError, "expiry chain"):
+            validate_run_attempt_heartbeat_expiry_chain(
+                controller_lease=self.preparation.controller_lease,
+                attempt_lease=outlives_controller,
+                capture_retention_lease=self.preparation.capture_retention_lease,
+            )
+
+        outlives_attempt = replace(
+            self.preparation.capture_retention_lease,
+            expires_at=self.preparation.attempt_lease.expires_at + 1.0,
+        )
+        with self.assertRaisesRegex(ValueError, "expiry chain"):
+            validate_run_attempt_heartbeat_expiry_chain(
+                controller_lease=self.preparation.controller_lease,
+                attempt_lease=self.preparation.attempt_lease,
+                capture_retention_lease=outlives_attempt,
+            )
 
 
 if __name__ == "__main__":

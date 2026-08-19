@@ -276,6 +276,7 @@ from .run_attempt_records import (
     RunAttemptTransitionRecord,
     RunObservationRecord,
     validate_run_attempt_candidate_authority,
+    validate_run_attempt_heartbeat_expiry_chain,
 )
 from .run_records import (
     RUN_CANDIDATE_ROLE,
@@ -18732,7 +18733,7 @@ class RealmLedger(
                     (run_id, logical_trial_id, logical_transition_index),
                 ).fetchone()
             )
-            return RunAttemptPreparationReceipt(
+            receipt = RunAttemptPreparationReceipt(
                 run=updated_run,
                 revision=revision,
                 controller_lease=_lease_from_row(
@@ -18762,7 +18763,15 @@ class RealmLedger(
                 attempt=attempt,
                 attempt_transition=attempt_transition,
                 logical_transition=logical_transition,
-            ).to_dict()
+            )
+            # These three rows were read in this transaction, so parent-first
+            # expiry ordering is meaningful here.
+            validate_run_attempt_heartbeat_expiry_chain(
+                controller_lease=receipt.controller_lease,
+                attempt_lease=receipt.attempt_lease,
+                capture_retention_lease=receipt.capture_retention_lease,
+            )
+            return receipt.to_dict()
 
         return RunAttemptPreparationReceipt.from_dict(
             self._operate(
@@ -18899,6 +18908,13 @@ class RealmLedger(
                 capture_retention_lease=_lease_from_row(capture_lease_row),
                 candidate=candidate,
                 candidate_content_bindings=candidate_content_bindings,
+            )
+            # These three rows were read in this transaction, so parent-first
+            # expiry ordering is meaningful here.
+            validate_run_attempt_heartbeat_expiry_chain(
+                controller_lease=receipt.controller_lease,
+                attempt_lease=receipt.attempt_lease,
+                capture_retention_lease=receipt.capture_retention_lease,
             )
             connection.commit()
             return receipt
