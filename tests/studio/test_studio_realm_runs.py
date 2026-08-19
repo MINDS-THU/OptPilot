@@ -79,6 +79,7 @@ from optpilot_studio.ui.server import (
     _handler_factory,
     _invalidate_runs_response_cache,
     _mint_assistant_run_selection,
+    ASSISTANT_SMOKE_DEFAULT_TRIALS,
     _prepare_assistant_smoke_package,
     _realm_compat_run_row,
     _realm_run_detail,
@@ -5949,14 +5950,24 @@ class StudioRealmRunsTest(unittest.TestCase):
         self.assertNotIn(str(temporary_root), json.dumps(result, sort_keys=True))
 
         original = self.study_path.read_text(encoding="utf-8")
-        unchanged_package, unchanged_study = _prepare_assistant_smoke_package(
+        # An unstated trial count used to mean "no limit", which also meant
+        # running against the person's own folder. It now means the default
+        # limit, applied to a copy -- a smoke test runs without asking, so it
+        # must not be possible to ask for an unbounded one.
+        bounded_package, bounded_study = _prepare_assistant_smoke_package(
             package_root=self.package,
             study_path=self.study_path,
             temporary_root=temporary_root,
             max_trials=0,
         )
-        self.assertEqual(unchanged_package, self.package)
-        self.assertEqual(unchanged_study, self.study_path)
+        self.assertNotEqual(bounded_package, self.package)
+        self.assertEqual(self.study_path.read_text(encoding="utf-8"), original)
+        self.assertEqual(
+            yaml.safe_load(bounded_study.read_text(encoding="utf-8"))["budget"][
+                "maxTrials"
+            ],
+            ASSISTANT_SMOKE_DEFAULT_TRIALS,
+        )
 
         copy_root = self.root / "copy-smoke"
         copy_root.mkdir()

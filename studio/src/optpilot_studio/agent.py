@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -72,6 +72,9 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_workspace_preview_open",
     "optpilot_catalog_list",
     "optpilot_catalog_detail",
+    "optpilot_resource_action_list",
+    "optpilot_resource_action_run",
+    "optpilot_resource_action_status",
     "optpilot_compatibility_check",
     "optpilot_config_discover",
     "optpilot_config_validate",
@@ -603,6 +606,31 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "annotations": {"readOnlyHint": True},
     },
     {
+        "name": "optpilot_resource_action_list",
+        "description": "List the named actions a catalog Resource declares, each with its typed inputs. Resources are the tools that make things -- for example generating a simulator from a description. Take resource_uid from an optpilot_catalog_list result.",
+        "parameters": _tool_schema({"resource_uid": {"type": "string"}}, ["resource_uid"]),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "optpilot_resource_action_run",
+        "description": "Run one declared Resource action. Requires approval. Pass workspace_id whenever the action produces something the person will keep or register, such as a generated simulator: the results are then written inside that attached Workspace instead of Studio's private folder, and can be registered without copying. Returns a request_id; poll it with optpilot_resource_action_status.",
+        "parameters": _tool_schema(
+            {
+                "resource_uid": {"type": "string"},
+                "action_id": {"type": "string"},
+                "inputs": {"type": "object"},
+                "workspace_id": {"type": "string"},
+            },
+            ["resource_uid", "action_id"],
+        ),
+    },
+    {
+        "name": "optpilot_resource_action_status",
+        "description": "Check an action started with optpilot_resource_action_run, including where its output was written.",
+        "parameters": _tool_schema({"request_id": {"type": "string"}}, ["request_id"]),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
         "name": "optpilot_compatibility_check",
         "description": "Check method/environment compatibility, optionally for a selected pair.",
         "parameters": _tool_schema({"environment_ref": CATALOG_ENTRY_REF_SCHEMA, "method_ref": CATALOG_ENTRY_REF_SCHEMA}),
@@ -797,6 +825,45 @@ class OpenHandsRuntimeConfig:
             enabled=bool(payload.get("enabled")),
             native_tools=sanitize_openhands_native_tools(payload.get("native_tools")),
         )
+
+
+#: Addresses that never leave this machine, where plain HTTP is fine because
+#: there is no network hop for anyone to read.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
+
+
+def _is_local_address(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip().lower()
+    if host in LOOPBACK_HOSTS:
+        return True
+    # `foo.localhost` resolves to loopback by convention and is used for
+    # per-service names on a development machine.
+    return host.endswith(".localhost")
+
+
+def require_encrypted_transport_for_secret(url: str) -> None:
+    """Refuse to put a credential on the wire unencrypted.
+
+    Studio lets a person point the Assistant at any address, and the key for
+    the configured model is sent to it as a bearer token. If that address is
+    plain HTTP on another machine, the key crosses the network in the clear
+    where anyone on the path can take it -- and a key taken this way is valid
+    everywhere, not only here.
+
+    Loopback is exempt: nothing is on the wire, and requiring certificates for
+    a locally-run agent server would only push people to disable the check.
+    """
+
+    if _is_local_address(url):
+        return
+    if urlparse(url).scheme.lower() == "https":
+        return
+    raise RuntimeError(
+        f"Refusing to send the model key to {url}: it is on another machine "
+        "and the address is not https, so the key would cross the network in "
+        "readable form. Use an https address, or run the service on this "
+        "machine."
+    )
 
 
 class OpenHandsAdapter:
@@ -998,19 +1065,56 @@ class OpenHandsAdapter:
             "runtime": self.status(),
         }
 
+    #: What to tell someone whose message cannot be answered, keyed by what is
+    #: missing. Each says the same three things in order: nothing is coming,
+    #: why, and the one action that fixes it. The old text said only that the
+    #: message had been "stored" and that a runtime they had never heard of
+    #: was "disabled" -- true, unhelpful, and easy to read as "still working".
+    ASSISTANT_OFF_NOTICES: Dict[str, str] = {
+        "disabled": (
+            "The Assistant is switched off, so no one is reading this. Your "
+            "message is saved here and nothing else will happen to it.\n\n"
+            "To switch it on, open Settings and turn the Assistant on, then "
+            "choose a model and enter the key for it. Send your message again "
+            "afterwards.\n\n"
+            "Everything else in OptPilot works without the Assistant: you can "
+            "browse the Catalog, open a Run setup, and start a Run yourself."
+        ),
+        "missing model": (
+            "The Assistant is on but has not been told which model to use, so "
+            "no one is reading this. Your message is saved here and nothing "
+            "else will happen to it.\n\n"
+            "Open Settings, choose a model for the Assistant, and send your "
+            "message again."
+        ),
+        "missing API key": (
+            "The Assistant is on and has a model chosen, but no key to reach "
+            "it with, so no one is reading this. Your message is saved here "
+            "and nothing else will happen to it.\n\n"
+            "Open Settings, enter the key for the chosen model, and send your "
+            "message again."
+        ),
+    }
+
     def _queued_result(self, status: JsonDict) -> JsonDict:
-        reason = status.get("mode") or "not configured"
+        reason = str(status.get("mode") or "not configured")
+        content = self.ASSISTANT_OFF_NOTICES.get(
+            reason,
+            (
+                "The Assistant cannot answer at the moment, so your message is "
+                "saved here and nothing else will happen to it. Open Settings "
+                "and check that the Assistant is on, a model is chosen, and "
+                "the key for it is entered, then send your message again."
+            ),
+        )
         return {
             "status": "queued",
             "mode": reason,
             "dispatch": status.get("dispatch", "queued"),
             "assistant_message": {
                 "role": "assistant",
-                "title": "Queued locally",
-                "content": (
-                    "This message was stored with the current OptPilot context, "
-                    f"but the OpenHands runtime is {reason}."
-                ),
+                "title": "The Assistant is not set up yet",
+                "content": content,
             },
             "events": [{"type": "openhands_dispatch_queued", "payload": {"mode": reason}}],
         }
@@ -2075,6 +2179,7 @@ class OpenHandsAdapter:
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if bearer_token:
+            require_encrypted_transport_for_secret(url)
             headers["Authorization"] = f"Bearer {bearer_token}"
         if extra_headers:
             headers.update({str(key): str(value) for key, value in extra_headers.items() if value})

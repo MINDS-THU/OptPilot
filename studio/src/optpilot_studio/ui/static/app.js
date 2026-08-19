@@ -579,6 +579,8 @@ function cacheElements() {
     "assistantPermissionCatalogRegistration",
     "assistantPermissionStudyLaunch",
     "assistantPermissionJobStop",
+  "assistantPermissionSmokeTest",
+  "assistantPermissionResourceAction",
     "workspaceCleanupModal",
     "workspaceCleanupDialog",
     "workspaceCleanupTitle",
@@ -3144,6 +3146,8 @@ function fillSettingsForm() {
   setSelectValue(els.assistantPermissionCatalogRegistration, permissions.catalog_registration || "approval_required");
   setSelectValue(els.assistantPermissionStudyLaunch, permissions.study_launch || "approval_required");
   setSelectValue(els.assistantPermissionJobStop, permissions.job_stop || "approval_required");
+  setSelectValue(els.assistantPermissionSmokeTest, permissions.smoke_test || "safe_without_approval");
+  setSelectValue(els.assistantPermissionResourceAction, permissions.resource_action || "approval_required");
 }
 
 function currentOpenHandsSettings() {
@@ -3371,6 +3375,8 @@ async function saveSettings() {
       catalog_registration: els.assistantPermissionCatalogRegistration ? els.assistantPermissionCatalogRegistration.value : "approval_required",
       study_launch: els.assistantPermissionStudyLaunch ? els.assistantPermissionStudyLaunch.value : "approval_required",
       job_stop: els.assistantPermissionJobStop ? els.assistantPermissionJobStop.value : "approval_required",
+      smoke_test: els.assistantPermissionSmokeTest ? els.assistantPermissionSmokeTest.value : "safe_without_approval",
+      resource_action: els.assistantPermissionResourceAction ? els.assistantPermissionResourceAction.value : "approval_required",
     },
   };
   const result = await postJson("/api/agent/settings", payload, { tolerateError: true });

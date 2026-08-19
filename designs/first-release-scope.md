@@ -9,15 +9,38 @@
 > trust refusal names its remedy; search reads descriptions; the README quick
 > start runs; failed Runs say why; stalled Runs admit it.
 >
-> Still open: catalog and compatibility performance (the real costs turned out
-> to be a request stampede, no cache at all on the compatibility endpoint, and
-> one method file parsed fourteen times over — not what this document first
-> assumed); human-readable component names; task vocabulary; de-emphasising
-> test fixtures; the Run page rebuilt around the trace; the documentation
-> truth pass including the operations-research walkthrough; the smallest
-> honest Assistant; and publishing itself, where the core must reach the
-> package index before Studio, which depends on it. The git-history purge
-> remains the one owner-only task and gates tagging.
+> **Progress, 2026-08-19.** The git-history purge is done: the archives are
+> gone from published history, only one published branch ever carried them,
+> and a fresh public clone is 38 MB with no credential files. Asking GitHub to
+> collect the objects its forks still share remains the owner's to send.
+>
+> Since the note above: catalog and compatibility performance, human-readable
+> component names, the task vocabulary, de-emphasising test fixtures, the Run
+> page rebuilt around the trace, and the documentation truth pass — including
+> the operations-research walkthrough, which now runs in both directions
+> between the two ways to improve a simulated system — are all done.
+>
+> The Assistant work is done as well, and grounding it turned up more than the
+> plan expected. Two of the three security minimums were **not** implemented
+> and were reachable in a normal session: the Assistant would read a `.env` or
+> a private key straight out of an attached folder and put it in the
+> conversation, and it would send the key for the configured model to a remote
+> plain-HTTP address in readable form. Both are now refused. The third —
+> refusing published bytes as an editable folder — was already enforced by the
+> workspace-root allowlist, and the part of it the review saw went away with
+> the packaging decision.
+>
+> Two claims in this document were also wrong. A smoke test was **not**
+> "bounded by construction": an unstated trial count meant no limit at all and
+> no copy, so the default was to run the person's own folder for as many trials
+> as the study declared. It is bounded now — a throwaway copy, a few trials, a
+> wall-clock cap — which is what makes running it without asking defensible.
+> And listing the catalog for the Assistant cost 348,000 characters on a bare
+> call, near a hundred thousand tokens before it had done anything; it is
+> 60,000 now.
+>
+> What remains is publishing itself, where the core must reach the package
+> index before Studio, which depends on it.
 
 This is a **scope document**, not an architecture. Two target designs already
 exist and remain the destination: `designs/how-the-assistant-works.md` and
@@ -203,7 +226,7 @@ user, loses their work, or blocks the flagship path outright.
 | A5 | Route "Open Candidate details" from the trial map through the loader | S | Currently renders a blank page. |
 | A6 | Terminalize unrecoverable runs at startup; show a failed run's reason | M | Four runs displayed a live "running" badge; one had been silent 135 hours while still claiming the method "may still be preparing another Candidate." A failed run says "needs attention" without ever naming the failure. |
 | A7 | Documentation truth pass | M | README's quick-start commands fail on a clean clone (they name a package that moved); installation says containers and command methods "are not yet executable" (both shipped); four pages still reference the retired job-shop tutorial; the site contradicts itself on whether COOPA is bundled (it is, Apache-2.0); nothing mentions approving an image. |
-| A8 | Three security minimums | M | (a) refuse canonical catalog and archive folders as editable workspaces — today the Assistant can mount one and edit published bytes in place, with no registration lineage; (b) deny reads of known secret files through the file tools; (c) require encrypted transport when the model provider's address is not on this machine — today a raw provider key can be sent to a configured remote address in the clear. |
+| A8 | Three security minimums — **done 2026-08-19** | M | (a) refuse canonical catalog and archive folders as editable workspaces — today the Assistant can mount one and edit published bytes in place, with no registration lineage; (b) deny reads of known secret files through the file tools; (c) require encrypted transport when the model provider's address is not on this machine — today a raw provider key can be sent to a configured remote address in the clear. |
 
 **A8 is deliberately small.** The larger hardening in the codex design — a
 credential proxy, removing the agent runtime's direct filesystem access,
@@ -242,12 +265,12 @@ Not the target Assistant. The smallest one that does not dead-end.
 
 | # | Item | Size | Note |
 | --- | --- | --- | --- |
-| C1 | Resource-action tools: list, approval-gated run, status | M | The flagship conversation's first leg. Output is rooted in an attached workspace so the generated bundle is immediately registerable (rule 5). |
+| C1 | Resource-action tools: list, approval-gated run, status — **done** | M | The flagship conversation's first leg. Output is rooted in an attached workspace so the generated bundle is immediately registerable (rule 5). |
 | C2 | Give existing refusals a machine-readable remedy | M | One shape carried by the refusals that already exist: image approval (with the command), missing launch inputs (with their declarations), validation failures (with the location), wrong front door (with the right tool). Refusals then teach their own fix instead of the guidance file reciting them. |
 | C3 | An edit-copy tool for updating a catalog entry | M | The safe counterpart to A8(a): the Assistant gets the front door at the same moment the unsafe path closes. |
-| C4 | Slim catalog listing for the Assistant | S | Today a bare listing call ships tens of kilobytes of raw settings into the first exchange. |
-| C5 | Say plainly when the Assistant is off | S | Messages currently queue "locally" with no explanation and no path forward. |
-| C6 | Give smoke tests their own permission, split from launches | S | They borrow the launch gate today, yet a smoke test is bounded by construction, and write → validate → smoke → fix is exactly where the repeated interruptions land. Highest friction relief per line of code in the whole plan. |
+| C4 | Slim catalog listing for the Assistant — **done**, 348k → 60k characters | S | Today a bare listing call ships tens of kilobytes of raw settings into the first exchange. |
+| C5 | Say plainly when the Assistant is off — **done**; the turn also had to stop reporting itself as still working | S | Messages currently queue "locally" with no explanation and no path forward. |
+| C6 | Give smoke tests their own permission, split from launches — **done**, after making the bound real | S | They borrow the launch gate today, yet a smoke test is bounded by construction, and write → validate → smoke → fix is exactly where the repeated interruptions land. Highest friction relief per line of code in the whole plan. |
 
 ---
 

@@ -123,8 +123,8 @@ Workspace and safety rules:
   environment-only, method-only, environment-plus-method, resource-only, or not
   yet classifiable. Prefer the `optpilot_package_plan_*` tools over the older
   component registration tools: prepare a package plan, review includes and
-  source ownership, validate source/import/setup files, run an approved smoke
-  study when a compatible pair exists, then apply the plan after approval.
+  source ownership, validate source/import/setup files, run a smoke study when
+  a compatible pair exists, then apply the plan after approval.
 - Use a validation-repair loop for package curation:
   1. If `optpilot_configs` may already exist, call `optpilot_config_discover`
      before broad file-tree scans.
@@ -140,11 +140,13 @@ Workspace and safety rules:
      thin adapter files, then run validation again before broad source reading.
   6. If an environment-plus-method package reaches `component-ready` but has no
      study, draft a minimal smoke study under `optpilot_configs/studies/`, save
-     it, prepare/validate the package plan again, then ask for approval to run
-     the smoke study.
-  7. To ask for smoke-run approval, call `optpilot_package_plan_smoke` without
-     `approved: true`; Studio will create the approval request. Do not claim the
-     smoke study ran until the approved tool call returns.
+     it, prepare/validate the package plan again, then run the smoke study.
+  7. Smoke studies run without asking the person, because each one is a
+     throwaway copy of the package limited to a few trials and a short time
+     budget. Call `optpilot_package_plan_smoke` and read the result. Do not
+     claim the smoke study ran until the call returns. If the person has set
+     smoke tests to require approval, the call returns an approval request
+     instead -- then wait for it, and never pass `approved: true` yourself.
 - Use one validation/registration/package-plan tool call at a time. Wait for the
   returned result and plan id before repeating the same tool. Do not switch to
   shell `cat` merely because a file read or search is still pending; use shell
@@ -203,8 +205,24 @@ Workspace and safety rules:
   `optpilot_workspace_preview_open` to open the Studio Preview panel. Do not
   claim the preview is visible unless the GUI context or tool result confirms a
   preview URL/status.
-- Registration, study launch, job stop, risky shell commands, and study smoke
-  tests require explicit approval.
+- Registration, study launch, job stop, resource actions, and risky shell
+  commands require explicit approval. Smoke tests do not, unless the person
+  asked for it.
+- Resources are the catalog entries that MAKE things rather than score or
+  propose them — most importantly generating a simulator from a description in
+  plain language. When someone describes a system they want to study and no
+  existing Environment fits, look for a Resource before offering to write code
+  by hand: call `optpilot_catalog_list` with `config_kind: "resource"`, then
+  `optpilot_resource_action_list` to see what one offers and what it needs.
+  Run it with `optpilot_resource_action_run` and follow it with
+  `optpilot_resource_action_status`, which reports where the output was
+  written.
+- Always pass `workspace_id` to `optpilot_resource_action_run` when the output
+  is something the person will keep — a generated bundle, a produced config.
+  The results are then written inside that attached Workspace, where they can
+  be checked, edited, and registered where they lie. Without it the output
+  goes to a Studio folder the person cannot build on, and the generated thing
+  has to be copied by hand before it can be registered.
 - Some Run setups declare per-launch inputs — for example a one-shot solving
   Run setup that takes the problem statement in plain language. Read the
   declared names, types, and descriptions from the Run setup's

@@ -3858,6 +3858,15 @@ class MvpIntegrationTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            # Smoke tests no longer ask by default; this case is about what
+            # an *approved* smoke run refuses, so ask for the approval.
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    "permissions": {"smoke_test": "approval_required"},
+                },
+            )
             session = _create_agent_session(state, {"title": "Secret smoke"})
             _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
             prepared = _prepare_package_plan(state, workspace["id"], {})["package_plan"]
@@ -4731,7 +4740,11 @@ class MvpIntegrationTest(unittest.TestCase):
             response_texts = _assistant_response_texts(reloaded, session["id"])
 
         self.assertEqual(attached["selected_workspace_id"], workspace["id"])
-        self.assertEqual(message_result["session"]["status"], "waiting_for_agent")
+        # The Assistant is not configured here, so nothing was dispatched and
+        # nothing will arrive. The turn is therefore over. This used to assert
+        # "waiting_for_agent", which is how conversations came to show
+        # "Working" forever, surviving restarts, with no one on the other end.
+        self.assertEqual(message_result["session"]["status"], "idle")
         self.assertEqual(
             message_result["message"]["context"]["selected_workspace"]["id"],
             workspace["id"],
@@ -5341,6 +5354,7 @@ class MvpIntegrationTest(unittest.TestCase):
                         "catalog_registration": "disabled",
                         "study_launch": "disabled",
                         "job_stop": "disabled",
+                        "smoke_test": "disabled",
                     },
                 },
             )
@@ -5390,7 +5404,7 @@ class MvpIntegrationTest(unittest.TestCase):
         for result, permission in [
             (shell, "shell_run"),
             (registration, "catalog_registration"),
-            (smoke, "study_launch"),
+            (smoke, "smoke_test"),
         ]:
             self.assertFalse(result["ok"], result)
             self.assertEqual(result["data"]["permission"], permission)
@@ -5546,6 +5560,18 @@ class MvpIntegrationTest(unittest.TestCase):
             state.runtime_dir = tmp_path / "runtime"
             for isolated_dir in (state.sessions_dir, state.agent_sessions_dir, state.jobs_dir, state.workspaces_dir, state.runtime_dir):
                 isolated_dir.mkdir(parents=True, exist_ok=True)
+            # This state's cwd is the repository itself, so keep settings in
+            # the temporary directory rather than writing into the checkout.
+            state.settings_path = tmp_path / "settings.json"
+            _update_agent_settings(
+                state,
+                {
+                    "openhands": {"enabled": False},
+                    # Smoke tests run without asking by default; this case is
+                    # about the approval card, so ask for it explicitly.
+                    "permissions": {"smoke_test": "approval_required"},
+                },
+            )
             session = _create_agent_session(state, {"title": "Docs and smoke"})
             study_entry = next(
                 item
@@ -5975,7 +6001,12 @@ class MvpIntegrationTest(unittest.TestCase):
                             "session_endpoint": "/api/conversations",
                             "model": "deepseek/deepseek-v4-flash",
                             "api_key": "sk-test-secret",
-                        }
+                        },
+                        # This case is about the approval *pause* mechanism and
+                        # drives it through the smoke tool, which no longer
+                        # asks by default. Ask for it, or there is no pause to
+                        # observe.
+                        "permissions": {"smoke_test": "approval_required"},
                     },
                 )
                 session = _create_agent_session(state, {"title": "Approval pause"})

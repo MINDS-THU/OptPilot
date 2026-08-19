@@ -546,7 +546,7 @@
 	            <div class="settings-section-heading">
 	              <div>
 	                <h3>Permissions</h3>
-	                <p>Potentially destructive actions remain approval-gated.</p>
+	                <p>Potentially destructive actions remain approval-gated. A smoke test is the exception: it runs a throwaway copy for a few trials, so it may run without asking.</p>
 	              </div>
 	            </div>
 	            <div class="settings-grid">
@@ -583,6 +583,21 @@
 	              <label class="control-field">
 	                <span>Stop Runs and Candidate tries</span>
 	                <select id="assistantPermissionJobStop">
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Smoke tests</span>
+	                <select id="assistantPermissionSmokeTest">
+	                  <option value="safe_without_approval">May run directly, on a copy</option>
+	                  <option value="approval_required">Approval required</option>
+	                  <option value="disabled">Disabled</option>
+	                </select>
+	              </label>
+	              <label class="control-field">
+	                <span>Resource actions</span>
+	                <select id="assistantPermissionResourceAction">
 	                  <option value="approval_required">Approval required</option>
 	                  <option value="disabled">Disabled</option>
 	                </select>

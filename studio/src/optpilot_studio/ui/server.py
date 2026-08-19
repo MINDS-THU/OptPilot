@@ -8537,6 +8537,18 @@ DEFAULT_ASSISTANT_PERMISSIONS = {
     "catalog_registration": "approval_required",
     "study_launch": "approval_required",
     "job_stop": "approval_required",
+    # A Resource action runs a command the package author wrote, on this
+    # machine, with whatever credentials the action declares. That is worth
+    # asking about every time, however routine the action looks.
+    "resource_action": "approval_required",
+    # A smoke test is the only execution the Assistant may start without
+    # asking, because it is the only one that cannot outlive the question it
+    # answers: it runs a throwaway copy of the package, for a handful of
+    # trials, under a wall-clock cap, against a Realm that is deleted when it
+    # finishes. Nothing it does is visible afterwards except the answer.
+    # Writing, validating, smoke-testing and fixing is one loop, and asking
+    # permission on every turn of it is where the interruptions land.
+    "smoke_test": "safe_without_approval",
 }
 
 ASSISTANT_PERMISSION_VALUES = {
@@ -8545,7 +8557,32 @@ ASSISTANT_PERMISSION_VALUES = {
     "catalog_registration": {"approval_required", "disabled"},
     "study_launch": {"approval_required", "disabled"},
     "job_stop": {"approval_required", "disabled"},
+    "smoke_test": {"approval_required", "safe_without_approval", "disabled"},
+    "resource_action": {"approval_required", "disabled"},
 }
+
+#: How many proposals a smoke test evaluates unless asked for more, and the
+#: most it will evaluate however many are asked for. The point of a smoke test
+#: is to prove the pieces fit together, which the first few trials settle.
+ASSISTANT_SMOKE_DEFAULT_TRIALS = 3
+ASSISTANT_SMOKE_MAX_TRIALS = 25
+
+
+def _assistant_smoke_trial_limit(raw: Any) -> int:
+    """The trial cap for one smoke test -- always a real number.
+
+    Previously an absent value meant *no* cap, which also skipped the copy
+    below, so the default behaviour was the least bounded one available: the
+    person's own package folder, for as many trials as the study declared.
+    """
+
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError):
+        requested = 0
+    if requested <= 0:
+        requested = ASSISTANT_SMOKE_DEFAULT_TRIALS
+    return min(requested, ASSISTANT_SMOKE_MAX_TRIALS)
 
 
 def _default_ui_settings() -> JsonDict:
@@ -9687,6 +9724,49 @@ def _executable_health(name: str, command: List[str]) -> JsonDict:
     }
 
 
+#: What the Assistant needs in order to *choose* a catalog entry, as opposed to
+#: what it needs in order to use one. Everything omitted here -- the file's full
+#: text, its parsed settings, the expanded source reference, the derived runtime
+#: summary -- is still one `optpilot_catalog_detail` call away.
+#:
+#: A bare listing used to return every field of every entry: 348,000 characters
+#: for the five shipped packages, spent before the Assistant had done anything.
+#: The `uid` stays despite its length because it pins the exact source revision
+#: the entry came from, and detail lookups are resolved through it.
+ASSISTANT_CATALOG_LIST_FIELDS = (
+    "id",
+    "uid",
+    "kind",
+    "config",
+    "label",
+    "package",
+    "package_id",
+    "qualified_id",
+    "description",
+    "tags",
+    "tasks",
+    "path",
+)
+
+
+def _assistant_catalog_entry(entry: Any) -> JsonDict:
+    """One catalog entry, reduced to what choosing between entries needs."""
+
+    if not isinstance(entry, dict):
+        return {}
+    return {
+        field: entry[field]
+        for field in ASSISTANT_CATALOG_LIST_FIELDS
+        if field in entry
+    }
+
+
+def _assistant_catalog_entries(entries: Any) -> List[JsonDict]:
+    if not isinstance(entries, list):
+        return []
+    return [_assistant_catalog_entry(entry) for entry in entries]
+
+
 def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
     expected_config = {
         "environments": "environment",
@@ -9835,6 +9915,7 @@ def _public_resource_action_run(record: JsonDict) -> JsonDict:
         "resource_uid": record.get("resource_uid"),
         "resource_id": record.get("resource_id"),
         "action_id": record.get("action_id"),
+        "workspace_id": record.get("workspace_id") or "",
         "status": record.get("status"),
         "started_at": record.get("started_at"),
         "finished_at": record.get("finished_at"),
@@ -9854,6 +9935,41 @@ def _public_resource_action_run(record: JsonDict) -> JsonDict:
             "error": summary.get("error"),
         }
     return payload
+
+
+def _resource_action_output_root(
+    state: UiState,
+    *,
+    workspace_id: str,
+    request_id: str,
+) -> tuple[Path, str]:
+    """Where one action's results go, and which Workspace that is (if any).
+
+    Without a Workspace the results land in Studio's own runtime folder, which
+    is right for a person clicking Run on the Catalog page and reading the
+    output there. It is wrong for generating something: a simulator bundle
+    produced into Studio's private folder has to be copied out by hand before
+    it can be registered, and the copy is exactly the step that loses the
+    connection between what was generated and what was registered.
+
+    So an action may name an attached Workspace instead, and its results are
+    written inside that folder -- already somewhere the person can see, edit,
+    and register from.
+    """
+
+    stamp = _safe_artifact_identifier(request_id, "resource action request id")
+    workspace_id = str(workspace_id or "").strip()
+    if not workspace_id:
+        return state.runtime_dir / "resource-action-runs" / stamp, ""
+    workspace = _workspace_by_id(state, workspace_id)
+    if not workspace:
+        raise ValueError(f"Unknown workspace {workspace_id!r}.")
+    root = _safe_workspace_root(state, Path(str(workspace.get("root") or "")))
+    if not root.is_dir():
+        raise ValueError(
+            f"Workspace {workspace_id!r} has no folder on this machine yet."
+        )
+    return root / "resource-action-output" / stamp, str(workspace.get("id") or "")
 
 
 def _start_resource_action_run(
@@ -9899,16 +10015,17 @@ def _start_resource_action_run(
         action=f"resource action {action.action_id!r}",
     )
     action_host_env = {**os.environ, **granted_env}
-    output_root = (
-        state.runtime_dir
-        / "resource-action-runs"
-        / _safe_artifact_identifier(request_id, "resource action request id")
+    output_root, workspace_id = _resource_action_output_root(
+        state,
+        workspace_id=str(payload.get("workspace_id") or ""),
+        request_id=request_id,
     )
     record: JsonDict = {
         "request_id": request_id,
         "resource_uid": resource_uid,
         "resource_id": str(resource_raw.get("id") or ""),
         "action_id": action.action_id,
+        "workspace_id": workspace_id,
         "status": "running",
         "started_at": time.time(),
         "finished_at": None,
@@ -18942,6 +19059,7 @@ def _execute_agent_tool(
         workspace, root, path = _resolve_agent_workspace_path(
             state, session_id, arguments
         )
+        _refuse_secret_file(path, root)
         if not path.is_file():
             raise FileNotFoundError(_relative_path(path, root))
         if path.stat().st_size > 1_000_000:
@@ -18960,6 +19078,7 @@ def _execute_agent_tool(
         workspace, root, path = _resolve_agent_workspace_path(
             state, session_id, arguments
         )
+        _refuse_secret_file(path, root)
         _require_editable_workspace(workspace)
         gate = _agent_permission_gate(
             state,
@@ -19002,6 +19121,9 @@ def _execute_agent_tool(
         workspace, root, path = _resolve_agent_workspace_path(
             state, session_id, arguments
         )
+        # A diff shows the existing contents line by line, so it leaks exactly
+        # what a read would.
+        _refuse_secret_file(path, root)
         new_content = str(arguments.get("content") or "")
         old_content = (
             path.read_text(encoding="utf-8", errors="replace")
@@ -19066,7 +19188,20 @@ def _execute_agent_tool(
             for key, entries in selected.items()
         }
         matched = sum(len(entries) for entries in filtered.values())
-        data = filtered if kind else {**catalog, **filtered}
+        slim = {
+            key: _assistant_catalog_entries(entries)
+            for key, entries in filtered.items()
+        }
+        data = (
+            slim
+            if kind
+            # Without a kind the caller wants everything, which also carries
+            # the small non-entry keys (where the catalog was read from, and
+            # which sources they came from). Keep those, replace the entry
+            # lists with the slim ones.
+            else {key: value for key, value in catalog.items() if key not in slim}
+            | slim
+        )
         summary = "Catalog entries and saved study plans listed."
         if query or tags:
             summary = (
@@ -19084,6 +19219,103 @@ def _execute_agent_tool(
             "saved study plan" if kind in {"study", "studies"} else "catalog entry"
         )
         return _tool_result(tool, True, f"Loaded {kind} {detail_label}.", data=detail)
+    if tool == "optpilot_resource_action_list":
+        resource_uid = str(arguments.get("resource_uid") or "").strip()
+        if not resource_uid:
+            raise ValueError("resource_uid must be an exact catalog entry ref token.")
+        manifest_path = _resolve_resource_action_source(state, resource_uid)
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            resource_raw = yaml.safe_load(handle) or {}
+        actions = compile_resource_actions(resource_raw, location=str(manifest_path))
+        listing = [
+            {
+                "action_id": action.action_id,
+                "label": action.label,
+                "description": action.description,
+                "inputs": action.inputs,
+                "timeout_seconds": action.timeout_seconds,
+                "requires_env_from_host": list(action.env_from_host),
+                "requires_secrets_from_host": list(action.secrets_from_host),
+            }
+            for action in actions
+        ]
+        return _tool_result(
+            tool,
+            True,
+            f"{len(listing)} action(s) declared by {resource_raw.get('id') or 'this resource'}."
+            if listing
+            else "This resource declares no actions.",
+            data={"resource_uid": resource_uid, "actions": listing},
+        )
+    if tool == "optpilot_resource_action_run":
+        resource_uid = str(arguments.get("resource_uid") or "").strip()
+        action_id = str(arguments.get("action_id") or "").strip()
+        if not resource_uid or not action_id:
+            raise ValueError("resource_uid and action_id are required.")
+        workspace_id = str(arguments.get("workspace_id") or "").strip()
+        inputs = arguments.get("inputs")
+        if inputs is not None and not isinstance(inputs, Mapping):
+            raise ValueError("inputs must be a JSON object.")
+        # Generated here rather than asked of the model, and then carried in
+        # the approval's stored arguments -- so approving a request runs the
+        # same one, and a repeated call after approval does not run it twice.
+        request_id = _canonical_request_uuid(
+            str(arguments.get("request_id") or "") or str(uuid.uuid4())
+        )
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={
+                **arguments,
+                "resource_uid": resource_uid,
+                "action_id": action_id,
+                "workspace_id": workspace_id,
+                "request_id": request_id,
+            },
+            permission_key="resource_action",
+            approval_kind="resource_action_run",
+            title=f"Run resource action {action_id}",
+            summary=(
+                f"Run the {action_id} action and write its output into the "
+                f"attached Workspace."
+                if workspace_id
+                else f"Run the {action_id} action."
+            ),
+            targets=[resource_uid, action_id],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
+        payload, _status = _start_resource_action_run(
+            state,
+            {
+                "request_id": request_id,
+                "resource_uid": resource_uid,
+                "action_id": action_id,
+                "workspace_id": workspace_id,
+                "inputs": dict(inputs or {}),
+            },
+        )
+        return _tool_result(
+            tool,
+            True,
+            f"Started {action_id}. Poll optpilot_resource_action_status with "
+            f"request_id {payload.get('request_id')}.",
+            data=payload,
+        )
+    if tool == "optpilot_resource_action_status":
+        request_id = str(arguments.get("request_id") or "").strip()
+        if not request_id:
+            raise ValueError("request_id is required.")
+        payload = _resource_action_run_status(state, request_id)
+        status = str(payload.get("status") or "")
+        summary = {
+            "running": "Still running.",
+            "succeeded": "The action finished successfully.",
+            "failed": f"The action failed: {payload.get('error') or 'see stderr_tail'}.",
+        }.get(status, f"Action status: {status or 'unknown'}.")
+        return _tool_result(tool, status != "failed", summary, data=payload)
     if tool == "optpilot_compatibility_check":
         environment_ref = arguments.get("environment_ref")
         method_ref = arguments.get("method_ref")
@@ -19166,7 +19398,7 @@ def _execute_agent_tool(
             elif plan.get(
                 "classification"
             ) == "environment-plus-method" and not plan.get("smoke", {}).get("valid"):
-                summary += " Next request optpilot_package_plan_smoke and approve it in Studio when prompted."
+                summary += " Next run optpilot_package_plan_smoke."
         else:
             summary = f"Package plan validation failed: {_validation_error_summary(plan.get('validation', {}) or {})}. Repair missing adapters/source paths/setup files and rerun package-plan validation."
         return _tool_result(tool, ok, summary, data=data)
@@ -19176,11 +19408,13 @@ def _execute_agent_tool(
             session_id,
             tool=tool,
             arguments=arguments,
-            permission_key="study_launch",
+            permission_key="smoke_test",
             approval_kind="package_plan_smoke",
             title="Run package plan smoke study",
             summary="Materialize the package plan in a temporary folder and run the selected smoke study.",
             targets=[str(arguments.get("plan_id") or "")],
+            require_approval=_assistant_permission(state, "smoke_test")
+            == "approval_required",
             execution_context=execution_context,
         )
         if gate is not None:
@@ -19557,6 +19791,72 @@ def _selected_agent_workspace_id(state: UiState, session_id: str) -> str:
     raise ValueError("No workspace is attached to this assistant session.")
 
 
+#: Files whose whole purpose is to hold a credential. Reading one through an
+#: Assistant tool puts its contents into the conversation, and from there into
+#: whichever model provider the person configured -- which is how this project
+#: published eleven live API keys once already.
+#:
+#: Matched on the file name alone, case-insensitively, so it holds wherever the
+#: file sits. Deliberately a denylist of well-known names rather than content
+#: sniffing: a name test cannot be argued with, and a file that merely mentions
+#: a key is a different problem from a file that exists to store one.
+SECRET_FILE_NAMES = frozenset(
+    {
+        ".env",
+        ".envrc",
+        ".netrc",
+        "_netrc",
+        ".npmrc",
+        ".pypirc",
+        ".git-credentials",
+        ".htpasswd",
+        "credentials",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+    }
+)
+
+#: Suffixes that name a key or certificate store regardless of the stem.
+SECRET_FILE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
+
+#: Stems whose every variant is a credential file: `.env.local`,
+#: `.env.production`, `id_rsa.bak`, and so on.
+SECRET_FILE_PREFIXES = (".env.", "id_rsa.", "id_ed25519.")
+
+
+def _is_secret_file(path: Path) -> bool:
+    name = path.name.lower()
+    if name in SECRET_FILE_NAMES:
+        return True
+    if name.endswith(SECRET_FILE_SUFFIXES):
+        return True
+    if name.startswith(SECRET_FILE_PREFIXES):
+        return True
+    # An SSH private key is the file inside .ssh that has no .pub twin; the
+    # common names are listed above, but the directory itself is never a place
+    # an Assistant needs to read from.
+    return ".ssh" in {part.lower() for part in path.parts}
+
+
+def _refuse_secret_file(path: Path, root: Path) -> None:
+    """Stop before a credential file's contents enter the conversation."""
+
+    if not _is_secret_file(path):
+        return
+    relative = _relative_path(path, root)
+    raise PermissionError(
+        f"{relative} holds credentials, so OptPilot will not read or change it "
+        "through the Assistant. Anything the Assistant reads is sent to the "
+        "configured model provider. Open it yourself if you need to see it, "
+        "and set values OptPilot should use in Studio Settings instead."
+    )
+
+
 def _resolve_agent_workspace_path(
     state: UiState,
     session_id: str,
@@ -19759,6 +20059,9 @@ def _agent_tool_openhands_file_editor(
             "file_editor command must be one of: view, create, str_replace, insert."
         )
     workspace, root, path = _resolve_agent_workspace_path(state, session_id, arguments)
+    # Covers every command: viewing a credential file leaks it, and creating
+    # or editing one is not the Assistant's to do either.
+    _refuse_secret_file(path, root)
     if command == "view":
         return _agent_file_editor_view(tool, workspace, root, path, arguments)
     _require_editable_workspace(workspace)
@@ -20075,6 +20378,12 @@ def _shell_needs_approval_inner(command: List[str], *, depth: int) -> bool:
         return False
     first = Path(command[0]).name
     tokens = {item.lower() for item in command[1:]}
+    # The file tools refuse credential files outright. A shell command can
+    # read one in too many ways to block them all, so this does the one thing
+    # that is actually reliable: it makes sure a person sees the command
+    # first, even for someone who allowed unattended shell commands.
+    if any(_is_secret_file(Path(item)) for item in command[1:]):
+        return True
     shell_payload = _shell_wrapper_payload(command)
     if shell_payload and depth < 2:
         if _shell_payload_text_needs_approval(shell_payload):
@@ -20190,11 +20499,13 @@ def _agent_tool_smoke_test_study(
         session_id,
         tool=tool,
         arguments={**arguments, "study_path": str(study_path)},
-        permission_key="study_launch",
+        permission_key="smoke_test",
         approval_kind="smoke_test_study",
         title="Run study smoke test",
         summary=f"Execute {study_path.name} in a temporary private Realm.",
         targets=[str(study_path)],
+        require_approval=_assistant_permission(state, "smoke_test")
+        == "approval_required",
         execution_context=execution_context,
     )
     if gate is not None:
@@ -20205,7 +20516,7 @@ def _agent_tool_smoke_test_study(
             package_root=package_root,
             study_path=study_path,
             temporary_root=tmp,
-            max_trials=int(arguments.get("max_trials") or 0),
+            max_trials=_assistant_smoke_trial_limit(arguments.get("max_trials")),
         )
         smoke = _run_temporary_realm_smoke(
             state,
@@ -20240,8 +20551,19 @@ def _prepare_assistant_smoke_package(
     temporary_root: Path,
     max_trials: int,
 ) -> tuple[Path, Path]:
-    if max_trials <= 0:
-        return package_root, study_path
+    """Copy the package aside and cap its trials, so the smoke touches neither.
+
+    The limit is normalised here rather than trusted from the caller: a smoke
+    test runs without asking the person, so losing its bound must not be one
+    mistaken argument away. Passing nothing meaningful gets the default limit,
+    not an unlimited run against the person's own folder -- which is what this
+    did before.
+
+    The study is guaranteed to sit inside ``package_root`` because callers
+    resolve it with ``_most_specific_study_package_root``.
+    """
+
+    max_trials = _assistant_smoke_trial_limit(max_trials)
     relative_study = study_path.resolve().relative_to(package_root.resolve())
     copied_package = temporary_root / "package"
     shutil.copytree(
@@ -21559,7 +21881,13 @@ def _append_agent_message(
             },
         )
         dispatch_status = str(dispatch.get("status") or "")
-        if dispatch_status in {"answered", "dispatched"}:
+        # "queued" means nothing was sent and nothing will ever arrive: the
+        # Assistant is switched off or has no model configured. The notice
+        # written into the transcript IS the whole answer, so the turn is
+        # finished. Treating it as still-waiting is what left conversations
+        # showing "Working" indefinitely, surviving restarts, with no hint
+        # that no one was on the other end.
+        if dispatch_status in {"answered", "dispatched", "queued"}:
             session["status"] = "idle"
             session.pop("active_turn_id", None)
             session.pop("active_turn_started_at", None)
