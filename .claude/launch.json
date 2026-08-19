@@ -6,7 +6,12 @@
       "runtimeExecutable": "env",
       "runtimeArgs": [
         "UV_PROJECT_ENVIRONMENT=/Users/li_chuanhao/.optpilot-venvs/OptPilot-venv",
-        "uv", "run", "optpilot-studio", "--port", "8866"
+        "PYTHONPATH=studio/src:src",
+        "uv",
+        "run",
+        "optpilot-studio",
+        "--port",
+        "8866"
       ],
       "port": 8866
     }
