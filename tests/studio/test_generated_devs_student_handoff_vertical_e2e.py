@@ -35,6 +35,7 @@ from optpilot_studio.ui.server import (
     _smoke_package_plan,
     _validate_package_plan,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _WHEEL_NAME = "xdevs-3.0.0-py3-none-any.whl"
@@ -288,7 +289,7 @@ class GeneratedDevsStudentHandoffVerticalE2ETest(unittest.TestCase):
         output_session = runtime.interface_outputs.create_session(
             operation_id="generated-devs-student/output-session",
             launch_id="generated-devs-student-interface",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         captured = runtime.interface_outputs.capture_tree_selection(
             handle=output_session,

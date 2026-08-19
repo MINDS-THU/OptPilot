@@ -29,6 +29,7 @@ from optpilot.realm.selection_content_service import (
 )
 from optpilot.realm.selections import SelectionRef
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -73,7 +74,7 @@ class RealmSelectionContentTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id=owner_id,
                 expected_owner_revision=0,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             capture = this.store.capture(
                 change_id=change.change_id,
@@ -494,7 +495,7 @@ class RealmSelectionContentTest(unittest.TestCase):
             operation_id=fixture.op("content-parameter-run-create"),
             actor_principal_id="operator",
             controller_holder_id="content-controller-parameters",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner,
@@ -507,7 +508,7 @@ class RealmSelectionContentTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         admitted = fixture.ledger.commit_run_candidate_admissions(
             operation_id=fixture.op("content-parameter-admission"),

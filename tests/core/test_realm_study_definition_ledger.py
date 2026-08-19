@@ -24,6 +24,7 @@ from optpilot.realm.study_definition import (
     StudyDefinitionManifest,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -641,7 +642,7 @@ class RealmStudyDefinitionLedgerTest(unittest.TestCase):
                 operation_id=self.op("client-semantics"),
                 actor_principal_id="operator",
                 controller_holder_id="controller-a",
-                controller_ttl_seconds=600,
+                controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 study_definition_owner_id=self.manifest.owner_id,
                 expected_study_definition_owner_revision=0,
                 expected_run_definition_digest=self.run_definition.digest,
@@ -737,7 +738,7 @@ class RealmStudyDefinitionLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.manifest.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("launch-replay-remove-commit"),
@@ -791,7 +792,7 @@ class RealmStudyDefinitionLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.manifest.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("first-launch-remove-commit"),
@@ -827,7 +828,7 @@ class RealmStudyDefinitionLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.manifest.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         committed = self.ledger.commit_owner_change(
             operation_id=self.op("remove-study-memberships-commit"),

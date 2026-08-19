@@ -22,6 +22,7 @@ from tests.core.test_realm_retained_file_vertical_e2e import (
     _ORIGINAL_SOLVER,
     _write_file_candidate_package,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 @unittest.skipUnless(os.name == "posix", "local Realm runtime is POSIX-only")
@@ -46,7 +47,7 @@ class FileCandidateDebugRunE2ETest(unittest.TestCase):
             package_root=package_root,
             study_config_path=study,
             operation_id="retained-file-debug-e2e/source-run",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
             method_start_timeout=20,
             method_request_timeout=20,

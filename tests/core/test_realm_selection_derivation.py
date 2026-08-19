@@ -44,6 +44,7 @@ from optpilot.realm.workspaces import (
     WorkspaceSelectionLineage,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -90,7 +91,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             operation_id="selection/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -177,7 +178,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         retired = self.ledger.retire_run(
             operation_id=self.op("projection-retire-commit"),
@@ -208,7 +209,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=change.change_id,
@@ -249,7 +250,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.hold_owner_content(
             operation_id=self.op("admission-hold"),
@@ -629,7 +630,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         retired = self.ledger.retire_run(
             operation_id=self.op("retire"),
@@ -739,7 +740,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         keep_operation = self.op("race-keep")
         retire_operation = self.op("race-retire")
@@ -824,7 +825,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
                 actor_principal_id="other",
                 selection=selection,
                 holder_id="selection-viewer-bytes",
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
         self.projections.append(projection)
 
@@ -884,7 +885,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="other",
             selection=selection,
             holder_id="selection-viewer-derive",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.projections.append(projection)
         self.assertEqual(
@@ -940,7 +941,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             selection=selection,
             holder_id="closing-viewer",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.projections.append(closed)
         closed.close()
@@ -985,7 +986,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
                     actor_principal_id="operator",
                     selection=selection,
                     holder_id="late-viewer",
-                    ttl_seconds=60,
+                    ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 )
         self.assertEqual(
             unavailable.exception.eligibility.code,
@@ -1009,7 +1010,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             operation_id=self.op("parameter-run-create"),
             actor_principal_id="operator",
             controller_holder_id="controller-parameters",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner,
@@ -1022,7 +1023,7 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         admitted = self.ledger.commit_run_candidate_admissions(
             operation_id=self.op("parameter-admission"),

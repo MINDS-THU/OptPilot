@@ -34,6 +34,7 @@ from optpilot.realm.run_records import (
     RunAdmissionPlan,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -81,7 +82,7 @@ class MethodExchangeProjectionTest(unittest.TestCase):
             operation_id="method-projection/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -153,7 +154,7 @@ class MethodExchangeProjectionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         plan = self.plan()
         completion = self.ledger.complete_run_method_proposal_exchange(

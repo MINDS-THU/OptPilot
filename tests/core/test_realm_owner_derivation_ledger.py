@@ -16,6 +16,7 @@ from optpilot.realm.owner_derivation import (
 )
 from optpilot.realm.owners import OwnerMembership, OwnerPermission
 from optpilot.realm.refs import BlobRef
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmOwnerDerivationLedgerTest(unittest.TestCase):
@@ -86,7 +87,7 @@ class RealmOwnerDerivationLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=change.change_id,
@@ -158,7 +159,7 @@ class RealmOwnerDerivationLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=owner_id,
             expected_owner_revision=revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op(f"remove-commit-{owner_id}"),
@@ -571,7 +572,7 @@ class RealmOwnerDerivationLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-a",
             expected_owner_revision=revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         barrier = threading.Barrier(3)
         derived = []

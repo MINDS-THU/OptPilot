@@ -30,6 +30,7 @@ from optpilot.realm.run_records import (
 )
 from optpilot.realm.selections import SelectionRef
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -100,7 +101,7 @@ class RealmRunClosureLedgerTest(unittest.TestCase):
             operation_id=operation_id,
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -119,7 +120,7 @@ class RealmRunClosureLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         plan = RunAdmissionPlan(
             candidates=(
@@ -490,7 +491,7 @@ class RealmRunClosureLedgerTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id=self.source_owner_id,
                 expected_owner_revision=self.source_owner_revision,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             capture = store_b.capture(
                 change_id=change.change_id,

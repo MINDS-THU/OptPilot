@@ -15,6 +15,7 @@ from optpilot.retained_batch_runtime import RetainedBatchWorkerStatus
 from optpilot.retained_batch_worker import INITIAL_BATCH_EXCHANGE_CHAIN
 from optpilot.run_authority import RetainedRunAuthority
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -180,7 +181,7 @@ class RealmRetainedBatchDriverCancellationTest(unittest.TestCase):
             operation_id="driver-cancel/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -220,7 +221,7 @@ class RealmRetainedBatchDriverCancellationTest(unittest.TestCase):
             method_runtime_provider=provider,
             scheduler=scheduler,
             heartbeat_factory=lambda _snapshot, _method: _Heartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
         return driver, provider, scheduler, worker

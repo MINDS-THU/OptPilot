@@ -45,6 +45,7 @@ from optpilot.retained_batch_worker import (
 )
 from optpilot.run_authority import RetainedRunAuthority
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -659,7 +660,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             operation_id="driver/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -707,7 +708,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             operation_id=f"driver/{run_id}/create",
             actor_principal_id="operator",
             controller_holder_id=f"controller-{run_id}",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -744,7 +745,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             operation_id=f"driver/{run_id}/create",
             actor_principal_id="operator",
             controller_holder_id=f"controller-{run_id}",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -777,7 +778,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
                 snapshot.run.controller_fencing_token
             ),
             new_controller_holder_id=holder,
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         return RetainedRunAuthority.hydrate(
             ledger=self.ledger,
@@ -800,7 +801,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             expected_controller_holder_id=snapshot.run.controller_holder_id,
             expected_controller_fencing_token=snapshot.run.controller_fencing_token,
             new_controller_holder_id=holder,
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         return RetainedRunAuthority.hydrate(
             ledger=self.ledger,
@@ -822,7 +823,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(worker),
             scheduler=scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
         return driver, scheduler
@@ -918,7 +919,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(worker),
             scheduler=scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -990,7 +991,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
                     method_runtime_provider=_FakeMethodProvider(worker),
                     scheduler=scheduler,
                     heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-                    controller_ttl_seconds=60,
+                    controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
                     attempt_ttl_seconds=60,
                 )
                 coordinates = tuple(
@@ -1059,7 +1060,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(first_worker),
             scheduler=first_scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -1120,7 +1121,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(recovered_worker),
             scheduler=recovered_scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -1250,7 +1251,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(worker),
             scheduler=scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -1335,7 +1336,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=_FakeMethodProvider(worker),
             scheduler=scheduler,
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -1489,7 +1490,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
             method_runtime_provider=provider,
             scheduler=_CancellingScheduler(terminal_authority),
             heartbeat_factory=lambda _snapshot, _method: _NoopHeartbeat(),
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
         )
 
@@ -1858,7 +1859,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
                 expected_controller_holder_id=lease.holder_id,
                 expected_controller_fencing_token=lease.fencing_token,
                 new_controller_holder_id="controller-c",
-                controller_ttl_seconds=60,
+                controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             return replacement
 
@@ -1880,7 +1881,7 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
                     new_controller_holder_id="controller-b",
                     candidate_normalizer=_normalizer,
                     normalizer_version=self.normalizer_version,
-                    controller_ttl_seconds=60,
+                    controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
                     method_runtime_provider=_FakeMethodProvider(worker),
                     heartbeat_factory=(
                         lambda _snapshot, _method: _NoopHeartbeat()

@@ -32,6 +32,7 @@ from optpilot_studio.ui.server import (
     _resolve_catalog_identifier,
     _start_catalog_interface_launch,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 PACKAGE_ARTIFACT_ROLE = "package-plan-artifact"
@@ -104,7 +105,7 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
             actor_principal_id=actor,
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=actor,

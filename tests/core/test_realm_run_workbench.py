@@ -88,6 +88,7 @@ from optpilot.realm.run_workbench import (
 from optpilot.realm.run_timeline import RUN_TIMELINE_PAGE_SCHEMA
 from optpilot.run_control_manifest import RetryPolicy
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -159,7 +160,7 @@ class RealmRunWorkbenchTest(unittest.TestCase):
             operation_id="workbench/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -234,7 +235,7 @@ class RealmRunWorkbenchTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         receipt = self.ledger.commit_run_candidate_admissions(
             operation_id=self.op("admission-commit"),
@@ -1574,7 +1575,7 @@ class RealmRunWorkbenchTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="mixed-source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=source_change.change_id,
@@ -1628,7 +1629,7 @@ class RealmRunWorkbenchTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.hold_owner_content(
             operation_id=self.op("mixed-candidate-hold"),
@@ -2268,7 +2269,7 @@ class RealmCandidateResultProjectionTest(unittest.TestCase):
             operation_id="candidate-results/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -2331,7 +2332,7 @@ class RealmCandidateResultProjectionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=self.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         receipt = self.ledger.commit_run_candidate_admissions(
             operation_id=self.op("admission-commit"),

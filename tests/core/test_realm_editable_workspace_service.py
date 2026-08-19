@@ -20,6 +20,7 @@ from optpilot.realm.projection_service import RealmProjectionService
 from optpilot.realm.refs import canonical_json_bytes
 from optpilot.realm.service import RealmContentService
 from optpilot.realm.workspaces import WORKSPACE_REVISION_ROLE, WorkspaceLineage
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmEditableWorkspaceServiceTest(unittest.TestCase):
@@ -104,7 +105,7 @@ class RealmEditableWorkspaceServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=change.change_id,
@@ -567,7 +568,7 @@ class RealmEditableWorkspaceServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id="editable-test/source-release-commit",

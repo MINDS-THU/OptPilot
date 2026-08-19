@@ -50,6 +50,7 @@ from optpilot.realm.manifests import (
 )
 from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.refs import BlobRef, canonical_json_bytes
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class _RecordingRetention:
@@ -386,7 +387,7 @@ class LocalContentStoreTest(unittest.TestCase):
             actor_principal_id="principal-a",
             owner_id="workspace-a",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         authority = ledger.content_capture_handle(
             actor_principal_id="principal-a",
@@ -516,7 +517,7 @@ class LocalContentStoreTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id="binding-owner",
                 expected_owner_revision=0,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             authority = ledger.content_capture_handle(
                 actor_principal_id="operator",
@@ -1755,7 +1756,7 @@ class LocalContentStoreTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id="cleanup-owner",
                 expected_owner_revision=0,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             authority = ledger.content_capture_handle(
                 actor_principal_id="operator",
@@ -1902,7 +1903,7 @@ class LocalContentStoreTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id="cleanup-owner",
                 expected_owner_revision=0,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             published_authority = ledger.content_capture_handle(
                 actor_principal_id="operator",
@@ -2051,7 +2052,7 @@ class LocalContentStoreTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="gc-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         first_authority = ledger.content_capture_handle(
             actor_principal_id="operator",
@@ -2126,7 +2127,7 @@ class LocalContentStoreTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="gc-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         second_authority = ledger.content_capture_handle(
             actor_principal_id="operator",

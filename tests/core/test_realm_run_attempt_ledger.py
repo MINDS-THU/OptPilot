@@ -41,6 +41,7 @@ from optpilot.realm.run_records import (
 from optpilot.realm.run_snapshot import RunLedgerSnapshot
 from optpilot.run_control_manifest import RetryPolicy
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -132,7 +133,7 @@ class RealmRunAttemptLedgerTest(unittest.TestCase):
             operation_id=operation_id,
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=(
@@ -1230,7 +1231,7 @@ class RealmRunAttemptLedgerTest(unittest.TestCase):
             expected_controller_holder_id=previous.holder_id,
             expected_controller_fencing_token=previous.fencing_token,
             new_controller_holder_id="loss-retry-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         retrying = self.ledger.reconcile_lost_run_attempt(
             operation_id=self.op("loss-retry-reconcile"),
@@ -1317,7 +1318,7 @@ class RealmRunAttemptLedgerTest(unittest.TestCase):
                 exhausted_created.controller_lease.fencing_token
             ),
             new_controller_holder_id="loss-exhausted-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         exhausted = self.ledger.reconcile_lost_run_attempt(
             operation_id=self.op("loss-exhausted-reconcile"),

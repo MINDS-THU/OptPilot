@@ -130,6 +130,7 @@ from optpilot_studio.ui.server import (
     _preview_proxy_handler_factory,
 )
 from optpilot_studio.ui.runtime_supervisor import StudioRuntimeSupervisorClaim
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 JsonDict = Dict[str, Any]
@@ -526,7 +527,7 @@ def _publish_exact_study_builder_fixture(
         actor_principal_id=actor,
         owner_id=owner_id,
         expected_owner_revision=0,
-        ttl_seconds=60,
+        ttl_seconds=TEST_LEASE_TTL_SECONDS,
     )
     sealed = runtime.content_service.capture(
         actor_principal_id=actor,

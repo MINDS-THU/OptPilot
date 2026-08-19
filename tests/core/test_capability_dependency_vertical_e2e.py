@@ -22,6 +22,7 @@ from optpilot.realm.run_closure import RUN_PREPARED_RUNTIME_ROLE
 from optpilot.realm.run_definition import RUN_PREPARED_METHOD_RUNTIME_ROLE
 from optpilot.realm_study_runner import run_local_realm_study
 from optpilot.runtime_scopes import ENVIRONMENT_PREPARED_PYTHON_SCOPE
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _WHEEL_NAME = "capability_replay_support-1.0.0-py3-none-any.whl"
@@ -249,7 +250,7 @@ class CapabilityDependencyVerticalE2ETest(unittest.TestCase):
             package_root=package_root,
             study_config_path=study,
             operation_id=f"capability-dependency-vertical-e2e/run/{root.name}",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
             method_start_timeout=20,
             method_request_timeout=20,

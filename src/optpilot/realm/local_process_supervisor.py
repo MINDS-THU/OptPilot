@@ -3707,14 +3707,20 @@ class LocalProcessSupervisor:
                         raise RealmIntegrityError(
                             "retired local process directory entry is invalid."
                         )
-                    entry = os.stat(
-                        name, dir_fd=directory_fd, follow_symlinks=False
-                    )
+                    try:
+                        entry = os.stat(
+                            name, dir_fd=directory_fd, follow_symlinks=False
+                        )
+                    except FileNotFoundError:
+                        continue
                     if stat.S_ISDIR(entry.st_mode):
                         raise RealmIntegrityError(
                             "retired local process directory contains a directory."
                         )
-                    os.unlink(name, dir_fd=directory_fd)
+                    try:
+                        os.unlink(name, dir_fd=directory_fd)
+                    except FileNotFoundError:
+                        pass
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)

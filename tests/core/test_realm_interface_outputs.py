@@ -18,6 +18,7 @@ from optpilot.realm.interface_outputs import (
 )
 from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.service import RealmContentService
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmInterfaceOutputsTest(unittest.TestCase):
@@ -50,7 +51,7 @@ class RealmInterfaceOutputsTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="interface-session-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.content = RealmContentService(
             self.ledger, local_stores={self.store.store_id: self.store}

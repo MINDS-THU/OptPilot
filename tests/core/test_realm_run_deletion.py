@@ -15,6 +15,7 @@ from optpilot.realm.errors import RealmConflict, RealmNotFound, RunRecordDeleted
 from optpilot.realm.run_deletion_service import delete_run_and_reclaim
 
 from tests.core.test_realm_run_retirement import RealmRunRetirementTest
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 IMAGE_DIGEST = "sha256:" + "a" * 64
 
@@ -254,7 +255,7 @@ class RealmRunDeletionTest(RealmRunRetirementTest):
             actor_principal_id="operator",
             owner_id="candidate-source-owner",
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("source-release-commit"),

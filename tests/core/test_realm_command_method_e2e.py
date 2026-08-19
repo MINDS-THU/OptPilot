@@ -14,6 +14,7 @@ from pathlib import Path
 
 from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot.realm_study_runner import run_local_realm_study
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _ENVIRONMENT = """\
@@ -138,7 +139,7 @@ class CommandMethodRealmRunE2ETest(unittest.TestCase):
             package_root=package_root,
             study_config_path=study,
             operation_id="command-method-e2e/run",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
             method_start_timeout=20,
         )

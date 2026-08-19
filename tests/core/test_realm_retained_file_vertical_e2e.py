@@ -12,6 +12,7 @@ from optpilot.realm.run_records import RUN_CANDIDATE_ROLE
 from optpilot.realm_study_runner import run_local_realm_study
 from optpilot.retained_batch_runtime import RetainedPythonBatchRuntime
 from optpilot.retained_file_candidates import FileCandidateDraft
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _ORIGINAL_SOLVER = "VALUE = 7\n"
@@ -192,7 +193,7 @@ class RetainedFileCandidateVerticalE2ETest(unittest.TestCase):
                 package_root=package_root,
                 study_config_path=study,
                 operation_id="retained-file-vertical-e2e/run",
-                controller_ttl_seconds=60,
+                controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 attempt_ttl_seconds=60,
                 method_start_timeout=20,
                 method_request_timeout=20,

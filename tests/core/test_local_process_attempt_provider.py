@@ -31,6 +31,7 @@ from tests.core.test_realm_local_attempt_launcher import (
     _RetainedRuntimeFixture,
     _SimulatedParentCrash,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class _ControllableHeartbeat:
@@ -409,7 +410,7 @@ class LocalProcessAttemptProviderTest(unittest.TestCase):
             expected_controller_holder_id=snapshot.run.controller_holder_id,
             expected_controller_fencing_token=snapshot.run.controller_fencing_token,
             new_controller_holder_id="orphan-replacement-controller",
-            controller_ttl_seconds=300,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         replacement = self.fixture.ledger.read_run_snapshot(
             actor_principal_id="operator", run_id=self.coordinates["run_id"]

@@ -53,6 +53,7 @@ from tests.core.test_runtime_binding import (
     _file_definition_and_candidate_input,
 )
 
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 class RealmProcessExecutionBinderTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -118,7 +119,7 @@ class RealmProcessExecutionBinderTest(unittest.TestCase):
             operation_id="process-binder/run/launch",
             actor_principal_id="operator",
             controller_holder_id="process-binder-controller",
-            controller_ttl_seconds=300,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=package,
             run_id="process-binder-run",
             owner_id="process-binder-run-owner",
@@ -132,7 +133,7 @@ class RealmProcessExecutionBinderTest(unittest.TestCase):
             logical_trial_id="trial-a",
             attempt_id="attempt-a",
             expected_run_revision=1,
-            attempt_ttl_seconds=300,
+            attempt_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             **self.controller_arguments(),
         )
         self.binder = RealmProcessExecutionBinder(
@@ -185,7 +186,7 @@ class RealmProcessExecutionBinderTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=300,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_run_candidate_admissions(
             operation_id=self.op("admission/commit"),
@@ -496,7 +497,7 @@ class RealmProcessExecutionBinderTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=snapshot.run.owner_id,
             expected_owner_revision=owner.revision,
-            ttl_seconds=300,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         envelope = NormalizedCandidateEnvelope.build(
             candidate_format="parameters", spec={"x": 0.75}

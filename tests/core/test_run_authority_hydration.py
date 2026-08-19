@@ -22,6 +22,7 @@ from optpilot.run_authority import RetainedRunAuthority
 from optpilot.run_control_manifest import RetryPolicy
 from optpilot.run_controller import RunControllerStateError
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -85,7 +86,7 @@ class RetainedRunAuthorityHydrationTest(unittest.TestCase):
             operation_id="hydration/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -98,7 +99,7 @@ class RetainedRunAuthorityHydrationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_run_candidate_admissions(
             operation_id="hydration/admission/commit",
@@ -425,7 +426,7 @@ class RetainedRunAuthorityHydrationTest(unittest.TestCase):
             operation_id="hydration/files/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-files",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -452,7 +453,7 @@ class RetainedRunAuthorityHydrationTest(unittest.TestCase):
             operation_id="hydration/budget/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-budget",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -465,7 +466,7 @@ class RetainedRunAuthorityHydrationTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         admitted = self.ledger.commit_run_candidate_admissions(
             operation_id="hydration/budget/admission/commit",

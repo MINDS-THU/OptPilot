@@ -20,6 +20,7 @@ from optpilot.realm.run_records import (
 )
 from optpilot.realm.selections import SelectionRef
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -58,7 +59,7 @@ class RealmChildRunSelectionPreparationTest(unittest.TestCase):
             operation_id="child-service/create-parent",
             actor_principal_id=self.principal.principal_id,
             controller_holder_id="controller-a",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -71,7 +72,7 @@ class RealmChildRunSelectionPreparationTest(unittest.TestCase):
             actor_principal_id=self.principal.principal_id,
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         admission = self.ledger.commit_run_candidate_admissions(
             operation_id="child-service/admit-parent-plan",

@@ -19,6 +19,7 @@ from optpilot.realm.run_records import (
 )
 from optpilot.realm.workspaces import WORKSPACE_REVISION_ROLE, WorkspaceLineage
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -58,7 +59,7 @@ class RealmRunSecurityRegressionTest(unittest.TestCase):
             operation_id="run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -99,7 +100,7 @@ class RealmRunSecurityRegressionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.run.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
 
     def commit_plan(self, *, change_id: str, plan: RunAdmissionPlan, bindings=()):
@@ -136,7 +137,7 @@ class RealmRunSecurityRegressionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=change.change_id,
@@ -404,7 +405,7 @@ class RealmRunSecurityRegressionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="other-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         operation_id = self.op("wrong-owner-admit")
         with self.assertRaises(RealmNotFound):

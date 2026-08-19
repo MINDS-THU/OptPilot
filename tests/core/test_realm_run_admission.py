@@ -20,6 +20,7 @@ from optpilot.realm.run_records import (
     SessionHandleAdmission,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -70,7 +71,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
             operation_id="run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=self.run_definition,
             definition_bindings=self.run_definition_bindings,
             source_owner_id=self.run_source_owner_id,
@@ -129,7 +130,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.run.run.owner_id,
             expected_owner_revision=expected_owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
 
     def commit_plan(
@@ -162,7 +163,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
                 operation_id="run/create",
                 actor_principal_id="operator",
                 controller_holder_id="controller-a",
-                controller_ttl_seconds=60,
+                controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 run_definition=self.run_definition,
                 definition_bindings=self.run_definition_bindings,
                 source_owner_id=self.run_source_owner_id,
@@ -357,7 +358,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=source_change.change_id,
@@ -456,7 +457,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.run.run.owner_id,
             expected_owner_revision=2,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         with self.assertRaisesRegex(
             RealmConflict, "fenced run domain transaction"
@@ -493,7 +494,7 @@ class RealmRunAdmissionTest(unittest.TestCase):
                 actor_principal_id="operator",
                 owner_id="two-store-source-owner",
                 expected_owner_revision=0,
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
             sealed = []
             for store in (self.store, second_store):

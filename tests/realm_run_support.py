@@ -29,6 +29,18 @@ from optpilot.run_control_manifest import (
     candidate_contract_digest,
 )
 
+# A lease that a test acquires in ``setUp`` has to outlive the whole test
+# method, so its TTL bounds test-suite wall-clock rather than production
+# liveness.  Sized like production (60s) it silently becomes a race against
+# the machine: the ledger correctly rejects the next controller-authorized
+# call with ``RealmExpired`` once the lease lapses, so a loaded machine turns
+# an unrelated test into a spurious failure and the suite reports a different
+# failure set on every run.  Tests that are not themselves about expiry take
+# this deliberately generous lease instead, so the only thing they measure is
+# the behaviour under test.  Tests that *do* exercise expiry keep their own
+# short, explicit TTLs.
+TEST_LEASE_TTL_SECONDS = 3600.0
+
 
 def prepare_test_run_control_manifest(
     closure: RunEvaluationClosure,
@@ -191,7 +203,7 @@ def prepare_test_run_closure(
         actor_principal_id=actor_principal_id,
         owner_id=source_owner_id,
         expected_owner_revision=0,
-        ttl_seconds=60,
+        ttl_seconds=TEST_LEASE_TTL_SECONDS,
     )
     capture = store.capture(
         change_id=change.change_id,

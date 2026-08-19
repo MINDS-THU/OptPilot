@@ -670,6 +670,8 @@ class RunControllerHeartbeatCoordinatorTest(unittest.TestCase):
                     operation_id="controller-heartbeat/run/create",
                     actor_principal_id="operator",
                     controller_holder_id="controller-a",
+                    # Shorter than the 120s heartbeat below on purpose: this test
+                    # asserts renewal pushes the expiry out.
                     controller_ttl_seconds=60,
                     run_definition=definition,
                     definition_bindings=definition_bindings,
@@ -709,6 +711,8 @@ class RunControllerHeartbeatCoordinatorTest(unittest.TestCase):
                         created.controller_lease.fencing_token
                     ),
                     new_controller_holder_id="controller-b",
+                    # Shorter than the 120s heartbeat below on purpose: this test
+                    # asserts renewal pushes the expiry out.
                     controller_ttl_seconds=60,
                 )
                 with self.assertRaises(RunControllerHeartbeatError) as stale:

@@ -18,6 +18,7 @@ from optpilot.realm.run_records import RunCandidateSelection
 from optpilot.run_authority import RetainedRunAuthority
 from optpilot.run_controller import MethodProtocolError
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -81,7 +82,7 @@ class RetainedRunAuthorityTest(unittest.TestCase):
             operation_id="authority/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,

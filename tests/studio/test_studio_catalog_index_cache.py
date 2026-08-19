@@ -32,6 +32,7 @@ from optpilot_studio.ui.server import (
     _catalog_payload,
     _refresh_realm_catalog_projections,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 PACKAGE_ARTIFACT_ROLE = "package-plan-artifact"
@@ -92,7 +93,7 @@ class StudioCatalogIndexCacheTest(unittest.TestCase):
             actor_principal_id=actor,
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=actor,

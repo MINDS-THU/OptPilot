@@ -36,6 +36,7 @@ from optpilot.realm.run_views import (
 )
 from optpilot.realm.selections import SelectionRef
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -135,7 +136,7 @@ class RealmRunReaderTest(unittest.TestCase):
             operation_id=f"reader/run/{name}/create",
             actor_principal_id=actor,
             controller_holder_id=f"controller-{name}",
-            controller_ttl_seconds=120,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,

@@ -62,6 +62,7 @@ from tests.core.test_runtime_binding import (
     _compile as _compile_portable_runtime,
     _definition_with_prepared_python,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class _SimulatedParentCrash(BaseException):
@@ -464,7 +465,7 @@ trialWorkspace:
             operation_id="local-attempt/run/launch",
             actor_principal_id="operator",
             controller_holder_id="local-attempt-controller",
-            controller_ttl_seconds=300,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=package,
             run_id="local-attempt-run",
             owner_id="local-attempt-run-owner",

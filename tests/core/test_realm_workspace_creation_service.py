@@ -23,6 +23,7 @@ from optpilot.realm.workspace_assembly import (
     WorkspaceRequestSource,
     WorkspaceSelectionSeed,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 PACKAGE_ARTIFACT_ROLE = "package-plan-artifact"
@@ -76,7 +77,7 @@ class RealmWorkspaceCreationServiceTest(unittest.TestCase):
             actor_principal_id=self.actor,
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=self.actor,

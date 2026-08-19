@@ -15,6 +15,7 @@ from optpilot.realm.errors import RealmConflict, RealmNotFound
 from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.workspaces import WORKSPACE_REVISION_ROLE, WorkspaceLineage
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 @unittest.skipUnless(os.name == "posix", "local Realm projections are POSIX-only")
@@ -54,7 +55,7 @@ class RealmWorkspaceSelectionTest(unittest.TestCase):
             actor_principal_id=self.actor,
             owner_id=self.source_owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=self.actor,
@@ -118,7 +119,7 @@ class RealmWorkspaceSelectionTest(unittest.TestCase):
             actor_principal_id=self.actor,
             selection=selection,
             holder_id=f"workspace-selection-viewer-{label}",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
             consumer_kind="workspace-selection-test",
         )
 

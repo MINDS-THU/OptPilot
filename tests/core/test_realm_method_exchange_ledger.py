@@ -39,6 +39,7 @@ from optpilot.realm.run_records import (
 )
 from optpilot.realm.run_snapshot import RunLedgerSnapshot
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -85,7 +86,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             operation_id="method-exchange/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,
@@ -929,7 +930,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             operation_id=self.op("create-shared-cas-run"),
             actor_principal_id="operator",
             controller_holder_id="controller-wide",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=wide_definition,
             definition_bindings=wide_bindings,
             source_owner_id=self.source_owner_id,
@@ -1277,7 +1278,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             expected_controller_holder_id=self.controller.holder_id,
             expected_controller_fencing_token=self.controller.fencing_token,
             new_controller_holder_id="controller-b",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         with self.assertRaises(RealmConflict):
             self.complete_file_proposal(
@@ -1523,7 +1524,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             operation_id=self.op("create-final-run"),
             actor_principal_id="operator",
             controller_holder_id="final-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -1649,7 +1650,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             expected_controller_holder_id=self.controller.holder_id,
             expected_controller_fencing_token=self.controller.fencing_token,
             new_controller_holder_id="controller-b",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         with self.assertRaises(RealmConflict):
             self.ledger.complete_run_method_proposal_exchange(
@@ -1710,7 +1711,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             expected_controller_holder_id=self.controller.holder_id,
             expected_controller_fencing_token=self.controller.fencing_token,
             new_controller_holder_id="controller-b",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         connection = sqlite3.connect(self.database_path)
         connection.execute("PRAGMA foreign_keys = ON")
@@ -1959,7 +1960,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             operation_id=self.op("create-wide-run"),
             actor_principal_id="operator",
             controller_holder_id="wide-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.source_owner_id,
@@ -2185,7 +2186,7 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
             operation_id=self.op("escalation-run-create"),
             actor_principal_id="operator",
             controller_holder_id="escalation-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=definition,
             definition_bindings=bindings,
             source_owner_id=self.source_owner_id,

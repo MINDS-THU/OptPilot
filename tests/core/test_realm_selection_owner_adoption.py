@@ -14,6 +14,7 @@ from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.owners import OwnerMembership, OwnerPermission
 from optpilot.realm.refs import SnapshotRef, canonical_json_bytes
 from optpilot.realm.workspaces import WORKSPACE_REVISION_ROLE, WorkspaceLineage
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmSelectionOwnerAdoptionTest(unittest.TestCase):
@@ -72,7 +73,7 @@ class RealmSelectionOwnerAdoptionTest(unittest.TestCase):
             actor_principal_id=self.actor,
             owner_id=source_owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=self.actor,

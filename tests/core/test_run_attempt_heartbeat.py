@@ -22,6 +22,7 @@ from optpilot.run_attempt_heartbeat import (
     RunAttemptHeartbeatStateError,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -156,7 +157,7 @@ class RunAttemptHeartbeatCoordinatorTest(unittest.TestCase):
             operation_id="heartbeat/run/create",
             actor_principal_id="operator",
             controller_holder_id="heartbeat-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,

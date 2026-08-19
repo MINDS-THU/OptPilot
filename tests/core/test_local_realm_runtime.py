@@ -19,6 +19,7 @@ from optpilot.realm.local_runtime import (
 from optpilot.realm.operator_capacity_records import OperatorCapacityPoolState
 from optpilot.realm.run_reader import LOCAL_REALM_PRINCIPAL_KIND
 from tests.core.test_retained_study_service import _write_package
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 @unittest.skipUnless(os.name == "posix", "local Realm runtime is POSIX-only")
@@ -333,7 +334,7 @@ class LocalRealmRuntimeTest(unittest.TestCase):
             operation_id="local-runtime-test/run",
             actor_principal_id=runtime.actor_principal_id,
             controller_holder_id="local-runtime-test-controller",
-            controller_ttl_seconds=300,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=preparation,
             run_id="local-runtime-test-run",
             owner_id="local-runtime-test-run-owner",

@@ -12,6 +12,7 @@ from optpilot.realm.errors import RealmConflict, RealmIntegrityError
 from optpilot.realm.ledger import RealmLedger
 from optpilot.realm.run_definition import RUN_METHOD_SOURCE_ROLE
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -189,7 +190,7 @@ class RealmRunDefinitionLedgerTest(unittest.TestCase):
             operation_id=operation_id,
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=self.definition if definition is None else definition,
             definition_bindings=(
                 self.definition_bindings if bindings is None else bindings
@@ -497,7 +498,7 @@ class RealmRunDefinitionLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         retired = self.ledger.retire_run(
             operation_id="definition/retire",

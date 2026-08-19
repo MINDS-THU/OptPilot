@@ -29,6 +29,7 @@ from optpilot.realm.run_views import (
     RunWorkbenchHead,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -77,7 +78,7 @@ class RealmRunComparabilityTest(unittest.TestCase):
             operation_id="comparability/run/create",
             actor_principal_id=self.principal.principal_id,
             controller_holder_id="controller-a",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=self.definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,

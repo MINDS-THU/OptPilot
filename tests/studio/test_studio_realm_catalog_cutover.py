@@ -22,6 +22,7 @@ from optpilot_studio.ui.server import (
     _write_package_plan,
     _validate_package_plan,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 @unittest.skipUnless(os.name == "posix", "local Realm runtime is POSIX-only")
@@ -102,7 +103,7 @@ class StudioRealmCatalogCutoverTest(unittest.TestCase):
             actor_principal_id=runtime.actor_principal_id,
             selection=selection,
             holder_id=f"studio-catalog-cutover-test-{coordinate}",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
             consumer_kind="studio-catalog-cutover-test",
         )
 

@@ -30,6 +30,7 @@ from optpilot.retained_study_service import (
     _retained_method_context_paths,
     _retained_trial_workspace_mappings,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _ENVIRONMENT = """\
@@ -297,7 +298,7 @@ class RetainedStudyServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=source_owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.content_service.capture(
             actor_principal_id="operator",
@@ -407,7 +408,7 @@ class RetainedStudyServiceTest(unittest.TestCase):
             operation_id="retained-service/launch",
             actor_principal_id="operator",
             controller_holder_id="controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=receipt,
             run_id="run-retained",
             owner_id="run-retained-owner",
@@ -616,7 +617,7 @@ class RetainedStudyServiceTest(unittest.TestCase):
             operation_id="retained-service/equivalent-second-launch",
             actor_principal_id="operator",
             controller_holder_id="equivalent-second-controller",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=second,
             run_id="equivalent-second-run",
             owner_id="equivalent-second-run-owner",
@@ -927,7 +928,7 @@ trialWorkspace:
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id="retained-service/change/commit",
@@ -956,7 +957,7 @@ trialWorkspace:
             operation_id="retained-service/source-independent-launch",
             actor_principal_id="operator",
             controller_holder_id="controller-independent",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             preparation=replay,
             run_id="run-source-independent",
             owner_id="run-source-independent-owner",
@@ -999,7 +1000,7 @@ trialWorkspace:
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id="retained-service/uncommitted-change/commit",

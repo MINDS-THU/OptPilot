@@ -36,6 +36,7 @@ from optpilot_studio.ui.server import (
     _smoke_package_plan,
     _validate_package_plan,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 _WHEEL_NAME = "generated_devs_support-1.0.0-py3-none-any.whl"
@@ -263,7 +264,7 @@ class RetainedDependencyVerticalE2ETest(unittest.TestCase):
             package_root=package_root,
             study_config_path=study,
             operation_id=f"retained-dependency-vertical-e2e/run/{root.name}",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
             method_start_timeout=20,
             method_request_timeout=20,
@@ -365,7 +366,7 @@ class RetainedDependencyVerticalE2ETest(unittest.TestCase):
         output_session = runtime.interface_outputs.create_session(
             operation_id="retained-dependency-vertical-e2e/output-session",
             launch_id="generated-devs-interface-launch",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         generation = runtime.interface_outputs.capture_tree_selection(
             handle=output_session,

@@ -17,6 +17,7 @@ from optpilot.realm.workspaces import (
     WorkspaceLineage,
     WorkspaceState,
 )
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmWorkspaceLedgerTest(unittest.TestCase):
@@ -66,7 +67,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=expected_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=change.change_id,
@@ -543,7 +544,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=created.owner_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         new_root = OwnerMembership(
             self.store.store_id,
@@ -614,7 +615,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=advanced.owner_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         with self.assertRaisesRegex(
             sqlite3.IntegrityError, "workspace revision membership is immutable"
@@ -702,7 +703,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=advanced.owner_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.hold_owner_content(
             operation_id=self.op("auxiliary-hold"),
@@ -723,7 +724,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=auxiliary_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("auxiliary-removal-commit"),
@@ -739,7 +740,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="source-owner",
             expected_owner_revision=second_source.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("source-release-commit"),
@@ -787,7 +788,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=created.owner_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         new_root = OwnerMembership(
             self.store.store_id,
@@ -864,7 +865,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=created.workspace.owner_id,
             expected_owner_revision=created.owner_commit.owner_revision,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.hold_owner_content(
             operation_id=self.op("generic-root-hold"),

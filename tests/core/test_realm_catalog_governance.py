@@ -23,6 +23,7 @@ from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot.realm.owners import OwnerMembership, OwnerPermission, OwnerState
 from optpilot.realm.refs import request_digest
 from optpilot.realm.selection_service import RealmSelectionActionService
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 PACKAGE_ARTIFACT_ROLE = "package-plan-artifact"
@@ -88,7 +89,7 @@ class RealmCatalogGovernanceTest(unittest.TestCase):
             actor_principal_id=actor_principal_id,
             owner_id=owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.runtime.content_service.capture(
             actor_principal_id=actor_principal_id,
@@ -442,7 +443,7 @@ class RealmCatalogGovernanceTest(unittest.TestCase):
                     actor_principal_id="operator",
                     owner_id=revision_owner_id,
                     expected_owner_revision=0,
-                    ttl_seconds=60,
+                    ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 ),
             ),
         )

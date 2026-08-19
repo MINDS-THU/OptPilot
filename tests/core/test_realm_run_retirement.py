@@ -21,6 +21,7 @@ from optpilot.realm.run_records import (
 from optpilot.realm.run_terminal_seal import RunTerminalAnchor, RunTerminalSeal
 from optpilot.realm.run_workbench import RunWorkbenchReadModel
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -68,7 +69,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             operation_id="run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=self.run_source_owner_id,
@@ -108,7 +109,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="candidate-source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         capture = self.store.capture(
             change_id=source_change.change_id,
@@ -148,7 +149,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.run.run.owner_id,
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.hold_owner_content(
             operation_id=self.op("run-admission-hold"),
@@ -228,7 +229,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id=self.run.run.owner_id,
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
 
     def retire(self, *, operation_id: str, change_id: str):
@@ -398,7 +399,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="candidate-source-owner",
             expected_owner_revision=1,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         self.ledger.commit_owner_change(
             operation_id=self.op("candidate-source-release-commit"),
@@ -549,7 +550,7 @@ class RealmRunRetirementTest(unittest.TestCase):
                 self.run.controller_lease.fencing_token
             ),
             new_controller_holder_id="controller-b",
-            controller_ttl_seconds=600,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
 
         self.assertEqual(replacement.run.current_revision, 5)
@@ -711,7 +712,7 @@ class RealmRunRetirementTest(unittest.TestCase):
             audience="realm-ledger",
             holder_id="worker-a",
             scope_key=f"run:{self.run.run.run_id}/attempt:1",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         change = self.begin_retirement()
         with self.assertRaises(RealmConflict):

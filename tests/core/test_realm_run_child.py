@@ -45,6 +45,7 @@ from optpilot.run_execution_profile import RunExecutionProfile
 from optpilot.study_launch_service import _plan_context
 from optpilot.study_realm_compiler import CANDIDATE_NORMALIZER_VERSION
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -943,7 +944,7 @@ class RealmExactPlanChildRunTest(unittest.TestCase):
             package_root=package_root,
             study_config_path=study_path,
             operation_id="child-run/file-parent",
-            controller_ttl_seconds=60,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             attempt_ttl_seconds=60,
             method_start_timeout=20,
             method_request_timeout=20,

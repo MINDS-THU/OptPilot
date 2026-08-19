@@ -34,6 +34,7 @@ from optpilot.realm.run_workbench import (
     RUN_WORKBENCH_MAX_PAGE_SIZE,
 )
 from tests.realm_run_support import (
+    TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
     prepare_test_run_definition,
@@ -90,7 +91,7 @@ class RealmRunQueryScaleAcceptanceTest(unittest.TestCase):
             operation_id="run-query-scale/run/create",
             actor_principal_id="operator",
             controller_holder_id="controller-a",
-            controller_ttl_seconds=120,
+            controller_ttl_seconds=TEST_LEASE_TTL_SECONDS,
             run_definition=run_definition,
             definition_bindings=definition_bindings,
             source_owner_id=source_owner_id,

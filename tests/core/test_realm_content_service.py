@@ -19,6 +19,7 @@ from optpilot.realm.manifests import TreeEntry, TreeManifest
 from optpilot.realm.owners import OwnerMembership, OwnerPermission
 from optpilot.realm.refs import BlobRef, request_digest
 from optpilot.realm.service import RealmContentService, TreeCompositionSource
+from tests.realm_run_support import TEST_LEASE_TTL_SECONDS
 
 
 class RealmContentServiceTest(unittest.TestCase):
@@ -61,7 +62,7 @@ class RealmContentServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="workspace-a",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
 
     def abort(self, label: str, change_id: str) -> None:
@@ -86,7 +87,7 @@ class RealmContentServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="composition-source-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         sealed = self.service.capture(
             actor_principal_id="operator",
@@ -373,7 +374,7 @@ class RealmContentServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="composition-foreign-owner",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         (self.source / "foreign.txt").write_text("foreign", encoding="utf-8")
         foreign_blob = self.service.capture(
@@ -442,7 +443,7 @@ class RealmContentServiceTest(unittest.TestCase):
                 audience="realm-content-service",
                 holder_id="forged-holder",
                 scope_key="tree-composition:forged:source:0",
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
                 metadata={
                     "composition_request_digest": request_digest(
                         {"forged": "composition"}
@@ -464,7 +465,7 @@ class RealmContentServiceTest(unittest.TestCase):
             audience="test",
             holder_id="test-holder",
             scope_key="composition-unbound",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
             content_roots=(membership,),
         )
 
@@ -524,7 +525,7 @@ class RealmContentServiceTest(unittest.TestCase):
                 composition_request_digest=digest,
                 source_index=0,
                 holder_id="test-holder",
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
         with self.assertRaisesRegex(ValueError, "out of range"):
             self.ledger.acquire_content_composition_source_lease(
@@ -533,7 +534,7 @@ class RealmContentServiceTest(unittest.TestCase):
                 composition_request_digest=digest,
                 source_index=1,
                 holder_id="test-holder",
-                ttl_seconds=60,
+                ttl_seconds=TEST_LEASE_TTL_SECONDS,
             )
 
     def test_composed_manifest_with_false_child_size_is_never_published(self) -> None:
@@ -580,7 +581,7 @@ class RealmContentServiceTest(unittest.TestCase):
             composition_request_digest=digest,
             source_index=0,
             holder_id="test-holder",
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         authority = self.ledger.content_composition_capture_handle(
             actor_principal_id="operator",
@@ -629,7 +630,7 @@ class RealmContentServiceTest(unittest.TestCase):
             actor_principal_id="operator",
             owner_id="workspace-b",
             expected_owner_revision=0,
-            ttl_seconds=60,
+            ttl_seconds=TEST_LEASE_TTL_SECONDS,
         )
         second = self.service.capture(
             actor_principal_id="operator",

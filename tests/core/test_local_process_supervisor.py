@@ -496,6 +496,34 @@ class LocalProcessSupervisorTest(unittest.TestCase):
         self.assertEqual(self._supervisor().retire_terminal(proof), proof)
         self.assertFalse(self._launch_dir("launch-a").exists())
 
+    def test_concurrent_retirement_tolerates_racing_directory_deletes(self) -> None:
+        request = self._request("pass")
+        supervisor = self._supervisor()
+        reservation = self._reserve(supervisor, request)
+        proof = supervisor.start_reserved(reservation).wait(timeout=5.0)
+        launch_dir = self._launch_dir("launch-a")
+        # A wide directory keeps both callers inside the listing loop long
+        # enough for one to unlink an entry the other has already listed.
+        for index in range(64):
+            (launch_dir / f"racing-{index:03d}.json").write_text(
+                "{}", encoding="utf-8"
+            )
+
+        barrier = threading.Barrier(2)
+
+        def delete() -> None:
+            barrier.wait(timeout=5.0)
+            supervisor._delete_retired_launch_directory(
+                supervisor._required_row(proof.launch_token)
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(delete) for _ in range(2)]
+            for future in futures:
+                future.result()
+
+        self.assertFalse(launch_dir.exists())
+
     def test_exact_terminal_reconciliation_abandons_and_replays_passive_launch(
         self,
     ) -> None:
