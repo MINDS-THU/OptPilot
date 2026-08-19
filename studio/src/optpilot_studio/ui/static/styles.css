@@ -7646,9 +7646,20 @@ body.assistant-open .agent-panel {
   background: rgba(28, 33, 38, 0.32);
 }
 
+/* These dialogs are laid out as a column rather than by numbered grid rows.
+   A row template assigns rows by counting the children that are actually
+   visible, and each of these dialogs has a child that comes and goes: the
+   Settings dialog hides its loading banner once loading finishes, and the two
+   confirmation dialogs reveal an error line only when something failed. Every
+   child after the one that changed then shifts by a row, which put the
+   Settings footer into the flexible row -- squeezed to zero height -- and its
+   Save button below the dialog's own edge, clipped away by overflow:hidden
+   with no scrollbar to reach it. In a column the body simply absorbs whatever
+   space is left and the footer keeps its own height, however many siblings
+   happen to be showing. */
 .settings-modal {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: min(760px, 100%);
   height: min(760px, calc(100vh - 56px));
   max-height: calc(100vh - 56px);
@@ -7930,8 +7941,8 @@ body.assistant-open .agent-panel {
 }
 
 .child-run-confirmation-modal {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: min(720px, 100%);
   max-height: min(760px, calc(100vh - 56px));
   overflow: hidden;
@@ -7942,8 +7953,8 @@ body.assistant-open .agent-panel {
 }
 
 .registration-confirmation-modal {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   width: min(680px, 100%);
   max-height: min(760px, calc(100vh - 56px));
   overflow: hidden;
@@ -10639,4 +10650,24 @@ body.shell-v2.shell-conversation .assistant-ui-card {
   border: 1px solid var(--line);
   color: var(--muted-text, #666);
   white-space: nowrap;
+}
+
+/* Column dialogs: the body absorbs the remaining height and scrolls; headers,
+   tabs, banners and footers keep the height they ask for. */
+.settings-body,
+.registration-confirmation-body,
+.child-run-confirmation-body {
+  flex: 1 1 auto;
+}
+
+.settings-modal > .modal-header,
+.settings-modal > .settings-load-status,
+.settings-modal > .settings-tabs,
+.settings-modal > .modal-actions,
+.registration-confirmation-modal > .modal-header,
+.registration-confirmation-modal > .error-text,
+.registration-confirmation-modal > .modal-actions,
+.child-run-confirmation-modal > .modal-header,
+.child-run-confirmation-modal > .modal-actions {
+  flex: none;
 }
