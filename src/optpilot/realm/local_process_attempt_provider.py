@@ -1404,6 +1404,24 @@ class LocalProcessAttemptProvider:
     def _normalize_public_error(
         operation: str, error: Exception
     ) -> LocalAttemptProviderError:
+        """Reduce any internal failure to a code, deliberately losing the cause.
+
+        Do not "improve" this by chaining the original with ``raise ... from``.
+        The cause carries host filesystem paths, command lines, environment,
+        backend tokens and terminal proofs, and this type is the boundary that
+        keeps them out of anything a caller can print or log.
+
+        Note also that every caller raises the returned error *outside* its
+        ``except`` block. That is not an accident of style: raising inside the
+        handler would set ``__context__`` and reattach everything this function
+        just removed. ``test_local_process_attempt_provider`` asserts both are
+        absent.
+
+        The cost is real -- a failure here reaches the caller unexplained, and
+        diagnosing one means instrumenting this function -- but the fix for
+        that is better evidence recorded on the attempt, not a leak.
+        """
+
         if isinstance(error, TimeoutError):
             code = "provider_timeout"
         elif isinstance(error, RealmNotFound):

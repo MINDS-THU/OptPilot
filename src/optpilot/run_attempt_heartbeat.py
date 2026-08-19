@@ -245,13 +245,19 @@ class RunAttemptHeartbeatCoordinator:
                     raise RunAttemptHeartbeatStateError(
                         "A provider binding was already attached."
                     )
-                if self._stopped or self._stop_requested.is_set():
-                    raise RunAttemptHeartbeatStateError(
-                        "Cannot attach provider resources after stop."
-                    )
+                # A failed round records the failure AND requests stop, so
+                # the failure must be tested first.  Testing stop first
+                # reported every broken heartbeat as a deliberate stop and
+                # discarded the cause the round captured for exactly this --
+                # which is how a renewal failure here reached the caller as an
+                # unexplained provider error.
                 if self._failure is not None:
                     raise RunAttemptHeartbeatStateError(
                         "Cannot attach provider resources after heartbeat failure."
+                    ) from self._failure.cause
+                if self._stopped or self._stop_requested.is_set():
+                    raise RunAttemptHeartbeatStateError(
+                        "Cannot attach provider resources after stop."
                     )
                 if (
                     binding_run_id != self._receipt.run.run_id
