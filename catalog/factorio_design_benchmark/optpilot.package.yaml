@@ -1,6 +1,11 @@
 apiVersion: optpilot.io/v1
 config: package
-# Identifies this package wherever its folder is moved to. Do not edit:
-# changing it detaches the package from its own published history.
+# Identifies this package, so moving or renaming its folder still
+# updates this package rather than creating a second one. Keep it as
+# it is when moving or renaming.
+# Copying the folder to start a SEPARATE package is the one case where
+# you change it: replace the value below with 32 different hex
+# characters, so the copy is its own package with its own history.
+# Do not delete the line -- a package without this cannot be read.
 identity: 3be8480be504bd83e66ad3f407e203a6
 description: A factory-layout design benchmark with a deterministic baseline designer.

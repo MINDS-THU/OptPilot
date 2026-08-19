@@ -267,10 +267,43 @@ Not the target Assistant. The smallest one that does not dead-end.
 | --- | --- | --- | --- |
 | C1 | Resource-action tools: list, approval-gated run, status — **done** | M | The flagship conversation's first leg. Output is rooted in an attached workspace so the generated bundle is immediately registerable (rule 5). |
 | C2 | Give existing refusals a machine-readable remedy | M | One shape carried by the refusals that already exist: image approval (with the command), missing launch inputs (with their declarations), validation failures (with the location), wrong front door (with the right tool). Refusals then teach their own fix instead of the guidance file reciting them. |
-| C3 | An edit-copy tool for updating a catalog entry | M | The safe counterpart to A8(a): the Assistant gets the front door at the same moment the unsafe path closes. |
+| C3 | An edit-copy tool for updating a catalog entry — **dropped 2026-08-19**, see below | M | The safe counterpart to A8(a): the Assistant gets the front door at the same moment the unsafe path closes. |
 | C4 | Slim catalog listing for the Assistant — **done**, 348k → 60k characters | S | Today a bare listing call ships tens of kilobytes of raw settings into the first exchange. |
 | C5 | Say plainly when the Assistant is off — **done**; the turn also had to stop reporting itself as still working | S | Messages currently queue "locally" with no explanation and no path forward. |
 | C6 | Give smoke tests their own permission, split from launches — **done**, after making the bound real | S | They borrow the launch gate today, yet a smoke test is bounded by construction, and write → validate → smoke → fix is exactly where the repeated interruptions land. Highest friction relief per line of code in the whole plan. |
+
+
+### Dropped: the tool for copying a catalog entry to edit
+
+**Decided 2026-08-19, after checking rather than reasoning.** This was planned
+as the safe route around a dangerous one: the concern was that the Assistant
+could open OptPilot's own frozen published copies as an editable folder and
+change them where they lie. Two things removed the reason.
+
+First, that path was already closed. The list of folders Studio will accept as
+an editable project never included the permanent copies; only a folder the
+person owns, or a project directory. Nothing had to be built.
+
+Second, the convenience the tool would have added already exists. Copying a
+package folder, renaming it, and pointing OptPilot at both was tried: both
+appear in the Catalog under their own names, with their own entries, and
+registering one does not disturb the other, because the owner a registration
+claims is derived from the folder name as well as the package's identity.
+
+What was actually missing was two sentences, not a day of work, and both are
+now fixed. Every package carries a value identifying it so that moving or
+renaming the folder still updates the same package. The comment above it said
+"Do not edit" without qualification — right for moving, wrong for copying,
+which is the other reason anyone opens that file. Worse, obeying it the natural
+way when copying (deleting the line, since you must not change it) broke the
+package with "Package identity must be a string", an error naming a type rather
+than a fix. The comment now says to change the value when copying and never to
+delete the line, and the error says how to add one.
+
+**The lesson worth keeping:** the item's stated justification had expired, but
+checking what a person would actually hit found a smaller real problem
+underneath it. Neither the original justification nor "the reason evaporated,
+drop it" would have found the misleading comment.
 
 ---
 

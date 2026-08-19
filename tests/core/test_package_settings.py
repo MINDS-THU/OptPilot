@@ -76,10 +76,23 @@ class PackageSettingsFileTests(unittest.TestCase):
         self.assertEqual(loaded.description, "A package.")
         self.assertEqual(loaded.package_root, self.root)
 
-    def test_the_file_warns_against_editing_the_identity(self) -> None:
+    def test_the_file_explains_when_to_change_the_identity_and_when_not(
+        self,
+    ) -> None:
+        """Both cases, because only warning about one of them misleads.
+
+        This used to assert a flat "Do not edit", which is right for moving a
+        package and wrong for the other reason anyone opens this file: copying
+        one to make a variant. Obeying it while copying leaves two packages
+        claiming to be the same one -- and obeying it the other natural way,
+        by deleting the line, made the package unreadable.
+        """
+
         write_package_settings(self.root, identity=new_package_identity())
         text = (self.root / PACKAGE_SETTINGS_FILENAMES[0]).read_text()
-        self.assertIn("Do not edit", text)
+        self.assertIn("moving or renaming", text.lower())
+        self.assertIn("SEPARATE package", text)
+        self.assertIn("Do not delete the line", text)
 
     def test_alternate_filename_is_accepted(self) -> None:
         identity = new_package_identity()

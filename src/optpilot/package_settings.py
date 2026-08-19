@@ -92,14 +92,31 @@ def new_package_identity() -> str:
 def validate_package_identity(value: Any) -> str:
     """Return ``value`` as a well-formed identity, or raise ``ValueError``."""
 
+    # Missing is the common case and has a different cause from malformed:
+    # people reach it by deleting the line after reading that they must not
+    # edit it, which is the right instinct applied to the wrong case.
+    if value is None:
+        raise ValueError(
+            "This package has no identity line. Every package needs one, "
+            "including a copy of another package: add "
+            f"'identity: <{_IDENTITY_LENGTH} hex characters>' to its settings "
+            "file. If you copied this folder to start a separate package, use "
+            "a value different from the original's, so the two do not claim to "
+            "be the same package."
+        )
     if not isinstance(value, str):
-        raise ValueError("Package identity must be a string.")
+        raise ValueError(
+            f"Package identity must be {_IDENTITY_LENGTH} lowercase hex "
+            f"characters written as text, not {type(value).__name__}."
+        )
     text = value.strip()
     if len(text) != _IDENTITY_LENGTH or any(
         character not in "0123456789abcdef" for character in text
     ):
         raise ValueError(
-            f"Package identity must be {_IDENTITY_LENGTH} lowercase hex characters."
+            f"Package identity must be {_IDENTITY_LENGTH} lowercase hex "
+            f"characters; this one is {len(text)}. If you are copying a "
+            "package, change every character you replace to 0-9 or a-f."
         )
     return text
 
@@ -238,8 +255,13 @@ def write_package_settings(
     lines = [
         f"apiVersion: {AUTHORING_API_VERSION}",
         f"config: {PACKAGE_CONFIG_KIND}",
-        "# Identifies this package wherever its folder is moved to. Do not edit:",
-        "# changing it detaches the package from its own published history.",
+        "# Identifies this package, so moving or renaming its folder still",
+        "# updates this package rather than creating a second one. Keep it as",
+        "# it is when moving or renaming.",
+        "# Copying the folder to start a SEPARATE package is the one case where",
+        "# you change it: replace the value below with 32 different hex",
+        "# characters, so the copy is its own package with its own history.",
+        "# Do not delete the line -- a package without this cannot be read.",
         f"identity: {identity}",
     ]
     if description:
