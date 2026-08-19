@@ -9,6 +9,10 @@ description = "Local Studio UI for OptPilot"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
+# Apache-2.0 requires recipients to receive a copy of the licence, so it
+# must travel inside the distribution. The core declares this; Studio did
+# not, and shipped no licence text in either its wheel or its sdist.
+license-files = ["LICENSE"]
 authors = [
   {name = "OptPilot contributors"},
 ]
