@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-scheduling-parallel-smoke
+title: "Production line: quick check, trials in parallel"
 description: Four deterministic GA candidates evaluated at paper-default scale to prove three-way evaluator concurrency.
 tags: [production, agv, smoke, parallelism, files]
 

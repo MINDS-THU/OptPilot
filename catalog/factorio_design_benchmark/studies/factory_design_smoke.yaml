@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: factory-design-smoke
+title: "Factory layout: quick check"
 description: >-
   Deterministic one-trial run of the Factorio static validator through the
   retained pipeline. The Direct designer runs in seed mode, so no model is

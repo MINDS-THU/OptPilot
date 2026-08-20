@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: clinic-policy-search
+title: "Clinic: search for a better triage rule"
 description: >-
   Class-style composition measurement: improve the generated triage
   clinic's TriagePolicy component (the whole DEVS component file is the

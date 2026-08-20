@@ -23,6 +23,11 @@
       "type": "string",
       "minLength": 1
     },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable name shown wherever this Run setup is listed. A study's `name` is its identifier, so without this every Run setup is presented to people as a slug."
+    },
     "description": {
       "type": "string"
     },

@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-process-aware-llm
+title: "Production line: let a model design the rule"
 description: Paper-style baseline plus up to five four-candidate process-aware LLM improvement rounds.
 tags: [production, agv, llm, heuristic-design, files]
 

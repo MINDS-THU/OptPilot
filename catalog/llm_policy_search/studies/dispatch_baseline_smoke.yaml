@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: dispatch-baseline-smoke
+title: "Dispatch station: check the baseline rule runs"
 description: >-
   Contract smoke for the generated dispatch station: one trial stages the
   baseline FCFS policy (no LLM calls), runs the seeded replications of

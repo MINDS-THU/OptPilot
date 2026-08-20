@@ -2526,13 +2526,16 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(state.catalog_roots, roots)
         environment_ids = {item["id"] for item in catalog["environments"]}
         method_ids = {item["id"] for item in catalog["methods"]}
-        study_labels = {item["label"] for item in catalog["studies"]}
+        # Identify Run setups the way environments and methods are identified
+        # above. This used to read `label`, which is now the readable name a
+        # person sees and therefore free to change; the id is the identity.
+        study_ids = {item["id"] for item in catalog["studies"]}
 
         self.assertIn("production-agv-scheduling-smoke", environment_ids)
         self.assertIn("or-problem", environment_ids)
         self.assertIn("exhaustive-rule-grid", method_ids)
         self.assertIn("coopa-solver", method_ids)
-        self.assertIn("production-agv-scheduling-smoke", study_labels)
+        self.assertIn("production-agv-scheduling-smoke", study_ids)
         # test_catalog/ fixtures must never reach the user-facing catalog.
         self.assertNotIn("job-shop-rule-parameters", environment_ids)
         self.assertNotIn("fixed-rule-parameters", method_ids)

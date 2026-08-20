@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-ga-weighted-rules
+title: "Production line: rule-weight search (genetic algorithm)"
 description: Paper-style GA search from the 64 one-hot weighted-rule policies through ten generations.
 tags: [production, agv, baseline, ga, files]
 

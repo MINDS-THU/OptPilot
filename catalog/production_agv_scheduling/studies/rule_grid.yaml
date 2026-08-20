@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-exhaustive-rule-grid
+title: "Production line: try every rule combination"
 description: Evaluate all 135 line/task/AGV rule combinations over the baseline replication set.
 tags: [production, agv, baseline, exhaustive-search, files]
 

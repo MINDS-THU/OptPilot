@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: dispatch-policy-search
+title: "Dispatch station: search for a better dispatch rule"
 description: >-
   The W5 composition demo: improve the DEVS-Gen generated dispatch
   station's decision policy with trace-aware LLM policy search over

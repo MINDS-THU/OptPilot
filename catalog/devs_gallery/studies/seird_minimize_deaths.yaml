@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: seird-minimize-deaths
+title: "Reduce deaths in an epidemic"
 description: >-
   Explore SEIRD epidemic parameters with random search, minimizing the
   final death toll over the simulated horizon. A demo of optimizing a

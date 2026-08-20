@@ -7761,7 +7761,9 @@ def _catalog_entry(
     source_record: Optional[JsonDict] = None,
 ) -> JsonDict:
     config = raw["config"]
-    label = raw.get("name") or raw.get("id") or path.stem
+    # `title` first: a study's `name` is its identifier, so it is the only
+    # kind whose displayed label would otherwise always be a slug.
+    label = raw.get("title") or raw.get("name") or raw.get("id") or path.stem
     interface_profiles: List[InterfaceLaunchProfile] = []
     interface_error = ""
     try:
@@ -15356,6 +15358,40 @@ def _reconcile_visible_operator_jobs(state: UiState) -> None:
                 continue
 
 
+def _run_display_name(
+    job_payload: Optional[Mapping[str, Any]],
+    objective: Any,
+    run_id: str,
+) -> str:
+    """What to call a Run in a list of them.
+
+    A Run launched from Studio carries the Run setup's name. One started any
+    other way -- the command line, or an older job record -- did not, and fell
+    back to the Run's own identifier: a list of forty-character hashes with
+    nothing saying what any of them had been. The pieces to describe it were
+    already on the record and simply unused.
+    """
+
+    payload = job_payload if isinstance(job_payload, Mapping) else {}
+    study_name = str(payload.get("study_name") or "").strip()
+    if study_name:
+        return study_name
+
+    environment_id = str(payload.get("environment_id") or "").strip()
+    goal = objective if isinstance(objective, Mapping) else {}
+    direction = str(goal.get("direction") or "").strip()
+    metric = str(goal.get("metric") or "").strip()
+    aim = f"{direction} {metric}".strip() if metric else ""
+
+    if environment_id and aim:
+        return f"{environment_id} — {aim}"
+    if environment_id:
+        return environment_id
+    if aim:
+        return aim
+    return run_id
+
+
 def _realm_presentation_status(run_status: str) -> str:
     if run_status == "succeeded":
         return "completed"
@@ -15443,8 +15479,7 @@ def _realm_compat_run_row(
     return {
         "id": run_id,
         "run_id": run_id,
-        "name": (job_payload.get("study_name") if job_payload is not None else None)
-        or run_id,
+        "name": _run_display_name(job_payload, objective, run_id),
         "status": (
             str(job_payload.get("status"))
             if job_payload is not None and job_payload.get("status")

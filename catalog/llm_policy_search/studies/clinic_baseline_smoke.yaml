@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: clinic-baseline-smoke
+title: "Clinic: check the baseline rule runs"
 description: >-
   Contract smoke for the generated triage clinic (class-style candidate:
   the TriagePolicy component file itself): one trial stages the baseline

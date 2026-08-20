@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: factory-design-task
+title: "Factory layout: design one production line"
 description: >-
   Design a factory for one benchmark task with the Direct baseline, revising
   from each trial's validation verdict. The task is chosen at launch, so this

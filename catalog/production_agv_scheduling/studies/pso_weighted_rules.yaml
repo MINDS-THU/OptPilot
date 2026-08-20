@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-pso-weighted-rules
+title: "Production line: rule-weight search (particle swarm)"
 description: Paper-style PSO search from the 64 one-hot policies through ten generations.
 tags: [production, agv, baseline, pso, files]
 

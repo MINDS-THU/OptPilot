@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: solve-or-problem
+title: "Solve one problem stated in plain language"
 description: >-
   Solve one natural-language operations-research problem with the COOPA
   multi-agent pipeline. Enter the problem statement at launch; the Run

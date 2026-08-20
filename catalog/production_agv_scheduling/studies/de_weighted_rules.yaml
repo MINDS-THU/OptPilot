@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-de-weighted-rules
+title: "Production line: rule-weight search (differential evolution)"
 description: Paper-style DE/best/1/bin search from the 64 one-hot policies through ten generations.
 tags: [production, agv, baseline, differential-evolution, files]
 

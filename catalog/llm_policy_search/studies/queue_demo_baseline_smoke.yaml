@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: queue-demo-baseline-smoke
+title: "Queue demo: check the baseline rule runs"
 description: >-
   Contract smoke for the DES template: one trial stages the unmodified
   baseline policy (no LLM calls), runs the seeded replications, and

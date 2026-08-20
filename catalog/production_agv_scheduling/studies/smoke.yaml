@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: production-agv-scheduling-smoke
+title: "Production line: quick check"
 description: Fast end-to-end check of the simulator and the initial executable policy.
 tags: [production, agv, smoke, files]
 

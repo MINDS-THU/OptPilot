@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: abp-tune-timeout
+title: "Tune the retransmission timeout"
 description: >-
   Tune the Alternating Bit Protocol sender timeout (and peer delays) with
   random search, minimizing retransmissions while the deterministic lossy

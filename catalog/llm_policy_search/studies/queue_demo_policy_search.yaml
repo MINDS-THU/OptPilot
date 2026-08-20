@@ -1,6 +1,7 @@
 apiVersion: optpilot.io/v1
 config: study
 name: queue-demo-policy-search
+title: "Queue demo: search for a better queue rule"
 description: >-
   Improve the queue dispatch policy with trace-aware LLM policy search:
   manager plans from worst-seed traces, parallel editors, exact-seed
