@@ -21990,6 +21990,24 @@ function kvPanel(title, rows) {
   `;
 }
 
+function runLooksStalled(run) {
+  // The Run page already tells someone when a Run has stopped moving, but the
+  // list did not, so four Runs sat behind a live "running" badge for nine and
+  // a half days across every restart. Same threshold as the Run page, so the
+  // two cannot disagree about the same Run.
+  if (runStatus(run) !== "running") return false;
+  const updated = runRecordedUpdateMilliseconds(run.updated_at || run.created_at);
+  if (!Number.isFinite(updated)) return false;
+  return Date.now() - updated >= RUN_STALLED_GUIDANCE_DELAY_MS;
+}
+
+function runRowStatusPill(run) {
+  if (!runLooksStalled(run)) return statusPill(runStatus(run));
+  // Deliberately not "failed": nothing has proved it dead, only that it has
+  // not moved. Open it to see what the Run page says.
+  return `<span class="status-pill ${statusClass("running")}" title="No progress recorded for a long time. Open the Run for details.">no progress</span>`;
+}
+
 function runRow(run) {
   const rowKey = runRowKey(run);
   const runId = canonicalRunId(run) || "identity pending";
@@ -22010,7 +22028,7 @@ function runRow(run) {
         <strong title="${escapeHtml(runLabel)}">${escapeHtml(runLabel)}</strong>
         ${showRunId ? `<span class="path-text" title="${escapeHtml(runId)}">${escapeHtml(runId)}</span>` : ""}
       </span>
-      ${loading ? `<span class="run-row-load-status" role="status">Loading…</span>` : statusPill(runStatus(run))}
+      ${loading ? `<span class="run-row-load-status" role="status">Loading…</span>` : runRowStatusPill(run)}
       <span class="run-row-meta">
         <span title="${escapeHtml(`Planned trials: ${plannedWork}`)}">Trials: ${escapeHtml(plannedWork)}</span>
         <span title="${escapeHtml(bestTitle)}">Best comparable Candidate ${escapeHtml(best.label)}: ${best.available ? formatMetric(best.value) : "not available"}</span>
@@ -22043,7 +22061,7 @@ function validationHtml(result) {
       ${result && result.name ? `<strong>${escapeHtml(result.name)}</strong>` : ""}
     </div>
     ${valid || result && result.launched ? `<p class="path-text">${escapeHtml(shortPath(result.path || result.job_id || ""))}</p>` : `<ul class="error-list">${errors || "<li>Validation failed.</li>"}</ul>`}
-    ${launchBlocked ? `<p class="error-text">Launch unavailable (${escapeHtml(launch.code || "unsupported")}): ${escapeHtml(publicStudyLaunchReason(launch))}</p>` : ""}
+    ${launchBlocked ? `<p class="error-text" title="Technical reason: ${escapeHtml(launch.code || "unsupported")}">Launch unavailable: ${escapeHtml(publicStudyLaunchReason(launch))}</p>` : ""}
     ${valid && launch && launch.eligible === true ? `<p><small>Run support check passed; Environment and Method code was not executed.</small></p>` : ""}
   `;
 }
