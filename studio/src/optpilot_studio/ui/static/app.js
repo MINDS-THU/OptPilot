@@ -581,6 +581,7 @@ function cacheElements() {
     "assistantPermissionJobStop",
   "assistantPermissionSmokeTest",
   "assistantPermissionResourceAction",
+  "assistantPermissionInterfaceLaunch",
     "workspaceCleanupModal",
     "workspaceCleanupDialog",
     "workspaceCleanupTitle",
@@ -3159,6 +3160,7 @@ function fillSettingsForm() {
   setSelectValue(els.assistantPermissionJobStop, permissions.job_stop || "approval_required");
   setSelectValue(els.assistantPermissionSmokeTest, permissions.smoke_test || "safe_without_approval");
   setSelectValue(els.assistantPermissionResourceAction, permissions.resource_action || "approval_required");
+  setSelectValue(els.assistantPermissionInterfaceLaunch, permissions.interface_launch || "approval_required");
 }
 
 function currentOpenHandsSettings() {
@@ -3388,6 +3390,7 @@ async function saveSettings() {
       job_stop: els.assistantPermissionJobStop ? els.assistantPermissionJobStop.value : "approval_required",
       smoke_test: els.assistantPermissionSmokeTest ? els.assistantPermissionSmokeTest.value : "safe_without_approval",
       resource_action: els.assistantPermissionResourceAction ? els.assistantPermissionResourceAction.value : "approval_required",
+      interface_launch: els.assistantPermissionInterfaceLaunch ? els.assistantPermissionInterfaceLaunch.value : "approval_required",
     },
   };
   const result = await postJson("/api/agent/settings", payload, { tolerateError: true });

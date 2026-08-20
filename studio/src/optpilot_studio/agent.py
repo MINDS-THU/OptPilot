@@ -91,6 +91,8 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_job_stop",
     "optpilot_run_compare",
     "optpilot_smoke_test_study",
+    "optpilot_interface_launch",
+    "optpilot_interface_status",
     "optpilot_docs_search",
     "optpilot_capability_list",
     "optpilot_capability_detail",
@@ -798,6 +800,39 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "max_trials": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 10}}, ["study_path"]),
     },
     {
+        "name": "optpilot_interface_launch",
+        "description": (
+            "Open a Catalog component's own web interface, such as the DEVS "
+            "simulation generator. Only entries whose listing shows "
+            "has_interface true have one. This starts the component's web "
+            "application in a container and always asks the person first."
+        ),
+        "parameters": _tool_schema(
+            {
+                "config_kind": CONFIG_KIND_SCHEMA,
+                "uid": {
+                    "type": "string",
+                    "description": (
+                        "A catalog entry's qualified_id (for example "
+                        "devs_gallery/resource/devs-gen-interface), or its "
+                        "plain id when only one entry of that kind has it."
+                    ),
+                },
+                "profile_id": {"type": "string"},
+            },
+            ["config_kind", "uid"],
+        ),
+    },
+    {
+        "name": "optpilot_interface_status",
+        "description": (
+            "Check an interface that was launched, and get the address it is "
+            "reachable at once it is ready."
+        ),
+        "parameters": _tool_schema({"launch_id": {"type": "string"}}, ["launch_id"]),
+        "annotations": {"readOnlyHint": True},
+    },
+    {
         "name": "optpilot_docs_search",
         "description": "Search curated OptPilot docs and schema files for compact excerpts.",
         "parameters": _tool_schema({"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
@@ -1106,6 +1141,55 @@ class OpenHandsAdapter:
                 ],
             }
 
+    def _explain_runtime_error(self, raw: Any) -> tuple[str, str]:
+        """Turn a runtime failure into a sentence, keeping the detail aside.
+
+        The raw text is whatever the model provider returned, and it went
+        straight onto the screen: a nested JSON blob naming litellm, an
+        exception class, an HTTP code and the person's own account id. Someone
+        reading it cannot tell whether they configured something wrongly,
+        whether their key is wrong, or whether a service they have never heard
+        of is having a bad afternoon -- and the one time it happened here, the
+        question asked was whether a completely unrelated package needed keys.
+
+        Returns the sentence to show and the original text to keep for a bug
+        report.
+        """
+
+        text = str(raw or "").strip()
+        if not text:
+            return ("The Assistant stopped without saying why.", "")
+        lowered = text.lower()
+        provider = ""
+        for marker in ('"provider_name":"', "'provider_name': '"):
+            if marker in text:
+                rest = text.split(marker, 1)[1]
+                provider = rest.split('"', 1)[0].split("'", 1)[0]
+                break
+        if "openrouterexception" in lowered or "provider returned error" in lowered:
+            named = f" ({provider})" if provider else ""
+            return (
+                f"The model you chose{named} returned an error to OptPilot. "
+                "That happened at the model provider, not in OptPilot or in "
+                "anything you configured here, and it is usually temporary. "
+                "Send the message again; if it keeps happening, choose a "
+                "different model in Settings.",
+                text,
+            )
+        if "rate limit" in lowered or "429" in lowered:
+            return (
+                "The model provider is rate-limiting this key. Wait a moment "
+                "and send the message again, or use a different key.",
+                text,
+            )
+        if "authentication" in lowered or "invalid api key" in lowered or "401" in lowered:
+            return (
+                "The model provider rejected the API key. Check the key in "
+                "Settings.",
+                text,
+            )
+        return (f"The Assistant stopped with an error: {text}", text)
+
     @staticmethod
     def _is_agent_server_unreachable(error: BaseException) -> bool:
         """Whether this failure is simply "nothing is listening there".
@@ -1389,8 +1473,9 @@ class OpenHandsAdapter:
                 "conversation_id": next_conversation_id,
                 "assistant_message": {
                     "role": "assistant",
-                    "title": "OpenHands error",
-                    "content": f"OpenHands reported an error: {runtime_error}",
+                    "title": "The Assistant could not finish",
+                    "content": self._explain_runtime_error(runtime_error)[0],
+                    "technical": self._explain_runtime_error(runtime_error)[1],
                 },
                 "events": [
                     *tool_events,
@@ -1466,8 +1551,9 @@ class OpenHandsAdapter:
                 "conversation_id": conversation_id,
                 "assistant_message": {
                     "role": "assistant",
-                    "title": "OpenHands error",
-                    "content": f"OpenHands reported an error: {runtime_error}",
+                    "title": "The Assistant could not finish",
+                    "content": self._explain_runtime_error(runtime_error)[0],
+                    "technical": self._explain_runtime_error(runtime_error)[1],
                 },
                 "events": tool_events,
                 "sync_state": {

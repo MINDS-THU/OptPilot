@@ -8541,6 +8541,10 @@ DEFAULT_ASSISTANT_PERMISSIONS = {
     "catalog_registration": "approval_required",
     "study_launch": "approval_required",
     "job_stop": "approval_required",
+    # An interface is a component's own web application, started in a container
+    # with whatever credentials it declares -- the same exposure as running a
+    # resource action, so it asks first.
+    "interface_launch": "approval_required",
     # A Resource action runs a command the package author wrote, on this
     # machine, with whatever credentials the action declares. That is worth
     # asking about every time, however routine the action looks.
@@ -8563,6 +8567,7 @@ ASSISTANT_PERMISSION_VALUES = {
     "job_stop": {"approval_required", "disabled"},
     "smoke_test": {"approval_required", "safe_without_approval", "disabled"},
     "resource_action": {"approval_required", "disabled"},
+    "interface_launch": {"approval_required", "disabled"},
 }
 
 #: How many proposals a smoke test evaluates unless asked for more, and the
@@ -9842,6 +9847,9 @@ ASSISTANT_CATALOG_LIST_FIELDS = (
     "tags",
     "tasks",
     "path",
+    # Without this the Assistant cannot tell which entries even have an
+    # interface to open, and guesses at what it was asked for.
+    "has_interface",
 )
 
 
@@ -9850,11 +9858,14 @@ def _assistant_catalog_entry(entry: Any) -> JsonDict:
 
     if not isinstance(entry, dict):
         return {}
-    return {
+    slim = {
         field: entry[field]
         for field in ASSISTANT_CATALOG_LIST_FIELDS
         if field in entry
     }
+    summary = entry.get("summary") if isinstance(entry.get("summary"), dict) else {}
+    slim["has_interface"] = bool(summary.get("interface"))
+    return slim
 
 
 def _assistant_catalog_entries(entries: Any) -> List[JsonDict]:
@@ -20112,6 +20123,60 @@ def _execute_agent_tool(
         return _agent_tool_smoke_test_study(
             state, session_id, tool, arguments, execution_context=execution_context
         )
+    if tool == "optpilot_interface_launch":
+        kind = str(arguments.get("config_kind") or arguments.get("kind") or "")
+        uid = str(arguments.get("uid") or "")
+        if not kind or not uid:
+            raise ValueError("config_kind and uid are required.")
+        entry_label = uid
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "config_kind": kind, "uid": uid},
+            permission_key="interface_launch",
+            approval_kind="interface_launch",
+            title="Open a component's interface",
+            summary=(
+                f"Start the web interface declared by {entry_label} in a "
+                "container, with the credentials it declares."
+            ),
+            targets=[entry_label],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
+        launched = _start_catalog_interface_launch(
+            state,
+            kind,
+            uid,
+            profile_id=str(arguments.get("profile_id") or "") or None,
+        )
+        launch = launched.get("launch") if isinstance(launched, dict) else {}
+        launch_id = str((launch or {}).get("id") or (launch or {}).get("launch_id") or "")
+        return _tool_result(
+            tool,
+            True,
+            (
+                f"Opening the interface for {entry_label}. It takes a few "
+                "seconds to become reachable; check optpilot_interface_status "
+                f"with launch_id {launch_id}."
+            ),
+            data={"launch": launch, "launch_id": launch_id},
+        )
+    if tool == "optpilot_interface_status":
+        launch_id = str(arguments.get("launch_id") or "")
+        if not launch_id:
+            raise ValueError("launch_id is required.")
+        launch = _interface_launch_by_id(state, launch_id)
+        status = str((launch or {}).get("status") or "unknown")
+        url = str((launch or {}).get("url") or (launch or {}).get("preview_url") or "")
+        ready = status in {"ready", "running"}
+        summary = (
+            f"The interface is ready at {url}." if ready and url
+            else f"The interface is {status}."
+        )
+        return _tool_result(tool, True, summary, data={"launch": launch})
     if tool == "optpilot_docs_search":
         results = _docs_search(
             state,
@@ -33493,6 +33558,30 @@ def _configured_package_plan_validation(immutable_root: Path) -> JsonDict:
 
 def _validate_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:
     plan = _read_package_plan(state, workspace_id, plan_id)
+    if (
+        str(plan.get("classification") or "") == "not-yet-classifiable"
+        and not plan.get("source_authority")
+    ):
+        # Checking a folder that holds nothing OptPilot recognises used to run
+        # on into the registration state machine and surface its internal
+        # consistency assertion -- "checked registration setup lacks its exact
+        # identity" -- which names nothing a person can act on. Say what is
+        # missing instead, at the point they asked.
+        #
+        # Only for a folder with no source authority -- the case the state
+        # machine cannot represent. A folder that IS a registered catalog
+        # source and has since lost its entries keeps the real check: that path
+        # produces facts a person can use, naming both the missing entries and
+        # any stray yaml that was ignored, and refusing early would throw those
+        # away. Measured, not assumed: the two cases are identical on
+        # classification, package id, publisher and lineage, and differ only
+        # here.
+        raise ValueError(
+            "This folder does not contain anything OptPilot recognises as a "
+            "package yet, so there is nothing to check. Add at least one "
+            "environment, method, or resource settings file to it, then try "
+            "again."
+        )
     workspace = _require_ui_workspace(state, workspace_id)
     if workspace.get("ownership") == "realm-managed":
         revision = _registration_workspace_revision(workspace)
@@ -36520,7 +36609,18 @@ def _safe_workspace_root(state: UiState, root: Path) -> Path:
         return root
     if _is_active_catalog_workspace_projection_path(state, root):
         return root
-    raise PermissionError(f"Workspace root is outside allowed OptPilot paths: {root}")
+    # Naming only the rejected path leaves nothing to act on: a person is told
+    # where they cannot put a Workspace and not where they can. Name the two
+    # places that are actually theirs to use -- the project folder Studio was
+    # started in, and the folder it keeps Workspaces in. The rest of the
+    # allowlist is catalog packages and Studio's own storage, which nobody
+    # should be steered towards, so listing all of it would trade silence for
+    # a wall of paths.
+    raise PermissionError(
+        f"Workspace root is outside allowed OptPilot paths: {root}. "
+        f"Put it inside the project folder ({state.cwd}) "
+        f"or Studio's Workspaces folder ({state.workspaces_dir})."
+    )
 
 
 def _is_local_catalog_path(state: UiState, path: Path) -> bool:
