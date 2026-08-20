@@ -8,10 +8,12 @@ turning the Assistant off.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
+from optpilot_studio.agent import DEFAULT_OPENHANDS_BASE_URL
 from optpilot_studio.ui.server import (
     UiState,
     _agent_settings_payload,
@@ -97,9 +99,19 @@ class AgentSettingsPartialSaveTest(unittest.TestCase):
                 },
             )
             openhands = self._openhands(state)
-            self.assertFalse(openhands["enabled"])
-            self.assertEqual(openhands["base_url"], "")
-            self.assertEqual(openhands["model"], "")
+            stored = json.loads(state.settings_path.read_text(encoding="utf-8"))
+            stored_openhands = stored["assistant"]["openhands"]
+
+        self.assertFalse(openhands["enabled"])
+        self.assertEqual(openhands["model"], "")
+        # The point of this case is that a full save OVERWRITES rather than
+        # merges, so check the stored value was really cleared. What the
+        # projection reports for a cleared URL is a separate question: an
+        # unset server URL now means "the helper OptPilot runs", so it reads
+        # back as that address rather than as blank.
+        self.assertEqual(stored_openhands["base_url"], "")
+        self.assertEqual(stored_openhands["model"], "")
+        self.assertEqual(openhands["base_url"], DEFAULT_OPENHANDS_BASE_URL)
 
 
 if __name__ == "__main__":

@@ -423,7 +423,7 @@ CONFIG_KIND_SCHEMA = {"type": "string", "enum": ["environment", "method", "resou
 OBJECTIVE_DIRECTION_SCHEMA = {"type": "string", "enum": ["maximize", "minimize"]}
 OBJECTIVE_AGGREGATION_SCHEMA = {"type": "string", "enum": ["mean", "median", "min", "max", "sum", "last", "weighted_mean"]}
 EVIDENCE_LEVEL_SCHEMA = {"type": "string", "enum": ["minimal", "standard", "full"]}
-CATALOG_ENTRY_REF_SCHEMA = {
+_CATALOG_ENTRY_REF_OBJECT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
@@ -452,6 +452,32 @@ CATALOG_ENTRY_REF_SCHEMA = {
         "ref_digest",
     ],
 }
+
+#: What a tool will accept for "which catalog entry". The structured form
+#: below is exact -- it names the source revision and carries a digest -- but
+#: reproducing it, or the equivalent ref token, means echoing hundreds of
+#: characters back without a slip. A language model does not reliably manage
+#: that: one re-encoded a token, dropped a field, and sent 485 characters where
+#: 489 were required, so the call failed and the conversation stalled with
+#: nothing on screen explaining why.
+#:
+#: A readable name is therefore accepted as well, and is what the listings
+#: advertise. It names the entry as it stands now, which is what a person
+#: clicking that entry in the Catalog also gets.
+CATALOG_ENTRY_REF_SCHEMA = {
+    "anyOf": [
+        {
+            "type": "string",
+            "description": (
+                "A catalog entry's qualified_id, for example "
+                "or_solving/method/coopa-solver, or its plain id when only one "
+                "entry of that kind has it."
+            ),
+        },
+        _CATALOG_ENTRY_REF_OBJECT_SCHEMA,
+    ]
+}
+
 STUDY_LAUNCH_INPUTS_SCHEMA = {
     "type": "object",
     "description": (
@@ -591,7 +617,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_catalog_list",
-        "description": "List reusable catalog environments, methods, resources, plus saved study plans. Prefer a free-text query when matching a user goal: every query term must match the entry's id, name, description, package, purpose, or tags. Optional tags must all be declared on an entry.",
+        "description": "List reusable catalog environments, methods, resources, plus saved study plans. Each entry carries a short qualified_id such as or_solving/method/coopa-solver; pass that to any tool that needs the entry. Prefer a free-text query when matching a user goal: every query term must match the entry's id, name, description, package, purpose, or tags. Optional tags must all be declared on an entry.",
         "parameters": _tool_schema({
             "config_kind": CONFIG_KIND_SCHEMA,
             "query": {"type": "string"},
@@ -602,13 +628,13 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     {
         "name": "optpilot_catalog_detail",
         "description": "Inspect one reusable catalog entry or saved study plan by kind and its exact uid token.",
-        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string"}}, ["config_kind", "uid"]),
+        "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."}}, ["config_kind", "uid"]),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_resource_action_list",
         "description": "List the named actions a catalog Resource declares, each with its typed inputs. Resources are the tools that make things -- for example generating a simulator from a description. Take resource_uid from an optpilot_catalog_list result.",
-        "parameters": _tool_schema({"resource_uid": {"type": "string"}}, ["resource_uid"]),
+        "parameters": _tool_schema({"resource_uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."}}, ["resource_uid"]),
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -616,7 +642,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Run one declared Resource action. Requires approval. Pass workspace_id whenever the action produces something the person will keep or register, such as a generated simulator: the results are then written inside that attached Workspace instead of Studio's private folder, and can be registered without copying. Returns a request_id; poll it with optpilot_resource_action_status.",
         "parameters": _tool_schema(
             {
-                "resource_uid": {"type": "string"},
+                "resource_uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."},
                 "action_id": {"type": "string"},
                 "inputs": {"type": "object"},
                 "workspace_id": {"type": "string"},
@@ -792,6 +818,29 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
 ]
 
 
+#: Where OptPilot's own agent-server listens. Which port an internal service
+#: uses is wiring, not a preference, so this is a real default rather than a
+#: greyed-out placeholder: leaving the field empty means "the one OptPilot
+#: starts", not "no server, answer without tools".
+DEFAULT_OPENHANDS_BASE_URL = "http://127.0.0.1:8781"
+
+#: The explicit way to ask for the toolless mode that an empty field used to
+#: select by accident. Kept because that mode still works and someone with no
+#: local agent-server may want it.
+OPENHANDS_NO_SERVER_VALUES = frozenset({"none", "off", "disabled", "-"})
+
+
+def resolve_openhands_base_url(value: Any) -> str:
+    """The server URL to actually use, given whatever was configured."""
+
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return DEFAULT_OPENHANDS_BASE_URL
+    if text.lower() in OPENHANDS_NO_SERVER_VALUES:
+        return ""
+    return text
+
+
 @dataclass(frozen=True)
 class OpenHandsRuntimeConfig:
     base_url: str = ""
@@ -803,7 +852,13 @@ class OpenHandsRuntimeConfig:
 
     @classmethod
     def from_env(cls) -> "OpenHandsRuntimeConfig":
-        base_url = os.environ.get("OPTPILOT_OPENHANDS_URL", "").strip().rstrip("/")
+        # Derive `enabled` from what was actually CONFIGURED, before the
+        # default below fills the URL in -- otherwise every install would look
+        # configured and the Assistant would switch itself on with no model.
+        configured_base_url = (
+            os.environ.get("OPTPILOT_OPENHANDS_URL", "").strip().rstrip("/")
+        )
+        base_url = resolve_openhands_base_url(configured_base_url)
         session_endpoint = os.environ.get("OPTPILOT_OPENHANDS_SESSION_ENDPOINT", "").strip()
         model = os.environ.get("OPTPILOT_OPENHANDS_MODEL", os.environ.get("LLM_MODEL", "")).strip()
         api_key = (
@@ -812,13 +867,16 @@ class OpenHandsRuntimeConfig:
             or os.environ.get("OPENAI_API_KEY")
             or ""
         ).strip()
-        enabled = _env_flag("OPTPILOT_OPENHANDS_ENABLED", bool(base_url or model or api_key))
+        enabled = _env_flag(
+            "OPTPILOT_OPENHANDS_ENABLED",
+            bool(configured_base_url or model or api_key),
+        )
         return cls(base_url=base_url, session_endpoint=session_endpoint, model=model, api_key=api_key, enabled=enabled)
 
     @classmethod
     def from_mapping(cls, payload: JsonDict) -> "OpenHandsRuntimeConfig":
         return cls(
-            base_url=str(payload.get("base_url") or "").strip().rstrip("/"),
+            base_url=resolve_openhands_base_url(payload.get("base_url")),
             session_endpoint=str(payload.get("session_endpoint") or "").strip(),
             model=str(payload.get("model") or "").strip(),
             api_key=str(payload.get("api_key") or "").strip(),
@@ -974,6 +1032,41 @@ class OpenHandsAdapter:
                 ],
             }
         except Exception as exc:
+            if self._is_agent_server_unreachable(exc):
+                return {
+                    "status": "failed",
+                    "mode": status.get("mode"),
+                    "dispatch": status.get("dispatch"),
+                    "conversation_id": conversation_id,
+                    "assistant_message": {
+                        "role": "assistant",
+                        "title": "The Assistant's helper is not running",
+                        "content": (
+                            "OptPilot runs a helper process that lets the "
+                            "Assistant use its tools -- reading the Catalog, "
+                            "preparing a Run, and so on -- and it is not "
+                            "answering at "
+                            f"{self.config.base_url}.\n\n"
+                            "Start OptPilot again so it can bring the helper "
+                            "up with it. If you started Studio by hand, run "
+                            "the agent-server alongside it.\n\n"
+                            "Nothing was sent anywhere, and the rest of "
+                            "OptPilot works meanwhile: you can browse the "
+                            "Catalog, open a Run setup, and start a Run "
+                            "yourself."
+                        ),
+                    },
+                    "events": [
+                        {
+                            "type": "openhands_dispatch_failed",
+                            "payload": {
+                                "error": str(exc),
+                                "reason": "agent_server_unreachable",
+                                "base_url": self.config.base_url,
+                            },
+                        }
+                    ],
+                }
             if self._is_client_tool_schema_conflict(exc):
                 return {
                     "status": "failed",
@@ -1012,6 +1105,29 @@ class OpenHandsAdapter:
                     }
                 ],
             }
+
+    @staticmethod
+    def _is_agent_server_unreachable(error: BaseException) -> bool:
+        """Whether this failure is simply "nothing is listening there".
+
+        Worth separating from every other dispatch failure: it is the one a
+        person can actually act on, and the raw connection error names a port
+        rather than saying which part of OptPilot is missing.
+        """
+
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            return True
+        text = str(error).lower()
+        return any(
+            marker in text
+            for marker in (
+                "connection refused",
+                "failed to establish a new connection",
+                "max retries exceeded",
+                "cannot connect",
+                "connection reset",
+            )
+        )
 
     def _is_client_tool_schema_conflict(self, error: Exception) -> bool:
         text = str(error)
@@ -1523,6 +1639,12 @@ class OpenHandsAdapter:
             time.sleep(2.0)
         return "", tool_events, "", ""
 
+    def _is_tool_result_feedback_event(self, event: JsonDict) -> bool:
+        """Whether this user message is Studio handing back a tool result."""
+
+        text = self._event_user_text(event) if isinstance(event, dict) else ""
+        return str(text or "").lstrip().startswith(self.TOOL_RESULT_FEEDBACK_PREFIX)
+
     def _execution_finished(self, events: Any) -> bool:
         # Events arrive newest-first; only the newest execution_status update
         # counts. An older "finished" from before a client-tool resume must
@@ -1547,7 +1669,15 @@ class OpenHandsAdapter:
                 newest_user is None
                 and kind == "MessageEvent"
                 and str(event.get("source") or "") == "user"
+                and not self._is_tool_result_feedback_event(event)
             ):
+                # Studio posts each tool's result back into the conversation as
+                # a user message, so those look like fresh user turns here.
+                # Counting them made the comparison below unwinnable: a result
+                # posted after the agent had already finished left the turn
+                # looking permanently unfinished, and the session sat on
+                # "Working" with the finished answer unread beside it. Only a
+                # real request from the person should hold a turn open.
                 newest_user = event
             if newest_status is not None and newest_user is not None:
                 break
@@ -2155,9 +2285,21 @@ class OpenHandsAdapter:
             return "\n".join(part for part in parts if part).strip()
         return str(content).strip()
 
+    #: How Studio hands a tool's result back to the model. It is scaffolding
+    #: between the two of them and must never be shown to a person as though
+    #: the Assistant had written it.
+    TOOL_RESULT_FEEDBACK_PREFIX = "OptPilot tool result for "
+
     def _user_facing_assistant_text(self, content: Any) -> str:
         text = self._content_text(content)
         if not text:
+            return ""
+        if text.lstrip().startswith(self.TOOL_RESULT_FEEDBACK_PREFIX):
+            # Studio posts tool results into the conversation for the model to
+            # read. They are addressed to the model, not to the person, and
+            # surfacing one as the reply shows a wall of raw JSON where an
+            # answer belongs. Every route to a displayed answer passes through
+            # here, so one guard covers them all.
             return ""
         if "</think>" in text:
             text = text.rsplit("</think>", 1)[1].strip()

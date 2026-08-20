@@ -39,6 +39,7 @@ class SlimEntryTest(unittest.TestCase):
     def test_the_heavy_fields_are_dropped(self) -> None:
         entry = {
             "id": "demo",
+            "qualified_id": "demo_pkg/method/demo",
             "uid": "cref_x",
             "label": "Demo",
             "description": "d",
@@ -52,16 +53,22 @@ class SlimEntryTest(unittest.TestCase):
         for dropped in ("yaml", "raw_config", "ref", "summary", "actions"):
             self.assertNotIn(dropped, slim)
         self.assertEqual(slim["id"], "demo")
-        self.assertEqual(slim["uid"], "cref_x")
+        self.assertEqual(slim["qualified_id"], "demo_pkg/method/demo")
+        # The ~490-character ref token goes too: offering it invites a model to
+        # copy it back wrongly, which is exactly how lookups were failing.
+        self.assertNotIn("uid", slim)
 
     def test_choosing_an_entry_still_has_what_it_needs(self) -> None:
         for needed in ("id", "label", "description", "tags", "tasks", "package"):
             self.assertIn(needed, ASSISTANT_CATALOG_LIST_FIELDS)
 
-    def test_the_token_detail_is_looked_up_by_survives(self) -> None:
-        # uid encodes which source revision the entry came from; a listing
-        # without it would force a second search to act on a result.
-        self.assertIn("uid", ASSISTANT_CATALOG_LIST_FIELDS)
+    def test_the_listing_carries_what_lookups_are_made_with(self) -> None:
+        # Whatever names an entry to the other tools has to be in the listing,
+        # or acting on a result needs a second search. That used to be the ref
+        # token; it is now the short qualified_id, which a model can actually
+        # reproduce.
+        self.assertIn("qualified_id", ASSISTANT_CATALOG_LIST_FIELDS)
+        self.assertNotIn("uid", ASSISTANT_CATALOG_LIST_FIELDS)
 
     def test_a_malformed_entry_does_not_raise(self) -> None:
         self.assertEqual(_assistant_catalog_entry("not an entry"), {})

@@ -14,6 +14,25 @@
         "8866"
       ],
       "port": 8866
+    },
+    {
+      "name": "optpilot-agent-server",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "UV_PROJECT_ENVIRONMENT=/Users/li_chuanhao/.optpilot-venvs/OptPilot-venv",
+        "PYTHONPATH=studio/src:src",
+        "OPENHANDS_SUPPRESS_BANNER=1",
+        "uv",
+        "run",
+        "agent-server",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8781",
+        "--import-modules",
+        "optpilot_studio.openhands_client_tools"
+      ],
+      "port": 8781
     }
   ]
 }

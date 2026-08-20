@@ -199,6 +199,7 @@ from ..agent import (
     STUDIO_UI_CARD_SCHEMA,
     sanitize_openhands_native_tools,
     sanitize_studio_ui_cards,
+    resolve_openhands_base_url,
 )
 from .coordination_store import (
     ActionState,
@@ -9233,7 +9234,9 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
     permissions = _assistant_permissions_from_settings(settings)
     safe_openhands = {
         "enabled": bool(openhands.get("enabled")),
-        "base_url": str(openhands.get("base_url") or ""),
+        # Report the URL actually in use, not the empty box behind it. Showing
+        # blank sent people looking for a value the product already knew.
+        "base_url": resolve_openhands_base_url(openhands.get("base_url")),
         "session_endpoint": str(openhands.get("session_endpoint") or ""),
         "model": str(openhands.get("model") or ""),
         "native_tools": list(_openhands_config_from_settings(settings).native_tools),
@@ -9731,11 +9734,14 @@ def _executable_health(name: str, command: List[str]) -> JsonDict:
 #:
 #: A bare listing used to return every field of every entry: 348,000 characters
 #: for the five shipped packages, spent before the Assistant had done anything.
-#: The `uid` stays despite its length because it pins the exact source revision
-#: the entry came from, and detail lookups are resolved through it.
+#: The ref token is deliberately NOT here. It is ~490 characters, and handing
+#: one to a language model invites it to echo the thing back wrongly -- one
+#: decoded a token, re-encoded it, dropped a field, and sent 485 characters
+#: that were not a prefix of the original, so the lookup failed and the
+#: conversation stalled. Tools now accept `qualified_id`, which is short enough
+#: to reproduce and readable enough to explain.
 ASSISTANT_CATALOG_LIST_FIELDS = (
     "id",
-    "uid",
     "kind",
     "config",
     "label",
@@ -9784,7 +9790,9 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
     )
     try:
         if source_projection is not None:
-            entry_ref = _catalog_entry_ref_from_value(state, expected_config, uid)
+            entry_ref = _catalog_entry_ref_from_value(
+                state, expected_config, uid, allow_readable_id=True
+            )
             assert entry_ref is not None
             path = source_projection.source_path
             source_record = {
@@ -10169,9 +10177,86 @@ def _resolve_catalog_identifier(
     raise FileNotFoundError(f"{expected_config} config not found: {value}")
 
 
-def _catalog_entry_ref_from_value(
+#: The catalog keys each kind of entry lives under, for short-name lookups.
+_CATALOG_KIND_KEYS = {
+    "environment": "environments",
+    "method": "methods",
+    "study": "studies",
+    "resource": "resources",
+}
+
+
+def _catalog_entry_ref_from_readable_id(
     state: UiState, expected_config: str, value: Any
 ) -> Optional[CatalogEntryRef]:
+    """Resolve a name a person could type, rather than a ref token.
+
+    The ref token encodes which source revision an entry came from, so it is
+    long -- around 490 characters of base64. Every tool that touches a catalog
+    entry required one echoed back exactly, and a language model will not
+    reliably do that: one decoded a token, re-encoded it, dropped a field, and
+    sent 485 characters that were not even a prefix of the original. The tool
+    then failed with "Catalog entry ref is invalid", and the conversation
+    stalled with no way for anyone to see why.
+
+    So the readable identifiers already carried by every listing are accepted
+    too: "or_solving/method/coopa-solver", or just "coopa-solver" when only one
+    entry of that kind has the name. These name the entry as it stands now,
+    which is what someone browsing the Catalog and clicking it also gets.
+    """
+
+    text = str(value or "").strip()
+    if not text or text.startswith(CATALOG_ENTRY_REF_TOKEN_PREFIX):
+        return None
+    key = _CATALOG_KIND_KEYS.get(str(expected_config or ""))
+    if not key:
+        return None
+    entries = _catalog_index_payload(state).get(key) or []
+
+    exact = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and text in {entry.get("qualified_id"), entry.get("catalog_key")}
+    ]
+    if len(exact) == 1:
+        return _catalog_entry_ref_from_value(state, expected_config, exact[0].get("uid"))
+
+    by_id = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("id") == text
+    ]
+    if len(by_id) == 1:
+        return _catalog_entry_ref_from_value(state, expected_config, by_id[0].get("uid"))
+    if len(by_id) > 1:
+        # Say which ones, so the next attempt can succeed instead of guessing.
+        choices = ", ".join(
+            sorted(str(entry.get("qualified_id") or entry.get("id")) for entry in by_id)
+        )
+        raise ValueError(
+            f"{text!r} is ambiguous: it matches more than one "
+            f"{expected_config} ({choices}). Use the fuller name."
+        )
+    return None
+
+
+def _catalog_entry_ref_from_value(
+    state: UiState,
+    expected_config: str,
+    value: Any,
+    *,
+    allow_readable_id: bool = False,
+) -> Optional[CatalogEntryRef]:
+    """Resolve "which catalog entry", from a ref, a token, or (opt-in) a name.
+
+    ``allow_readable_id`` is off by default because two callers use a None
+    return as their test for "this is an exact reference": opening an entry's
+    source read-only, and launching its interface. Both pin one exact revision,
+    and a name that resolves to whatever is current would quietly weaken that.
+    Reading, comparing and drafting accept names; pinning does not.
+    """
+
     entry_ref: Optional[CatalogEntryRef] = None
     if isinstance(value, CatalogEntryRef):
         entry_ref = value
@@ -10193,6 +10278,10 @@ def _catalog_entry_ref_from_value(
             if not isinstance(payload, dict):
                 raise ValueError("Catalog entry ref token is invalid.")
             entry_ref = CatalogEntryRef.from_dict(payload)
+        elif allow_readable_id:
+            entry_ref = _catalog_entry_ref_from_readable_id(
+                state, expected_config, token
+            )
     if entry_ref is not None and entry_ref.kind != expected_config:
         raise ValueError(
             f"Catalog entry ref is for {entry_ref.kind}, not {expected_config}."
@@ -10357,9 +10446,11 @@ def _compatibility_for_catalog_refs(
         )
     try:
         environment_ref = _catalog_entry_ref_from_value(
-            state, "environment", environment_value
+            state, "environment", environment_value, allow_readable_id=True
         )
-        method_ref = _catalog_entry_ref_from_value(state, "method", method_value)
+        method_ref = _catalog_entry_ref_from_value(
+            state, "method", method_value, allow_readable_id=True
+        )
         assert environment_ref is not None and method_ref is not None
         environment = _read_yaml(environment_source.source_path)
         method = _read_yaml(method_source.source_path)
