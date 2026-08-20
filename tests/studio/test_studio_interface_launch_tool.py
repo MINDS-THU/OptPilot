@@ -12,9 +12,11 @@ known. That is fixed here too.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from optpilot_studio.agent import OPTPILOT_AGENT_TOOLS, OPTPILOT_AGENT_TOOL_SPECS
 from optpilot_studio.ui.server import (
@@ -87,16 +89,34 @@ class InterfaceLaunchGateTest(unittest.TestCase):
         self.assertIn("devs_gallery/resource/devs-gen-interface", withui)
 
     def test_launching_it_requests_approval_rather_than_starting(self) -> None:
+        """With its requirements met, opening one is a decision for the person.
+
+        The values below are supplied only so the launch is possible at all: a
+        component that cannot run is refused before anyone is asked, which is
+        covered in test_studio_no_doomed_approvals. What matters here is that
+        being able to launch never means launching without asking.
+        """
+
+        supplied = {
+            "DEVS_DISPLAY_MODEL_ID": "openrouter/openai/gpt-5.4",
+            "DEVS_INTERFACE_MODEL_ID": "openrouter/openai/gpt-5.4",
+            "DEVS_INTERFACE_STRONG_MODEL_ID": "openrouter/openai/gpt-5.4",
+            "OPENROUTER_API_KEY": "test-key-not-used",
+        }
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))
             session = _create_agent_session(state, {"title": "iface"})
-            result = _execute_agent_tool(
-                state,
-                session["id"],
-                "optpilot_interface_launch",
-                {"config_kind": "resource", "uid": "devs-gen-interface"},
-            )
-        self.assertTrue(result["data"].get("approval_required"))
+            with mock.patch.dict(os.environ, supplied, clear=False):
+                result = _execute_agent_tool(
+                    state,
+                    session["id"],
+                    "optpilot_interface_launch",
+                    {"config_kind": "resource", "uid": "devs-gen-interface"},
+                )
+        self.assertTrue(
+            result["data"].get("approval_required"),
+            f"a launchable interface must still ask: {result['summary']}",
+        )
         self.assertIn("devs-gen-interface", result["summary"])
 
     def test_it_refuses_without_naming_an_entry(self) -> None:

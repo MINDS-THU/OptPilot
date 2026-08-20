@@ -19643,6 +19643,14 @@ def _execute_agent_tool(
         action_id = str(arguments.get("action_id") or "").strip()
         if not resource_uid or not action_id:
             raise ValueError("resource_uid and action_id are required.")
+        blocked = _resource_action_blocked_reason(state, resource_uid, action_id)
+        if blocked:
+            return _tool_result(
+                tool,
+                False,
+                blocked,
+                data={"remedy": {"kind": "configure_environment", "reason": blocked}},
+            )
         workspace_id = str(arguments.get("workspace_id") or "").strip()
         inputs = arguments.get("inputs")
         if inputs is not None and not isinstance(inputs, Mapping):
@@ -20144,6 +20152,21 @@ def _execute_agent_tool(
         if not kind or not uid:
             raise ValueError("config_kind and uid are required.")
         entry_label = uid
+        # Ask whether this CAN launch before asking the person to approve it.
+        # Studio already computes that answer, with a reason, and the Catalog
+        # page shows it -- but this tool went straight to the approval card, so
+        # a person was asked to approve a launch that was known to fail, it
+        # failed, the model asked again, and the loop ran until someone gave
+        # up. Approving something is a decision; being asked to decide the same
+        # doomed thing repeatedly is not.
+        blocked = _interface_launch_blocked_reason(state, kind, uid)
+        if blocked:
+            return _tool_result(
+                tool,
+                False,
+                blocked,
+                data={"remedy": {"kind": "configure_environment", "reason": blocked}},
+            )
         gate = _agent_permission_gate(
             state,
             session_id,
@@ -28952,6 +28975,60 @@ def _stop_interface_launch(state: UiState, launch_id: str) -> JsonDict:
         launch_id,
         terminal_target="stopped",
     )
+
+
+def _resource_action_blocked_reason(
+    state: UiState, resource_uid: str, action_id: str
+) -> str:
+    """Why this action cannot run right now, or empty if it can.
+
+    Same purpose as the interface check beside it: a person should not be asked
+    to approve something already known to fail. One conversation approved the
+    same generation action six times in four minutes, every run failing for
+    three values that were never set.
+    """
+
+    try:
+        manifest_path = _resolve_resource_action_source(state, resource_uid)
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle) or {}
+        actions = compile_resource_actions(raw, location=str(manifest_path))
+        action = find_resource_action(actions, action_id)
+    except Exception:
+        # A genuine lookup problem is reported by the run itself, in its own
+        # words; this check only answers "would the environment stop it?".
+        return ""
+    _resolved, missing = _resolve_declared_env_from_host(
+        state, (*action.env_from_host, *action.secrets_from_host)
+    )
+    if not missing:
+        return ""
+    joined = ", ".join(missing)
+    return (
+        f"Add {joined} in Studio Settings or export "
+        f"{'them' if len(missing) != 1 else 'it'} before running this action."
+    )
+
+
+def _interface_launch_blocked_reason(state: UiState, kind: str, uid: str) -> str:
+    """Why this interface cannot launch right now, or empty if it can.
+
+    Reads the same answer the Catalog page shows, so the two cannot disagree
+    about the same component.
+    """
+
+    try:
+        detail = _catalog_detail(state, kind, uid)
+    except Exception:
+        return ""
+    entry = detail.get("entry") if isinstance(detail.get("entry"), dict) else {}
+    summary = entry.get("summary") if isinstance(entry.get("summary"), dict) else {}
+    interface = summary.get("interface") if isinstance(summary.get("interface"), dict) else {}
+    actions = interface.get("actions") if isinstance(interface.get("actions"), dict) else {}
+    launch = actions.get("launch") if isinstance(actions.get("launch"), dict) else {}
+    if not launch or launch.get("eligible"):
+        return ""
+    return str(launch.get("reason") or "This interface cannot be launched yet.")
 
 
 def _start_catalog_interface_launch(
