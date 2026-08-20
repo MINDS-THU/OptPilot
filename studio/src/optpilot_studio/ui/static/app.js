@@ -3091,17 +3091,28 @@ function renderSettingsModal() {
   syncManagedModalBackgroundInert();
   if (els.settingsLoadStatus) {
     const error = String(state.settingsError || "");
-    els.settingsLoadStatus.hidden = !state.settingsLoading && !error;
-    els.settingsLoadStatus.classList.toggle("error", Boolean(error));
+    const saveError = String(state.settingsSaveError || "");
+    const notices = Array.isArray(state.settingsSaveNotices) ? state.settingsSaveNotices : [];
+    const showing = state.settingsLoading || error || saveError || notices.length;
+    els.settingsLoadStatus.hidden = !showing;
+    els.settingsLoadStatus.classList.toggle("error", Boolean(error || saveError));
     if (els.settingsLoadStatusTitle) {
       els.settingsLoadStatusTitle.textContent = state.settingsLoading
         ? "Loading Studio settings…"
-        : "Studio settings could not be loaded";
+        : error
+        ? "Studio settings could not be loaded"
+        : saveError
+        ? "That setting was not saved"
+        : "Saved, with one thing left out";
     }
     if (els.settingsLoadStatusBody) {
       els.settingsLoadStatusBody.textContent = state.settingsLoading
         ? "Reading the saved local configuration."
-        : `The form was not changed. ${error} Check Studio status, then try again.`;
+        : error
+        ? `The form was not changed. ${error} Check Studio status, then try again.`
+        : saveError
+        ? `Nothing was changed. ${saveError}`
+        : notices.join(" ");
     }
     if (els.settingsRetryButton) els.settingsRetryButton.hidden = state.settingsLoading || !error;
   }
@@ -3381,8 +3392,14 @@ async function saveSettings() {
   };
   const result = await postJson("/api/agent/settings", payload, { tolerateError: true });
   if (result.error) {
-    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "unavailable", error: result.error };
+    // A refused value means the save did not happen -- it does not mean the
+    // Assistant is broken. Reporting it as "unavailable" made a typo look
+    // like an outage and hid the sentence saying which value was wrong.
+    state.settingsSaveError = String(result.error);
+    state.settingsSaveNotices = [];
   } else {
+    state.settingsSaveError = "";
+    state.settingsSaveNotices = Array.isArray(result.notices) ? result.notices : [];
     state.agentSettings = result.settings || state.agentSettings;
     state.agentRuntimeStatus = result.status || state.agentRuntimeStatus;
     state.environmentVariableDrafts = [];
