@@ -48,7 +48,7 @@
           "items": {"$ref": "#/definitions/setupStep"}
         },
         "env": {"$ref": "#/definitions/envObject"},
-        "envFromHost": {"$ref": "#/definitions/stringList"},
+        "envFromHost": {"$ref": "#/definitions/hostEnvList"},
         "cache": {"enum": ["prepared"]},
         "timeoutSeconds": {"type": "integer", "minimum": 1}
       }
@@ -168,7 +168,7 @@
       "additionalProperties": false,
       "properties": {
         "network": {"enum": ["disabled", "enabled"]},
-        "envFromHost": {"$ref": "#/definitions/stringList"},
+        "envFromHost": {"$ref": "#/definitions/hostEnvList"},
         "secretsFromHost": {"$ref": "#/definitions/stringList"}
       }
     },
@@ -401,6 +401,25 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "hostEnvList": {
+      "description": "Environment values taken from the person's machine. A bare name is required from the host; an entry with a default is used only when the host does not supply one. Secrets never take a default: secretsFromHost stays a plain list of names.",
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "default"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "default": {"type": "string"},
+              "description": {"type": "string"}
+            }
+          }
+        ]
       }
     },
     "object": {

@@ -77,6 +77,7 @@ from optpilot.config import (
     validate_authoring_config,
 )
 from optpilot.config_errors import CodedConfigError, StudyLaunchInputsError
+from optpilot.host_env import compile_host_env_declarations
 from optpilot.parameter_values import missing_required_parameters
 from optpilot.resource_actions import (
     compile_resource_actions,
@@ -8823,15 +8824,29 @@ def _studio_method_environment_values(
 def _resolve_declared_env_from_host(
     state: UiState, names: Iterable[Any]
 ) -> tuple[Dict[str, str], List[str]]:
+    """Resolve declared host values, falling back to any declared defaults.
+
+    Accepts both forms of declaration: a bare name is required from the host,
+    while a name carrying a default is satisfied by that default when neither
+    Studio Settings nor the process environment provides one. Callers that pass
+    plain names -- including every secret, which never takes a default -- are
+    unaffected.
+    """
+
+    declarations = compile_host_env_declarations(
+        list(names), location="grants.envFromHost"
+    )
     settings_variables = _environment_variables_from_settings(_read_ui_settings(state))
     resolved: Dict[str, str] = {}
     missing: List[str] = []
-    for raw_name in _dedupe_strings(names):
-        name = _clean_env_var_name(raw_name)
+    for declared in declarations:
+        name = _clean_env_var_name(declared.name)
         if settings_variables.get(name):
             resolved[name] = settings_variables[name]
         elif os.environ.get(name):
             resolved[name] = os.environ[name]
+        elif declared.default is not None:
+            resolved[name] = declared.default
         else:
             missing.append(name)
     return resolved, missing

@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Tuple
 
 from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
+from .host_env import compile_host_env_declarations
 from .parameter_values import apply_parameter_defaults, validate_parameter_values
 from .realm.run_closure import InterfaceRuntimeSpec
 
@@ -86,6 +87,9 @@ class ResourceActionSpec:
     env: Mapping[str, str]
     inputs: Mapping[str, Any]
     env_from_host: Tuple[str, ...]
+    #: Fallbacks for declared host values, used only when the host has none.
+    #: Secrets never appear here: secretsFromHost takes no defaults.
+    env_from_host_defaults: Mapping[str, str]
     secrets_from_host: Tuple[str, ...]
     network: str
     runtime: Mapping[str, Any]
@@ -179,7 +183,15 @@ def _compile_resource_action(raw: Any, location: str) -> ResourceActionSpec:
         raise ValueError(
             f"{location}.grants may contain only envFromHost, network, and secretsFromHost."
         )
-    env_from_host = _string_list(grants.get("envFromHost", []), f"{location}.grants.envFromHost")
+    env_declarations = compile_host_env_declarations(
+        grants.get("envFromHost", []), location=f"{location}.grants.envFromHost"
+    )
+    env_from_host = tuple(item.name for item in env_declarations)
+    env_from_host_defaults = {
+        item.name: item.default
+        for item in env_declarations
+        if item.default is not None
+    }
     secrets_from_host = _string_list(
         grants.get("secretsFromHost", []), f"{location}.grants.secretsFromHost"
     )
@@ -217,6 +229,7 @@ def _compile_resource_action(raw: Any, location: str) -> ResourceActionSpec:
         env=dict(env),
         inputs=dict(inputs),
         env_from_host=env_from_host,
+        env_from_host_defaults=env_from_host_defaults,
         secrets_from_host=secrets_from_host,
         network=network,
         runtime=dict(runtime or {}),
@@ -327,6 +340,10 @@ def run_resource_action(
     bound_inputs = apply_parameter_defaults(input_values, action.inputs)
 
     environment = dict(host_env if host_env is not None else os.environ)
+    # A declared default stands in when the host supplies nothing, so only the
+    # values nobody could guess -- and every secret -- remain required.
+    for name, fallback in action.env_from_host_defaults.items():
+        environment.setdefault(name, fallback)
     missing = [
         name
         for name in (*action.env_from_host, *action.secrets_from_host)

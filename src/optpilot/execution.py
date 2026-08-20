@@ -14,6 +14,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .host_env import compile_host_env_declarations
+
 from .attempt_semantics import (
     PUBLIC_OBSERVATION_STATUSES,
     error_payload as _error_payload,
@@ -686,10 +688,13 @@ def _worker_process_env(config: Dict[str, Any]) -> Dict[str, str]:
     env = apply_prepared_env(minimal_host_env(), config.get("preparedEnv", {}))
     env.update({str(key): str(value) for key, value in config.get("env", {}).items()})
     env.update({str(key): str(value) for key, value in config.get("environmentVariables", {}).items()})
-    for key in config.get("envFromHost", []) or []:
-        key = str(key)
-        if key in os.environ:
-            env[key] = os.environ[key]
+    for declared in compile_host_env_declarations(
+        config.get("envFromHost", []), location="runtime.envFromHost"
+    ):
+        if declared.name in os.environ:
+            env[declared.name] = os.environ[declared.name]
+        elif declared.default is not None:
+            env[declared.name] = declared.default
     pythonpath_entries = [str(Path(__file__).resolve().parents[1]), str(Path.cwd().resolve())]
     existing_pythonpath = env.get("PYTHONPATH")
     if existing_pythonpath:

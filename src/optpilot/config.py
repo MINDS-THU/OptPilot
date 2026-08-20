@@ -18,6 +18,7 @@ import yaml
 from .image_reference import parse_image_reference
 
 from .config_errors import StudyLaunchInputsError
+from .host_env import compile_host_env_declarations
 from .parameter_values import (
     apply_parameter_defaults,
     missing_required_parameters,
@@ -936,7 +937,9 @@ def _validate_runtime(runtime: Any, location: str) -> None:
     for key in ("envFromHost",):
         value = runtime.get(key, [])
         if value is not None:
-            _require_string_list(value, f"{location}.{key}")
+            # Names, or names carrying a default for when the host supplies
+            # nothing. compile_host_env_declarations rejects anything else.
+            compile_host_env_declarations(value, location=f"{location}.{key}")
 
 
 def _validate_interface(
@@ -963,7 +966,9 @@ def _validate_setup(setup: Any, location: str) -> None:
     if setup.get("env") is not None and not isinstance(setup["env"], dict):
         raise ValueError(f"{location}.env must be an object.")
     if setup.get("envFromHost") is not None:
-        _require_string_list(setup["envFromHost"], f"{location}.envFromHost")
+        compile_host_env_declarations(
+            setup["envFromHost"], location=f"{location}.envFromHost"
+        )
     timeout = setup.get("timeoutSeconds")
     if timeout is not None and int(timeout) < 1:
         raise ValueError(f"{location}.timeoutSeconds must be a positive integer.")

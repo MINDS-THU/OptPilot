@@ -68,7 +68,7 @@
           "$ref": "common.schema.json#/definitions/envObject"
         },
         "envFromHost": {
-          "$ref": "common.schema.json#/definitions/stringList"
+          "$ref": "common.schema.json#/definitions/hostEnvList"
         }
       },
       "allOf": [

@@ -33,6 +33,7 @@ from .errors import RealmIntegrityError
 from .manifests import validate_portable_path
 from .owners import OwnerMembership
 from .refs import PhysicalContentRef, SnapshotRef, canonical_json_bytes, request_digest
+from ..host_env import host_env_names
 from ..image_reference import IMAGE_DIGEST_RE
 
 
@@ -850,9 +851,20 @@ class InterfaceGrantSpec:
             {"envFromHost", "network", "secretsFromHost"},
             "interface grants",
         )
+        # An authored declaration may name a value or name it with a default.
+        # Only the NAMES are retained: this record says which authorities the
+        # interface was granted, and a default is a fallback applied when the
+        # value is resolved -- the same standing as a value read from the
+        # host, whose contents are deliberately kept out of the record too.
+        # Keeping defaults out also leaves the retained shape, and therefore
+        # every digest computed from it, unchanged.
         return cls(
             network=payload["network"],
-            env_from_host=tuple(payload["envFromHost"]),
+            env_from_host=tuple(
+                host_env_names(
+                    payload["envFromHost"], location="interface grants.envFromHost"
+                )
+            ),
             secrets_from_host=tuple(payload["secretsFromHost"]),
         )
 

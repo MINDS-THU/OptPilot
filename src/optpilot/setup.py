@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .host_env import compile_host_env_declarations
+
 from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 
 
@@ -121,10 +123,13 @@ def apply_prepared_env(env: Dict[str, str], prepared_env: JsonDict | None) -> Di
 
 def setup_env(setup: JsonDict) -> Dict[str, str]:
     env = minimal_host_env()
-    for key in setup.get("envFromHost", []) or []:
-        key = str(key)
-        if key in os.environ:
-            env[key] = os.environ[key]
+    for declared in compile_host_env_declarations(
+        setup.get("envFromHost", []), location="setup.envFromHost"
+    ):
+        if declared.name in os.environ:
+            env[declared.name] = os.environ[declared.name]
+        elif declared.default is not None:
+            env[declared.name] = declared.default
     env.update({str(key): str(value) for key, value in (setup.get("env") or {}).items()})
     return env
 

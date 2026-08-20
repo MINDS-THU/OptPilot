@@ -605,6 +605,30 @@ The execution contract:
   values passed through to the command; a missing name fails the run before
   anything executes. In Studio, granted names resolve through Studio
   Settings environment variables first, then the Studio process environment.
+- An `envFromHost` entry may carry a default, for values your package knows a
+  working answer to. A model id is the usual case: the package can name one, so
+  only someone who wants a different model has to set anything.
+
+  ```yaml
+  grants:
+    envFromHost:
+      - name: MY_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+        description: Model used for generating.
+      - MY_REQUIRED_VALUE        # a plain name is still required
+    secretsFromHost: [MY_API_KEY]
+  ```
+
+  A default is a fallback, never an override: a value set in Studio Settings or
+  exported still wins. Only entries with no default can fail the run.
+
+  **Secrets never take a default.** `secretsFromHost` stays a plain list of
+  names, because a default secret is either useless or a credential written
+  into a settings file. Ask for it instead.
+
+  Defaults are not retained in the evidence record. That record says which
+  authorities a component was granted; which value satisfied one is resolution
+  detail, exactly as it already is for a value read from the host.
 - An optional `runtime` block (process sandbox) may declare `setup` steps;
   the local headless path runs them in the resource root before the command,
   so setup scripts should be idempotent. Container runtimes are not

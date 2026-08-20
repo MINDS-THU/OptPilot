@@ -42,7 +42,16 @@ actions:
       # Generation calls the configured model through OpenRouter, and setup
       # installs the dependency closure from PyPI.
       network: enabled
-      envFromHost: [DEVS_INTERFACE_MODEL_ID, DEVS_INTERFACE_STRONG_MODEL_ID]
+      envFromHost:
+        # Model choices, not secrets. The package knows a working answer, so
+        # only someone who wants a different model has to set these; anything
+        # set in Studio Settings or exported still wins.
+        - name: DEVS_INTERFACE_MODEL_ID
+          default: openrouter/openai/gpt-5.4
+          description: Model used for generating simulator projects.
+        - name: DEVS_INTERFACE_STRONG_MODEL_ID
+          default: openrouter/openai/gpt-5.4
+          description: Model used for the harder generation passes.
       secretsFromHost: [OPENROUTER_API_KEY]
     runtime:
       sandbox: process
@@ -105,9 +114,16 @@ interface:
   grants:
     network: enabled
     envFromHost:
-      - DEVS_INTERFACE_MODEL_ID
-      - DEVS_INTERFACE_STRONG_MODEL_ID
-      - DEVS_DISPLAY_MODEL_ID
+      # Model choices, not secrets -- see the note on the action above.
+      - name: DEVS_INTERFACE_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+        description: Model used for generating simulator projects.
+      - name: DEVS_INTERFACE_STRONG_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+        description: Model used for the harder generation passes.
+      - name: DEVS_DISPLAY_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+        description: Model used for explaining and visualising a project.
     secretsFromHost: [OPENROUTER_API_KEY]
   resources:
     cpu: 2
