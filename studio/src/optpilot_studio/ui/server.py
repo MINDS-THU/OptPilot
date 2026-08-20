@@ -200,6 +200,7 @@ from ..agent import (
     sanitize_openhands_native_tools,
     sanitize_studio_ui_cards,
     resolve_openhands_base_url,
+    ALLOWED_OPENHANDS_NATIVE_TOOLS,
 )
 from .coordination_store import (
     ActionState,
@@ -9261,12 +9262,79 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
     }
 
 
+def _native_tools_not_enabled(raw: Any) -> List[str]:
+    """Which requested tools OptPilot will not switch on.
+
+    Not an error: a caller may legitimately send OpenHands' whole tool list,
+    and OptPilot narrows it deliberately -- it ships its own terminal and file
+    editor, so enabling OpenHands' would give the Assistant two of each. What
+    was wrong was doing that in silence, leaving a person to believe they had
+    switched something on.
+    """
+
+    if not isinstance(raw, list):
+        return []
+    skipped: List[str] = []
+    for name in raw:
+        text = str(name or "").strip()
+        if text and text not in ALLOWED_OPENHANDS_NATIVE_TOOLS and text not in skipped:
+            skipped.append(text)
+    return skipped
+
+
+def _require_usable_capability_entries(raw: Any) -> None:
+    """Refuse an entry that could never do anything.
+
+    An MCP server with neither a command to start nor an address to reach was
+    accepted and stored as an enabled entry with both fields blank -- which
+    reads on screen as configured and can never work.
+    """
+
+    if not isinstance(raw, Mapping):
+        return
+    for entry in raw.get("mcp_servers") or []:
+        if not isinstance(entry, Mapping):
+            continue
+        if not str(entry.get("command") or "").strip() and not str(
+            entry.get("url") or ""
+        ).strip():
+            label = str(entry.get("name") or entry.get("id") or "this server")
+            raise ValueError(
+                f"{label} needs either a command to start it or a URL to reach "
+                "it. Add one, or remove the entry."
+            )
+
+
+def _require_supported_assistant_permissions(raw: Any) -> None:
+    """Refuse a permission this build cannot act on, naming what is allowed."""
+
+    if not isinstance(raw, Mapping):
+        return
+    for key, value in raw.items():
+        name = str(key)
+        allowed = ASSISTANT_PERMISSION_VALUES.get(name)
+        if allowed is None:
+            known = ", ".join(sorted(ASSISTANT_PERMISSION_VALUES))
+            raise ValueError(
+                f"{name!r} is not a permission OptPilot knows about. "
+                f"Choose one of: {known}."
+            )
+        text = str(value or "").strip()
+        if text not in allowed:
+            choices = ", ".join(sorted(allowed))
+            raise ValueError(
+                f"{text!r} is not a setting for {name!r}. "
+                f"Choose one of: {choices}."
+            )
+
+
 def _update_agent_settings(state: UiState, payload: JsonDict) -> JsonDict:
     with state._settings_lock:
         return _update_agent_settings_unlocked(state, payload)
 
 
 def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDict:
+    notices: List[str] = []
     settings = _read_ui_settings(state)
     assistant = settings.setdefault("assistant", {})
     assistant["runtime"] = "openhands"
@@ -9292,6 +9360,13 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
     if "model" in incoming:
         openhands["model"] = str(incoming.get("model") or "").strip()
     if isinstance(incoming.get("native_tools"), list):
+        skipped = _native_tools_not_enabled(incoming.get("native_tools"))
+        if skipped:
+            notices.append(
+                "Not switched on: "
+                + ", ".join(skipped)
+                + ". OptPilot provides its own for these."
+            )
         openhands["native_tools"] = list(
             sanitize_openhands_native_tools(incoming.get("native_tools"))
         )
@@ -9300,10 +9375,18 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
     elif "api_key" in incoming and str(incoming.get("api_key") or "").strip():
         openhands["api_key"] = str(incoming.get("api_key") or "").strip()
     if isinstance(payload.get("capabilities"), dict):
+        _require_usable_capability_entries(payload.get("capabilities"))
         assistant["capabilities"] = _normalize_assistant_capabilities(
             payload.get("capabilities")
         )
     if isinstance(payload.get("permissions"), dict):
+        # Reject a value we cannot honour instead of quietly substituting the
+        # default. Normalising on the way IN meant a save could report success
+        # while discarding what was asked for, so the setting a person thought
+        # they had changed silently stayed as it was. Normalising on the way
+        # OUT is still right, and deliberately unchanged: a settings file
+        # written by a newer version must not stop Studio from starting.
+        _require_supported_assistant_permissions(payload.get("permissions"))
         assistant["permissions"] = _normalize_assistant_permissions(
             payload.get("permissions")
         )
@@ -9337,7 +9420,12 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
         environment["revisions"] = revisions
     _write_ui_settings_unlocked(state, settings)
     _refresh_agent_adapter(state)
-    return _agent_settings_payload(state)
+    saved = _agent_settings_payload(state)
+    if notices:
+        # Anything the save did not apply travels back with it, so a person is
+        # told rather than left to notice on their own.
+        saved["notices"] = notices
+    return saved
 
 
 def _runtime_health(state: Optional[UiState] = None) -> JsonDict:
