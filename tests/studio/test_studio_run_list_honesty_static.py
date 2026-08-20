@@ -67,3 +67,35 @@ class LaunchRefusalWordingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkingStateShowsProgressTest(unittest.TestCase):
+    """"Working" alone cannot be told apart from "stopped".
+
+    A turn here routinely runs a minute or two across a dozen steps, and the
+    only thing on screen was the word "Working" behind a collapsed arrow. The
+    same person reported the Assistant had "just stopped" twice; both times it
+    was working, and once it was seconds from answering. The useful summary --
+    "Worked for 1m19s, 12 steps" -- appeared only once it was over.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = _APP.read_text(encoding="utf-8", errors="replace")
+
+    def test_the_working_label_is_built_from_the_run_so_far(self) -> None:
+        self.assertIn("function assistantWorkingLabel(", self.app)
+        body = self.app[self.app.index("function assistantWorkingLabel(") :][:900]
+        self.assertIn("assistantStepSummary", body)   # what it is doing
+        self.assertIn("formatDuration", body)         # and for how long
+
+    def test_the_group_header_uses_it(self) -> None:
+        body = self.app[self.app.index("function assistantStepGroupHtml(") :][:700]
+        self.assertIn("assistantWorkingLabel(visibleEvents", body)
+        self.assertNotIn('options.isWorking\n    ? "Working"', body)
+
+    def test_it_still_says_something_before_the_first_step(self) -> None:
+        # With no steps yet there is nothing to name, but the label must not
+        # come out empty.
+        body = self.app[self.app.index("function assistantWorkingLabel(") :][:900]
+        self.assertIn('return "Working"', body)

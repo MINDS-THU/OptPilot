@@ -18612,6 +18612,33 @@ def _approval_bypass_field_result(tool: str) -> JsonDict:
     )
 
 
+def _previous_tool_failure_summary(
+    state: UiState, session_id: str, tool: str
+) -> str:
+    """The reason this tool last failed in this conversation, if it did.
+
+    Asking again after a failure is reasonable -- the person may have fixed
+    whatever was wrong. Asking again without saying what went wrong is not:
+    one conversation raised the same approval six times over four minutes,
+    each run failing for three missing settings, and the person saw only a
+    prompt reappearing with no explanation. The reason was recorded and
+    readable the whole time; nothing put it in front of them.
+    """
+
+    latest = ""
+    for event in _read_agent_events(state, session_id):
+        if event.get("type") != "optpilot_tool_result":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if str(payload.get("tool") or "") != tool:
+            continue
+        if payload.get("ok"):
+            latest = ""  # a later success clears the warning
+            continue
+        latest = str(payload.get("summary") or "").strip()
+    return latest
+
+
 def _request_agent_approval(
     state: UiState,
     session_id: str,
@@ -18649,6 +18676,11 @@ def _request_agent_approval(
                 events=[{"level": "warning", "message": summary}],
             )
     tool_call_id = str(arguments.get("_openhands_tool_call_id") or "")
+    previous_failure = _previous_tool_failure_summary(state, session_id, tool)
+    if previous_failure:
+        # Put the last failure on the card itself. Approving again without it
+        # is a coin flip the person cannot reason about.
+        summary = f"{summary}\n\nThis failed last time: {previous_failure}"
     approval = {
         "id": f"approval_{uuid.uuid4().hex[:10]}",
         "session_id": session_id,
@@ -18656,6 +18688,7 @@ def _request_agent_approval(
         "kind": kind,
         "title": title,
         "summary": summary,
+        "previous_failure": previous_failure,
         "targets": targets or [],
         "arguments": arguments,
         "private_execution_payload": {

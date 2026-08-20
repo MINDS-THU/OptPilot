@@ -5798,13 +5798,30 @@ function assistantInterleavedTimelineHtml(session) {
   return html.join("");
 }
 
+function assistantWorkingLabel(visibleEvents, startMs) {
+  // A bare "Working" looks identical whether the Assistant is mid-thought or
+  // has died, and a turn here routinely runs a minute or two. People read the
+  // silence as failure and say it stopped -- so say what it is doing and for
+  // how long, and let the elapsed time keep moving.
+  const last = visibleEvents.length ? visibleEvents[visibleEvents.length - 1] : null;
+  const step = last ? assistantStepSummary(last) : null;
+  const doing = step && step.title ? String(step.title).trim() : "";
+  const elapsed = Number.isFinite(startMs)
+    ? formatDuration(Math.max(0, Date.now() - startMs))
+    : "";
+  if (doing && elapsed) return `Working ${elapsed} — ${doing}`;
+  if (doing) return `Working — ${doing}`;
+  if (elapsed) return `Working ${elapsed}`;
+  return "Working";
+}
+
 function assistantStepGroupHtml(events, options = {}) {
   const visibleEvents = events.filter(assistantEventIsInformative);
   if (!visibleEvents.length && !options.isWorking) return "";
   const start = firstFinite(visibleEvents.map(eventTimestampMs));
   const end = lastFinite(visibleEvents.map(eventTimestampMs));
   const label = options.isWorking
-    ? "Working"
+    ? assistantWorkingLabel(visibleEvents, start)
     : Number.isFinite(start) && Number.isFinite(end)
     ? `Worked for ${formatDuration(Math.max(0, end - start))}`
     : `${visibleEvents.length} assistant step${visibleEvents.length === 1 ? "" : "s"}`;
