@@ -16,6 +16,14 @@ import yaml
 from optpilot.config import compile_interface_launch_profiles
 from optpilot.resource_actions import compile_resource_actions, find_resource_action
 
+CATALOG_RESOURCE = (
+    Path(__file__).resolve().parents[2]
+    / "catalog"
+    / "devs_gallery"
+    / "resources"
+    / "devs-gen-interface"
+)
+
 
 class DevsInterfaceLauncherTest(unittest.TestCase):
     @staticmethod
@@ -49,14 +57,29 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
             if not path.is_symlink():
                 path.chmod(stat.S_IMODE(path.lstat().st_mode) | 0o200)
 
+    def _runnable_resource(self) -> Path:
+        """Copy the interface resource somewhere ordinary and return the copy.
+
+        A developer checkout often sits in a file-provider-backed sync folder
+        (Synology Drive, iCloud, Dropbox), and there open() of a catalog file
+        occasionally blocks for milliseconds while the provider services it —
+        measured at ~1.7 per 100k opens, against nothing above 400us in 600k
+        opens on a plain volume. The launcher reaches
+        `exec ./_start_frontend.sh` with a backgrounded _start_backend.sh
+        still outstanding, so a child exiting during one of those blocked
+        opens interrupts it: bash reports "Interrupted system call" against
+        its own script argument and exits 126, failing whichever assertion
+        consumed that run. Executing from a temporary directory removes the
+        blocking window instead of tolerating the resulting flake.
+        """
+        temporary = tempfile.mkdtemp(prefix="devs-gen-interface-")
+        self.addCleanup(shutil.rmtree, temporary, ignore_errors=True)
+        destination = Path(temporary) / CATALOG_RESOURCE.name
+        shutil.copytree(CATALOG_RESOURCE, destination, symlinks=True)
+        return destination
+
     def test_model_roles_are_selected_from_host_environment(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = CATALOG_RESOURCE
         environment = dict(os.environ)
         environment.update(
             {
@@ -96,13 +119,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         )
 
     def test_preparation_and_launch_require_distinct_runtime_access(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = self._runnable_resource()
 
         cases = (
             (
@@ -155,13 +172,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
     def test_explicit_runtime_contract_rejects_dependency_paths_outside_payload(
         self,
     ) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = self._runnable_resource()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             prepared_root = root / "prepared"
@@ -213,13 +224,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
                     self.assertIn(expected_error, completed.stderr)
 
     def test_interface_declares_dependency_preparation_before_readiness(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = CATALOG_RESOURCE
         raw = yaml.safe_load(
             (resource / "optpilot.resource.yaml").read_text(encoding="utf-8")
         )
@@ -251,13 +256,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         )
 
     def test_standalone_launch_keeps_runtime_state_out_of_source_tree(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = CATALOG_RESOURCE
         launcher = (resource / "_optpilot_launch_interface.sh").read_text(
             encoding="utf-8"
         )
@@ -275,13 +274,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         self.assertNotIn('BACKEND_LOG="$ROOT/backend.run.log"', launcher)
 
     def test_direct_python_entrypoints_share_the_runtime_boundary(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = CATALOG_RESOURCE
         agent_entrypoint = (resource / "devs_app" / "run.py").read_text(
             encoding="utf-8"
         )
@@ -296,13 +289,7 @@ class DevsInterfaceLauncherTest(unittest.TestCase):
         self.assertNotIn('"devs_display/.storage"', display_server)
 
     def test_managed_launch_respects_platform_runtime_handles(self) -> None:
-        resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        resource = self._runnable_resource()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             output_root = root / "output"
@@ -655,13 +642,7 @@ class DevsGenerateActionRuntimeTest(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.resource = (
-            Path(__file__).resolve().parents[2]
-            / "catalog"
-            / "devs_gallery"
-            / "resources"
-            / "devs-gen-interface"
-        )
+        self.resource = CATALOG_RESOURCE
 
     def test_generate_action_declares_its_python_runtime(self) -> None:
         raw = yaml.safe_load(
