@@ -54,6 +54,18 @@ class _WaitingProcess(_ImmediateProcess):
         self.returncode = None
 
 
+#: What the executor records for the stub engine. It deliberately pins the
+#: canonical path of the binary it is given -- Path.resolve() at construction
+#: -- so that the file it will keep invoking is the real one, not a symlink
+#: that could later point somewhere else. On Linux /bin is itself a symlink
+#: into /usr/bin, so the "/bin/echo" handed in comes back as "/usr/bin/echo"
+#: there, and unchanged on macOS. Every previous CI run died before this file
+#: ran, so the hard-coded "/bin/echo" in these assertions was only ever
+#: compared on developer Macs; the first full-suite run on Linux failed all
+#: three command assertions at once.
+_RESOLVED_ENGINE = str(Path("/bin/echo").resolve())
+
+
 class StudioInterfaceOutputExecutionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -235,7 +247,7 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
             request=self.request,
         )
         text = "\n".join(command)
-        self.assertEqual(command[:3], ["/bin/echo", "run", "--detach"])
+        self.assertEqual(command[:3], [_RESOLVED_ENGINE, "run", "--detach"])
         self.assertIn("--network\nnone", text)
         self.assertIn("--read-only", command)
         self.assertIn("--cap-drop\nALL", text)
@@ -260,7 +272,7 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
         entrypoint_index = command.index("--entrypoint")
         self.assertEqual(command[entrypoint_index + 1], "python3")
         self.assertEqual(command[entrypoint_index + 2], image_digest)
-        self.assertEqual(action_command[:2], ["/bin/echo", "exec"])
+        self.assertEqual(action_command[:2], [_RESOLVED_ENGINE, "exec"])
         self.assertIn("--workdir", action_command)
         self.assertIn("/optpilot/output", action_command)
         self.assertEqual(
@@ -403,7 +415,7 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
             (destination / "nested" / "result.txt").stat().st_mode & 0o777,
             0o600,
         )
-        self.assertEqual(observed[:2], ["/bin/echo", "exec"])
+        self.assertEqual(observed[:2], [_RESOLVED_ENGINE, "exec"])
         self.assertIn("live-keeper", observed)
         self.assertIn("python3", observed)
         self.assertNotIn("cp", observed)
@@ -907,11 +919,11 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
             self.executor._require_container_absent("bounded-container")
         self.assertEqual(
             run.call_args_list[0].args[0],
-            ["/bin/echo", "rm", "-f", "bounded-container"],
+            [_RESOLVED_ENGINE, "rm", "-f", "bounded-container"],
         )
         self.assertEqual(
             run.call_args_list[1].args[0],
-            ["/bin/echo", "inspect", "bounded-container"],
+            [_RESOLVED_ENGINE, "inspect", "bounded-container"],
         )
 
     def test_pre_execution_failure_is_terminal_and_does_not_fabricate_snapshot(self) -> None:
