@@ -27,19 +27,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Registries require a lowercase repository name, and an organisation
+      # name is free to contain capitals -- MINDS-THU does. Passing the owner
+      # through unchanged makes the tag invalid and the build fails before it
+      # starts, saying only "repository name must be lowercase".
+      - name: Lowercase the owner for the image name
+        id: owner
+        run: echo "name=$(printf %s "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
         with:
           context: images/default
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/optpilot-default:latest
+          tags: ghcr.io/${{ steps.owner.outputs.name }}/optpilot-default:latest
           platforms: linux/amd64,linux/arm64
 
       - name: Report the fingerprint a release must pin
         run: |
           echo "Published manifest digest: ${{ steps.push.outputs.digest }}"
-          echo "A release records ghcr.io/${{ github.repository_owner }}/optpilot-default@${{ steps.push.outputs.digest }}"
+          echo "A release records ghcr.io/${{ steps.owner.outputs.name }}/optpilot-default@${{ steps.push.outputs.digest }}"
 
       # The registry makes a new image private by default, and a private image
       # answers strangers with the same refusal as a nonexistent one -- so the
@@ -48,8 +56,8 @@ jobs:
       # no credentials at all, whether the image is readable (design §4).
       - name: Verify a stranger can pull it
         run: |
-          MANIFEST="https://ghcr.io/v2/${{ github.repository_owner }}/optpilot-default/manifests/latest"
-          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/optpilot-default:pull&service=ghcr.io" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          MANIFEST="https://ghcr.io/v2/${{ steps.owner.outputs.name }}/optpilot-default/manifests/latest"
+          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:${{ steps.owner.outputs.name }}/optpilot-default:pull&service=ghcr.io" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
           STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.oci.image.index.v1+json" \
