@@ -1,11 +1,12 @@
 ---
-title: Natural-Language OR Solving
+title: COOPA
 description: Describe an operations-research problem in plain language, solve it once with the COOPA pipeline, and keep the whole audit trail as Run evidence.
 ---
 
-# Natural-Language OR Solving
+# COOPA: Natural-Language OR Solving
 
-This tutorial runs the `or_solving` package: you type an operations-research
+`catalog/or_solving` is the release package for
+[COOPA](https://arxiv.org/abs/2606.27611). You type an operations-research
 problem in plain language, one method solves it **once**, and OptPilot retains
 the full artifact — formulation with provenance, confidence scores, routing
 decision, generated solver code, numeric answer. It demonstrates *applying one

@@ -100,7 +100,7 @@ OPTPILOT_AGENT_TOOLS = [
 SUPPORTED_CLIENT_TOOL_NAMES = {*OPTPILOT_AGENT_TOOLS, *OPENHANDS_COMPAT_AGENT_TOOLS}
 
 STUDIO_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1"
-STUDIO_UI_CARD_KINDS = frozenset({"catalog-use", "run-setup", "run"})
+STUDIO_UI_CARD_KINDS = frozenset({"catalog-use", "interface", "run-setup", "run"})
 STUDIO_UI_CARD_OPERATIONS = frozenset(
     {
         "configure-run",
@@ -115,6 +115,46 @@ STUDIO_UI_CARD_OPERATIONS = frozenset(
 STUDIO_UI_CARD_MAX_COUNT = 12
 STUDIO_UI_CARD_MAX_BYTES = 16 * 1024
 STUDIO_UI_CARDS_MAX_BYTES = 64 * 1024
+
+
+def explain_runtime_error(raw: Any) -> tuple[str, str]:
+    """Return an actionable user-facing explanation and the original detail."""
+
+    text = str(raw or "").strip()
+    if not text:
+        return ("The Assistant stopped without saying why.", "")
+    lowered = text.lower()
+    provider = ""
+    for marker in ('"provider_name":"', "'provider_name': '"):
+        if marker in text:
+            rest = text.split(marker, 1)[1]
+            provider = rest.split('"', 1)[0].split("'", 1)[0]
+            break
+    if "authentication" in lowered or "invalid api key" in lowered or "401" in lowered:
+        service = "OpenRouter" if "openrouter" in lowered else "The model provider"
+        return (
+            f"{service} rejected the API key (401). Check or replace the key "
+            "in Settings, then send the message again. Switching models will "
+            "not fix an invalid key.",
+            text,
+        )
+    if "rate limit" in lowered or "429" in lowered:
+        return (
+            "The model provider is rate-limiting this key. Wait a moment "
+            "and send the message again, or use a different key.",
+            text,
+        )
+    if "openrouterexception" in lowered or "provider returned error" in lowered:
+        named = f" ({provider})" if provider else ""
+        return (
+            f"The model you chose{named} returned an error to OptPilot. "
+            "That happened at the model provider, not in OptPilot or in "
+            "anything you configured here, and it is usually temporary. "
+            "Send the message again; if it keeps happening, choose a "
+            "different model in Settings.",
+            text,
+        )
+    return (f"The Assistant stopped with an error: {text}", text)
 
 
 def _studio_ui_card_text(
@@ -216,6 +256,24 @@ def _sanitize_studio_ui_card_coordinate(value: Any) -> Optional[JsonDict]:
         if run_id is not None:
             result["run_id"] = run_id
         return result
+    if kind == "interface-launch":
+        launch_id = opaque(value.get("launch_id"))
+        config_kind = _studio_ui_card_text(
+            value.get("config_kind"), maximum=32, required=True
+        )
+        uid = opaque(value.get("uid"))
+        if (
+            launch_id is None
+            or config_kind not in {"environment", "method", "resource"}
+            or uid is None
+        ):
+            return None
+        return {
+            "kind": kind,
+            "launch_id": launch_id,
+            "config_kind": config_kind,
+            "uid": uid,
+        }
     if kind == "run":
         run_id = opaque(value.get("run_id"))
         if run_id is None:
@@ -309,6 +367,8 @@ def _studio_ui_card_coordinate_operations(coordinate: JsonDict) -> frozenset[str
         return frozenset({"open-workspace", "start-run"})
     if kind == "study-launch":
         return frozenset({"open-launch", "open-run"})
+    if kind == "interface-launch":
+        return frozenset({"open-interface"})
     if kind == "run":
         return frozenset({"open-run"})
     return frozenset()
@@ -367,6 +427,7 @@ def sanitize_studio_ui_cards(raw_cards: Any) -> List[JsonDict]:
                 )
             )
             or (kind == "run" and coordinate_kind not in {"study-launch", "run"})
+            or (kind == "interface" and coordinate_kind != "interface-launch")
         ):
             continue
         description = _studio_ui_card_text(
@@ -1156,39 +1217,7 @@ class OpenHandsAdapter:
         report.
         """
 
-        text = str(raw or "").strip()
-        if not text:
-            return ("The Assistant stopped without saying why.", "")
-        lowered = text.lower()
-        provider = ""
-        for marker in ('"provider_name":"', "'provider_name': '"):
-            if marker in text:
-                rest = text.split(marker, 1)[1]
-                provider = rest.split('"', 1)[0].split("'", 1)[0]
-                break
-        if "openrouterexception" in lowered or "provider returned error" in lowered:
-            named = f" ({provider})" if provider else ""
-            return (
-                f"The model you chose{named} returned an error to OptPilot. "
-                "That happened at the model provider, not in OptPilot or in "
-                "anything you configured here, and it is usually temporary. "
-                "Send the message again; if it keeps happening, choose a "
-                "different model in Settings.",
-                text,
-            )
-        if "rate limit" in lowered or "429" in lowered:
-            return (
-                "The model provider is rate-limiting this key. Wait a moment "
-                "and send the message again, or use a different key.",
-                text,
-            )
-        if "authentication" in lowered or "invalid api key" in lowered or "401" in lowered:
-            return (
-                "The model provider rejected the API key. Check the key in "
-                "Settings.",
-                text,
-            )
-        return (f"The Assistant stopped with an error: {text}", text)
+        return explain_runtime_error(raw)
 
     @staticmethod
     def _is_agent_server_unreachable(error: BaseException) -> bool:

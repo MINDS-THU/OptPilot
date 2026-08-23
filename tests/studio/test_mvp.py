@@ -101,6 +101,7 @@ from optpilot_studio.ui.server import (
     _read_agent_approvals,
     _read_agent_events,
     _read_agent_messages,
+    _request_agent_approval,
     _reject_agent_action,
     _rename_ui_workspace,
     _require_ui_workspace,
@@ -1990,6 +1991,7 @@ class MvpIntegrationTest(unittest.TestCase):
         roots = expand_package_roots([repo_root / "catalog"])
 
         self.assertIn(repo_root / "catalog" / "production_agv_scheduling", roots)
+        self.assertIn(repo_root / "catalog" / "optpilot_tutorial", roots)
         # test_catalog/ is deliberately not a default root: it holds test-only
         # fixtures that must never be offered to users.
         self.assertNotIn(repo_root / "test_catalog" / "example_package", roots)
@@ -2535,7 +2537,25 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("or-problem", environment_ids)
         self.assertIn("exhaustive-rule-grid", method_ids)
         self.assertIn("coopa-solver", method_ids)
+        self.assertIn("tutorial-toy-factory", environment_ids)
+        self.assertIn("tutorial-random-search", method_ids)
         self.assertIn("production-agv-scheduling-smoke", study_ids)
+        tutorial_entry = next(
+            item for item in catalog["environments"]
+            if item["id"] == "tutorial-toy-factory"
+        )
+        self.assertEqual(
+            tutorial_entry["package_metadata"],
+            {
+                "id": "optpilot_tutorial",
+                "title": "Build Your First OptPilot Package",
+                "category": "tutorial",
+                "description": (
+                    "A deliberately small, runnable package that teaches "
+                    "Environment, Method, Study, and Resource configuration."
+                ),
+            },
+        )
         # test_catalog/ fixtures must never reach the user-facing catalog.
         self.assertNotIn("job-shop-rule-parameters", environment_ids)
         self.assertNotIn("fixed-rule-parameters", method_ids)
@@ -6633,6 +6653,109 @@ class MvpIntegrationTest(unittest.TestCase):
             )
         )
         self.assertTrue(any(message["content"] == "Recovered after retrying the stored tool result." for message in messages))
+
+    def test_ui_agent_sync_ignores_approved_tool_call_after_forwarding(self) -> None:
+        class ReplayAdapter:
+            def __init__(self) -> None:
+                self.ignored_tool_calls: set[str] = set()
+
+            def sync_conversation(self, conversation_id: str, **kwargs: object) -> JsonDict:
+                self.ignored_tool_calls = set(
+                    kwargs.get("ignored_tool_calls") or set()
+                )
+                return {
+                    "status": "running",
+                    "conversation_id": conversation_id,
+                    "assistant_message": {
+                        "role": "assistant",
+                        "title": "OpenHands",
+                        "content": "",
+                    },
+                    "events": [],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            adapter = ReplayAdapter()
+            state.agent_adapter = adapter
+            session = _create_agent_session(state, {"title": "Approved launch"})
+            session["status"] = "waiting_for_agent"
+            session["openhands_conversation_id"] = "conversation-approved"
+            session["active_turn_id"] = "turn-approved"
+            session["active_turn_started_at"] = "2026-08-21T23:59:00Z"
+            _upsert_agent_session(state, session)
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "id": "evt-approved-tool-forwarded",
+                    "type": "openhands_tool_result_forwarded",
+                    "created_at": "2026-08-21T23:59:04Z",
+                    "payload": {
+                        "tool": "optpilot_interface_launch",
+                        "tool_call_id": "call-interface-launch-1",
+                        "tool_call_ids": ["call-interface-launch-1"],
+                        "conversation_id": "conversation-approved",
+                        "sent": True,
+                        "reason": "",
+                    },
+                },
+            )
+
+            _sync_agent_session(state, session["id"])
+
+        self.assertIn("call-interface-launch-1", adapter.ignored_tool_calls)
+
+    def test_ui_agent_session_recovers_stale_replayed_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            session = _create_agent_session(state, {"title": "Replayed approval"})
+            session["status"] = "waiting_for_agent"
+            session["openhands_conversation_id"] = "conversation-approved"
+            session["active_turn_id"] = "turn-approved"
+            session["active_turn_started_at"] = "2026-08-21T23:59:00Z"
+            _upsert_agent_session(state, session)
+            requested = _request_agent_approval(
+                state,
+                session["id"],
+                tool="optpilot_interface_launch",
+                arguments={
+                    "config_kind": "resource",
+                    "uid": "devs_gallery/resource/devs-gen-interface",
+                    "_openhands_tool_call_id": "call-interface-launch-1",
+                },
+                kind="interface_launch",
+                title="Open a component's interface",
+                summary="Start the DEVS Gen interface.",
+            )
+            approval_id = requested["data"]["approval"]["id"]
+            _append_jsonl(
+                state.agent_sessions_dir / session["id"] / "events.jsonl",
+                {
+                    "id": "evt-approved-tool-forwarded",
+                    "type": "openhands_tool_result_forwarded",
+                    "created_at": "2026-08-21T23:59:04Z",
+                    "payload": {
+                        "tool": "optpilot_interface_launch",
+                        "tool_call_id": "call-interface-launch-1",
+                        "tool_call_ids": ["call-interface-launch-1"],
+                        "conversation_id": "conversation-approved",
+                        "sent": True,
+                        "reason": "",
+                    },
+                },
+            )
+
+            recovered = _agent_session_by_id(state, session["id"])
+            approvals = _read_agent_approvals(state, session["id"])
+
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered["effective_status"], "waiting_for_agent")
+        self.assertEqual(recovered["pending_approval_count"], 0)
+        approval = next(item for item in approvals if item["id"] == approval_id)
+        self.assertEqual(approval["status"], "superseded")
+        self.assertEqual(
+            approval["superseded_action"], "tool_result_already_forwarded"
+        )
 
     def test_ui_agent_messages_hide_malformed_context_echoes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

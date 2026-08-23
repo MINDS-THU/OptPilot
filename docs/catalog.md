@@ -178,7 +178,7 @@ do not overwrite a bundled package or another user package:
 
 ```text
 catalog/
-  production_agv_scheduling/ # bundled flagship package
+  production_agv_scheduling/ # bundled research package
   scheduling_case_study/ # another package
   my_lab_project/        # user-owned package
 ```

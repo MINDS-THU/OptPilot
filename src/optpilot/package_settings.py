@@ -35,6 +35,7 @@ __all__ = [
     "PACKAGE_SETTINGS_FILENAMES",
     "PACKAGE_IDENTITY_BYTES",
     "ContainerImageDeclaration",
+    "PackagePaper",
     "PackageSettings",
     "resolve_component_image",
     "ensure_package_identity",
@@ -68,12 +69,25 @@ class ContainerImageDeclaration:
 
 
 @dataclass(frozen=True)
+class PackagePaper:
+    """The research paper for which a public package is the companion."""
+
+    title: str
+    url: str
+
+
+@dataclass(frozen=True)
 class PackageSettings:
     """What a package says about itself."""
 
     path: Path
     identity: str
     description: Optional[str] = None
+    #: Human-facing catalog name. The folder name remains the stable technical id.
+    title: Optional[str] = None
+    #: Catalog grouping: research, tutorial, or local.
+    category: Optional[str] = None
+    paper: Optional[PackagePaper] = None
     #: The image every component in this package uses unless it names its own.
     #: Absent when the package needs nothing beyond what OptPilot provides.
     container: Optional[ContainerImageDeclaration] = None
@@ -162,13 +176,45 @@ def load_package_settings(package_root: str | Path) -> Optional[PackageSettings]
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
         raise ValueError(f"{path} description must be a string.")
+    title = raw.get("title")
+    if title is not None and (not isinstance(title, str) or not title.strip()):
+        raise ValueError(f"{path} title must be a non-empty string.")
+    category = raw.get("category")
+    if category is not None:
+        if not isinstance(category, str) or category not in {"research", "tutorial", "local"}:
+            raise ValueError(
+                f"{path} category must be research, tutorial, or local."
+            )
+    paper = _parse_paper(raw.get("paper"), subject=str(path))
 
     return PackageSettings(
         path=path,
         identity=validate_package_identity(raw.get("identity")),
         description=description,
+        title=title.strip() if isinstance(title, str) else None,
+        category=category,
+        paper=paper,
         container=_parse_container(raw.get("runtime"), subject=str(path)),
     )
+
+
+def _parse_paper(value: Any, *, subject: str) -> Optional[PackagePaper]:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{subject} paper must be a mapping.")
+    unknown = set(value) - {"title", "url"}
+    if unknown:
+        raise ValueError(
+            f"{subject} paper has unknown keys: " + ", ".join(sorted(unknown))
+        )
+    title = value.get("title")
+    url = value.get("url")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError(f"{subject} paper.title must be a non-empty string.")
+    if not isinstance(url, str) or not url.startswith("https://arxiv.org/abs/"):
+        raise ValueError(f"{subject} paper.url must be an arXiv abstract URL.")
+    return PackagePaper(title=title.strip(), url=url.strip())
 
 
 def _parse_container(
@@ -238,6 +284,9 @@ def write_package_settings(
     *,
     identity: str,
     description: Optional[str] = None,
+    title: Optional[str] = None,
+    category: Optional[str] = None,
+    paper: Optional[PackagePaper] = None,
     container: Optional[ContainerImageDeclaration] = None,
 ) -> Path:
     """Write the settings file, creating the package folder if needed.
@@ -266,6 +315,20 @@ def write_package_settings(
     ]
     if description:
         lines.append(f"description: {_yaml_scalar(description)}")
+    if title:
+        lines.append(f"title: {_yaml_scalar(title)}")
+    if category:
+        if category not in {"research", "tutorial", "local"}:
+            raise ValueError("Package category must be research, tutorial, or local.")
+        lines.append(f"category: {category}")
+    if paper is not None:
+        lines.extend(
+            [
+                "paper:",
+                f"  title: {_yaml_scalar(paper.title)}",
+                f"  url: {_yaml_scalar(paper.url)}",
+            ]
+        )
     if container is not None:
         lines.extend(
             [
@@ -315,4 +378,13 @@ def package_settings_payload(settings: PackageSettings) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"identity": settings.identity}
     if settings.description is not None:
         payload["description"] = settings.description
+    if settings.title is not None:
+        payload["title"] = settings.title
+    if settings.category is not None:
+        payload["category"] = settings.category
+    if settings.paper is not None:
+        payload["paper"] = {
+            "title": settings.paper.title,
+            "url": settings.paper.url,
+        }
     return payload

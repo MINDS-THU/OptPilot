@@ -104,31 +104,30 @@ Read the docs in this order if you are new:
    candidates, runtime workspaces, and evidence.
 4. [Packages and Catalogs](catalog.md): understand how reusable environments,
    methods, resources, and studies are organized.
-5. [Bundled Capability Packages](#bundled-capability-packages): browse
-   `catalog/production_agv_scheduling/` to see several method families target
-   the same evaluation problem.
+5. [Research Packages](#research-packages): browse the three paper companion
+   packages and see how their public contracts compose.
 6. [OptPilot Studio](ui.md): use the local GUI, workspace manager, and assistant.
-7. [Bundled Capability Packages](#bundled-capability-packages): pick the
-   package closest to your own problem and run it.
+7. [Build Your First Package](tutorial-package.md): copy the small tutorial
+   package and replace one building block at a time.
 
 Use [Configuration Reference](configuration.md) when you need the allowed YAML
 fields and [How a Run Works](how-it-works.md) when you need the runtime sequence.
 
-## Bundled Capability Packages
+## Research Packages
 
-Beyond that first run, OptPilot ships five packages that each
-demonstrate a different kind of work. The "Where To Go Next" section of
-[Your First Run](getting-started.md) carries the exact launch command for
-each; the pages below explain them.
+OptPilot's release catalog contains one companion package for each research
+paper, plus one deliberately small tutorial. Package implementations remain
+general: Methods and Environments compose through declared Candidate, metric,
+trace, and capability contracts rather than package-specific imports.
 
 | Package | What it demonstrates | Runs without an API key? |
 | --- | --- | --- |
-| [DEVS Gallery](devs-gallery.md) (`catalog/devs_gallery`) | Generated discrete-event simulators packaged as ordinary Environments. | Yes |
-| [OR Solving](or-solving.md) (`catalog/or_solving`) | Solving a natural-language operations-research problem stated at launch time. | Needs a key and the pruned runtime deps; COOPA itself is bundled |
-| [Factorio Design Benchmark](factorio-design-benchmark.md) (`catalog/factorio_design_benchmark`) | Comparing methods repeatably on one static-validation environment. | Smoke study yes; the design study needs a key |
-| [LLM Policy Search](llm-policy-search.md) (`catalog/llm_policy_search`) | Improving a simulator's decision policy with a trace-aware LLM loop. | Baseline smokes yes; the search studies need a key |
+| [DEVS-Gen](devs-gallery.md) (`catalog/devs_gallery`) | Generate and evaluate discrete-event world models from natural-language specifications. | Gallery studies yes; generation needs a key |
+| [LLM-Guided Heuristic Design](llm-policy-search.md) (`catalog/production_agv_scheduling`) | Improve executable policies using simulation metrics and event-level traces; production/AGV scheduling is the reference case. | Baselines yes; LLM search needs a key |
+| [COOPA](or-solving.md) (`catalog/or_solving`) | Formulate and solve a natural-language OR problem with provenance and solver routing. | Needs a key and the pruned runtime dependencies |
+| [Build Your First Package](tutorial-package.md) (`catalog/optpilot_tutorial`) | Learn Environment, Method, Run setup, and Resource configuration from one tiny runnable package. | Yes |
 
-[Generate and Optimize](generate-and-optimize.md) joins the last two ideas:
+[Generate and Optimize](generate-and-optimize.md) joins the first two ideas:
 generate a simulator from a text specification, then optimize the policy it
 declares.
 
@@ -137,19 +136,17 @@ declares.
 The PyPI core package contains the CLI, SDK, schemas, runner, runtime helpers,
 evidence store, and package validation command.
 
-The source checkout also contains:
+The source checkout also contains the four catalog packages above:
 
-- `catalog/devs_gallery/`, `catalog/or_solving/`,
-  `catalog/factorio_design_benchmark/`, and `catalog/llm_policy_search/`: the
-  four capability packages above
-- `catalog/production_agv_scheduling/`: a larger AGV scheduling package with
-  several environment variants and declared interfaces
+- `catalog/devs_gallery/`, `catalog/production_agv_scheduling/`, and
+  `catalog/or_solving/`: the three research packages
+- `catalog/optpilot_tutorial/`: the small teaching/template package
 - `studio/`: the OptPilot Studio UI package
 - docs, tests, and contributor tooling
 
-The five ready-made packages ship with the install and are copied into a
-folder of your own the first time Studio starts. Third-party code inside a
-package carries its license text and a third-party notice in that package. Code that cannot be redistributed is not bundled at all:
+Catalog packages are released separately from the core Python wheel. Third-party
+code inside a package carries its license text and a third-party notice in that
+package. Code that cannot be redistributed is not bundled at all:
 COOPA is bundled under Apache-2.0; only its native solver backends are
 installed by you.
 

@@ -37,6 +37,11 @@ class _FakeContainerEngine:
         self.gateway_publication_inspects_remaining = 0
         self.reject_isolated_network = False
         self.fail_next_stop = False
+        # ``None`` preserves the historical fake behavior: every exact image
+        # is assumed to have been provisioned. Tests can use a set to model
+        # Docker's local image inventory explicitly.
+        self.available_images: set[str] | None = None
+        self.pull_failure: str | None = None
 
     def __call__(
         self, command: tuple[str, ...], _timeout: float
@@ -75,10 +80,39 @@ class _FakeContainerEngine:
         if command[1:3] == ("network", "rm"):
             existed = self.networks.pop(command[3], None)
             return self._result(command, code=0 if existed else 1)
+        if command[1:3] == ("image", "inspect"):
+            available = (
+                self.available_images is None
+                or command[3] in self.available_images
+            )
+            return self._result(
+                command,
+                code=0 if available else 1,
+                stdout="[]\n" if available else "",
+                stderr="not found" if not available else "",
+            )
+        if command[1] == "pull":
+            if self.pull_failure is not None:
+                return self._result(command, code=1, stderr=self.pull_failure)
+            if self.available_images is not None:
+                self.available_images.add(command[2])
+            return self._result(command, stdout=command[2] + "\n")
         if command[1] == "inspect":
             return self._inspect(command, self.containers.get(command[2]))
         if command[1] == "run":
             name = self._option(command, "--name")
+            image = next(
+                item for item in command if "@sha256:" in item
+            )
+            if (
+                self.available_images is not None
+                and image not in self.available_images
+            ):
+                return self._result(
+                    command,
+                    code=125,
+                    stderr=f"No such image: {image}",
+                )
             if self.concurrent_run_winner:
                 self.concurrent_run_winner = False
                 self._create_container(command)
@@ -528,6 +562,39 @@ class LocalContainerWebProviderTests(unittest.TestCase):
         ]
         self.assertGreaterEqual(len(gateway_inspects), 3)
 
+    def test_exact_image_availability_and_explicit_provisioning(self) -> None:
+        self.engine.available_images = set()
+
+        self.assertFalse(self.provider.is_image_available(self.image))
+        self.assertTrue(self.provider.pull_trusted_image(self.image))
+        self.assertTrue(self.provider.is_image_available(self.image))
+        self.assertFalse(self.provider.pull_trusted_image(self.image))
+
+        pull_calls = [call for call in self.engine.calls if call[1] == "pull"]
+        self.assertEqual(pull_calls, [("fake-container", "pull", self.image)])
+
+    def test_image_provisioning_requires_trust_and_reports_pull_failure(self) -> None:
+        other = "example/other@sha256:" + "c" * 64
+        self.engine.available_images = set()
+        with self.assertRaises(LocalContainerWebProviderError) as caught:
+            self.provider.pull_trusted_image(other)
+        self.assertEqual(caught.exception.code, "container_gateway_image_untrusted")
+
+        self.engine.pull_failure = "registry temporarily unavailable"
+        with self.assertRaises(LocalContainerWebProviderError) as caught:
+            self.provider.pull_trusted_image(self.image)
+        self.assertEqual(caught.exception.code, "container_image_pull_failed")
+        self.assertIn("registry temporarily unavailable", str(caught.exception))
+
+    def test_launch_race_reports_missing_image_instead_of_generic_start_failure(self) -> None:
+        self.engine.available_images = set()
+
+        with self.assertRaises(LocalContainerWebProviderError) as caught:
+            self.provider.start_or_adopt(self._request())
+
+        self.assertEqual(caught.exception.code, "container_image_unavailable")
+        self.assertIn("No such image", str(caught.exception))
+
     def test_mount_identity_and_owner_access_fail_before_engine_side_effects(self) -> None:
         request = self._request()
         wrong_identity = ContainerWebRunIdentity(
@@ -889,6 +956,22 @@ class LocalContainerWebProviderTests(unittest.TestCase):
         with self.assertRaises(LocalContainerWebProviderError) as caught:
             provider.start_or_adopt(self._request())
         self.assertEqual(caught.exception.code, "container_provider_unavailable")
+
+    def test_missing_container_executable_is_reported_without_host_details(self) -> None:
+        provider = LocalContainerWebProvider(
+            executable="missing-container",
+            control_root=self.root / "missing-provider-control",
+            broker_authority=self.authority,
+            trusted_gateway_images=(ContainerGatewayImageTrust(self.image),),
+            run_command=lambda _command, _timeout: (_ for _ in ()).throw(
+                FileNotFoundError("host-specific executable path")
+            ),
+            gateway_probe=lambda _routes, _token, _primary, _path, _timeout: True,
+        )
+        with self.assertRaises(LocalContainerWebProviderError) as caught:
+            provider.is_image_available(self.image)
+        self.assertEqual(caught.exception.code, "container_provider_unavailable")
+        self.assertNotIn("host-specific", str(caught.exception))
 
     def test_resource_claim_is_split_instead_of_double_counted(self) -> None:
         self.provider.start_or_adopt(self._request())

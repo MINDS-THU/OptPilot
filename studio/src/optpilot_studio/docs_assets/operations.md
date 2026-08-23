@@ -228,6 +228,20 @@ uv run optpilot environment-preview trust revoke \
 stored in the selected private Realm and survive process and Studio restarts.
 Replace the example image and digest with the exact reference declared by the
 Environment, then restart Studio so its startup trust snapshot is refreshed.
+
+Approval records permission to execute the exact image; it does not install
+the image. Studio checks the local container inventory before creating an
+Environment Preview job and offers **Approve & download** or **Download image**
+as appropriate. For CLI-only provisioning, install the same pinned digest
+explicitly:
+
+```bash
+docker pull registry.example/preview@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+The execution provider continues to use `--pull never`. A Preview launch
+therefore performs no implicit registry access and cannot silently substitute
+a tag or a different image generation.
 The `--realm-root` value must be absolute and must identify the same Realm that
 Studio opens; omitting it uses the normal secure per-user default.
 

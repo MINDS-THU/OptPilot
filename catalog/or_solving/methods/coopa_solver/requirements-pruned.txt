@@ -1,4 +1,4 @@
-# Pruned COOPA runtime for the coopa-solver method (plan §5.3 item 1).
+# Pruned COOPA runtime for the coopa-solver method.
 # This is the ~10-package subset the paper pipeline actually uses, extracted
 # from the 40+-pin research requirements; the retrieval/KB/web tail
 # (crawl4ai, gradio, langchain, e2b, docker-py, serpapi) is deliberately

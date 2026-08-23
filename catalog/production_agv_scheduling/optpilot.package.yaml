@@ -8,4 +8,9 @@ config: package
 # characters, so the copy is its own package with its own history.
 # Do not delete the line -- a package without this cannot be read.
 identity: da09b269505371ed830534e451eec79e
-description: "A production line with automated guided vehicles, and seven methods that schedule it."
+title: LLM-Guided Heuristic Design
+category: research
+description: "Improve executable decision policies using repeated simulation, event-level traces, and parallel LLM revisions; includes production and AGV scheduling as the reference case study."
+paper:
+  title: "LLM-Guided Heuristic Design from Simulation Traces: A Case Study in Dynamic Production and AGV Scheduling"
+  url: https://arxiv.org/abs/2608.09343

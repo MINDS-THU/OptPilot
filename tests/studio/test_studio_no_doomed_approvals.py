@@ -18,6 +18,7 @@ check has to happen before the question is asked.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,9 +34,15 @@ _ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless((_ROOT / "catalog").is_dir(), "needs the shipped packages")
 class NoDoomedApprovalTest(unittest.TestCase):
+    _DEVS_RESOURCE = "devs_gallery/resource/devs-gen-interface"
+
     def _state(self, tmp: Path) -> UiState:
         # No environment values configured, so the shipped generator cannot run.
-        state = UiState(cwd=_ROOT, catalog_roots=[_ROOT / "catalog"], run_roots=[])
+        state = UiState(
+            cwd=_ROOT,
+            catalog_roots=[_ROOT / "catalog" / "devs_gallery"],
+            run_roots=[],
+        )
         for name in (
             "sessions_dir", "agent_sessions_dir", "jobs_dir",
             "workspaces_dir", "runtime_dir",
@@ -49,12 +56,17 @@ class NoDoomedApprovalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))
             session = _create_agent_session(state, {"title": "doomed"})
-            return _execute_agent_tool(state, session["id"], tool, arguments)
+            previous = os.environ.pop("OPENROUTER_API_KEY", None)
+            try:
+                return _execute_agent_tool(state, session["id"], tool, arguments)
+            finally:
+                if previous is not None:
+                    os.environ["OPENROUTER_API_KEY"] = previous
 
     def test_an_interface_that_cannot_launch_is_not_put_up_for_approval(self) -> None:
         result = self._run(
             "optpilot_interface_launch",
-            {"config_kind": "resource", "uid": "devs-gen-interface"},
+            {"config_kind": "resource", "uid": self._DEVS_RESOURCE},
         )
         self.assertFalse(result["data"].get("approval_required"))
         self.assertFalse(result["ok"])
@@ -63,7 +75,7 @@ class NoDoomedApprovalTest(unittest.TestCase):
     def test_an_action_that_cannot_run_is_not_put_up_for_approval(self) -> None:
         result = self._run(
             "optpilot_resource_action_run",
-            {"resource_uid": "devs-gen-interface", "action_id": "generate"},
+            {"resource_uid": self._DEVS_RESOURCE, "action_id": "generate"},
         )
         self.assertFalse(result["data"].get("approval_required"))
         self.assertFalse(result["ok"])
@@ -73,14 +85,14 @@ class NoDoomedApprovalTest(unittest.TestCase):
         # Not just "cannot run" -- the person has to know what to add.
         result = self._run(
             "optpilot_resource_action_run",
-            {"resource_uid": "devs-gen-interface", "action_id": "generate"},
+            {"resource_uid": self._DEVS_RESOURCE, "action_id": "generate"},
         )
         self.assertIn("OPENROUTER_API_KEY", result["summary"])
 
     def test_the_refusal_carries_a_remedy_the_assistant_can_act_on(self) -> None:
         result = self._run(
             "optpilot_interface_launch",
-            {"config_kind": "resource", "uid": "devs-gen-interface"},
+            {"config_kind": "resource", "uid": self._DEVS_RESOURCE},
         )
         remedy = result["data"].get("remedy") or {}
         self.assertEqual(remedy.get("kind"), "configure_environment")

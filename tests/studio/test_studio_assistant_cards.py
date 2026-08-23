@@ -10,7 +10,13 @@ from optpilot_studio.agent import (
     STUDIO_UI_CARD_SCHEMA,
     sanitize_studio_ui_cards,
 )
-from optpilot_studio.ui.server import _sanitize_agent_event, _tool_result
+from optpilot_studio.ui.server import (
+    _assistant_inactive_interface_launch_ui_card,
+    _assistant_interface_launch_ui_card,
+    _refresh_runtime_error_messages,
+    _sanitize_agent_event,
+    _tool_result,
+)
 
 
 def _run_card(*, title: str = "Recorded run") -> dict:
@@ -36,6 +42,50 @@ def _run_card(*, title: str = "Recorded run") -> dict:
 
 
 class StudioAssistantCardContractTests(unittest.TestCase):
+    def test_missing_transient_interface_launch_is_projected_as_stopped(self) -> None:
+        card = _assistant_interface_launch_ui_card(
+            {
+                "launch_id": "launch-old",
+                "kind": "resource",
+                "uid": "example/resource/interface",
+                "label": "Example interface",
+                "status": "queued",
+                "port": 3000,
+                "profile_id": "default",
+            }
+        )
+
+        inactive = _assistant_inactive_interface_launch_ui_card(card)
+
+        self.assertEqual(inactive["status"], "stopped")
+        self.assertEqual(inactive["description"], "This interface launch is no longer active.")
+        self.assertFalse(inactive["actions"][0]["eligible"])
+        self.assertEqual(inactive["actions"][0]["reason"], "This interface is no longer active.")
+
+    def test_retained_generic_provider_notice_uses_nearby_auth_error(self) -> None:
+        messages = [
+            {
+                "title": "The Assistant could not finish",
+                "content": "The model you chose returned an error to OptPilot.",
+                "created_at": "2026-08-22T01:55:39Z",
+            }
+        ]
+        events = [
+            {
+                "type": "openhands_dispatch_failed",
+                "created_at": "2026-08-22T01:55:38Z",
+                "payload": {
+                    "error": "AuthenticationError: OpenrouterException code 401"
+                },
+            }
+        ]
+
+        refreshed = _refresh_runtime_error_messages(messages, events)
+
+        self.assertIn("OpenRouter rejected the API key (401)", refreshed[0]["content"])
+        self.assertIn("Switching models will not fix", refreshed[0]["content"])
+        self.assertEqual(messages[0]["content"], "The model you chose returned an error to OptPilot.")
+
     def test_card_sanitizer_keeps_only_bounded_allowlisted_presentation_data(self) -> None:
         raw = _run_card()
         raw["url"] = "https://attacker.invalid/run"
@@ -252,6 +302,46 @@ class StudioAssistantCardContractTests(unittest.TestCase):
         self.assertEqual(run["coordinate"], {"kind": "run", "run_id": "run-exact-1"})
         self.assertNotIn("url", str(catalog).lower())
         self.assertNotIn("url", str(run).lower())
+
+    def test_interface_result_projects_a_durable_open_interface_card(self) -> None:
+        result = _tool_result(
+            "optpilot_interface_status",
+            True,
+            "The interface is ready.",
+            data={
+                "launch": {
+                    "launch_id": "launch-interface-1",
+                    "kind": "resource",
+                    "uid": "devs_gallery/resource/devs-gen-interface",
+                    "label": "DEVS Generator",
+                    "status": "ready",
+                    "port": 3000,
+                    "profile_id": "default",
+                    "result": {
+                        "preview": {
+                            "preview_url": "http://127.0.0.1:19767/?secret-token"
+                        }
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(len(result["ui_cards"]), 1)
+        card = result["ui_cards"][0]
+        self.assertEqual(card["kind"], "interface")
+        self.assertEqual(
+            card["coordinate"],
+            {
+                "kind": "interface-launch",
+                "launch_id": "launch-interface-1",
+                "config_kind": "resource",
+                "uid": "devs_gallery/resource/devs-gen-interface",
+            },
+        )
+        self.assertEqual(card["actions"][0]["operation"], "open-interface")
+        self.assertEqual(card["actions"][0]["label"], "Open interface")
+        self.assertNotIn("preview_url", str(card))
+        self.assertNotIn("secret-token", str(card))
 
     def test_broad_catalog_list_is_search_evidence_not_a_wall_of_cards(self) -> None:
         environments = [

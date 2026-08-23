@@ -49,6 +49,7 @@ from optpilot.package_settings import (
     load_package_settings,
     new_package_identity,
     package_identity,
+    package_settings_payload,
     write_package_settings,
 )
 from optpilot.realm.configured_package_ingress import (
@@ -198,6 +199,7 @@ from ..agent import (
     OpenHandsConversationNotFound,
     OpenHandsRuntimeConfig,
     STUDIO_UI_CARD_SCHEMA,
+    explain_runtime_error,
     sanitize_openhands_native_tools,
     sanitize_studio_ui_cards,
     resolve_openhands_base_url,
@@ -444,6 +446,12 @@ SELECTION_CONTENT_READ_DEFAULT_BYTES = 64 * 1024
 SELECTION_CONTENT_READ_MAX_BYTES = 1024 * 1024
 CANDIDATE_INSPECTION_SCHEMA = "optpilot.candidate-inspection.v1"
 CANDIDATE_TRY_PLAN_SCHEMA = "optpilot.candidate-try-plan.v1"
+ENVIRONMENT_PREVIEW_TRUST_APPROVE_REQUEST_SCHEMA = (
+    "optpilot.environment-preview-trust-approve-request.v1"
+)
+ENVIRONMENT_PREVIEW_TRUST_APPROVE_RESPONSE_SCHEMA = (
+    "optpilot.environment-preview-trust-approve-response.v1"
+)
 OPERATOR_JOB_PUBLIC_SCHEMA = "optpilot.operator-job-public.v1"
 OPERATOR_JOB_LIST_SCHEMA = "optpilot.operator-job-list.v1"
 OPERATOR_JOB_DETAIL_SCHEMA = "optpilot.operator-job-detail.v1"
@@ -3253,6 +3261,10 @@ class UiState:
         self._realm_catalog_package_ids: Dict[Path, str] = {}
         self._catalog_workspace_projections: Dict[str, CatalogSourceProjection] = {}
         self._catalog_projection_lock = threading.RLock()
+        # Catalog and compatibility requests start together.  Only one may
+        # perform the expensive package walk; followers reuse its completed
+        # cache instead of duplicating the same filesystem scan.
+        self._catalog_index_build_lock = threading.Lock()
         # Read-path debounce state, guarded by _catalog_projection_lock: the
         # monotonic stamp of the last complete projection refresh and the last
         # built catalog index payload.  Both stay unused while the TTL is 0.
@@ -6001,6 +6013,15 @@ def _handler_factory(state: UiState):
                         # a Studio-owned execution record after the 202.
                         pass
                 return
+            if resource == "environment-preview-trust" and len(parts) == 5:
+                self._send_json(
+                    _approve_candidate_environment_preview_image(
+                        state,
+                        run_id=run_id,
+                        payload=self._read_json_body(),
+                    )
+                )
+                return
             if resource == "cancel" and len(parts) == 5:
                 self._send_json(
                     _cancel_realm_run(
@@ -6834,6 +6855,21 @@ def _catalog_index_payload(state: UiState) -> JsonDict:
             # Consumers only read this payload (public views deep-copy the
             # entries they expose), so the built index can be shared as-is.
             return cached[1]
+    with state._catalog_index_build_lock:
+        # Catalog and compatibility hydrate concurrently on startup.  The
+        # first request may have populated the cache while this request waited
+        # for the single-flight build lock.
+        if ttl_seconds > 0:
+            with state._catalog_projection_lock:
+                cached = state._catalog_index_cache
+            if cached is not None and time.monotonic() - cached[0] < ttl_seconds:
+                return cached[1]
+        return _build_catalog_index_payload(state, ttl_seconds=ttl_seconds)
+
+
+def _build_catalog_index_payload(
+    state: UiState, *, ttl_seconds: float
+) -> JsonDict:
     _refresh_catalog_package_roots(state)
     _refresh_realm_catalog_projections(state, max_age_seconds=ttl_seconds)
     with state._catalog_projection_lock:
@@ -7722,6 +7758,7 @@ def _scan_catalog(
         if not root.exists():
             continue
         package_id = _catalog_package_id(root, package_ids=package_ids)
+        package_metadata = _catalog_package_metadata(root, package_id)
         for path in _iter_yaml_files(root):
             if path in seen:
                 continue
@@ -7745,6 +7782,7 @@ def _scan_catalog(
                 package_root=root,
                 source_record=(source_records or {}).get(root.resolve()),
             )
+            entry["package_metadata"] = deepcopy(package_metadata)
             if config == "study":
                 entry["validation"] = _validate_study(path, state=state)
                 entry["validation"]["path"] = entry["path"]
@@ -7955,6 +7993,7 @@ def _scan_catalog_resources(
             catalog_root,
             package_ids=package_ids,
         )
+        package_metadata = _catalog_package_metadata(catalog_root, package_id)
         resources_root = catalog_root / "resources"
         if not resources_root.exists() or not resources_root.is_dir():
             continue
@@ -7971,6 +8010,7 @@ def _scan_catalog_resources(
                 package_root=catalog_root,
                 source_record=(source_records or {}).get(catalog_root.resolve()),
             )
+            entry["package_metadata"] = deepcopy(package_metadata)
             _reject_duplicate_catalog_id(
                 ids_by_package, package_id, "resource", entry["id"], resolved
             )
@@ -8135,6 +8175,30 @@ def _catalog_package_id(
         if package_id:
             return package_id
     return resolved.name
+
+
+def _catalog_package_metadata(root: Path, package_id: str) -> JsonDict:
+    """Return safe, human-facing metadata for one catalog package."""
+
+    metadata: JsonDict = {
+        "id": package_id,
+        "title": package_id,
+        "category": "local",
+    }
+    try:
+        settings = load_package_settings(root)
+    except (OSError, ValueError):
+        return metadata
+    if settings is None:
+        return metadata
+    declared = package_settings_payload(settings)
+    metadata["title"] = str(declared.get("title") or package_id)
+    metadata["category"] = str(declared.get("category") or "local")
+    if declared.get("description"):
+        metadata["description"] = declared["description"]
+    if isinstance(declared.get("paper"), Mapping):
+        metadata["paper"] = deepcopy(declared["paper"])
+    return metadata
 
 
 def _qualified_catalog_id(package_id: str, kind: str, entry_id: str) -> str:
@@ -9843,7 +9907,7 @@ def _executable_health(name: str, command: List[str]) -> JsonDict:
 #: summary -- is still one `optpilot_catalog_detail` call away.
 #:
 #: A bare listing used to return every field of every entry: 348,000 characters
-#: for the five shipped packages, spent before the Assistant had done anything.
+#: for the shipped example packages, spent before the Assistant had done anything.
 #: The ref token is deliberately NOT here. It is ~490 characters, and handing
 #: one to a language model invites it to echo the thing back wrongly -- one
 #: decoded a token, re-encoded it, dropped a field, and sent 485 characters
@@ -12686,6 +12750,17 @@ def _candidate_preview_runtime_capability(
                         "kind": "approve_container_gateway_image",
                         "image_ref": plan.runtime.image_ref,
                     }
+                elif error.code == "container_image_unavailable":
+                    reason = "environment_preview_image_unavailable"
+                    detail = {
+                        "category": "installation_required",
+                        "code": error.code,
+                        **trust_context,
+                    }
+                    remediation = {
+                        "kind": "pull_container_image",
+                        "image_ref": plan.runtime.image_ref,
+                    }
                 else:
                     reason = "environment_preview_profile_incompatible"
                     detail = {
@@ -12751,7 +12826,11 @@ def _candidate_preview_runtime_capability(
         (
             item
             for item in applicable_blockers
-            if item["reason"] == "environment_preview_image_untrusted"
+            if item["reason"]
+            in {
+                "environment_preview_image_untrusted",
+                "environment_preview_image_unavailable",
+            }
         ),
         applicable_blockers[0] if applicable_blockers else diagnostics[0],
     )
@@ -13889,6 +13968,141 @@ def _complete_durable_run_action(
         result=result,
         core_receipt={"http_status": int(status), "response": response},
     )
+
+
+def _approve_candidate_environment_preview_image(
+    state: UiState,
+    *,
+    run_id: str,
+    payload: Mapping[str, Any],
+) -> JsonDict:
+    """Approve when needed and install the exact blocking Preview image.
+
+    The browser cannot name an arbitrary provider image: the request must
+    reproduce one remediation on the current retained Candidate capability.
+    """
+
+    request = _exact_json_object(
+        payload,
+        expected={
+            "schema",
+            "request_id",
+            "presentation_selection",
+            "profile_id",
+            "image_ref",
+        },
+        label="Environment Preview trust approval request",
+    )
+    if request["schema"] != ENVIRONMENT_PREVIEW_TRUST_APPROVE_REQUEST_SCHEMA:
+        raise ValueError(
+            "Environment Preview trust approval request schema is unsupported."
+        )
+    request_id = _canonical_request_uuid(request["request_id"])
+    canonical_run_id = RunViewRef(run_id=run_id).run_id
+    presentation_selection = request["presentation_selection"]
+    if not isinstance(presentation_selection, Mapping):
+        raise ValueError("presentation_selection must be a JSON object.")
+    profile_id = request["profile_id"]
+    if (
+        not isinstance(profile_id, str)
+        or not profile_id
+        or profile_id.strip() != profile_id
+        or len(profile_id.encode("utf-8")) > 256
+    ):
+        raise ValueError("Environment Preview profile_id must be bounded text.")
+    image_ref = ContainerGatewayImageTrust(
+        image_ref=request["image_ref"]
+    ).image_ref
+    target, unavailable_reason = _candidate_action_target(
+        state,
+        run_id=canonical_run_id,
+        presentation_selection=presentation_selection,
+    )
+    if target is None or unavailable_reason is not None or not target.runnable:
+        raise RealmConflict(
+            "Environment Preview approval requires the current runnable Candidate."
+        )
+    (
+        _supported,
+        _reason,
+        _profiles,
+        profile_diagnostics,
+        _eligibility_detail,
+    ) = _candidate_preview_runtime_capability(state, target=target)
+    diagnostic = next(
+        (
+            item
+            for item in profile_diagnostics
+            if str(item.get("id") or "") == profile_id
+        ),
+        None,
+    )
+    remediation = (
+        diagnostic.get("remediation")
+        if isinstance(diagnostic, Mapping)
+        and isinstance(diagnostic.get("remediation"), Mapping)
+        else None
+    )
+    trust_source = str(
+        diagnostic
+        and diagnostic.get("eligibility_detail", {}).get("trust_source")
+        or ""
+    )
+    remediation_kind = str(remediation and remediation.get("kind") or "")
+    already_ready = False
+    if isinstance(diagnostic, Mapping) and diagnostic.get("eligible") is True:
+        try:
+            already_ready = (
+                compile_environment_preview_plan(
+                    target,
+                    profile_id=profile_id,
+                ).runtime.image_ref
+                == image_ref
+            )
+        except (EnvironmentPreviewCompileError, RealmConflict, TypeError, ValueError):
+            already_ready = False
+    if (
+        not already_ready
+        and (
+            remediation is None
+            or remediation_kind
+            not in {"approve_container_gateway_image", "pull_container_image"}
+            or remediation.get("image_ref") != image_ref
+            or (
+                remediation_kind == "approve_container_gateway_image"
+                and trust_source != "realm"
+            )
+        )
+    ):
+        raise RealmConflict(
+            "The current Candidate no longer requires this Preview image preparation."
+        )
+    runtime = _require_realm_runtime(state)
+    decision = None
+    if remediation_kind == "approve_container_gateway_image":
+        decision = runtime.approve_container_gateway_image(
+            operation_id=(
+                f"studio/environment-preview/trust/approve/{request_id}"
+            ),
+            image_ref=image_ref,
+            reason=(
+                "Approved from Studio for the exact Environment Preview profile "
+                f"{profile_id}."
+            ),
+        )
+    downloaded = runtime.prepare_container_gateway_image(image_ref=image_ref)
+    return {
+        "schema": ENVIRONMENT_PREVIEW_TRUST_APPROVE_RESPONSE_SCHEMA,
+        "request_id": request_id,
+        "run_id": canonical_run_id,
+        "profile_id": profile_id,
+        "image_ref": image_ref,
+        "decision_id": str(getattr(decision, "decision_id", "")),
+        "downloaded": downloaded,
+        "image_ready": True,
+        "trust_generation": runtime.container_gateway_trust_generation,
+        "restart_required": False,
+    }
 
 
 def _execute_run_workbench_action(
@@ -18311,6 +18525,81 @@ def _assistant_run_ui_card(run: Any) -> Optional[JsonDict]:
     }
 
 
+def _assistant_interface_launch_ui_card(launch: Any) -> Optional[JsonDict]:
+    if not isinstance(launch, Mapping):
+        return None
+    launch_id = str(launch.get("launch_id") or launch.get("id") or "")
+    config_kind = str(launch.get("kind") or "")
+    uid = str(launch.get("uid") or "")
+    if (
+        not launch_id
+        or config_kind not in {"environment", "method", "resource"}
+        or not uid
+    ):
+        return None
+    coordinate = {
+        "kind": "interface-launch",
+        "launch_id": launch_id,
+        "config_kind": config_kind,
+        "uid": uid,
+    }
+    card_id = _assistant_ui_card_id("interface", coordinate)
+    status = str(launch.get("status") or "queued")
+    ready = status == "ready"
+    active = status not in {"failed", "stopped"}
+    return {
+        "schema": STUDIO_UI_CARD_SCHEMA,
+        "id": card_id,
+        "kind": "interface",
+        "coordinate": coordinate,
+        "title": str(launch.get("label") or "Interface"),
+        "description": (
+            "The interface is ready in Studio Preview."
+            if ready
+            else "The interface launch is tracked by Studio."
+        ),
+        "status": status,
+        "facts": _assistant_ui_card_facts(
+            ("Launch", launch_id),
+            ("Port", launch.get("port")),
+            ("Profile", launch.get("profile_id")),
+        ),
+        "actions": [
+            _assistant_ui_card_action(
+                card_id,
+                "open-interface",
+                "Open interface" if ready else "View interface",
+                eligible=active,
+                reason=(
+                    str(launch.get("error") or "This interface is no longer active.")
+                    if not active
+                    else ""
+                ),
+            )
+        ],
+    }
+
+
+def _assistant_inactive_interface_launch_ui_card(card: Any) -> Optional[JsonDict]:
+    """Project a retained interface card whose transient launch no longer exists."""
+
+    cards = sanitize_studio_ui_cards([card])
+    if not cards or cards[0].get("kind") != "interface":
+        return None
+    inactive = dict(cards[0])
+    inactive["description"] = "This interface launch is no longer active."
+    inactive["status"] = "stopped"
+    inactive["actions"] = [
+        {
+            **action,
+            "eligible": False,
+            "reason": "This interface is no longer active.",
+        }
+        for action in inactive.get("actions", [])
+    ]
+    return inactive
+
+
 def _assistant_tool_ui_cards(tool: str, data: Mapping[str, Any]) -> List[JsonDict]:
     cards: List[Optional[JsonDict]] = []
     if tool == "optpilot_catalog_detail":
@@ -18331,6 +18620,8 @@ def _assistant_tool_ui_cards(tool: str, data: Mapping[str, Any]) -> List[JsonDic
             cards.extend(_assistant_run_ui_card(item) for item in runs)
     elif tool == "optpilot_run_detail":
         cards.append(_assistant_run_ui_card(data.get("run")))
+    elif tool in {"optpilot_interface_launch", "optpilot_interface_status"}:
+        cards.append(_assistant_interface_launch_ui_card(data.get("launch")))
     return [card for card in cards if card is not None]
 
 
@@ -18489,6 +18780,7 @@ def _public_agent_approval(approval: JsonDict) -> JsonDict:
             "ok": bool(result.get("ok")),
             "tool": str(result.get("tool") or ""),
             "summary": str(result.get("summary") or ""),
+            "ui_cards": sanitize_studio_ui_cards(result.get("ui_cards")),
         }
     if "openhands_feedback" in approval:
         public["openhands_feedback"] = approval.get("openhands_feedback")
@@ -18496,10 +18788,43 @@ def _public_agent_approval(approval: JsonDict) -> JsonDict:
 
 
 def _public_agent_approvals(state: UiState, session_id: str) -> List[JsonDict]:
-    return [
-        _public_agent_approval(approval)
-        for approval in _read_agent_approvals(state, session_id)
-    ]
+    approvals: List[JsonDict] = []
+    for approval in _read_agent_approvals(state, session_id):
+        public = _public_agent_approval(approval)
+        result = (
+            approval.get("result")
+            if isinstance(approval.get("result"), dict)
+            else {}
+        )
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        launch_id = str(
+            data.get("launch_id")
+            or (
+                data.get("launch", {}).get("launch_id")
+                if isinstance(data.get("launch"), dict)
+                else ""
+            )
+        )
+        if result.get("tool") == "optpilot_interface_launch" and launch_id:
+            try:
+                launch = _interface_launch_by_id(state, launch_id)
+            except KeyError:
+                launch = None
+            card = _assistant_interface_launch_ui_card(launch)
+            if isinstance(public.get("result"), dict):
+                if card:
+                    public["result"]["ui_cards"] = sanitize_studio_ui_cards([card])
+                else:
+                    retained_cards = public["result"].get("ui_cards", [])
+                    public["result"]["ui_cards"] = sanitize_studio_ui_cards(
+                        [
+                            inactive
+                            for retained in retained_cards
+                            if (inactive := _assistant_inactive_interface_launch_ui_card(retained))
+                        ]
+                    )
+        approvals.append(public)
+    return approvals
 
 
 def _agent_pending_approval_ids(state: UiState, session_id: str) -> List[str]:
@@ -19211,6 +19536,58 @@ def _successful_openhands_forwarded_tool_call_ids(
             if call_id:
                 handled.add(call_id)
     return handled
+
+
+def _supersede_forwarded_pending_approvals(
+    state: UiState, session_id: str
+) -> bool:
+    """Recover approval cards left pending after their call already resumed."""
+
+    forwarded_call_ids = _successful_openhands_forwarded_tool_call_ids(
+        state, session_id
+    )
+    if not forwarded_call_ids:
+        return False
+    approvals = _read_agent_approvals(state, session_id)
+    resolved_by_call_id: Dict[str, str] = {}
+    for approval in approvals:
+        if approval.get("status") not in {"approved", "rejected"}:
+            continue
+        approval_id = str(approval.get("id") or "")
+        for call_id in _approval_tool_call_ids(approval):
+            if call_id in forwarded_call_ids and approval_id:
+                resolved_by_call_id[call_id] = approval_id
+
+    changed = False
+    recovered_at = _now_iso()
+    recovered: List[JsonDict] = []
+    for approval in approvals:
+        approval = dict(approval)
+        matching_call_ids = [
+            call_id
+            for call_id in _approval_tool_call_ids(approval)
+            if call_id in forwarded_call_ids
+        ]
+        if approval.get("status") == "pending" and matching_call_ids:
+            approval["status"] = "superseded"
+            approval["superseded_action"] = "tool_result_already_forwarded"
+            approval["superseded_at"] = recovered_at
+            approval["updated_at"] = recovered_at
+            superseded_by = next(
+                (
+                    resolved_by_call_id[call_id]
+                    for call_id in matching_call_ids
+                    if call_id in resolved_by_call_id
+                ),
+                "",
+            )
+            if superseded_by:
+                approval["superseded_by"] = superseded_by
+            changed = True
+        recovered.append(approval)
+    if changed:
+        _write_agent_approvals(state, session_id, recovered)
+    return changed
 
 
 def _pending_tool_result_forward_records(
@@ -21387,10 +21764,49 @@ def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
     if not messages:
         messages = [_default_agent_message()]
         _append_jsonl(_agent_messages_path(state, session_id), messages[0])
-    payload["messages"] = messages
-    payload["events"] = _read_agent_events(state, session_id)
+    events = _read_agent_events(state, session_id)
+    payload["messages"] = _refresh_runtime_error_messages(messages, events)
+    payload["events"] = events
     payload["approvals"] = _public_agent_approvals(state, session_id)
     return _decorate_agent_session_status(state, payload)
+
+
+def _refresh_runtime_error_messages(
+    messages: List[JsonDict], events: List[JsonDict]
+) -> List[JsonDict]:
+    """Repair old generic provider notices when retained events are more specific."""
+
+    runtime_errors: List[tuple[float, str]] = []
+    for event in events:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        error = ""
+        if event.get("type") == "openhands_dispatch_failed":
+            error = str(payload.get("error") or "")
+        elif event.get("type") == "openhands_event" and payload.get("category") == "error":
+            error = str(payload.get("summary") or payload.get("raw_preview") or "")
+        timestamp = _parse_iso_timestamp(str(event.get("created_at") or ""))
+        if error and timestamp is not None:
+            runtime_errors.append((timestamp, error))
+
+    refreshed: List[JsonDict] = []
+    for message in messages:
+        copy = dict(message)
+        content = str(copy.get("content") or "")
+        message_time = _parse_iso_timestamp(str(copy.get("created_at") or ""))
+        if (
+            copy.get("title") == "The Assistant could not finish"
+            and content.startswith("The model you chose")
+            and message_time is not None
+        ):
+            nearby = [
+                error
+                for timestamp, error in runtime_errors
+                if 0 <= message_time - timestamp <= 60
+            ]
+            if nearby:
+                copy["content"] = explain_runtime_error(nearby[-1])[0]
+        refreshed.append(copy)
+    return refreshed
 
 
 _AGENT_TITLE_ORIGINS = frozenset({"default", "fallback", "assistant", "user"})
@@ -21596,6 +22012,28 @@ def _normalized_agent_sessions(state: UiState) -> List[JsonDict]:
         normalized = []
         for session in sessions:
             session = dict(session)
+            session_id = str(session.get("id") or "")
+            if session_id and _supersede_forwarded_pending_approvals(
+                state, session_id
+            ):
+                if session.get("openhands_conversation_id") and session.get(
+                    "active_turn_id"
+                ):
+                    session["status"] = "waiting_for_agent"
+                else:
+                    session["status"] = "idle"
+                pending_sync = (
+                    dict(session.get("openhands_pending_sync"))
+                    if isinstance(session.get("openhands_pending_sync"), dict)
+                    else {}
+                )
+                pending_sync.pop("paused_approval_id", None)
+                if pending_sync:
+                    session["openhands_pending_sync"] = pending_sync
+                else:
+                    session.pop("openhands_pending_sync", None)
+                session["updated_at"] = _now_iso()
+                changed = True
             attached = [
                 item
                 for item in session.get("attached_workspace_ids", [])
@@ -22625,7 +23063,13 @@ def _agent_message_source(message: JsonDict) -> str:
 
 
 def _handled_optpilot_tool_call_ids(state: UiState, session_id: str) -> set[str]:
-    handled = set()
+    # Approval-gated tools do not emit ``optpilot_tool_result`` when the
+    # adapter first sees them: polling pauses while Studio waits for the
+    # person to approve or reject the action.  Once that decision is sent
+    # back to OpenHands, the forwarding event is the durable proof that the
+    # call was handled.  Include it here so a replayed ActionEvent cannot
+    # create another approval (or execute the approved action again).
+    handled = _successful_openhands_forwarded_tool_call_ids(state, session_id)
     for event in _read_agent_events(state, session_id):
         if event.get("type") not in {"optpilot_tool_result", "optpilot_approval_pause"}:
             continue
@@ -35689,6 +36133,9 @@ def _write_composed_package_settings(
         plan["package_identity"] = identity
     container = None
     description = None
+    title = None
+    category = None
+    paper = None
     try:
         existing = load_package_settings(destination)
     except (ValueError, OSError):
@@ -35696,6 +36143,9 @@ def _write_composed_package_settings(
     if existing is not None:
         container = existing.container
         description = existing.description
+        title = existing.title
+        category = existing.category
+        paper = existing.paper
     captured = plan.get("captured_image")
     if (
         isinstance(captured, Mapping)
@@ -35712,7 +36162,13 @@ def _write_composed_package_settings(
             platform=str(captured.get("platform")),
         )
     write_package_settings(
-        destination, identity=identity, description=description, container=container
+        destination,
+        identity=identity,
+        description=description,
+        title=title,
+        category=category,
+        paper=paper,
+        container=container,
     )
 
 
@@ -37645,7 +38101,7 @@ def _register_user_packages(state: UiState) -> List[str]:
     A package folder has to be published -- captured as an immutable, numbered
     version -- before a Run setup drafted from it can be launched, because a
     launch records exactly which bytes produced its result. Nothing did that
-    for the examples OptPilot ships, so a fresh install showed five packages
+    for the examples OptPilot ships, so a fresh install showed packages
     and refused to run any of them.
 
     Only the person's own packages folder is registered here. A source
@@ -37654,7 +38110,8 @@ def _register_user_packages(state: UiState) -> List[str]:
 
     Already-published packages are skipped without being re-read, so a normal
     start costs one cheap lookup per package and nothing else. Measured, a
-    genuine first start publishes all five in about two seconds, which is why
+    genuine first start publishes every configured example in about two seconds,
+    which is why
     this runs before the UI is served rather than behind it: a person who
     clicks Launch immediately should not be told to publish first while a
     background thread is still working.
@@ -37668,9 +38125,20 @@ def _register_user_packages(state: UiState) -> List[str]:
         # stay visible; publishing is simply not possible here.
         return []
     packages_root = default_packages_root()
+    # The open project wins over an older copy in the person's packages
+    # folder for indexing, and it must win for first-start publication too.
+    # Otherwise Studio can publish the stale user copy into a fresh Realm and
+    # immediately shadow the newer project package with that old revision.
+    configured_elsewhere = [
+        root.resolve()
+        for root in getattr(state, "catalog_roots", ())
+        if not _is_relative_to(root.resolve(), packages_root.resolve())
+    ]
     roots = [
         root
-        for root in _catalog_package_roots(packages_root)
+        for root in _user_package_roots_not_shadowed(
+            packages_root, configured_elsewhere
+        )
         if _looks_like_catalog_package(root)
     ]
     if not roots:
@@ -37863,15 +38331,35 @@ def _iter_yaml_files(root: Path) -> Iterable[Path]:
         if root.suffix.lower() in {".yaml", ".yml"}:
             yield root
         return
-    for path in root.rglob("*"):
-        try:
-            _require_safe_workspace_match(root, path)
-            relative_parts = path.resolve().relative_to(root).parts
-        except ValueError:
-            continue
-        if any(part in EXCLUDED_SCAN_DIRS for part in relative_parts):
-            continue
-        if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}:
+    # ``Path.rglob`` cannot prune a subtree. Large local runtime caches (for
+    # example node_modules inside an interface resource) were therefore fully
+    # walked even though every descendant was discarded afterward. Prune at
+    # the directory boundary so catalog refresh time depends on authored
+    # source, not machine-local dependency caches.
+    for directory, directory_names, file_names in os.walk(
+        root, topdown=True, followlinks=False
+    ):
+        directory_path = Path(directory)
+        retained_directories: List[str] = []
+        for name in directory_names:
+            if name in EXCLUDED_SCAN_DIRS:
+                continue
+            candidate = directory_path / name
+            try:
+                _require_safe_workspace_match(root, candidate)
+            except ValueError:
+                continue
+            retained_directories.append(name)
+        directory_names[:] = retained_directories
+
+        for name in file_names:
+            path = directory_path / name
+            if path.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            try:
+                _require_safe_workspace_match(root, path)
+            except ValueError:
+                continue
             yield path.resolve()
 
 

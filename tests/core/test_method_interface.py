@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COOPA_METHOD = (
     REPO_ROOT / "catalog" / "or_solving" / "methods" / "coopa_solver" / "method.yaml"
 )
+COOPA_CONSOLE = COOPA_METHOD.with_name("solve_console.html")
 
 
 class MethodInterfaceTest(unittest.TestCase):
@@ -43,6 +44,18 @@ class MethodInterfaceTest(unittest.TestCase):
         }
         with self.assertRaises((TypeError, ValueError)):
             compile_interface_launch_profiles(bad, component_kind="method")
+
+    def test_coopa_console_uses_the_full_stage_without_losing_advanced_options(self) -> None:
+        console = COOPA_CONSOLE.read_text(encoding="utf-8")
+
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr)", console)
+        self.assertIn("#input-card { display: grid", console)
+        self.assertIn("#problem { height: 100%", console)
+        self.assertIn("#input-card:has(details.adv[open])", console)
+        self.assertIn("details.adv[open] { overflow: auto", console)
+        self.assertIn("#run-card { overflow: auto", console)
+        self.assertIn("@media (max-height: 680px)", console)
+        self.assertIn("@media (max-width: 900px)", console)
 
 
 if __name__ == "__main__":

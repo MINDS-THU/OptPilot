@@ -1,4 +1,4 @@
-"""Pruned COOPA pipeline shim (W3, plan §5.3 item 2).
+"""Pruned COOPA pipeline shim for the bundled research package.
 
 Imports the bundled COOPA source (``coopa_home/``, overridable with
 ``COOPA_HOME``) and drives the
@@ -30,8 +30,8 @@ def _coopa_home() -> Path:
 
     Tries ``COOPA_HOME`` first, then a ``coopa_home/`` folder next to this
     shim. The fallback matters in containerized interface launches, where a
-    host ``COOPA_HOME`` path does not exist but the method folder (with a
-    local, gitignored checkout copy) is mounted.
+    host ``COOPA_HOME`` path does not exist but the method folder (with the
+    bundled source copy) is mounted.
     """
 
     candidates: list[Path] = []
@@ -44,9 +44,9 @@ def _coopa_home() -> Path:
             return candidate
     tried = ", ".join(str(c) for c in candidates)
     raise RuntimeError(
-        "No usable COOPA checkout was found (the package does not "
-        f"redistribute COOPA). Tried: {tried}. Set COOPA_HOME to a checkout, "
-        "or place one at methods/coopa_solver/coopa_home (gitignored)."
+        "No usable COOPA source tree was found. "
+        f"Tried: {tried}. Restore methods/coopa_solver/coopa_home or set "
+        "COOPA_HOME to another checkout."
     )
 
 

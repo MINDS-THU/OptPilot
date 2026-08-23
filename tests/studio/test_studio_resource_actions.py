@@ -166,6 +166,8 @@ print("bundle generated")
         self.assertIn("/api/resource-actions/run", source)
         self.assertIn("resourceActionsPanel(item)", source)
         self.assertIn("bindResourceActionControls(item)", source)
+        self.assertIn("<h3>Headless actions</h3>", source)
+        self.assertIn("Declared in this Resource's YAML under <code>actions</code>", source)
 
 
 if __name__ == "__main__":

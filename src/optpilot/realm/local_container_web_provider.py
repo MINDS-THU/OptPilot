@@ -23,6 +23,7 @@ import secrets
 import socket
 import stat
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -70,6 +71,8 @@ _ISOLATED_GATEWAY_OPTION = "com.docker.network.bridge.gateway_mode_ipv4"
 _INGRESS_BIND_ADDRESS_OPTION = "com.docker.network.bridge.host_binding_ipv4"
 _INGRESS_BIND_ADDRESS = "127.0.0.1"
 _TERMINAL_EVIDENCE_DIRECTORY = "terminal-evidence-v1"
+_IMAGE_INSPECT_TIMEOUT_SECONDS = 30.0
+_IMAGE_PULL_TIMEOUT_SECONDS = 15 * 60.0
 _BINDING_SEAL: Final = object()
 
 
@@ -556,14 +559,98 @@ class LocalContainerWebProvider:
             trusted[item.image_ref] = item
         self._control_root = root
         self._broker_authority = broker_authority
+        self._trusted_gateway_images_data = trusted
         self._trusted_gateway_images = MappingProxyType(trusted)
+        self._trusted_gateway_images_lock = threading.RLock()
         self._run_command = run_command or self._subprocess_run
         self._gateway_probe = gateway_probe or _probe_gateway_routes
 
     def is_gateway_image_trusted(self, image_ref: str) -> bool:
         """Return only the administrator trust fact, not provider availability."""
 
-        return image_ref in self._trusted_gateway_images
+        with self._trusted_gateway_images_lock:
+            return image_ref in self._trusted_gateway_images
+
+    def add_gateway_image_trust(self, trust: ContainerGatewayImageTrust) -> None:
+        """Activate one already-authorized immutable image without a restart.
+
+        The caller owns policy authorization and durability.  This provider
+        only accepts the fully validated provider-specific trust value and
+        never removes or weakens an active approval through this live path.
+        """
+
+        if not isinstance(trust, ContainerGatewayImageTrust):
+            raise TypeError("gateway image trust is invalid.")
+        with self._trusted_gateway_images_lock:
+            existing = self._trusted_gateway_images.get(trust.image_ref)
+            if existing is not None and existing != trust:
+                raise RealmConflict(
+                    "Gateway image trust conflicts with the active runtime value."
+                )
+            self._trusted_gateway_images_data[trust.image_ref] = trust
+
+    def is_image_available(self, image_ref: str) -> bool:
+        """Return whether the exact immutable image is installed locally.
+
+        Preview execution deliberately uses ``--pull never``.  Keeping this
+        side-effect-free check separate lets callers offer an explicit image
+        provisioning step before an Operator Job is created.
+        """
+
+        exact_ref = ContainerGatewayImageTrust(image_ref=image_ref).image_ref
+        completed = self._invoke(
+            [self._executable, "image", "inspect", exact_ref],
+            timeout=_IMAGE_INSPECT_TIMEOUT_SECONDS,
+        )
+        if completed.returncode == 0:
+            return True
+        diagnostic = _container_command_diagnostic(completed).casefold()
+        if any(
+            marker in diagnostic
+            for marker in ("no such image", "not found", "image not known")
+        ):
+            return False
+        raise LocalContainerWebProviderError(
+            "container_image_inventory_unavailable",
+            _container_command_failure_message(
+                "The local container image inventory could not be inspected.",
+                completed,
+            ),
+        )
+
+    def pull_trusted_image(self, image_ref: str) -> bool:
+        """Install one approved digest-pinned image and verify its identity.
+
+        The return value distinguishes a newly downloaded image from an
+        already-present one.  This method never widens the provider trust set.
+        """
+
+        exact_ref = ContainerGatewayImageTrust(image_ref=image_ref).image_ref
+        if not self.is_gateway_image_trusted(exact_ref):
+            raise LocalContainerWebProviderError(
+                "container_gateway_image_untrusted",
+                "The Environment Preview image must be approved before it can be downloaded.",
+            )
+        if self.is_image_available(exact_ref):
+            return False
+        completed = self._invoke(
+            [self._executable, "pull", exact_ref],
+            timeout=_IMAGE_PULL_TIMEOUT_SECONDS,
+        )
+        if completed.returncode != 0:
+            raise LocalContainerWebProviderError(
+                "container_image_pull_failed",
+                _container_command_failure_message(
+                    "The approved Environment Preview image could not be downloaded.",
+                    completed,
+                ),
+            )
+        if not self.is_image_available(exact_ref):
+            raise LocalContainerWebProviderError(
+                "container_image_pull_unverified",
+                "The container engine did not retain the downloaded Environment Preview image.",
+            )
+        return True
 
     def start_or_adopt(
         self, request: ContainerWebLaunchRequest
@@ -883,14 +970,13 @@ class LocalContainerWebProvider:
                 try:
                     return self._inspect_container(request, role)
                 except RealmNotFound as error:
-                    code = (
-                        "container_start_failed"
-                        if role == "app"
-                        else "container_gateway_start_failed"
-                    )
+                    code = _container_start_failure_code(completed, role=role)
                     raise LocalContainerWebProviderError(
                         code,
-                        "The local container provider could not start an exact launch component.",
+                        _container_command_failure_message(
+                            "The local container provider could not start the approved interface image.",
+                            completed,
+                        ),
                     ) from error
             return self._inspect_container(request, role)
 
@@ -1849,6 +1935,11 @@ class LocalContainerWebProvider:
                 "container_provider_timeout",
                 "The local container provider operation timed out.",
             ) from error
+        except OSError as error:
+            raise LocalContainerWebProviderError(
+                "container_provider_unavailable",
+                "The local container provider is unavailable.",
+            ) from error
         if not isinstance(result, subprocess.CompletedProcess):
             raise TypeError("container provider command runner returned an invalid result.")
         return result
@@ -1860,6 +1951,42 @@ class LocalContainerWebProvider:
         return subprocess.run(
             list(command), capture_output=True, text=True, timeout=timeout, check=False
         )
+
+
+def _container_command_diagnostic(completed: subprocess.CompletedProcess[str]) -> str:
+    """Return one bounded, single-line engine diagnostic safe for local UI."""
+
+    raw = str(completed.stderr or completed.stdout or "")
+    normalized = " ".join(raw.replace("\x00", " ").split())
+    return normalized[:2048]
+
+
+def _container_command_failure_message(
+    summary: str,
+    completed: subprocess.CompletedProcess[str],
+) -> str:
+    diagnostic = _container_command_diagnostic(completed)
+    return f"{summary} Container engine: {diagnostic}" if diagnostic else summary
+
+
+def _container_start_failure_code(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    role: Literal["app", "gateway"],
+) -> str:
+    diagnostic = _container_command_diagnostic(completed).casefold()
+    missing_image_markers = (
+        "no such image",
+        "unable to find image",
+        "image not known",
+    )
+    if role == "app" and any(marker in diagnostic for marker in missing_image_markers):
+        return "container_image_unavailable"
+    return (
+        "container_start_failed"
+        if role == "app"
+        else "container_gateway_start_failed"
+    )
 
 
 def _labels(

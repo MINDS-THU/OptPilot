@@ -9,73 +9,10 @@ description: Install OptPilot, and what you get.
 
 - Python 3.10 or newer. (On macOS the built-in `python3` is older than this;
   install a current Python first, or the install will refuse.)
-- Docker or Podman **only** if you use a package that declares a container
-  image. Nothing that ships with OptPilot requires one.
+- Docker or Podman **only** for packages or interfaces that declare a
+  container image.
 
-## Install
-
-```bash
-python -m pip install optpilot-studio
-```
-
-That gives you three things: the `optpilot` command line, the Studio web
-application, and five ready-made packages to look at and run.
-
-To install only the command line, without the web application:
-
-```bash
-python -m pip install optpilot
-```
-
-## Start Studio
-
-```bash
-optpilot-studio --open-browser
-```
-
-The default address is `http://127.0.0.1:8765/`. Choose another port with
-`--port`.
-
-The first start takes a few seconds longer than later ones: OptPilot copies
-the ready-made packages into a folder of your own and records a version of
-each, so they can be run straight away. Those copies are yours — edit them,
-move them, delete the ones you do not want. They live beside OptPilot's own
-storage, in the standard per-user data location for your operating system, and
-`OPTPILOT_PACKAGES_ROOT` overrides where they go.
-
-## Run something without the web application
-
-Every package that ships works from the command line too. This one needs no
-container software and no model provider account:
-
-```bash
-optpilot run --package-root <packages>/devs_gallery \
-  <packages>/devs_gallery/studies/seird_minimize_deaths.yaml
-```
-
-Replace `<packages>` with the folder Studio reports on its Catalog page, or
-set `OPTPILOT_PACKAGES_ROOT` yourself so you know where it is.
-
-## Packages that need more
-
-Two of the ready-made packages need something extra before they run:
-
-- Anything that asks a language model to write candidates needs an API key.
-  Add it under Studio Settings → Local environment variables, or export it
-  before a command-line launch. OptPilot passes the value to that run's method
-  only, and never copies it into the run's record.
-- A package that declares a container image needs Docker or Podman, and the
-  image must be approved for execution first:
-
-  ```bash
-  optpilot image approve <image reference>
-  ```
-
-  Approving an image is how you say you are willing to run software someone
-  else built. A refused launch names the exact image and this command.
-
-## Core CLI/SDK
-
+## Install the core CLI/SDK
 
 ```bash
 python -m pip install optpilot
@@ -135,6 +72,9 @@ See [Packages and Catalogs](catalog.md).
 
 ## Source checkout and Studio
 
+Studio, the public research catalog, documentation, and contributor tooling
+are currently distributed from the source repository rather than PyPI.
+
 ```bash
 git clone https://github.com/MINDS-THU/OptPilot.git
 cd OptPilot
@@ -143,9 +83,13 @@ uv run optpilot --help
 uv run optpilot package validate catalog/production_agv_scheduling --check-source
 ```
 
-The five packages that ship are described under
-[Flagship Capabilities](devs-gallery.md). Most run with no extra setup; the
-ones that call a language model need an API key, as described above.
+The source checkout contains three paper-backed research packages and one
+small tutorial package. They are described under [Research Packages](devs-gallery.md).
+Pre-generated examples run with no model key. Generation and language-model
+search need an API key; add it under Studio Settings → Local environment
+variables, or export it before a command-line launch. OptPilot passes only
+declared values to that launch and does not copy their contents into Run
+evidence.
 
 Launch Studio:
 
@@ -163,6 +107,10 @@ Studio scans `catalog/` by default and reads runs from the same default Realm.
 See [Studio UI](ui.md), [Workspace Management](studio-workspaces.md), and
 [OptPilot Assistant](assistant.md).
 
+Packages that declare a container image also need Docker or Podman. Approve
+the exact digest before execution as described in
+[Local Operations and Security](operations.md#environment-preview-image-approvals).
+
 ## Optional test-catalog dependencies
 
 ```bash
@@ -172,7 +120,7 @@ uv sync --all-packages --group examples
 Only needed to run the job-shop studies under `test_catalog/`, which are part
 of OptPilot's own test material rather than something shipped to users. The
 group pulls in a deep-learning stack and several hundred megabytes; nothing in
-the five shipped packages needs it.
+the four public catalog packages needs it.
 
 ## Documentation server
 

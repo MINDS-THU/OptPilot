@@ -12,7 +12,7 @@ const SELECTION_CONTENT_TREE_ENTRY_LIMIT = 1000;
 const SELECTION_CONTENT_PREVIEW_CHUNK_LIMIT = 32 * 1024;
 const SELECTION_CONTENT_PREVIEW_LIMIT = 128 * 1024;
 const ASSISTANT_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1";
-const ASSISTANT_UI_CARD_KINDS = new Set(["catalog-use", "run-setup", "run"]);
+const ASSISTANT_UI_CARD_KINDS = new Set(["catalog-use", "interface", "run-setup", "run"]);
 const ASSISTANT_UI_CARD_OPERATIONS = new Set([
   "configure-run",
   "open-catalog",
@@ -29,6 +29,10 @@ const RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS = 12_000;
 // heavy evaluation, and short enough that nobody watches a dead Run all day.
 const RUN_STALLED_GUIDANCE_DELAY_MS = 30 * 60_000;
 const CORE_REQUEST_TIMEOUT_MS = 20_000;
+// A first Catalog load may need to project and inspect several substantial
+// research packages. It is bounded, but legitimately slower than ordinary
+// Studio status requests on network-synchronized filesystems.
+const CATALOG_REQUEST_TIMEOUT_MS = 60_000;
 const PLATFORM_STATUS_TIMEOUT_MS = 12_000;
 const RUNS_REQUEST_TIMEOUT_MS = 15_000;
 const RUN_DETAIL_REQUEST_TIMEOUT_MS = 20_000;
@@ -151,6 +155,7 @@ const state = {
   resourceActionDrafts: new Map(),
   resourceActionRuns: new Map(),
   resourceActionErrors: new Map(),
+  selectedRunCandidateIds: {},
   selectedRunTrialIds: {},
   planSearch: "",
   selectedPlanId: null,
@@ -446,7 +451,6 @@ function cacheElements() {
     "backToConversationButton",
     "openWorkButton",
     "openWorkCount",
-    "closeOpenWorkButton",
     "openWorkShelf",
     "openWorkItems",
     "askOptPilotButton",
@@ -719,6 +723,7 @@ function bindEvents() {
   on(els.candidateTryCancelButton, "click", () => closeCandidateTrySheet());
   on(els.candidateTrySubmitButton, "click", confirmCandidateTry);
   on(els.candidateTryBody, "change", updateCandidateTrySheet);
+  on(els.candidateTryBody, "click", approveCandidatePreviewImage);
   on(els.candidateTryBody, "click", copyCandidatePreviewTrustCommand);
   on(els.candidateTryModal, "click", (event) => {
     if (event.target === els.candidateTryModal) closeCandidateTrySheet();
@@ -748,7 +753,6 @@ function bindEvents() {
   on(els.backToConversationButton, "click", () => openConversationSurface({ history: "push" }));
   on(els.askOptPilotButton, "click", () => setAssistantOverlayOpen(!state.shell.assistantOverlayOpen));
   on(els.openWorkButton, "click", () => setOpenWorkExpanded(!state.shell.openWorkExpanded));
-  on(els.closeOpenWorkButton, "click", () => setOpenWorkExpanded(false));
   on(els.railToggleButton, "click", () => setMobileRailOpen(!state.shell.mobileRailOpen));
   on(els.railScrim, "click", () => setMobileRailOpen(false));
   on(els.newWorkspaceButton, "click", () => createBlankSession());
@@ -1046,10 +1050,10 @@ async function loadCatalogAndCompatibility(options = {}) {
     (reason) => ({ status: "rejected", reason }),
   );
   const catalogResultPromise = settle(
-    getJson("/api/catalog", { timeoutMs: CORE_REQUEST_TIMEOUT_MS }).then(validateCatalogPayload),
+    getJson("/api/catalog", { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS }).then(validateCatalogPayload),
   );
   const compatibilityResultPromise = settle(
-    getJson("/api/compatibility", { timeoutMs: CORE_REQUEST_TIMEOUT_MS }).then(validateCompatibilityPayload),
+    getJson("/api/compatibility", { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS }).then(validateCompatibilityPayload),
   );
   const catalogResult = await catalogResultPromise;
 
@@ -3647,9 +3651,10 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
   const base = {
     kind: "candidate",
     key: `candidate:${runId}:${candidateId}:${jobId}`,
-    eyebrow: "Candidate interface",
+    eyebrow: "Interactive Candidate",
     title: candidateId || "Interactive Candidate",
-    source: runId ? `Candidate from Run ${runId}` : "Candidate try",
+    source: runId ? `From Run ${shortDigest(runId)}` : "Candidate try",
+    sourceTitle: runId ? `Candidate from Run ${runId}` : "Candidate try",
     status: "preparing",
     statusLabel: "Preparing",
     message: "Loading the exact saved Candidate and its interactive Environment.",
@@ -3657,7 +3662,7 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
     emptyBody: "The interface will appear here after the isolated Environment is ready.",
     openUrl: "",
     backHash,
-    backLabel: "Back to Candidate",
+    backLabel: "← Candidate",
     canStop: false,
     stopPending: false,
     stop: null,
@@ -3715,20 +3720,34 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
     ? String(presentation.open_url || "")
     : "";
   const jobState = String(job.state || "queued");
+  const outcome = job.outcome && typeof job.outcome === "object" ? job.outcome : {};
   const active = operatorJobIsActive(job);
   const stopPending = state.pendingOperatorJobStops.has(jobId);
   const closed = presentationStatus === "closed" || ["succeeded", "failed", "cancelled"].includes(jobState);
   const failed = jobState === "failed";
+  const outcomeCode = String(outcome.code || "");
+  const imageUnavailable = failed && outcomeCode === "container_image_unavailable";
+  const startFailed = failed && new Set(["container_start_failed", "container_image_unavailable"]).has(outcomeCode);
+  const failureMessage = imageUnavailable
+    ? "The approved interface image was removed before launch. Return to the Candidate, download the image again, and retry."
+    : startFailed
+      ? "The interactive Environment could not start, so no interface was opened. Return to the Candidate to review the try details and try again."
+    : "This interactive try failed and its interface is closed. Return to the Candidate to review the failure details or try again.";
   const reconnecting = presentationStatus === "reconciling";
   return {
     ...base,
     title: targetCandidateId,
-    source: `Candidate from Run ${targetRunId}`,
+    source: `From Run ${shortDigest(targetRunId)}`,
+    sourceTitle: `Candidate from Run ${targetRunId}`,
     status: failed ? "failed" : closed ? "stopped" : openUrl ? "ready" : "running",
     statusLabel: failed
       ? "Failed"
       : closed
-        ? "Closed"
+        ? jobState === "succeeded"
+          ? "Complete"
+          : jobState === "cancelled"
+            ? "Stopped"
+            : "Closed"
         : openUrl
           ? "Running"
           : reconnecting
@@ -3736,22 +3755,28 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
             : "Starting",
     message: state.operatorJobDetailError
       || state.operatorJobStopErrors[jobId]
-      || (openUrl
+      || (failed
+        ? failureMessage
+        : openUrl
         ? "This interface is running with the exact saved Candidate."
         : reconnecting
           ? "The Environment is running while Studio reconnects the interactive view."
           : closed
-            ? "This interactive try has finished. Its result remains in the Candidate try history."
+            ? jobState === "succeeded"
+              ? "Interactive try complete. Review its metrics and saved outputs from the Candidate."
+              : "This interactive try has stopped. Any recorded result remains in the Candidate try history."
             : "The isolated Environment is starting. The view will open automatically."),
     emptyTitle: failed
-      ? "Interactive try failed"
+      ? startFailed ? "Interface could not start" : "Interactive try failed"
       : closed
         ? "Interactive view closed"
         : reconnecting
           ? "Reconnecting the interactive view"
           : "Starting the interactive Environment",
     emptyBody: failed
-      ? "Return to the Candidate to inspect the saved failure details or try again."
+      ? startFailed
+        ? "No interactive session was created. The Candidate try history keeps the failure details."
+        : "Return to the Candidate to inspect the saved failure details or try again."
       : closed
         ? "Return to the Candidate to inspect this try's metrics, outputs, and result."
         : "Studio is waiting for the Environment's presentation endpoint.",
@@ -3759,7 +3784,7 @@ function candidateInterfaceSessionModel(route = state.interfaceSessionRoute) {
     canStop: active && Boolean(job.can_stop),
     stopPending,
     stop: () => stopOperatorJob(jobId),
-    retry: () => loadOperatorJobDetail(jobId),
+    retry: closed ? null : () => loadOperatorJobDetail(jobId),
   };
 }
 
@@ -3848,6 +3873,7 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
   const openUrl = status === "ready" ? String(preview.preview_url || "") : "";
   const stopping = status === "stopping";
   const terminal = ["failed", "stopped", "cleanup_pending"].includes(status);
+  const preparation = interfaceLaunchPreparationProgress(launch);
   return {
     ...base,
     title: String(launch.label || "Interactive interface"),
@@ -3879,7 +3905,7 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
         ? "Studio is stopping the temporary interface runtime."
         : terminal
           ? "The interface is no longer available."
-          : "Studio is preparing the temporary interface runtime.")),
+          : preparation.message)),
     emptyTitle: reconnecting
       ? "Reconnecting to the interface"
       : connectionUnavailable
@@ -3899,12 +3925,44 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
         ? "Choose Reconnect to check the same launch again."
         : String(launch.error || (terminal
       ? "Return to the source to launch it again."
-      : "The interactive view will appear automatically when it is ready.")),
+      : preparation.detail)),
     openUrl,
     canStop: !["failed", "stopped", "stopping"].includes(status),
     stopPending: stopping,
     stop: () => stopInterfaceLaunch(launch.key),
     retry: connectionUnavailable ? () => resumeInterfaceLaunchPolling(launch) : null,
+  };
+}
+
+function interfaceLaunchPreparationProgress(launch) {
+  const steps = Array.isArray(launch && launch.steps) ? launch.steps : [];
+  const cacheBuildStarted = steps.some((step) => (
+    String(step && step.title || "") === "Building prepared runtime"
+  ));
+  const cacheBuildFinished = steps.some((step) => (
+    String(step && step.title || "") === "Prepared runtime cached"
+    && String(step && step.status || "") === "ready"
+  ));
+  const startedAt = Number(launch && launch.started_at || 0);
+  const elapsedSeconds = startedAt > 0
+    ? Math.max(0, Math.floor(Date.now() / 1000 - startedAt))
+    : 0;
+  const elapsed = elapsedSeconds >= 60
+    ? `${Math.floor(elapsedSeconds / 60)}m ${String(elapsedSeconds % 60).padStart(2, "0")}s`
+    : `${elapsedSeconds}s`;
+  if (cacheBuildStarted && !cacheBuildFinished) {
+    return {
+      message: `Building the reusable interface runtime · ${elapsed} elapsed`,
+      detail: "This first launch is installing the interface dependencies and may take several minutes. Studio is still working; later launches will reuse this cached runtime.",
+    };
+  }
+  const current = [...steps].reverse().find((step) => (
+    ["queued", "running"].includes(String(step && step.status || ""))
+  ));
+  const title = String(current && current.title || "Preparing the interface runtime");
+  return {
+    message: `${title} · ${elapsed} elapsed`,
+    detail: "Studio is preparing an isolated temporary runtime. The interactive view will appear automatically when it is ready.",
   };
 }
 
@@ -3947,8 +4005,14 @@ function renderInterfaceSession() {
     state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
   }
   if (els.interfaceSessionEyebrow) els.interfaceSessionEyebrow.textContent = model.eyebrow;
-  if (els.interfaceSessionTitle) els.interfaceSessionTitle.textContent = model.title;
-  if (els.interfaceSessionSource) els.interfaceSessionSource.textContent = model.source;
+  if (els.interfaceSessionTitle) {
+    els.interfaceSessionTitle.textContent = model.title;
+    els.interfaceSessionTitle.title = model.title;
+  }
+  if (els.interfaceSessionSource) {
+    els.interfaceSessionSource.textContent = model.source;
+    els.interfaceSessionSource.title = model.sourceTitle || model.source;
+  }
   if (els.interfaceSessionStatus) {
     els.interfaceSessionStatus.textContent = model.statusLabel;
     els.interfaceSessionStatus.className = `status-pill ${statusClass(model.status)}`;
@@ -3962,7 +4026,12 @@ function renderInterfaceSession() {
       state.interfaceSessionActionError = null;
     }
     els.interfaceSessionNotice.textContent = actionError || model.message;
-    els.interfaceSessionNotice.classList.toggle("error", Boolean(actionError) || ["failed", "mismatch"].includes(model.status));
+    const errorNotice = Boolean(actionError) || ["failed", "mismatch"].includes(model.status);
+    els.interfaceSessionNotice.classList.toggle("error", errorNotice);
+    els.interfaceSessionNotice.classList.toggle(
+      "complete",
+      !errorNotice && model.kind === "candidate" && model.status === "stopped",
+    );
     els.interfaceSessionNotice.setAttribute(
       "role",
       actionError || ["failed", "mismatch"].includes(model.status) ? "alert" : "status",
@@ -5131,9 +5200,10 @@ function assistantApprovalsHtml() {
 }
 
 function normalizeAssistantUiCard(raw) {
-  const coordinateKinds = new Set(["catalog-entry", "study-workspace", "workspace", "study-launch", "run"]);
+  const coordinateKinds = new Set(["catalog-entry", "interface-launch", "study-workspace", "workspace", "study-launch", "run"]);
   const operationsByCoordinate = {
     "catalog-entry": new Set(["configure-run", "open-catalog", "open-interface", "start-run"]),
+    "interface-launch": new Set(["open-interface"]),
     "study-workspace": new Set(["configure-run", "open-workspace", "start-run"]),
     workspace: new Set(["open-workspace", "start-run"]),
     "study-launch": new Set(["open-launch", "open-run"]),
@@ -5198,6 +5268,18 @@ function normalizeAssistantUiCard(raw) {
       const runId = sourceCoordinate.run_id ? opaque(sourceCoordinate.run_id) : null;
       if (runId) coordinate.run_id = runId;
     }
+  } else if (coordinateKind === "interface-launch") {
+    const launchId = opaque(sourceCoordinate.launch_id);
+    const configKind = text(sourceCoordinate.config_kind, 32, true);
+    const uid = opaque(sourceCoordinate.uid);
+    if (launchId && new Set(["environment", "method", "resource"]).has(configKind) && uid) {
+      coordinate = {
+        kind: coordinateKind,
+        launch_id: launchId,
+        config_kind: configKind,
+        uid,
+      };
+    }
   } else if (coordinateKind === "run") {
     const runId = opaque(sourceCoordinate.run_id);
     if (runId) coordinate = { kind: coordinateKind, run_id: runId };
@@ -5212,6 +5294,7 @@ function normalizeAssistantUiCard(raw) {
     )
   ) return null;
   if (kind === "run" && !new Set(["study-launch", "run"]).has(coordinateKind)) return null;
+  if (kind === "interface" && coordinateKind !== "interface-launch") return null;
   const facts = (Array.isArray(raw.facts) ? raw.facts : []).slice(0, 8).flatMap((fact) => {
     if (!fact || typeof fact !== "object" || Array.isArray(fact)) return [];
     const label = text(fact.label, 120, true);
@@ -5346,6 +5429,16 @@ function assistantUiCardCurrentActionState(card, action) {
       : { eligible: false, reason: "This exact Catalog item is no longer available." };
   }
   if (action.operation === "open-interface") {
+    if (coordinate.kind === "interface-launch") {
+      if (!coordinate.launch_id) return { eligible: false, reason: "This interface launch is no longer available." };
+      const tracked = state.interfaceLaunch;
+      const sameLaunch = tracked && String(tracked.launch_id || "") === String(coordinate.launch_id);
+      return {
+        eligible: true,
+        reason: "",
+        label: sameLaunch ? `Return to ${String(tracked.label || "running interface")}` : "Open interface",
+      };
+    }
     const component = assistantUiCardCatalogComponent(coordinate);
     if (!component) return { eligible: false, reason: "This exact Catalog item is no longer available." };
     if (isActiveInterfaceLaunch(state.interfaceLaunch)) {
@@ -5430,6 +5523,37 @@ function assistantUiCardsFromEvents(events = currentAssistantEvents(), options =
   return [...cardsById.values()];
 }
 
+function assistantApprovalResultCardEvents(session = currentAgentSession()) {
+  if (!session) return [];
+  return (state.agentApprovalsBySession[session.id] || []).flatMap((approval, index) => {
+    const result = approval && approval.result && typeof approval.result === "object"
+      ? approval.result
+      : {};
+    const uiCards = Array.isArray(result.ui_cards) ? result.ui_cards : [];
+    if (approval.status !== "approved" || result.ok !== true || !uiCards.length) return [];
+    return [{
+      id: `approval-result-cards-${String(approval.id || index)}`,
+      type: "optpilot_tool_result",
+      created_at: approval.approved_at || approval.updated_at || approval.created_at || "",
+      payload: {
+        tool: String(result.tool || approval.tool || ""),
+        ok: true,
+        summary: String(result.summary || ""),
+        ui_card_only: true,
+        ui_cards: uiCards,
+      },
+      __index: index,
+    }];
+  });
+}
+
+function currentAssistantUiCards() {
+  return assistantUiCardsFromEvents([
+    ...currentAssistantEvents(),
+    ...assistantApprovalResultCardEvents(),
+  ]);
+}
+
 function assistantUiCardsHtml(events, options = {}) {
   const seen = options.seen instanceof Set ? options.seen : new Set();
   const cards = assistantUiCardsFromEvents(events, options).filter((card) => {
@@ -5439,7 +5563,7 @@ function assistantUiCardsHtml(events, options = {}) {
     return true;
   });
   if (!cards.length) return "";
-  const kindLabels = { "catalog-use": "Recommended Catalog item", "run-setup": "Run setup", run: "Run" };
+  const kindLabels = { "catalog-use": "Recommended Catalog item", interface: "Launched interface", "run-setup": "Run setup", run: "Run" };
   return `<div class="assistant-ui-card-stack">${cards.map((card) => {
     const safeCardId = slug(card.id) || "assistant-card";
     return `
@@ -5487,7 +5611,7 @@ function bindAssistantUiCards() {
     button.addEventListener("click", async () => {
       const cardId = button.dataset.assistantCardId || "";
       const actionId = button.dataset.assistantCardAction || "";
-      const card = assistantUiCardsFromEvents().find((item) => item.id === cardId);
+      const card = currentAssistantUiCards().find((item) => item.id === cardId);
       const action = card && card.actions.find((item) => item.id === actionId);
       const currentAction = assistantUiCardCurrentActionState(card, action);
       const article = button.closest(".assistant-ui-card");
@@ -5531,7 +5655,7 @@ function bindAssistantUiCards() {
 
 function refreshAssistantUiCardActions() {
   if (!els.agentTimeline) return;
-  const cards = assistantUiCardsFromEvents();
+  const cards = currentAssistantUiCards();
   els.agentTimeline.querySelectorAll("[data-assistant-card-action]").forEach((button) => {
     if (button.closest('.assistant-ui-card[aria-busy="true"]')) return;
     const card = cards.find((item) => item.id === (button.dataset.assistantCardId || ""));
@@ -5605,6 +5729,10 @@ async function executeAssistantUiCardAction(card, action) {
     return;
   }
   if (operation === "open-interface") {
+    if (coordinate.kind === "interface-launch") {
+      await openAssistantInterfaceLaunch(coordinate);
+      return;
+    }
     const component = await resolveAssistantUiCardComponent(coordinate, { refresh: true });
     if (!component) throw new Error("This Catalog interface is no longer available.");
     const active = state.interfaceLaunch;
@@ -5749,20 +5877,36 @@ async function resolveAssistantUiCardPlan(coordinate, options = {}) {
 
 function assistantInterleavedTimelineHtml(session) {
   const messages = currentAssistantMessages();
-  const events = currentAssistantEvents()
-    .map((event, index) => ({ ...event, __index: index }))
-    .sort((left, right) => {
-      const byTime = eventTimestampMs(left) - eventTimestampMs(right);
-      return Number.isFinite(byTime) && byTime !== 0 ? byTime : left.__index - right.__index;
-    });
-  if (!messages.length) return assistantUiCardsHtml(events);
+  const recordedEvents = currentAssistantEvents()
+    .map((event, index) => ({ ...event, __index: index }));
   const html = [];
   const messageTimes = messages.map(messageTimestampMs);
   const renderedEventIndexes = new Set();
   const renderedCardIds = new Set();
+  const recordedLatestCardEventIndexes = assistantUiCardLatestEventIndexes(recordedEvents);
+  const eventCardIds = new Set(
+    assistantUiCardsFromEvents(recordedEvents, { latestEventIndexes: recordedLatestCardEventIndexes })
+      .map((card) => card.id),
+  );
+  const approvalCardEvents = assistantApprovalResultCardEvents(session).map((event, index) => ({
+    ...event,
+    __index: recordedEvents.length + index,
+    payload: {
+      ...event.payload,
+      ui_cards: (event.payload.ui_cards || []).filter((raw) => {
+        const card = normalizeAssistantUiCard(raw);
+        return card && !eventCardIds.has(card.id);
+      }),
+    },
+  }));
+  const events = [...recordedEvents, ...approvalCardEvents].sort((left, right) => {
+    const byTime = eventTimestampMs(left) - eventTimestampMs(right);
+    return Number.isFinite(byTime) && byTime !== 0 ? byTime : left.__index - right.__index;
+  });
   const latestCardEventIndexes = assistantUiCardLatestEventIndexes(events);
   const allowedCardIds = new Set(
-    assistantUiCardsFromEvents(events, { latestEventIndexes: latestCardEventIndexes }).map((card) => card.id),
+    assistantUiCardsFromEvents(events, { latestEventIndexes: latestCardEventIndexes })
+      .map((card) => card.id),
   );
   let index = 0;
   while (index < messages.length) {
@@ -5895,6 +6039,7 @@ function assistantEventIsInformative(event) {
   const type = event.type || "";
   const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
   if (payload.tool === "optpilot_conversation_title") return false;
+  if (payload.ui_card_only) return false;
   if (type === "optpilot_tool_result") return true;
   if (type === "openhands_event") {
     const category = payload.category || "";
@@ -6178,6 +6323,27 @@ async function resolveAssistantApproval(sessionId, approvalId, action) {
     } else {
       await loadAgentSessions();
       renderAssistant();
+    }
+    const interfaceLaunchResult = action === "approve"
+      && payload.result
+      && payload.result.ok === true
+      && payload.result.tool === "optpilot_interface_launch"
+      ? payload.result
+      : null;
+    if (interfaceLaunchResult) {
+      const launchedInterface = interfaceLaunchResult.data
+        && interfaceLaunchResult.data.launch;
+      if (launchedInterface) {
+        trackAssistantInterfaceLaunch(launchedInterface, {
+          open: true,
+          sessionId,
+        });
+      } else {
+        const launchCard = (interfaceLaunchResult.ui_cards || [])
+          .map(normalizeAssistantUiCard)
+          .find((item) => item && item.kind === "interface");
+        if (launchCard) await openAssistantInterfaceLaunch(launchCard.coordinate);
+      }
     }
     await refreshAgentWorkspaceState();
   } catch (error) {
@@ -9497,6 +9663,7 @@ function revealCatalogComponent(component) {
 }
 
 function renderCatalog() {
+  const renderedComponentKey = String(els.componentDetail && els.componentDetail.dataset.componentKey || "");
   if (els.componentSearch && els.componentSearch.value !== state.componentSearch) {
     els.componentSearch.value = state.componentSearch;
   }
@@ -9549,6 +9716,11 @@ function renderCatalog() {
     els.componentDetail.innerHTML = emptyState("Catalog items are unavailable. Try loading them again.");
   } else {
     renderComponentDetail();
+    const selectedKey = String(state.selectedComponentKey || "");
+    if (els.componentDetail && renderedComponentKey !== selectedKey) {
+      els.componentDetail.scrollTop = 0;
+      els.componentDetail.dataset.componentKey = selectedKey;
+    }
   }
 }
 
@@ -9735,11 +9907,19 @@ function renderCatalogPackageFilter() {
   if (state.componentPackageFilter !== "all" && !packages.some((item) => item.id === state.componentPackageFilter)) {
     state.componentPackageFilter = "all";
   }
-  const options = [
-    { id: "all", label: "All packages" },
-    ...packages,
-  ];
-  const html = options.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`).join("");
+  const groupLabels = {
+    research: "Research packages",
+    tutorial: "Learn",
+    local: "Local & development",
+  };
+  const grouped = ["research", "tutorial", "local"].map((category) => {
+    const items = packages.filter((item) => item.category === category);
+    if (!items.length) return "";
+    return `<optgroup label="${escapeHtml(groupLabels[category])}">${items
+      .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
+      .join("")}</optgroup>`;
+  }).join("");
+  const html = `<option value="all">All catalog packages</option>${grouped}`;
   if (els.componentPackageFilter.innerHTML !== html) {
     els.componentPackageFilter.innerHTML = html;
   }
@@ -9749,15 +9929,36 @@ function renderCatalogPackageFilter() {
 }
 
 function catalogPackageOptions() {
-  const counts = new Map();
+  const packages = new Map();
   allComponents().forEach((component) => {
     const id = componentPackageId(component);
     if (!id) return;
-    counts.set(id, (counts.get(id) || 0) + 1);
+    const entry = component && component.entry || {};
+    const metadata = entry.package_metadata && typeof entry.package_metadata === "object"
+      ? entry.package_metadata
+      : {};
+    const current = packages.get(id) || {
+      id,
+      count: 0,
+      title: String(metadata.title || id),
+      category: ["research", "tutorial", "local"].includes(metadata.category)
+        ? metadata.category
+        : "local",
+    };
+    current.count += 1;
+    packages.set(id, current);
   });
-  return Array.from(counts.entries())
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .map(([id, count]) => ({ id, label: `${id} (${count})` }));
+  const categoryOrder = { research: 0, tutorial: 1, local: 2 };
+  return Array.from(packages.values())
+    .sort((left, right) => (
+      categoryOrder[left.category] - categoryOrder[right.category]
+      || left.title.localeCompare(right.title)
+    ))
+    .map((item) => ({
+      id: item.id,
+      category: item.category,
+      label: `${item.title} (${item.count})`,
+    }));
 }
 
 function componentPackageId(component) {
@@ -9915,7 +10116,7 @@ function renderComponentDetail() {
     ? "Interface unavailable"
     : "Open interface";
   const interfaceAction = hasInterface
-    ? `<button class="ghost-button component-launch-interface" type="button" ${interfaceDisabled ? `disabled aria-disabled="true" title="${escapeHtml(interfaceReason)}"` : ""}>${escapeHtml(interfaceLabel)}</button>`
+    ? `<button class="${component.kind === "resource" ? "primary-button" : "ghost-button"} component-launch-interface" type="button" ${interfaceDisabled ? `disabled aria-disabled="true" title="${escapeHtml(interfaceReason)}"` : ""}>${escapeHtml(interfaceLabel)}</button>`
     : "";
   const interfaceGuidance = interfaceReason
     ? `<p class="source-note component-interface-guidance">${escapeHtml(interfaceReason)}</p>`
@@ -9945,10 +10146,10 @@ function renderComponentDetail() {
   if (component.kind === "resource") {
     els.componentDetail.innerHTML = `
       ${entityHeader(item, component.kind)}
-      <div class="action-row">
+      <div class="action-row catalog-primary-actions">
+        ${interfaceAction}
         <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
         ${editButton}
-        ${interfaceAction}
       </div>
       ${interfaceGuidance}
       ${editGuidance}
@@ -9988,7 +10189,7 @@ function renderComponentDetail() {
   const counterpartLabel = component.kind === "environment" ? "Method" : "Environment";
   els.componentDetail.innerHTML = `
     ${entityHeader(item, component.kind)}
-    <div class="action-row">
+    <div class="action-row catalog-primary-actions">
       <button class="primary-button component-use-study" type="button" ${pairs.length ? "" : `disabled title="${escapeHtml(studyActionReason)}"`}>Choose ${escapeHtml(counterpartLabel)} for Run setup</button>
       <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
       ${editButton}
@@ -12507,7 +12708,7 @@ async function loadRunDetail(runId, options = {}) {
     if (preserveCandidateRoute) state.activeRunTab = "candidate";
     else if (!options.keepTab || showLoadingState) state.activeRunTab = initialRunDetailTab(detail);
     if (!options.skipListRender || exactSummaryAdded || listVisibilityChanged) renderRuns();
-    renderRunDetail();
+    renderRunDetail({ preserveScroll: options.preserveScroll });
     renderAssistant();
     if (exactSummaryAdded) renderOpenWork();
     loadSelectedRunOperatorJobs({ silent: state.operatorJobsLoaded });
@@ -12746,7 +12947,36 @@ function updateRunDetailRefreshNoticeInPlace() {
   );
 }
 
-function renderRunDetail() {
+function restoreRunDetailScroll(scrollTop) {
+  if (!Number.isFinite(scrollTop) || !els.runDetail) return;
+  const runId = state.selectedRunId;
+  const apply = () => {
+    if (!els.runDetail || state.selectedRunId !== runId) return;
+    const maximum = Math.max(0, els.runDetail.scrollHeight - els.runDetail.clientHeight);
+    els.runDetail.scrollTop = Math.min(scrollTop, maximum);
+  };
+  apply();
+  // Replacing the detail markup can leave scrollHeight at its previous,
+  // temporarily shorter value until layout runs. Restore again on the next
+  // frame so a tall Candidate (notably the Best Candidate) is not clamped
+  // toward the top while its detail panel is being laid out.
+  window.requestAnimationFrame(apply);
+}
+
+function renderRunDetail(options = {}) {
+  const selectedDetailRunId = state.selectedRun && state.selectedRun.run
+    ? canonicalRunId(state.selectedRun.run)
+    : null;
+  const preserveSelectedCandidateScroll = Boolean(
+    state.routedCandidateId
+    && selectedDetailRunId
+    && selectedDetailRunId === state.selectedRunId,
+  );
+  const shouldPreserveScroll = options.preserveScroll !== false
+    && (options.preserveScroll === true || preserveSelectedCandidateScroll);
+  const preservedScrollTop = shouldPreserveScroll && els.runDetail
+    ? els.runDetail.scrollTop
+    : null;
   renderSelectionContentHost();
   const loadingSelectedRun = Boolean(
     state.selectedRunId
@@ -12816,24 +13046,19 @@ function renderRunDetail() {
   }
   const runLabel = run.name || runId;
   const status = runStatus(summary);
-  const objective = runObjective(summary);
   const counts = runCounts(summary);
-  const headlineResult = runHeadlineResult(detail);
   const budget = summary.budget || {};
   const overview = exactRunOverview(detail);
   const overviewCounts = overview && overview.counts || {};
-  const candidateCounts = overviewCounts.candidates || {};
   const trialCounts = overviewCounts.logical_trials || {};
   const plannedTrials = trialCounts.planned ?? budget.max_trials;
-  const progress = plannedTrials == null
-    ? `${counts.terminalTrials} complete`
-    : `${counts.terminalTrials} / ${plannedTrials}`;
-  const completeCandidates = candidateCounts.complete
-    ?? Number(overview && overview.objective_series && overview.objective_series.total_complete_candidates || 0);
   const completionMessage = runCompletionMessage(summary, status);
   const canStopRun = Boolean(run.can_stop);
   const technicalTabs = runTechnicalTabs();
   const activeTechnicalTab = technicalTabs.find(([tab]) => tab === state.activeRunTab);
+  const focusedCandidateMode = Boolean(state.routedCandidateId);
+  const shortlistAvailable = Boolean(reviewCollection(detail));
+  const activeSecondaryPanel = Boolean(activeTechnicalTab || state.activeRunTab === "review");
   const recordedUpdateValue = run.updated_at || summary.updated_at || "";
   const refreshNotice = runDetailRefreshNoticeHtml(run, summary);
   const progressGuidance = runProgressGuidance(
@@ -12845,8 +13070,9 @@ function renderRunDetail() {
     detail,
   );
   els.runDetail.innerHTML = `
-    <div class="detail-heading">
+    <div class="detail-heading run-detail-heading">
       <div>
+        <span class="eyebrow">${focusedCandidateMode ? "Source Run" : "Experiment Run"}</span>
         <h2>${escapeHtml(runLabel)}</h2>
         ${runLabel !== runId ? `<p class="run-identity" title="${escapeHtml(runId)}">Run ${escapeHtml(runId)}</p>` : ""}
       </div>
@@ -12855,35 +13081,27 @@ function renderRunDetail() {
         ${canStopRun ? `<button class="ghost-button stop-selected-run" type="button">Stop Run</button>` : ""}
       </div>
     </div>
-    ${runTrialMapHtml(detail)}
     ${runLineageHtml(detail.lineage, run.name)}
     ${refreshNotice}
-    <div class="detail-stats run-headline-stats">
-      <div><span>Trial progress</span><strong>${escapeHtml(progress)}</strong></div>
-      <div><span>Complete Candidates</span><strong>${escapeHtml(completeCandidates)}</strong></div>
-      <div><span>Objective</span><strong>${escapeHtml(`${objective.name || "Not reported"}${objective.direction ? ` · ${objective.direction}` : ""}`)}</strong></div>
-      <div><span>${escapeHtml(headlineResult.label)}</span><strong>${escapeHtml(headlineResult.value)}</strong></div>
-    </div>
     ${completionMessage ? `<p class="muted-text run-stop-code">${escapeHtml(completionMessage)}</p>` : ""}
     ${progressGuidance}
-    <div class="tabs" ${runWorkbenchTabs(detail).some(([tab]) => tab === state.activeRunTab) ? 'role="tablist" aria-orientation="horizontal"' : ""} aria-label="Run result sections" data-run-tablist>
-      ${runWorkbenchTabs(detail).map(([tab, label]) => runTabButtonHtml(tab, label, detail)).join("")}
+    ${runTrialMapHtml(detail)}
+    <div class="run-secondary-navigation">
+      ${shortlistAvailable ? `<button class="ghost-button compact-action ${state.activeRunTab === "review" ? "active" : ""}" data-run-tab="review" type="button" aria-pressed="${state.activeRunTab === "review" ? "true" : "false"}">Shortlist</button>` : ""}
+      <details class="run-more-navigation" ${activeTechnicalTab ? "open" : ""}>
+        <summary>Evidence & history${activeTechnicalTab ? ` · ${escapeHtml(activeTechnicalTab[1])}` : ""}</summary>
+        <div class="run-more-actions">
+          ${technicalTabs.map(([tab, label]) => `<button class="ghost-button compact-action ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button" aria-pressed="${state.activeRunTab === tab ? "true" : "false"}">${escapeHtml(label)}</button>`).join("")}
+        </div>
+      </details>
     </div>
-    <details class="run-more-navigation" ${activeTechnicalTab ? "open" : ""}>
-      <summary>Technical evidence${activeTechnicalTab ? ` · ${escapeHtml(activeTechnicalTab[1])}` : ""}</summary>
-      <div class="run-more-actions">
-        ${technicalTabs.map(([tab, label]) => `<button class="ghost-button compact-action ${state.activeRunTab === tab ? "active" : ""}" data-run-tab="${tab}" type="button" aria-pressed="${state.activeRunTab === tab ? "true" : "false"}">${escapeHtml(label)}</button>`).join("")}
-      </div>
-    </details>
-    ${runTabPanelHtml(detail)}
+    ${activeSecondaryPanel ? runTabPanelHtml(detail) : ""}
   `;
   els.runDetail.querySelectorAll("[data-run-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       activateRunTab(button.dataset.runTab, { restoreFocus: button.getAttribute("role") === "tab" });
     });
   });
-  const runTablist = els.runDetail.querySelector("[data-run-tablist]");
-  if (runTablist) runTablist.addEventListener("keydown", handleRunTablistKeydown);
   els.runDetail.querySelectorAll("[data-refresh-run-detail]").forEach((button) => {
     bindRunDetailRefreshButton(button, runId);
   });
@@ -12913,6 +13131,7 @@ function renderRunDetail() {
   });
   bindWorkbenchEntityActions();
   bindOperatorJobEvents();
+  restoreRunDetailScroll(preservedScrollTop);
   if (state.routedCandidateId) {
     window.requestAnimationFrame(ensureFocusedCandidateInspection);
   }
@@ -12923,13 +13142,34 @@ function renderRunDetail() {
 
 function runTrialNodes(detail) {
   const trials = workbenchPage(detail, "logical_trial").items || [];
-  const candidateValues = new Map();
+  const candidateInfo = new Map();
   (workbenchPage(detail, "candidate").items || []).forEach((item) => {
-    const value = item && item.data && item.data.result && item.data.result.aggregate
-      && item.data.result.aggregate.value;
-    if (item && item.id !== undefined && typeof value === "number") {
-      candidateValues.set(String(item.id), value);
-    }
+    if (!item || item.id === undefined) return;
+    const data = item.data && typeof item.data === "object" ? item.data : {};
+    const result = data.result && typeof data.result === "object" ? data.result : {};
+    const aggregate = result.aggregate && typeof result.aggregate === "object" ? result.aggregate : {};
+    const comparison = result.comparison && typeof result.comparison === "object" ? result.comparison : {};
+    const objective = result.objective && typeof result.objective === "object" ? result.objective : {};
+    candidateInfo.set(String(item.id), {
+      value: typeof aggregate.value === "number" ? aggregate.value : null,
+      rank: Number.isInteger(comparison.rank) ? comparison.rank : null,
+      comparisonEligible: comparison.eligible === true,
+      sampleCount: aggregate.sample_count ?? null,
+      metric: String(objective.metric || ""),
+      format: String(data.format || ""),
+    });
+  });
+  const attemptsByTrial = new Map();
+  (workbenchPage(detail, "attempt").items || []).forEach((item) => {
+    const trialId = String(item && item.data && item.data.logical_trial_id || "");
+    if (!trialId) return;
+    if (!attemptsByTrial.has(trialId)) attemptsByTrial.set(trialId, []);
+    attemptsByTrial.get(trialId).push(item);
+  });
+  const observationByTrial = new Map();
+  (workbenchPage(detail, "observation").items || []).forEach((item) => {
+    const trialId = String(item && item.data && item.data.logical_trial_id || "");
+    if (trialId) observationByTrial.set(trialId, item);
   });
   const nodes = trials.map((item) => {
     const data = item && item.data || {};
@@ -12940,14 +13180,47 @@ function runTrialNodes(detail) {
         ? "succeeded"
         : "failed";
     const candidateId = String(data.candidate_id || "");
+    const candidate = candidateInfo.get(candidateId) || {};
+    const attempts = attemptsByTrial.get(String(item.id || "")) || [];
+    const observationItem = observationByTrial.get(String(item.id || "")) || null;
+    const observation = observationItem && observationItem.data || {};
+    const metrics = observation.metrics && Array.isArray(observation.metrics.rows)
+      ? observation.metrics.rows
+      : [];
+    const constraints = observation.constraints && Array.isArray(observation.constraints.rows)
+      ? observation.constraints.rows
+      : [];
+    const reportedArtifacts = Math.max(
+      Number(observation.artifact_count || 0),
+      ...attempts.map((attempt) => Number(attempt && attempt.data && attempt.data.artifact_count || 0)),
+    );
     return {
       id: String(item.id || ""),
       sequence: Number(data.accepted_sequence || 0),
       status,
       candidateId,
-      value: candidateValues.has(candidateId) ? candidateValues.get(candidateId) : null,
+      // A Candidate value is an aggregate across its Trials. Keep it beside,
+      // rather than in place of, the objective observed for this one Trial.
+      value: typeof observation.objective_value === "number"
+        ? observation.objective_value
+        : null,
+      candidateAggregateValue: typeof candidate.value === "number" ? candidate.value : null,
+      rank: candidate.rank ?? null,
+      comparisonEligible: candidate.comparisonEligible === true,
+      sampleCount: candidate.sampleCount ?? null,
+      metric: String(candidate.metric || observation.objective_metric || ""),
+      candidateFormat: String(candidate.format || ""),
       code: data.code ? String(data.code) : "",
       attemptCount: Number(data.attempt_count || 0),
+      attempts,
+      observationId: String(observationItem && observationItem.id || ""),
+      observationOutcome: String(observation.outcome || ""),
+      wallClockSeconds: typeof observation.wall_clock_seconds === "number" ? observation.wall_clock_seconds : null,
+      metrics,
+      constraints,
+      artifactCount: reportedArtifacts,
+      outputCount: Number(observation.output_declaration_count || 0),
+      phase: String(observation.phase || ""),
     };
   });
   nodes.sort((left, right) => left.sequence - right.sequence);
@@ -12959,76 +13232,271 @@ function runTrialNodes(detail) {
   return nodes;
 }
 
+
+function runCandidateGroups(detail, nodes = runTrialNodes(detail)) {
+  const groups = [];
+  const byId = new Map();
+  const candidateItems = [...(workbenchPage(detail, "candidate").items || [])];
+  const routedCandidate = routedCandidateResolution(detail);
+  const focusedCandidate = routedCandidate && routedCandidate.candidate;
+  if (
+    focusedCandidate
+    && !candidateItems.some((item) => item && item.id === focusedCandidate.id)
+  ) candidateItems.unshift(focusedCandidate);
+  candidateItems.forEach((item) => {
+    if (!item || item.id === undefined) return;
+    const data = item.data && typeof item.data === "object" ? item.data : {};
+    const result = data.result && typeof data.result === "object" ? data.result : {};
+    const aggregate = result.aggregate && typeof result.aggregate === "object" ? result.aggregate : {};
+    const comparison = result.comparison && typeof result.comparison === "object" ? result.comparison : {};
+    const objective = result.objective && typeof result.objective === "object" ? result.objective : {};
+    const counts = result.counts && typeof result.counts === "object" ? result.counts : {};
+    const group = {
+      id: String(item.id),
+      acceptedSequence: Number(data.accepted_sequence || 0),
+      format: String(data.format || ""),
+      value: typeof aggregate.value === "number" ? aggregate.value : null,
+      sampleCount: Number(aggregate.sample_count ?? counts.usable_objectives ?? 0),
+      rank: Number.isInteger(comparison.rank) ? comparison.rank : null,
+      comparisonEligible: comparison.eligible === true,
+      resultStatus: String(result.status || ""),
+      metric: String(objective.metric || ""),
+      logicalTrialCount: Number(data.logical_trial_count ?? counts.logical_trials ?? 0),
+      attempts: Number(counts.attempts || 0),
+      retries: Number(counts.retries || 0),
+      successfulTrials: Number(counts.successful || 0),
+      failedTrials: Number(counts.terminal_failures || 0),
+      trials: [],
+    };
+    groups.push(group);
+    byId.set(group.id, group);
+  });
+  nodes.forEach((node) => {
+    let group = byId.get(node.candidateId);
+    if (!group) {
+      group = {
+        id: node.candidateId || `candidate-for-${node.id}`,
+        acceptedSequence: node.sequence,
+        format: node.candidateFormat,
+        value: node.candidateAggregateValue,
+        sampleCount: node.sampleCount || 0,
+        rank: node.rank,
+        comparisonEligible: node.comparisonEligible,
+        resultStatus: "",
+        metric: node.metric,
+        logicalTrialCount: 0,
+        attempts: 0,
+        retries: 0,
+        successfulTrials: 0,
+        failedTrials: 0,
+        trials: [],
+      };
+      groups.push(group);
+      byId.set(group.id, group);
+    }
+    group.trials.push(node);
+  });
+  groups.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
+  groups.forEach((group, index) => {
+    group.ordinal = index + 1;
+    group.trials.sort((left, right) => left.sequence - right.sequence);
+    const running = group.trials.some((trial) => trial.status === "running");
+    const succeeded = group.trials.some((trial) => trial.status === "succeeded");
+    const failed = group.trials.length > 0 && group.trials.every((trial) => trial.status === "failed");
+    group.status = running
+      ? "running"
+      : typeof group.value === "number" || succeeded
+        ? "succeeded"
+        : failed
+          ? "failed"
+          : "pending";
+    group.totalTrials = Math.max(group.logicalTrialCount, group.trials.length);
+  });
+  return groups;
+}
+
 function runTrialMapHtml(detail) {
   const summary = detail.workbench.summary || detail.run || {};
   const runId = canonicalRunId(detail.run) || summary.run_id;
   const nodes = runTrialNodes(detail);
+  const groups = runCandidateGroups(detail, nodes);
   const planned = Number((summary.budget || {}).max_trials || 0);
-  if (!nodes.length && !planned) return "";
-  const direction = String(runObjective(summary).direction || "maximize");
-  let best = null;
-  nodes.forEach((node) => {
-    if (typeof node.value !== "number") return;
-    if (
-      best === null
-      || (direction === "minimize" ? node.value < best.value : node.value > best.value)
-    ) {
-      best = node;
-    }
+  if (!groups.length && !planned) return "";
+  const objective = runObjective(summary);
+  const direction = String(objective.direction || "maximize");
+  const overviewBest = runOverviewBest(detail);
+  const valueGroups = groups.filter((group) => typeof group.value === "number" && Number.isFinite(group.value));
+  const best = overviewBest.available
+    ? groups.find((group) => group.id === overviewBest.candidateId) || null
+    : null;
+  const soleResult = !best && valueGroups.length === 1 ? valueGroups[0] : null;
+  groups.forEach((group) => {
+    group.isBest = Boolean(best && best.id === group.id);
   });
-  // With nothing chosen, show what is happening now rather than nothing: the
-  // running trial, or failing that the most recent one. A person opening a
-  // live Run wants the current trial, not an empty panel.
-  const liveNode = [...nodes].reverse().find((node) => node.status === "running");
-  const selectedId = state.selectedRunTrialIds[runId]
-    || (liveNode ? liveNode.id : (nodes.length ? nodes[nodes.length - 1].id : ""));
-  const chips = nodes.map((node) => {
-    const isBest = best && node.id === best.id;
-    const label = node.ordinal || "?";
-    const valueText = typeof node.value === "number" ? formatMetricNumber(node.value) : "";
+  const liveGroup = [...groups].reverse().find((group) => group.status === "running");
+  // Candidate tabs are the Run's upper loop. Preserve an explicit selection;
+  // otherwise open the Candidate that is most useful right now: a live one
+  // while work is running, the leading one after completion, or the first
+  // accepted Candidate as a final fallback. This selection is local UI state
+  // and does not navigate or move the user's scroll position.
+  const preferredId = String(
+    state.routedCandidateId
+    || state.selectedRunCandidateIds[runId]
+    || (liveGroup ? liveGroup.id : "")
+    || (best ? best.id : "")
+    || (groups[0] ? groups[0].id : ""),
+  );
+  const selected = groups.find((group) => group.id === preferredId) || null;
+  if (selected) state.selectedRunCandidateIds[runId] = selected.id;
+  const selectedTrialId = selected && (
+    selected.trials.some((trial) => trial.id === state.selectedRunTrialIds[runId])
+      ? state.selectedRunTrialIds[runId]
+      : (selected.trials.find((trial) => trial.status === "running") || selected.trials[0] || {}).id
+  );
+  if (selectedTrialId) state.selectedRunTrialIds[runId] = selectedTrialId;
+
+  const candidateValues = valueGroups.map((group) => group.value);
+  const minimum = candidateValues.length ? Math.min(...candidateValues) : null;
+  const maximum = candidateValues.length ? Math.max(...candidateValues) : null;
+  const scoreWidth = (group) => {
+    if (typeof group.value !== "number") return 0;
+    if (minimum === maximum) return 100;
+    const normalized = direction === "minimize"
+      ? (maximum - group.value) / (maximum - minimum)
+      : (group.value - minimum) / (maximum - minimum);
+    return Math.round(18 + normalized * 82);
+  };
+  const candidateCards = groups.map((group) => {
+    const value = typeof group.value === "number" ? formatMetricNumber(group.value) : "—";
+    const rank = group.comparisonEligible && group.rank
+      ? `Rank #${group.rank}`
+      : group.status === "running"
+        ? "Evaluating"
+        : group.status === "failed"
+          ? "No result"
+          : "Not ranked";
+    const trialLabel = `${group.totalTrials} trial${group.totalTrials === 1 ? "" : "s"}`;
     return `
-      <button
-        class="run-trial-node run-trial-${node.status}${node.id === selectedId ? " selected" : ""}${isBest ? " best" : ""}"
-        type="button"
-        data-run-trial-id="${escapeHtml(node.id)}"
-        title="Trial ${escapeHtml(String(label))} · ${escapeHtml(node.status)}${valueText ? ` · ${escapeHtml(valueText)}` : ""}"
-        aria-pressed="${node.id === selectedId ? "true" : "false"}"
-      >
-        <span class="run-trial-index">${escapeHtml(String(label))}</span>
-        <span class="run-trial-value">${escapeHtml(valueText || (node.status === "running" ? "…" : ""))}</span>
-        ${isBest ? '<span class="run-trial-best" aria-label="Best so far">★</span>' : ""}
+      <button id="run-candidate-tab-${escapeHtml(String(group.ordinal))}" class="run-candidate-node run-candidate-${escapeHtml(group.status)}${selected && group.id === selected.id ? " selected" : ""}${group.isBest ? " best" : ""}" type="button" role="tab" data-open-candidate-route="${escapeHtml(group.id)}" aria-label="Candidate ${escapeHtml(String(group.ordinal))}: ${escapeHtml(group.id)}. ${escapeHtml(rank)}, ${escapeHtml(trialLabel)}, ${escapeHtml(value)} ${escapeHtml(group.metric || objective.name || "result")}${group.isBest ? ". Best Candidate" : ""}." aria-selected="${selected && group.id === selected.id ? "true" : "false"}" aria-controls="run-candidate-tab-content" tabindex="${selected ? (group.id === selected.id ? "0" : "-1") : (group.ordinal === 1 ? "0" : "-1")}">
+        <span class="run-candidate-order">${escapeHtml(String(group.ordinal))}</span>
+        <span class="run-candidate-node-copy"><strong title="${escapeHtml(group.id)}">${escapeHtml(compactCandidateLabel(group.id))}</strong><small>${escapeHtml(rank)} · ${escapeHtml(trialLabel)}</small></span>
+        <span class="run-candidate-node-result"><strong>${escapeHtml(value)}</strong><small>${escapeHtml(group.metric || objective.name || "result")}</small></span>
+        <span class="run-candidate-result-bar" aria-hidden="true"><i style="width:${scoreWidth(group)}%"></i></span>
+        ${group.isBest ? '<span class="run-candidate-best">Best</span>' : ""}
       </button>
     `;
-  });
-  // Trials arrive one page at a time. When more are unloaded, the remaining
-  // budget is unknown -- drawing the difference as "planned" labelled trials
-  // that had already run and finished as though they had never started.
-  const trialPaging = (workbenchPage(detail, "logical_trial").page) || {};
-  const moreTrialsUnloaded = Boolean(trialPaging.has_more);
-  const ghostCount = moreTrialsUnloaded ? 0 : Math.max(0, planned - nodes.length);
-  const ghosts = Array.from({ length: Math.min(ghostCount, 64) }, (_, index) => `
-    <span class="run-trial-node run-trial-planned" title="Not started yet">
-      <span class="run-trial-index">${nodes.length + index + 1}</span>
-    </span>
-  `);
-  const selected = nodes.find((node) => node.id === selectedId) || null;
+  }).join("");
+
+  const counts = runCounts(summary);
+  const terminalTrials = counts.terminalTrials;
+  const progressPercent = planned > 0 ? Math.min(100, Math.round((terminalTrials / planned) * 100)) : 0;
+  const resultLabel = best
+    ? formatMetricNumber(best.value)
+    : soleResult
+      ? formatMetricNumber(soleResult.value)
+      : liveGroup
+        ? "In progress"
+        : valueGroups.length > 1
+          ? "Not comparable"
+          : "No result";
+  const resultNarrative = best
+    ? `${best.id} has the best comparable aggregate across ${best.sampleCount || best.totalTrials} successful trial${(best.sampleCount || best.totalTrials) === 1 ? "" : "s"}.`
+    : soleResult
+      ? `${soleResult.id} produced the only complete Candidate result in this Run.`
+      : liveGroup
+        ? `${liveGroup.id} is being evaluated. Its aggregate result updates as its trials finish.`
+        : valueGroups.length > 1
+          ? runOverviewBestReason(overviewBest.reason)
+          : "No Candidate has a usable aggregate result yet. Select a Candidate below to inspect its trials.";
+  const usefulCandidate = best || soleResult;
+  const candidatePaging = workbenchPage(detail, "candidate").page || {};
+  const trialPaging = workbenchPage(detail, "logical_trial").page || {};
+  const candidatePage = workbenchPage(detail, "candidate");
+  const routedResolution = routedCandidateResolution(detail);
+  const focusedCandidate = routedResolution && routedResolution.candidate
+    || (candidatePage.items || []).find((item) => item && selected && item.id === selected.id)
+    || null;
+  const candidateContent = selected
+    ? `${runCandidateInspectorHtml(detail, selected, selectedTrialId)}${renderEmbeddedCandidateDetails(detail, candidatePage, focusedCandidate)}`
+    : `<div class="run-candidate-tab-empty"><strong>Select a Candidate</strong><span>Choose a Candidate tab to inspect its result, trials, saved contents, and available actions.</span></div>`;
   return `
-    <section class="run-trial-map-panel">
-      <div class="run-trial-map-heading">
-        <strong>Trials</strong>
-        <span class="study-card-help">Each chip is one trial in order. Click a trial to inspect its Candidate and result${best ? "; ★ marks the best result so far" : ""}.</span>
+    <section class="run-outcome-hero run-status-${escapeHtml(runStatus(summary))}" aria-label="Run outcome">
+      <div class="run-outcome-main">
+        <span class="eyebrow">Outcome at a glance</span>
+        <div class="run-outcome-value">${escapeHtml(resultLabel)}</div>
+        <div class="run-outcome-objective"><strong>${escapeHtml(objective.name || "Objective not reported")}</strong><span>${escapeHtml(direction === "minimize" ? "Lower is better" : "Higher is better")}</span></div>
+        <p>${escapeHtml(resultNarrative)}</p>
+        ${usefulCandidate ? `<button class="primary-button compact-action" data-open-candidate-route="${escapeHtml(usefulCandidate.id)}" data-candidate-scroll-target="candidate-section" type="button">${best ? "Open leading Candidate" : "Open complete Candidate"}</button>` : ""}
       </div>
-      <div class="run-trial-map" role="group" aria-label="Trial progress map">
-        ${chips.join('<span class="run-trial-connector" aria-hidden="true"></span>')}
-        ${ghosts.length ? `<span class="run-trial-connector" aria-hidden="true"></span>${ghosts.join('<span class="run-trial-connector" aria-hidden="true"></span>')}` : ""}
+      <div class="run-outcome-progress">
+        <div class="run-progress-heading"><span>Run progress</span><strong>${escapeHtml(`${terminalTrials} of ${planned || terminalTrials}`)} trials</strong></div>
+        <div class="run-progress-track" role="progressbar" aria-label="Completed trials" aria-valuemin="0" aria-valuemax="${escapeHtml(String(planned || terminalTrials || 1))}" aria-valuenow="${escapeHtml(String(terminalTrials))}"><i style="width:${progressPercent}%"></i></div>
+        <div class="run-outcome-facts">
+          <div><strong>${escapeHtml(String(valueGroups.length))}</strong><span>complete Candidates</span></div>
+          <div><strong>${escapeHtml(String(counts.finalFailures))}</strong><span>failed trials</span></div>
+          <div><strong>${escapeHtml(String(counts.retries))}</strong><span>retries</span></div>
+        </div>
       </div>
-      ${moreTrialsUnloaded ? `
-      <p class="run-trial-map-truncated">
-        Showing the first ${escapeHtml(String(nodes.length))} trials.
-        <button class="ghost-button compact-action" data-run-page-more="logical_trial" type="button" ${state.runPageLoadingKind === "logical_trial" ? "disabled" : ""}>${state.runPageLoadingKind === "logical_trial" ? "Loading…" : "Load the rest"}</button>
-      </p>` : ""}
-      ${selected ? runTrialInspectorHtml(detail, selected) : ""}
     </section>
+    <section class="run-general-summary" aria-label="Run summary">
+      ${runOverview(detail)}
+    </section>
+    <section class="run-candidate-map-panel" data-run-candidate-section>
+      <div class="run-candidate-map-heading">
+        <div><span class="eyebrow">Explore the Run</span><h3>Candidates</h3><p>Each Candidate is a proposed solution. Select one to review its overall score, recorded trials, saved files, and next actions.</p></div>
+        <div class="run-candidate-legend" aria-label="Candidate legend"><span><i class="succeeded"></i>Complete</span><span><i class="running"></i>Evaluating</span><span><i class="failed"></i>No score</span>${best ? '<span><i class="best"></i>Best</span>' : ""}</div>
+      </div>
+      <div class="run-candidate-map" role="tablist" aria-label="Candidates in accepted order">${candidateCards}</div>
+      <div id="run-candidate-tab-content" class="run-candidate-tab-content" role="tabpanel" ${selected ? `aria-labelledby="run-candidate-tab-${escapeHtml(String(selected.ordinal))}"` : 'aria-label="Candidate details"'}>${candidateContent}</div>
+      ${candidatePaging.has_more || trialPaging.has_more ? `<div class="run-candidate-load-more">
+        ${candidatePaging.has_more ? `<button class="ghost-button compact-action" data-run-page-more="candidate" type="button" ${state.runPageLoadingKind === "candidate" ? "disabled" : ""}>${state.runPageLoadingKind === "candidate" ? "Loading…" : "Load more Candidates"}</button>` : ""}
+        ${trialPaging.has_more ? `<button class="ghost-button compact-action" data-run-page-more="logical_trial" type="button" ${state.runPageLoadingKind === "logical_trial" ? "disabled" : ""}>${state.runPageLoadingKind === "logical_trial" ? "Loading…" : "Load more trials"}</button>` : ""}
+      </div>` : ""}
+    </section>
+  `;
+}
+
+function runCandidateInspectorHtml(detail, group, selectedTrialId) {
+  const selectedTrial = group.trials.find((trial) => trial.id === selectedTrialId) || group.trials[0] || null;
+  const selectedTrialWithinCandidate = selectedTrial ? group.trials.indexOf(selectedTrial) + 1 : 0;
+  const aggregate = typeof group.value === "number"
+    ? formatMetricNumber(group.value)
+    : group.status === "running"
+      ? "Calculating"
+      : "No usable score";
+  const rank = group.comparisonEligible && group.rank ? `Rank #${group.rank}` : "Not ranked";
+  const sampleCount = group.sampleCount || group.successfulTrials || group.trials.filter((trial) => trial.status === "succeeded").length;
+  const statusLabel = group.status === "running" ? "Evaluating" : group.status === "succeeded" ? "Complete" : group.status === "failed" ? "No result" : "Waiting";
+  const trialRows = group.trials.map((trial, index) => {
+    const value = typeof trial.value === "number" ? formatMetricNumber(trial.value) : trial.status === "running" ? "Running" : "—";
+    return `<button class="run-candidate-trial-row run-trial-${escapeHtml(trial.status)}${selectedTrial && trial.id === selectedTrial.id ? " selected" : ""}" type="button" data-run-trial-id="${escapeHtml(trial.id)}" aria-pressed="${selectedTrial && trial.id === selectedTrial.id ? "true" : "false"}">
+      <span class="run-candidate-trial-index">${escapeHtml(String(index + 1))}</span>
+      <span class="run-candidate-trial-copy"><strong>Trial ${escapeHtml(String(index + 1))}</strong><small>${escapeHtml(trial.status === "succeeded" ? "Succeeded" : trial.status === "running" ? "Evaluating" : "Failed")}</small></span>
+      <span class="run-candidate-trial-result"><strong>${escapeHtml(value)}</strong><small>${escapeHtml(trial.metric || group.metric || "result")}</small></span>
+      <span class="run-candidate-trial-attempts">${escapeHtml(String(trial.attemptCount || 1))} attempt${trial.attemptCount === 1 ? "" : "s"}</span>
+    </button>`;
+  }).join("");
+  return `
+    <article class="run-candidate-inspector">
+      <header class="run-candidate-inspector-heading">
+        <div><span class="eyebrow">Selected Candidate</span><h3>${escapeHtml(group.id)}</h3></div>
+        <div class="run-candidate-inspector-badges">${group.isBest ? '<span class="run-best-badge">Best result</span>' : ""}<span class="status-pill status-${escapeHtml(group.status)}">${escapeHtml(statusLabel)}</span></div>
+      </header>
+      <div class="run-candidate-summary">
+        <div class="run-candidate-score"><span>Overall ${escapeHtml(group.metric || "score")}</span><strong>${escapeHtml(aggregate)}</strong><small>${escapeHtml(rank)} · ${escapeHtml(String(sampleCount))} usable trial${sampleCount === 1 ? "" : "s"}</small></div>
+        <dl class="run-candidate-facts">
+          <div><dt>Recorded trials</dt><dd>${escapeHtml(group.totalTrials)} trial${group.totalTrials === 1 ? "" : "s"}</dd></div>
+          <div><dt>Successful</dt><dd>${escapeHtml(String(group.successfulTrials || group.trials.filter((trial) => trial.status === "succeeded").length))}</dd></div>
+          <div><dt>Attempts</dt><dd>${escapeHtml(String(group.attempts || group.trials.reduce((total, trial) => total + (trial.attemptCount || 0), 0)))}</dd></div>
+          <div><dt>Format</dt><dd>${escapeHtml(group.format || "Not reported")}</dd></div>
+        </dl>
+      </div>
+      <section class="run-candidate-trials">
+        <div class="run-candidate-trials-heading"><div><span class="eyebrow">Evaluation evidence</span><h4>Trials for this Candidate</h4></div><p>${group.totalTrials === 1 ? "This Candidate was evaluated once." : `This Candidate's aggregate combines ${escapeHtml(String(group.totalTrials))} trials.`}</p></div>
+        ${trialRows ? `<div class="run-candidate-trial-list" role="group" aria-label="Trials for ${escapeHtml(group.id)}">${trialRows}</div>` : '<div class="empty-inline">No trials have been recorded for this Candidate yet.</div>'}
+        ${selectedTrial ? runTrialInspectorHtml(detail, { ...selectedTrial, candidateOrdinal: selectedTrialWithinCandidate }) : ""}
+      </section>
+    </article>
   `;
 }
 
@@ -13048,57 +13516,75 @@ function runTrialInspectorHtml(detail, node) {
           : "Its evaluation is under way. The result appears here when the trial finishes."
       }</p>`
     : "";
+  const valueLabel = typeof node.value === "number"
+    ? formatMetricNumber(node.value)
+    : node.status === "running"
+      ? "Still running"
+      : node.status === "failed"
+        ? "No usable result"
+        : "Not reported";
+  const metricRows = node.metrics
+    .filter((row) => row && row.supported !== false && row.name)
+    .slice(0, 6);
+  const satisfiedConstraints = node.constraints.filter((row) => row && row.supported && row.value === true).length;
+  const violatedConstraints = node.constraints.filter((row) => row && row.supported && row.value === false).length;
+  const duration = node.wallClockSeconds == null
+    ? "Not reported"
+    : node.wallClockSeconds < 1
+      ? `${Math.round(node.wallClockSeconds * 1000)} ms`
+      : `${formatMetricNumber(node.wallClockSeconds)} s`;
   return `
-    <div class="run-trial-inspector">
-      <div class="run-trial-inspector-facts">
-        <div><span>Trial</span><strong>#${escapeHtml(String(node.ordinal))}</strong></div>
-        <div><span>Status</span><strong>${escapeHtml(statusLabel)}</strong></div>
-        <div><span>Result</span><strong>${escapeHtml(
-          typeof node.value === "number"
-            ? formatMetricNumber(node.value)
-            : node.status === "running"
-              ? "still running"
-              : node.status === "failed"
-                ? "none — this trial failed"
-                : "not reported"
-        )}</strong></div>
-        <div><span>Attempts</span><strong>${escapeHtml(String(node.attemptCount || 1))}</strong></div>
-        <div class="run-trial-inspector-candidate"><span>Candidate</span><strong title="${escapeHtml(node.candidateId)}">${escapeHtml(node.candidateId || "-")}</strong></div>
+    <div class="run-trial-inspector run-nested-trial-evidence">
+      <div class="run-trial-inspector-heading">
+        <div>
+          <span class="eyebrow">Selected trial evidence · Run trial ${escapeHtml(String(node.ordinal))}</span>
+          <h3>Trial ${escapeHtml(String(node.candidateOrdinal || node.ordinal))}</h3>
+        </div>
+        <div class="run-trial-inspector-badges">
+          ${node.isBest ? '<span class="run-best-badge">Best result</span>' : ""}
+          <span class="status-pill status-${escapeHtml(node.status)}">${escapeHtml(statusLabel)}</span>
+        </div>
+      </div>
+      <div class="run-trial-score">
+        <span>${escapeHtml(node.metric || "Result")}</span>
+        <strong>${escapeHtml(valueLabel)}</strong>
+        <small>Observed for this trial</small>
       </div>
       ${liveNote}
-      <div class="action-row">
-        <button class="ghost-button compact-action" type="button" data-run-trial-open-candidate="${escapeHtml(node.candidateId)}">Open Candidate details</button>
-        <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="attempt">Attempts</button>
-        <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="observation">Observations</button>
+      <div class="run-trial-inspector-facts">
+        <div><span>Attempts</span><strong>${escapeHtml(String(node.attemptCount || 1))}</strong></div>
+        <div><span>Evaluation time</span><strong>${escapeHtml(duration)}</strong></div>
+        <div><span>Metrics</span><strong>${escapeHtml(String(node.metrics.length))}</strong></div>
+        <div><span>Saved files</span><strong>${escapeHtml(String(node.artifactCount))}</strong></div>
       </div>
+      ${metricRows.length ? `<section class="run-trial-metrics"><div class="run-trial-section-title"><strong>Observed metrics</strong><span>${escapeHtml(String(node.metrics.length))} recorded</span></div><div class="run-trial-metric-grid">${metricRows.map((row) => `<div${row.name === node.metric ? ' class="objective"' : ""}><span>${escapeHtml(row.name)}</span><strong>${formatMetric(row.value)}</strong></div>`).join("")}</div></section>` : ""}
+      ${node.constraints.length ? `<div class="run-trial-constraint-summary"><strong>Constraints</strong><span>${escapeHtml(String(satisfiedConstraints))} satisfied · ${escapeHtml(String(violatedConstraints))} violated</span></div>` : ""}
+      <div class="run-trial-actions">
+        <button class="ghost-button compact-action" type="button" data-run-trial-open-tab="attempt">View attempt history</button>
+        ${node.observationId ? '<button class="ghost-button compact-action" type="button" data-run-trial-open-tab="observation">View observation</button>' : ""}
+        ${node.artifactCount ? '<button class="ghost-button compact-action" type="button" data-run-trial-open-tab="artifact">View saved files</button>' : ""}
+      </div>
+      <details class="run-trial-evidence-ids">
+        <summary>Evidence identifiers</summary>
+        <dl>
+          <div><dt>Trial</dt><dd><code>${escapeHtml(node.id)}</code></dd></div>
+          ${node.observationId ? `<div><dt>Observation</dt><dd><code>${escapeHtml(node.observationId)}</code></dd></div>` : ""}
+          <div><dt>Phase</dt><dd>${escapeHtml(node.phase || "Not reported")}</dd></div>
+          <div><dt>Declared outputs</dt><dd>${escapeHtml(String(node.outputCount))}</dd></div>
+        </dl>
+      </details>
     </div>
   `;
 }
 
 function bindRunTrialMap(runId) {
+  const candidateTablist = els.runDetail.querySelector(".run-candidate-map[role='tablist']");
+  if (candidateTablist) candidateTablist.addEventListener("keydown", handleCandidateTablistKeydown);
   els.runDetail.querySelectorAll("[data-run-trial-id]").forEach((button) => {
     button.addEventListener("click", () => {
       const trialId = button.dataset.runTrialId;
-      state.selectedRunTrialIds[runId] = state.selectedRunTrialIds[runId] === trialId ? "" : trialId;
+      state.selectedRunTrialIds[runId] = trialId;
       renderRunDetail();
-    });
-  });
-  els.runDetail.querySelectorAll("[data-run-trial-open-candidate]").forEach((button) => {
-    button.addEventListener("click", () => {
-      // Setting the route alone renders an empty pane: the candidate detail is
-      // fetched, not held. Follow the same path as the Candidates list links.
-      const candidateId = String(button.dataset.runTrialOpenCandidate || "");
-      if (!candidateId || !runId) return;
-      state.routedCandidateId = candidateId;
-      state.routedCandidateResolution = null;
-      state.routedCandidateFocusApplied = "";
-      state.activeRunTab = "candidate";
-      syncStudioRoute();
-      loadRunDetail(runId, {
-        keepTab: true,
-        skipListRender: true,
-        fromRoute: true,
-      }).catch(() => {});
     });
   });
   els.runDetail.querySelectorAll("[data-run-trial-open-tab]").forEach((button) => {
@@ -13106,6 +13592,28 @@ function bindRunTrialMap(runId) {
       activateRunTab(button.dataset.runTrialOpenTab, { restoreFocus: false });
     });
   });
+}
+
+function handleCandidateTablistKeydown(event) {
+  if (!event.currentTarget || !event.target.closest) return;
+  const current = event.target.closest('[role="tab"]');
+  if (!current || !event.currentTarget.contains(current)) return;
+  const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]:not([disabled])')];
+  const index = tabs.indexOf(current);
+  if (index < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === "Home"
+    ? tabs[0]
+    : event.key === "End"
+    ? tabs[tabs.length - 1]
+    : tabs[(index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+  next.click();
+}
+
+function compactCandidateLabel(candidateId) {
+  const label = String(candidateId || "Candidate");
+  if (label.length <= 32) return label;
+  return `…${label.slice(-31)}`;
 }
 
 function formatMetricNumber(value) {
@@ -13553,8 +14061,9 @@ function operatorJobsPanelBody(runId, candidateId = "") {
   return `
     <div class="operator-jobs-heading">
       <div>
-        <h3>Candidate tries</h3>
-        <p>${candidateId ? "Trying this Candidate" : "These tries"} ${candidateId ? "does" : "do"} not use the Run's trial budget or change its recorded results, ranking, or best Candidate.</p>
+        ${candidateId ? '<span class="eyebrow">Activity created here</span>' : ""}
+        <h3>${candidateId ? "New tries from this Candidate" : "Candidate tries"}</h3>
+        <p>${candidateId ? "These are new, independent evaluations started from this Candidate page. They are not the source Run's recorded trials and do not change its result, ranking, or best Candidate." : "These tries do not use the Run's trial budget or change its recorded results, ranking, or best Candidate."}</p>
       </div>
       <span class="tag">${escapeHtml(jobs.length)} ${jobs.length === 1 ? "try" : "tries"}</span>
     </div>
@@ -13568,7 +14077,7 @@ function operatorJobsPanelBody(runId, candidateId = "") {
           ${visibleSelected ? renderOperatorJobSummary(visibleSelected) : `<div class="operator-job-empty">Select a try to see its status and result.</div>`}
         </div>
       </div>
-    ` : `<div class="operator-job-empty">${candidateId ? "This Candidate has not been tried yet." : "No Candidate tries have been started for this Run."}</div>`}
+    ` : `<div class="operator-job-empty">${candidateId ? "No new tries have been started from this page yet. The source Run's recorded trials remain available in the Run explorer." : "No Candidate tries have been started for this Run."}</div>`}
   `;
 }
 
@@ -14074,7 +14583,6 @@ const RUN_STOP_REASONS = {
   method_failed: "The method stopped working while proposing candidates. Its error is in the trial evidence below.",
   protocol_error: "The method sent something OptPilot could not read. This usually means the method's code returned the wrong shape.",
   method_completed: "The method finished proposing candidates before the budget was used up.",
-  max_trials: "The Run finished its planned trials.",
 };
 
 function runCompletionMessage(summary, status) {
@@ -14087,7 +14595,7 @@ function runCompletionMessage(summary, status) {
   }
   if (["cancelled", "canceled"].includes(status)) return "This Run was stopped. Results already recorded are still available.";
   if (["completed", "succeeded"].includes(status)) {
-    if (stopCode === "max_trials") return "This Run finished its planned trials.";
+    if (stopCode === "max_trials") return "";
     if (reason) return reason;
   }
   return "";
@@ -14154,10 +14662,7 @@ function coherentRunDetail(detail, expectedRunId) {
 }
 
 function runWorkbenchTabs(detail = state.selectedRun) {
-  const tabs = [
-    ["overview", "Overview"],
-    ["candidate", "Candidates"],
-  ];
+  const tabs = [];
   const shortlist = reviewCollection(detail);
   if (shortlist) {
     tabs.push(["review", "Shortlist"]);
@@ -14181,21 +14686,15 @@ function runTabButtonHtml(tab, label, detail = state.selectedRun) {
 }
 
 function runTabPanelHtml(detail) {
-  const activePrimaryTab = runWorkbenchTabs(detail).find(([tab]) => tab === state.activeRunTab);
-  const accessibility = activePrimaryTab
-    ? `role="tabpanel" aria-labelledby="${escapeHtml(runTabDomId(activePrimaryTab[0]))}"`
-    : 'role="region" aria-label="Run technical details"';
+  const activeLabel = state.activeRunTab === "review"
+    ? "Shortlist"
+    : (runTechnicalTabs().find(([tab]) => tab === state.activeRunTab) || ["", "Run technical details"])[1];
+  const accessibility = `role="region" aria-label="${escapeHtml(activeLabel)}"`;
   return `<div id="run-result-tabpanel" class="tab-content" ${accessibility} tabindex="0">${runTabContent(detail)}</div>`;
 }
 
 function activateRunTab(tab, options = {}) {
   state.activeRunTab = tab;
-  if (state.activeRunTab !== "candidate" && state.routedCandidateId) {
-    state.routedCandidateId = null;
-    state.routedCandidateResolution = null;
-    state.routedCandidateFocusApplied = "";
-    syncStudioRoute();
-  }
   renderRunDetail();
   if (options.restoreFocus) {
     window.requestAnimationFrame(() => {
@@ -14726,36 +15225,45 @@ function runOverview(detail) {
   const budget = summary.budget || {};
   const capabilityNote = runProviderCapabilityNote(detail.workbench);
   const status = runStatus(summary);
+  const attemptPage = workbenchPage(detail, "attempt");
+  const observationPage = workbenchPage(detail, "observation");
+  const artifactPage = workbenchPage(detail, "artifact");
+  const pageCount = (page) => Number(
+    (page && page.page && page.page.count) ?? ((page && page.items || []).length),
+  );
   const bestState = best.available
     ? ""
     : `<div class="run-result-state ${["completed", "succeeded", "failed", "cancelled"].includes(status) ? "warning" : ""}" role="status"><strong>${onlyCompleteCandidate ? "Only one complete Candidate" : `No comparable complete Candidate${["completed", "succeeded", "failed", "cancelled"].includes(status) ? "" : " yet"}`}</strong><span>${escapeHtml(runOverviewBestReason(best.reason))}</span></div>`;
   return `
     ${bestState}
-    <section class="run-next-step" aria-label="What to do with this Run">
-      <div>
-        <h3>Run results</h3>
-        <p>See the overall outcome here. Open Candidates to review individual results, try a Candidate, save it to the Shortlist, or edit its files in a Workspace.</p>
-      </div>
-      ${headlineResult.candidateId ? `<div class="run-next-step-actions"><button class="primary-button compact-action" data-open-candidate-route="${escapeHtml(headlineResult.candidateId)}" type="button">${best.available ? "Open best comparable Candidate" : "Open only complete Candidate"}</button></div>` : ""}
-    </section>
-    <div class="detail-grid run-overview-grid">
-      ${kvPanel("Objective and result", [
-        ["Objective", `${objective.metric || objective.name || "-"} ${objective.direction || ""}`.trim()],
-        ["Aggregation", candidateAggregationLabel(objective.aggregation_mode) || objective.aggregation_mode || "-"],
-        [best.available ? "Best comparable Candidate" : onlyCompleteCandidate ? "Only complete Candidate" : "Best comparable Candidate", best.candidateId || headlineResult.candidateId || "-"],
-        ["Complete Candidate value", headlineResult.candidateId ? headlineResult.value : "-"],
-        ["Trials included in result", headlineResult.sampleCount ?? "-"],
-      ])}
-      ${kvPanel("Progress", [
-        ["Planned trials", trialCounts.planned ?? budget.max_trials ?? "unbounded"],
-        ["Active trials", trialCounts.active ?? counts.acceptedTrials - counts.terminalTrials],
-        ["Completed trials", trialCounts.terminal ?? counts.terminalTrials],
-        ["Complete Candidates", candidateCounts.complete ?? 0],
-        ["Failures requiring attention", (overview && overview.failure_count) ?? counts.finalFailures],
-        ["Retries", counts.retries],
-      ])}
+    <div class="run-summary-cards">
+      <section class="run-summary-card">
+        <span class="eyebrow">Evaluation plan</span>
+        <h3>How Candidates were judged</h3>
+        <dl>
+          <div><dt>Objective</dt><dd>${escapeHtml(objective.metric || objective.name || "Not reported")}</dd></div>
+          <div><dt>Direction</dt><dd>${escapeHtml(objective.direction === "minimize" ? "Minimize · lower is better" : objective.direction === "maximize" ? "Maximize · higher is better" : "Not reported")}</dd></div>
+          <div><dt>Aggregation</dt><dd>${escapeHtml(candidateAggregationLabel(objective.aggregation_mode) || objective.aggregation_mode || "Not reported")}</dd></div>
+          <div><dt>Planned trials</dt><dd>${escapeHtml(String(trialCounts.planned ?? budget.max_trials ?? "Unbounded"))}</dd></div>
+        </dl>
+      </section>
+      <section class="run-summary-card">
+        <span class="eyebrow">Recorded evidence</span>
+        <h3>What this Run saved</h3>
+        <dl>
+          <div><dt>Candidates</dt><dd>${escapeHtml(String(candidateCounts.complete ?? counts.candidates))}</dd></div>
+          <div><dt>Trial attempts</dt><dd>${escapeHtml(String(pageCount(attemptPage)))}</dd></div>
+          <div><dt>Observations</dt><dd>${escapeHtml(String(pageCount(observationPage)))}</dd></div>
+          <div><dt>Saved files</dt><dd>${escapeHtml(String(pageCount(artifactPage)))}</dd></div>
+        </dl>
+      </section>
     </div>
-    <div class="run-observation-insights">
+    <div class="run-overview-section-heading">
+      <span class="eyebrow">Performance</span>
+      <h3>Candidate results across the Run</h3>
+      <p>Use this chart to see whether results improved, how much they varied, and which Candidate is worth opening.</p>
+    </div>
+    <div class="run-observation-insights run-overview-performance">
       ${runCompleteObjectivePanel(detail)}
     </div>
     <details class="run-technical-details">
@@ -14915,12 +15423,16 @@ function capabilityReason(reason) {
     environment_preview_profile_unavailable: "This Run's saved Environment version does not include an interactive interface.",
     environment_preview_profile_incompatible: "This Environment's interactive interface cannot run in the current OptPilot installation.",
     environment_preview_image_untrusted: "The interactive interface requires software that this OptPilot installation has not approved.",
+    environment_preview_image_unavailable: "The approved interactive interface image is not installed on this computer.",
   };
   return messages[code] || "This action is unavailable for this Candidate.";
 }
 
 function renderWorkbenchPage(detail, kind) {
-  const labels = Object.fromEntries(runWorkbenchTabs());
+  const labels = Object.fromEntries([
+    ...runTechnicalTabs(),
+    ["candidate", "Candidates"],
+  ]);
   const page = workbenchPage(detail, kind);
   const items = Array.isArray(page.items) ? page.items : [];
   const entityCapability = detail.workbench.capabilities && detail.workbench.capabilities.entity_pages || {};
@@ -15085,27 +15597,59 @@ function renderFocusedCandidatePage(detail, page, candidate) {
     : aggregate
     ? "Not ranked"
     : "Not available";
+  const sourceRunName = String(detail.run && (detail.run.name || canonicalRunId(detail.run)) || "this Run");
+  const trialCount = Number(counts.logical_trials || 0);
+  const aggregateValue = aggregate ? formatMetric(aggregate.value) : "Not available";
+  const relationshipRanking = ranking.startsWith("#") ? `Rank ${ranking}` : ranking;
   return `
     <div class="candidate-focused-page" data-focused-candidate="${escapeHtml(candidate.id || "")}">
-      <div class="candidate-focused-heading">
-        <button class="ghost-button compact-action" data-clear-candidate-route type="button">Back to Candidates</button>
-        <span class="status-pill ${status.className}">${escapeHtml(status.label)}</span>
-      </div>
-      <div class="candidate-focused-title">
-        <div>
-          <span class="eyebrow">Candidate from this Run</span>
-          <h3 title="${escapeHtml(candidate.id || "")}">${escapeHtml(candidate.id || "Candidate")}</h3>
-          <p>Review this Candidate and its results, then try it, save it to the Shortlist, or edit it in a Workspace.</p>
+      <section class="candidate-focused-hero">
+        <div class="candidate-focused-heading">
+          <button class="ghost-button compact-action" data-clear-candidate-route type="button">← Back to all Candidates</button>
+          <span class="status-pill ${status.className}">${escapeHtml(status.label)}</span>
         </div>
-      </div>
+        <div class="candidate-focused-title">
+          <div>
+            <span class="eyebrow">Selected Candidate</span>
+            <h3 title="${escapeHtml(candidate.id || "")}">${escapeHtml(candidate.id || "Candidate")}</h3>
+            <p>This is one saved proposed solution from <strong>${escapeHtml(sourceRunName)}</strong>. The source Run evaluated it and recorded the result below.</p>
+          </div>
+        </div>
+        <div class="candidate-relationship-flow" aria-label="How this Candidate relates to its Run result">
+          <div class="candidate-relationship-step">
+            <span>1 · Proposed solution</span>
+            <strong>Saved Candidate</strong>
+            <small>${escapeHtml(data.format || "Candidate definition")}</small>
+          </div>
+          <span class="candidate-relationship-arrow" aria-hidden="true">→</span>
+          <div class="candidate-relationship-step">
+            <span>2 · Evaluated by source Run</span>
+            <strong>${escapeHtml(String(trialCount))} recorded trial${trialCount === 1 ? "" : "s"}</strong>
+            <small>${escapeHtml(counts.successful ?? 0)} successful · ${escapeHtml(counts.terminal_failures ?? 0)} failed</small>
+          </div>
+          <span class="candidate-relationship-arrow" aria-hidden="true">→</span>
+          <div class="candidate-relationship-step result">
+            <span>3 · Produced this result</span>
+            <strong>${escapeHtml(aggregateValue)}</strong>
+            <small>${escapeHtml(objectiveLabel)} · ${escapeHtml(relationshipRanking)}</small>
+          </div>
+        </div>
+        <p class="candidate-relationship-note">Actions on this page create new work from the saved Candidate. They never change the source Run, its recorded trials, or this result.</p>
+      </section>
       <section class="candidate-focused-summary" aria-label="Candidate summary">
-        <h4>Results from this Run</h4>
-        <dl class="workbench-data-grid candidate-result-evidence">
-          <div><dt>${escapeHtml(objectiveLabel)}</dt><dd>${aggregate ? formatMetric(aggregate.value) : "Not available"}</dd></div>
-          <div><dt>Rank</dt><dd>${escapeHtml(ranking)}</dd></div>
-          <div><dt>Trials with a usable objective</dt><dd>${escapeHtml(coverage)}</dd></div>
-          <div><dt>Trial outcomes</dt><dd>${escapeHtml(counts.successful ?? 0)} successful · ${escapeHtml(counts.terminal_failures ?? 0)} failed</dd></div>
-        </dl>
+        <div class="candidate-section-heading">
+          <div><span class="eyebrow">Recorded evidence</span><h4>Result in the source Run</h4><p>This aggregate and rank belong to this Candidate only within <strong>${escapeHtml(sourceRunName)}</strong>.</p></div>
+          <span class="tag">Read-only result</span>
+        </div>
+        <div class="candidate-recorded-result">
+          <div class="candidate-recorded-score"><span>${escapeHtml(objectiveLabel)}</span><strong>${escapeHtml(aggregateValue)}</strong><small>${objective.direction ? escapeHtml(objective.direction === "minimize" ? "Lower is better" : "Higher is better") : "Objective direction not reported"}</small></div>
+          <dl class="candidate-recorded-facts">
+            <div><dt>Rank in matching group</dt><dd>${escapeHtml(ranking)}</dd></div>
+            <div><dt>Trials with usable results</dt><dd>${escapeHtml(coverage)}</dd></div>
+            <div><dt>Successful trials</dt><dd>${escapeHtml(String(counts.successful ?? 0))}</dd></div>
+            <div><dt>Failed trials</dt><dd>${escapeHtml(String(counts.terminal_failures ?? 0))}</dd></div>
+          </dl>
+        </div>
         ${candidateResultReason(result.reason || result.comparison && result.comparison.reason) ? `<p class="candidate-result-reason">${escapeHtml(candidateResultReason(result.reason || result.comparison && result.comparison.reason))}</p>` : ""}
       </section>
       ${renderFocusedCandidateActions(candidate, page)}
@@ -15119,9 +15663,41 @@ function renderFocusedCandidatePage(detail, page, candidate) {
         : inspectCapability.supported && !inspectCapability.eligible
         ? `<div class="candidate-detail-loading">Saved values are unavailable: ${escapeHtml(capabilityReason(inspectCapability.reason))}.</div>`
         : ""}
-      ${operatorJobsSection(selectedCanonicalRunId(), String(candidate.id || ""))}
+      <section class="candidate-derived-activity" aria-label="New work created from this Candidate">
+        ${operatorJobsSection(selectedCanonicalRunId(), String(candidate.id || ""))}
+      </section>
       ${renderFocusedCandidateMore(candidate, page)}
     </div>
+  `;
+}
+
+function renderEmbeddedCandidateDetails(detail, page, candidate) {
+  if (!candidate) return renderRoutedCandidateNotice(detail);
+  const selection = candidate.selection && typeof candidate.selection === "object" ? candidate.selection : {};
+  const selectionId = String(selection.selection_id || "");
+  const inspection = state.semanticInspections[selectionId];
+  const inspectCapability = actionCapability(candidate, page, "inspect");
+  const inspectKey = workbenchActionKey(selectionId, "inspect");
+  const inspectPending = state.pendingWorkbenchActions.has(inspectKey);
+  const inspectError = state.workbenchActionErrors[inspectKey];
+  return `
+    <section class="candidate-tab-workspace" aria-label="Selected Candidate details and actions">
+      ${renderFocusedCandidateActions(candidate, page)}
+      ${renderCandidateComparisonPanel()}
+      ${inspection
+        ? renderCandidateInspection(inspection)
+        : inspectPending
+        ? `<div class="candidate-detail-loading" role="status">Loading saved values and evaluation details…</div>`
+        : inspectError
+        ? `<div class="selection-action-error" role="alert">Candidate details were unavailable: ${escapeHtml(inspectError)} <button class="ghost-button compact-action" data-retry-candidate-inspection="${escapeHtml(selectionId)}" type="button">Retry</button></div>`
+        : inspectCapability.supported && !inspectCapability.eligible
+        ? `<div class="candidate-detail-loading">Saved values are unavailable: ${escapeHtml(capabilityReason(inspectCapability.reason))}.</div>`
+        : ""}
+      <section class="candidate-derived-activity" aria-label="New work created from this Candidate">
+        ${operatorJobsSection(selectedCanonicalRunId(), String(candidate.id || ""))}
+      </section>
+      ${renderFocusedCandidateMore(candidate, page)}
+    </section>
   `;
 }
 
@@ -15188,8 +15764,9 @@ function renderFocusedCandidateActions(item, page) {
   return `
     <section class="candidate-focused-actions" aria-labelledby="candidate-actions-title">
       <div class="candidate-focused-action-heading">
-        <h4 id="candidate-actions-title">Candidate actions</h4>
-        <p>Use this Candidate without changing the source Run or its recorded results.</p>
+        <span class="eyebrow">Create new work</span>
+        <h4 id="candidate-actions-title">Use this Candidate</h4>
+        <p>Start new work, view or edit the saved files, or keep this Candidate for comparison. These actions do not change this Run's recorded score or trials.</p>
       </div>
       <div class="candidate-focused-action-toolbar">
         <div class="candidate-focused-primary-actions">
@@ -16249,7 +16826,7 @@ function currentWorkbenchItem(selectionId) {
   return null;
 }
 
-function startCandidateTry(selectionId, trigger = null) {
+function startCandidateTry(selectionId, trigger = null, preferredAction = "") {
   const item = currentWorkbenchItem(selectionId);
   const page = item ? workbenchPage(state.selectedRun, item.kind) : null;
   if (!item || !page) return;
@@ -16261,16 +16838,18 @@ function startCandidateTry(selectionId, trigger = null) {
   const staleNotice = els.runDetail && els.runDetail.querySelector("[data-candidate-try-notice]");
   if (staleNotice) staleNotice.remove();
   const directMode = directCandidateTryMode(modes);
-  if (directMode) {
+  if (directMode && !preferredAction) {
     performWorkbenchAction(directMode.action, selectionId, {
       restoreCandidateTryFocus: true,
     });
     return;
   }
   const eligibleModes = modes.filter((mode) => mode.eligible);
-  const selectedAction = eligibleModes.some((mode) => mode.action === "debug_run")
-    ? "debug_run"
-    : eligibleModes[0] && eligibleModes[0].action || modes[0].action;
+  const selectedAction = eligibleModes.some((mode) => mode.action === preferredAction)
+    ? preferredAction
+    : eligibleModes.some((mode) => mode.action === "debug_run")
+      ? "debug_run"
+      : eligibleModes[0] && eligibleModes[0].action || modes[0].action;
   state.pendingCandidateTry = {
     run_id: selectedCanonicalRunId(),
     run_head: { ...(state.selectedRun && state.selectedRun.workbench && state.selectedRun.workbench.head || {}) },
@@ -16290,10 +16869,13 @@ function shellSingleQuote(value) {
 }
 
 function candidatePreviewTrustCommand(remediation) {
-  if (!remediation || remediation.kind !== "approve_container_gateway_image") return "";
+  if (!remediation || !new Set(["approve_container_gateway_image", "pull_container_image"]).has(remediation.kind)) return "";
   const imageRef = String(remediation.image_ref || "");
   if (!imageRef) return "";
-  return `uv run optpilot environment-preview trust approve ${shellSingleQuote(imageRef)} --yes`;
+  if (remediation.kind === "pull_container_image") {
+    return `docker pull ${shellSingleQuote(imageRef)}`;
+  }
+  return `uv run optpilot environment-preview trust approve ${shellSingleQuote(imageRef)} --yes\ndocker pull ${shellSingleQuote(imageRef)}`;
 }
 
 function renderCandidatePreviewProfileDiagnostics(mode) {
@@ -16306,13 +16888,43 @@ function renderCandidatePreviewProfileDiagnostics(mode) {
     <span class="candidate-try-profile-diagnostics">
       ${blockers.map((profile) => {
         const command = candidatePreviewTrustCommand(profile.remediation);
+        const imageRef = String(profile.remediation && profile.remediation.image_ref || "");
+        const remediationKind = String(profile.remediation && profile.remediation.kind || "");
+        const profileId = String(profile.id || "");
         const trustSource = String(profile.eligibility_detail && profile.eligibility_detail.trust_source || "");
-        const restartInstruction = trustSource === "session"
+        const pending = state.pendingCandidateTry;
+        const approving = Boolean(pending && pending.trust_pending_image === imageRef);
+        const approvalError = pending && pending.trust_error_image === imageRef
+          ? String(pending.trust_error || "")
+          : "";
+        const restartInstruction = trustSource === "session" && remediationKind === "approve_container_gateway_image"
           ? "This Studio is using an exact session-only trust list. After approving, restart without that override, or add this image to the session list."
-          : "Run this command, then restart Studio.";
+          : "Run these commands, then try the Candidate again.";
+        const approvalRequired = remediationKind === "approve_container_gateway_image";
+        const actionTitle = approvalRequired ? "Enable this interface image" : "Download the interface image";
+        const actionDescription = approvalRequired
+          ? "Approve this exact pinned image and download it for interactive previews."
+          : "Restore the exact approved image that this Environment requires.";
+        const actionLabel = approvalRequired ? "Approve & download" : "Download image";
         return `
           <small><strong>${escapeHtml(profile.label || profile.id)}:</strong> ${escapeHtml(capabilityReason(profile.reason))}</small>
-          ${command ? `
+          ${command && (trustSource === "realm" || remediationKind === "pull_container_image") ? `
+            <span class="candidate-try-remediation candidate-try-remediation-enable">
+              <span class="candidate-try-remediation-copy">
+                <strong>${escapeHtml(actionTitle)}</strong>
+                <small>${escapeHtml(actionDescription)}</small>
+              </span>
+              <button
+                class="primary-button compact-action"
+                type="button"
+                data-approve-preview-image="${escapeHtml(imageRef)}"
+                data-approve-preview-profile="${escapeHtml(profileId)}"
+                ${approving ? "disabled" : ""}
+              >${approving ? "Preparing…" : escapeHtml(actionLabel)}</button>
+              <small class="candidate-try-remediation-note">The launch remains offline and uses only this pinned image.</small>
+              ${approvalError ? `<small class="error-text" role="alert">${escapeHtml(approvalError)}</small>` : ""}
+            </span>
+          ` : command ? `
             <span class="candidate-try-remediation">
               <code>${escapeHtml(command)}</code>
               <button class="ghost-button compact-action" type="button" data-copy-preview-trust-command="${escapeHtml(command)}">Copy command</button>
@@ -16323,6 +16935,70 @@ function renderCandidatePreviewProfileDiagnostics(mode) {
       }).join("")}
     </span>
   `;
+}
+
+async function approveCandidatePreviewImage(event) {
+  const button = event.target && event.target.closest
+    ? event.target.closest("[data-approve-preview-image]")
+    : null;
+  if (!button) return;
+  const pending = state.pendingCandidateTry;
+  const imageRef = String(button.dataset.approvePreviewImage || "");
+  const profileId = String(button.dataset.approvePreviewProfile || "");
+  const item = pending && currentWorkbenchItem(pending.selection_id);
+  if (!pending || !item || !item.selection || !imageRef || !profileId) return;
+
+  const runId = String(pending.run_id || "");
+  const routedCandidateId = String(state.routedCandidateId || "");
+  const selectionId = String(pending.selection_id || "");
+  pending.trust_pending_image = imageRef;
+  pending.trust_error = "";
+  pending.trust_error_image = "";
+  button.disabled = true;
+  button.textContent = "Preparing…";
+  try {
+    const result = await postJson(
+      `/api/runs/${encodeURIComponent(runId)}/environment-preview-trust`,
+      {
+        schema: "optpilot.environment-preview-trust-approve-request.v1",
+        request_id: newRequestId(),
+        presentation_selection: item.selection,
+        profile_id: profileId,
+        image_ref: imageRef,
+      },
+    );
+    if (
+      !result
+      || result.schema !== "optpilot.environment-preview-trust-approve-response.v1"
+      || result.run_id !== runId
+      || result.profile_id !== profileId
+      || result.image_ref !== imageRef
+      || result.image_ready !== true
+      || result.restart_required !== false
+    ) throw new Error("Studio did not confirm the interface approval.");
+
+    closeCandidateTrySheet({ restoreFocus: false });
+    const refreshed = await loadRunDetail(runId, {
+      keepTab: true,
+      skipListRender: true,
+      fromRoute: true,
+    });
+    if (!refreshed) throw new Error("Studio could not refresh this Candidate.");
+    if (
+      selectedCanonicalRunId() !== runId
+      || routedCandidateId && String(state.routedCandidateId || "") !== routedCandidateId
+    ) return;
+    startCandidateTry(selectionId, null, "environment_preview");
+  } catch (error) {
+    if (state.pendingCandidateTry !== pending) return;
+    pending.trust_pending_image = "";
+    pending.trust_error_image = imageRef;
+    pending.trust_error = boundedPublicActionError(
+      error,
+      "The interactive interface image could not be prepared. Check the registry connection and try again.",
+    );
+    renderCandidateTrySheet();
+  }
 }
 
 async function copyCandidatePreviewTrustCommand(event) {
@@ -16400,7 +17076,7 @@ function renderCandidateTrySheet() {
             </span>
           </label>
         ` : `
-          <div class="candidate-try-mode unavailable" aria-disabled="true">
+          <div class="candidate-try-mode unavailable">
             <span>
               <span class="candidate-try-mode-heading"><strong>${escapeHtml(capabilityActionLabel(mode.action))}</strong><span class="tag status-unavailable">Unavailable</span></span>
               <small>${escapeHtml(capabilityReason(mode.reason))}</small>
@@ -16875,10 +17551,11 @@ async function performWorkbenchAction(actionName, selectionId, options = {}) {
     && ["debug_run", "environment_preview"].includes(actionName),
   );
   let createdOperatorJobId = "";
+  const preserveRunScroll = Boolean(state.routedCandidateId && state.activeRunTab === "candidate");
   state.pendingWorkbenchActions.add(key);
   state.expandedWorkbenchSelections.add(selectionId);
   delete state.workbenchActionErrors[key];
-  renderRunDetail();
+  renderRunDetail({ preserveScroll: preserveRunScroll });
   if (restoreCandidateTryFocus) {
     restoreFocusedCandidateTryFocus(selectionId, "status");
   }
@@ -16962,7 +17639,7 @@ async function performWorkbenchAction(actionName, selectionId, options = {}) {
   } finally {
     state.pendingWorkbenchActions.delete(key);
     if (actionName === "evaluate_child_run") renderChildRunConfirmation();
-    if (state.selectedRunId === runId) renderRunDetail();
+    if (state.selectedRunId === runId) renderRunDetail({ preserveScroll: preserveRunScroll });
     if (restoreCandidateTryFocus) {
       restoreFocusedCandidateTryFocus(
         selectionId,
@@ -16984,22 +17661,23 @@ function renderCandidateInspection(inspection) {
     <div class="candidate-inspection" role="region" aria-label="Candidate inspection">
       <div class="candidate-inspection-heading">
         <div>
-          <span class="eyebrow">Saved Candidate details</span>
-          <strong>${escapeHtml(candidate.candidate_id || "Candidate")}</strong>
+          <span class="eyebrow">Saved proposed solution</span>
+          <strong>What this Candidate contains</strong>
+          <p>This read-only definition is the Candidate that the source Run's recorded trials evaluated.</p>
         </div>
-        <span class="tag">Read-only</span>
+        <span class="tag">Saved definition · Read-only</span>
       </div>
       <div class="candidate-inspection-grid">
-        ${semanticPanel("Candidate", [
+        ${semanticPanel("Candidate definition", [
           ["Format", candidate.format],
           ["Content items", candidate.content_count],
           ["Specification", candidate.spec_included ? "available values included" : "not available"],
         ])}
-        ${semanticPanel("Environment", [
+        ${semanticPanel("Evaluated in", [
           ["Environment", environment.environment_id],
           ["Availability", environment.availability],
         ])}
-        ${semanticPanel("Evaluation", [
+        ${semanticPanel("Scored by", [
           ["Environment evaluator", evaluation.runnable == null ? null : evaluation.runnable ? "Configured" : "Not configured"],
           ["Objective", evaluation.objective_metric],
           ["Direction", evaluation.objective_direction],
@@ -17566,16 +18244,32 @@ function bindWorkbenchEntityActions() {
       const candidateId = String(button.dataset.openCandidateRoute || "");
       const runId = selectedCanonicalRunId();
       if (!candidateId || !runId) return;
+      const shouldScrollToCandidateSection = button.dataset.candidateScrollTarget === "candidate-section";
+      const scrollToCandidateSection = () => {
+        if (
+          !shouldScrollToCandidateSection
+          || state.selectedRunId !== runId
+          || state.routedCandidateId !== candidateId
+        ) return;
+        const target = els.runDetail.querySelector("[data-run-candidate-section]");
+        if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
+      };
+      state.selectedRunCandidateIds[runId] = candidateId;
       state.routedCandidateId = candidateId;
       state.routedCandidateResolution = null;
       state.routedCandidateFocusApplied = "";
       state.activeRunTab = "candidate";
       syncStudioRoute();
+      renderRunDetail({ preserveScroll: true });
+      window.requestAnimationFrame(scrollToCandidateSection);
       loadRunDetail(runId, {
         keepTab: true,
         skipListRender: true,
         fromRoute: true,
-      }).catch(() => {});
+        preserveScroll: true,
+      }).catch(() => {}).finally(() => {
+        window.requestAnimationFrame(scrollToCandidateSection);
+      });
     });
   });
   els.runDetail.querySelectorAll("[data-clear-candidate-route]").forEach((button) => {
@@ -18386,6 +19080,89 @@ async function openComponentInterface(component) {
     return;
   }
   await launchComponentInterface(component);
+}
+
+function trackAssistantInterfaceLaunch(launch, options = {}) {
+  const launchId = String(launch && launch.launch_id || "");
+  const configKind = String(launch && launch.kind || "");
+  const uid = String(launch && launch.uid || "");
+  if (
+    !launchId
+    || !new Set(["environment", "method", "resource"]).has(configKind)
+    || !uid
+  ) return false;
+  const launchKey = `${configKind}:${uid}`;
+  const existing = state.interfaceLaunch;
+  if (existing && String(existing.launch_id || "") === launchId) {
+    state.interfaceLaunch = mergeInterfaceLaunchPayload(existing, launch, launchKey);
+    if (options.open !== false) openLaunchInterfaceSession(state.interfaceLaunch);
+    return true;
+  }
+  const origin = state.agentSessions.find((session) => session.id === options.sessionId)
+    || currentAgentSession();
+  resetActiveInterfaceReturnState();
+  const component = componentByKey(launchKey);
+  if (component) rememberCatalogSourceComponent(component);
+  state.interfaceLaunch = mergeInterfaceLaunchPayload(
+    {
+      key: launchKey,
+      kind: configKind,
+      uid,
+      label: String(launch.label || "Interface"),
+      port: Number(launch.port || 0) || 0,
+      profile_id: String(launch.profile_id || ""),
+      launch_scope: String(launch.launch_scope || "catalog-transient"),
+      origin_conversation_id: origin && !String(origin.id || "").startsWith("agent-session-")
+        ? String(origin.id)
+        : "",
+      origin_conversation_title: origin && !String(origin.id || "").startsWith("agent-session-")
+        ? assistantSessionLabel(origin)
+        : "",
+      startedAt: Date.now(),
+      status: "queued",
+      error: "",
+    },
+    launch,
+    launchKey,
+  );
+  renderInterfaceLaunchSurface(state.interfaceLaunch);
+  if (options.open !== false) openLaunchInterfaceSession(state.interfaceLaunch);
+  if (!new Set(["failed", "stopped"]).has(String(state.interfaceLaunch.status || ""))) {
+    pollComponentInterfaceLaunch(launchKey, launchId).catch((error) => {
+      handleInterfaceLaunchPollingError(
+        error,
+        launchKey,
+        launchId,
+        "This interface could not be opened.",
+      );
+    });
+  }
+  return true;
+}
+
+async function openAssistantInterfaceLaunch(coordinate) {
+  const launchId = String(coordinate && coordinate.launch_id || "");
+  if (!launchId) throw new Error("This card does not identify an interface launch.");
+  if (
+    state.interfaceLaunch
+    && String(state.interfaceLaunch.launch_id || "") === launchId
+  ) {
+    openLaunchInterfaceSession(state.interfaceLaunch);
+    return;
+  }
+  const payload = await getJson(`/api/interface-launches/${encodeURIComponent(launchId)}`);
+  const launch = payload && payload.launch;
+  if (
+    !launch
+    || String(launch.launch_id || "") !== launchId
+    || String(launch.kind || "") !== String(coordinate.config_kind || "")
+    || String(launch.uid || "") !== String(coordinate.uid || "")
+  ) {
+    throw new Error("This exact interface launch is no longer available.");
+  }
+  if (!trackAssistantInterfaceLaunch(launch, { open: true })) {
+    throw new Error("Studio could not open this interface launch.");
+  }
 }
 
 async function fetchInterfaceLaunchStatusWithRecovery(launchKey, launchId) {
@@ -21483,6 +22260,16 @@ function compatibleEnvironmentsForMethod(uid) {
 }
 
 function entityHeader(item, kind) {
+  const packageMetadata = item.package_metadata && typeof item.package_metadata === "object"
+    ? item.package_metadata
+    : {};
+  const packageTitle = String(packageMetadata.title || item.package_id || item.package || "Local package");
+  const paper = packageMetadata.paper && typeof packageMetadata.paper === "object"
+    ? packageMetadata.paper
+    : null;
+  const packageContext = paper && paper.url
+    ? `Package: <strong>${escapeHtml(packageTitle)}</strong> · <a href="${escapeHtml(paper.url)}" target="_blank" rel="noopener">Research paper</a>`
+    : `Package: <strong>${escapeHtml(packageTitle)}</strong>`;
   return `
     <div class="detail-heading">
       <div class="detail-title-block">
@@ -21490,6 +22277,7 @@ function entityHeader(item, kind) {
           <h2>${escapeHtml(item.label)}</h2>
           <span class="catalog-kind-chip catalog-kind-${escapeHtml(kind)}">${escapeHtml(catalogKindLabel(kind, item))}</span>
         </div>
+        <p class="path-text catalog-package-context">${packageContext}</p>
         <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
       </div>
     </div>
@@ -21780,8 +22568,8 @@ function resourceActionsPanel(item) {
   }).join("");
   return `
     <section class="detail-panel resource-actions-panel">
-      <h3>Actions</h3>
-      <p class="study-card-help">Registered operations of this Resource, runnable without its interface. Results are written to a fresh folder and listed here.</p>
+      <h3>Headless actions</h3>
+      <p class="study-card-help">Declared in this Resource's YAML under <code>actions</code>. These operations run without opening the interface; each result is written to a fresh folder and listed here.</p>
       ${cards}
     </section>
   `;
@@ -22436,7 +23224,11 @@ function isMarkdownTableDivider(line) {
 function inlineMarkdown(value) {
   return escapeHtml(value)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/`([^`]+)`/g, (_match, content) => (
+      /^https?:\/\/[^\s<>]+$/.test(content)
+        ? `<a class="assistant-inline-url" href="${content}" title="${content}" target="_blank" rel="noopener noreferrer">${content.includes("__optpilot_presentation_token=") ? "Open preview" : "Open link"}</a>`
+        : `<code>${content}</code>`
+    ))
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 }

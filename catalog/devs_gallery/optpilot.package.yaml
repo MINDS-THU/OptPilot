@@ -8,4 +8,9 @@ config: package
 # characters, so the copy is its own package with its own history.
 # Do not delete the line -- a package without this cannot be read.
 identity: b71e65be04f97365c4239c07547a5954
-description: "Discrete-event simulators generated from plain-language descriptions, with studies that tune them."
+title: DEVS-Gen
+category: research
+description: "Generate, verify, run, and evaluate discrete-event world models from natural-language specifications."
+paper:
+  title: Specification-Driven Generation and Evaluation of Discrete-Event World Models via the DEVS Formalism
+  url: https://arxiv.org/abs/2603.03784

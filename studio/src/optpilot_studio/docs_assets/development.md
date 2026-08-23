@@ -84,4 +84,6 @@ Before publishing:
 - Confirm only intentional internal Markdown notes are committed under
   `resource/`; local external projects should stay uncommitted.
 - Confirm user-facing entries live under a bundled package's `environments/`, `methods/`, and `studies/` folders in `catalog/`.
-- Confirm test-only catalogs live under `tests/fixtures/catalog`.
+- Confirm small schema fixtures live under `tests/fixtures/catalog` and heavier
+  end-to-end examples live under `test_catalog/`, never under the public
+  `catalog/` tree.

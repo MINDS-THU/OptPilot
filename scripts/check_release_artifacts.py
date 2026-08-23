@@ -18,9 +18,7 @@ import zipfile
 from pathlib import Path
 
 
-#: Never distributable: working notes and untracked research trees. The
-#: example packages used to sit in this list, which is why nobody could
-#: install anything to run -- they are product, not scratch, and now ship.
+#: Never distributable: working notes and untracked research trees.
 RESEARCH_SCRATCH_PREFIXES = (
     "design/",
     "designs/",
@@ -31,6 +29,7 @@ CORE_FORBIDDEN_SDIST_PREFIXES = (
     ".agents/",
     ".github/",
     ".optpilot-ui/",
+    "catalog/",
     "docs/",
     "runs/",
     "scripts/",
@@ -46,6 +45,7 @@ CORE_FORBIDDEN_WHEEL_PREFIXES = (
     "optpilot/assistant_assets/",
     "optpilot/docs_assets/",
     "optpilot_studio/",
+    "optpilot_examples/",
     *RESEARCH_SCRATCH_PREFIXES,
 )
 
@@ -100,18 +100,39 @@ STUDIO_REQUIRED_SDIST_ENTRIES = {
     "src/optpilot_studio/ui/workspace_runtime/Dockerfile",
 }
 
-#: The same launch scripts as they appear INSIDE a distribution. The wheel
-#: carries the example packages under optpilot_examples/, so an allowlisted
-#: script has two legitimate names; the source distribution keeps catalog/.
-#: Without this, a package that legitimately ships a launch script could
-#: never be distributed at all.
 def _distributed_executable_paths() -> set[str]:
-    paths = set()
-    for relative in ALLOWED_EXECUTABLE_PATHS:
-        paths.add(relative)
-        if relative.startswith("catalog/"):
-            paths.add("optpilot_examples/" + relative[len("catalog/"):])
-    return paths
+    """Return executable paths that may appear in a distribution archive."""
+
+    return set(ALLOWED_EXECUTABLE_PATHS)
+
+
+_GENERATED_METADATA_TEXT = {
+    "SOURCES.txt",
+    "dependency_links.txt",
+    "entry_points.txt",
+    "requires.txt",
+    "top_level.txt",
+}
+
+
+def _artifact_executable_path_allowed(path: str) -> bool:
+    """Whether an executable bit is harmless build-generated metadata.
+
+    Some sync-managed filesystems replace setuptools' generated ``*.txt``
+    metadata with mode 0700 even though Git records every source file with the
+    correct mode. These files are inert package-manager indexes, not runnable
+    payloads; keep the exception narrow so executable source or documentation
+    still fails the release check.
+    """
+
+    if path in _distributed_executable_paths():
+        return True
+    parts = path.split("/")
+    if not parts or parts[-1] not in _GENERATED_METADATA_TEXT:
+        return False
+    return any(
+        part.endswith((".egg-info", ".dist-info")) for part in parts[:-1]
+    )
 
 
 ALLOWED_EXECUTABLE_PATHS = {
@@ -120,6 +141,7 @@ ALLOWED_EXECUTABLE_PATHS = {
     "catalog/devs_gallery/resources/devs-gen-interface/_start_backend.sh",
     "catalog/devs_gallery/resources/devs-gen-interface/_start_frontend.sh",
     "scripts/smoke_test.sh",
+    "scripts/start_services.sh",
 }
 
 
@@ -306,13 +328,12 @@ def _check_wheel(
         names = {member.filename for member in members}
         errors.extend(_missing_entries(path, required, names))
         errors.extend(_archive_hygiene_errors(path, names, forbidden_prefixes))
-        allowed_executables = _distributed_executable_paths()
         for member in members:
             mode = member.external_attr >> 16
             if (
                 stat.S_ISREG(mode)
                 and mode & 0o111
-                and member.filename not in allowed_executables
+                and not _artifact_executable_path_allowed(member.filename)
             ):
                 errors.append(
                     f"{path.name} contains unexpectedly executable file: "
@@ -351,13 +372,12 @@ def _check_sdist(
     with tarfile.open(path) as archive:
         members = archive.getmembers()
         names = {_strip_sdist_root(member.name) for member in members}
-        allowed_executables = _distributed_executable_paths()
         for member in members:
             normalized = _strip_sdist_root(member.name)
             if (
                 member.isfile()
                 and member.mode & 0o111
-                and normalized not in allowed_executables
+                and not _artifact_executable_path_allowed(normalized)
             ):
                 errors.append(
                     f"{path.name} contains unexpectedly executable file: {normalized}"

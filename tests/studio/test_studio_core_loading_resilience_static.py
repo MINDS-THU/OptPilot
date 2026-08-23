@@ -42,6 +42,7 @@ class StudioCoreLoadingResilienceStaticTest(unittest.TestCase):
         load_all = _function_source(self.source, "loadAll")
 
         self.assertIn("const CORE_REQUEST_TIMEOUT_MS", self.source)
+        self.assertIn("const CATALOG_REQUEST_TIMEOUT_MS = 60_000", self.source)
         self.assertIn("const PLATFORM_STATUS_TIMEOUT_MS", self.source)
         self.assertIn("const RUNS_REQUEST_TIMEOUT_MS", self.source)
         self.assertIn("const RUN_DETAIL_REQUEST_TIMEOUT_MS", self.source)

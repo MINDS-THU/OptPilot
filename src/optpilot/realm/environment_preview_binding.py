@@ -47,6 +47,7 @@ from .local_container_web_provider import (
     ContainerWebMount,
     ContainerWebRunIdentity,
     LocalContainerWebProvider,
+    LocalContainerWebProviderError,
     LocalContainerWebTerminal,
 )
 from .operator_job_records import OperatorJobRecord, OperatorJobState
@@ -700,7 +701,7 @@ class RealmEnvironmentPreviewBinder:
         self._layout_attachments = _PreviewLayoutAttachmentTracker()
 
     def validate_plan(self, preview_plan: EnvironmentPreviewPlan) -> None:
-        """Pure provider-capability check used before exposing a launch action."""
+        """Side-effect-free provider preflight used before exposing a launch action."""
 
         if not isinstance(preview_plan, EnvironmentPreviewPlan):
             raise TypeError("preview_plan must be an EnvironmentPreviewPlan.")
@@ -2439,6 +2440,15 @@ def _validate_provider_plan(
         raise EnvironmentPreviewProviderPlanError(
             "container_gateway_image_untrusted",
             "Environment Preview image is not trusted for authenticated ingress.",
+        )
+    try:
+        image_available = provider.is_image_available(plan.runtime.image_ref)
+    except LocalContainerWebProviderError as error:
+        raise EnvironmentPreviewProviderPlanError(error.code, str(error)) from error
+    if not image_available:
+        raise EnvironmentPreviewProviderPlanError(
+            "container_image_unavailable",
+            "The approved Environment Preview image is not installed locally.",
         )
 
 

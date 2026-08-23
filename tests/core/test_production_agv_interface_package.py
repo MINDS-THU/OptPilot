@@ -186,6 +186,7 @@ class ProductionAgvInterfacePackageTest(unittest.TestCase):
                     ContainerGatewayImageTrust(_CANDIDATE_IMAGE),
                 ),
             )
+            provider.is_image_available = lambda _image_ref: True  # type: ignore[method-assign]
             binder = RealmEnvironmentPreviewBinder(
                 fixture.ledger,
                 fixture.projection_service,

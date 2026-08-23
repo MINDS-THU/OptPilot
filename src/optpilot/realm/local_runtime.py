@@ -26,6 +26,7 @@ from .content import LocalContentStore
 from .editable_workspace_service import RealmEditableWorkspaceService
 from .environment_preview_binding import RealmEnvironmentPreviewBinder
 from .ephemeral_volume_service import RealmEphemeralVolumeService
+from .errors import RealmConflict
 from .inspection_service import RealmInspectionTargetService
 from .interface_output_service import RealmInterfaceOutputSessionService
 from .ledger import PrincipalRecord, RealmLedger
@@ -73,6 +74,29 @@ _VOLUME_DIRECTORY = "volumes"
 _PROCESS_DIRECTORY = "processes"
 _CONTAINER_WEB_DIRECTORY = "container-web"
 _RETAINED_DEPENDENCY_CACHE_DIRECTORY = "retained-dependency-cache"
+
+
+def _container_gateway_trust_generation(
+    source: str,
+    trusts: Sequence[ContainerGatewayImageTrust],
+) -> str:
+    return request_digest(
+        {
+            "schema": "optpilot.container-gateway-trust-snapshot.v1",
+            "source": source,
+            "trusts": [
+                {
+                    "contract": trust.contract,
+                    "image_ref": trust.image_ref,
+                    "python_executable": trust.python_executable,
+                }
+                for trust in sorted(
+                    trusts,
+                    key=lambda item: item.image_ref.encode("utf-8"),
+                )
+            ],
+        }
+    )
 
 
 class LocalRealmRuntime:
@@ -204,22 +228,9 @@ class LocalRealmRuntime:
             else:
                 gateway_images = session_gateway_images
                 gateway_trust_source = "session"
-            gateway_trust_generation = request_digest(
-                {
-                    "schema": "optpilot.container-gateway-trust-snapshot.v1",
-                    "source": gateway_trust_source,
-                    "trusts": [
-                        {
-                            "contract": trust.contract,
-                            "image_ref": trust.image_ref,
-                            "python_executable": trust.python_executable,
-                        }
-                        for trust in sorted(
-                            gateway_images,
-                            key=lambda item: item.image_ref.encode("utf-8"),
-                        )
-                    ],
-                }
+            gateway_trust_generation = _container_gateway_trust_generation(
+                gateway_trust_source,
+                gateway_images,
             )
 
             capacity_limits = conservative_local_host_capacity_limits()
@@ -447,6 +458,66 @@ class LocalRealmRuntime:
         runtime.container_gateway_trust_generation = gateway_trust_generation
         runtime._closed = False
         return runtime
+
+    def approve_container_gateway_image(
+        self,
+        *,
+        operation_id: str,
+        image_ref: str,
+        reason: str,
+    ) -> object:
+        """Durably approve and immediately activate one Preview gateway image.
+
+        Live activation is deliberately available only when this runtime uses
+        the Realm-owned policy.  An exact session override remains exact until
+        restart and cannot be silently widened by a browser request.
+        """
+
+        if self._closed:
+            raise RuntimeError("Local Realm runtime is closed.")
+        if self.container_gateway_trust_source != "realm":
+            raise RealmConflict(
+                "This Studio session uses an exact Preview trust override and "
+                "cannot be changed while it is running."
+            )
+        provider = self.container_web_provider
+        if provider is None:
+            raise RealmConflict("Environment Preview is unavailable.")
+        trust = ContainerGatewayImageTrust(image_ref=image_ref)
+        decision = self.provider_trust_policy.approve(
+            operation_id=operation_id,
+            image_ref=trust.image_ref,
+            python_executable=trust.python_executable,
+            contract=trust.contract,
+            reason=reason,
+        )
+        provider.add_gateway_image_trust(trust)
+        active = tuple(
+            ContainerGatewayImageTrust(
+                image_ref=head.image_ref,
+                python_executable=head.python_executable,
+                contract=head.contract,
+            )
+            for head in self.provider_trust_policy.list_active()
+        )
+        self.container_gateway_trust_generation = (
+            _container_gateway_trust_generation("realm", active)
+        )
+        return decision
+
+    def prepare_container_gateway_image(self, *, image_ref: str) -> bool:
+        """Ensure one already-approved Preview image is installed locally.
+
+        Download is intentionally explicit and separate from execution so the
+        eventual container launch can remain offline with ``--pull never``.
+        """
+
+        if self._closed:
+            raise RuntimeError("Local Realm runtime is closed.")
+        provider = self.container_web_provider
+        if provider is None:
+            raise RealmConflict("Environment Preview is unavailable.")
+        return provider.pull_trusted_image(image_ref)
 
     @property
     def closed(self) -> bool:

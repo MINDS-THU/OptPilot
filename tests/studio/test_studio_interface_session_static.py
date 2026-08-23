@@ -164,6 +164,20 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertIn("state.selectedOperatorJob", candidate)
         self.assertIn("state.interfaceLaunch", launch)
 
+    def test_catalog_interface_startup_explains_one_time_runtime_preparation(self) -> None:
+        model = _function_source(self.source, "launchInterfaceSessionModel")
+        progress = _function_source(self.source, "interfaceLaunchPreparationProgress")
+
+        self.assertIn("interfaceLaunchPreparationProgress(launch)", model)
+        self.assertIn("preparation.message", model)
+        self.assertIn("preparation.detail", model)
+        self.assertIn('title || "") === "Building prepared runtime"', progress)
+        self.assertIn('title || "") === "Prepared runtime cached"', progress)
+        self.assertIn("Building the reusable interface runtime", progress)
+        self.assertIn("may take several minutes", progress)
+        self.assertIn("later launches will reuse this cached runtime", progress)
+        self.assertIn("elapsedSeconds", progress)
+
     def test_catalog_and_workspace_launches_open_the_shared_interface_view(self) -> None:
         active_bar = _function_source(self.source, "openActiveInterfaceLocation")
         catalog_launch = _function_source(self.source, "launchComponentInterface")

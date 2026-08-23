@@ -38,6 +38,28 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         cls.styles = _STYLES_CSS.read_text(encoding="utf-8")
         cls.html = _INDEX_HTML.read_text(encoding="utf-8")
 
+    def test_catalog_package_filter_uses_release_titles_and_groups(self) -> None:
+        render = _function_source(
+            self.source,
+            "renderCatalogPackageFilter",
+            "catalogPackageOptions",
+        )
+        options = _function_source(
+            self.source,
+            "catalogPackageOptions",
+            "componentPackageId",
+        )
+
+        self.assertIn('research: "Research packages"', render)
+        self.assertIn('tutorial: "Learn"', render)
+        self.assertIn('local: "Local & development"', render)
+        self.assertIn("All catalog packages", render)
+        self.assertIn("entry.package_metadata", options)
+        self.assertIn("metadata.title", options)
+        header = _function_source(self.source, "entityHeader", "sessionCard")
+        self.assertIn("catalog-package-context", header)
+        self.assertIn("Research paper", header)
+
     def test_keep_action_is_capability_driven_workspace_derivation(self) -> None:
         label = _function_source(
             self.source,
@@ -1072,6 +1094,11 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
     def test_live_candidate_interface_uses_stable_full_page_host_during_polls(
         self,
     ) -> None:
+        candidate_session = _function_source(
+            self.source,
+            "candidateInterfaceSessionModel",
+            "launchInterfaceSessionModel",
+        )
         session = _function_source(
             self.source,
             "renderInterfaceSession",
@@ -1104,6 +1131,17 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
 
         self.assertIn("els.interfaceSessionFrame", session)
+        self.assertIn("This interactive try failed and its interface is closed", candidate_session)
+        self.assertIn('outcome.code || ""', candidate_session)
+        self.assertIn("The interactive Environment could not start", candidate_session)
+        self.assertIn("No interactive session was created", candidate_session)
+        self.assertIn("Interactive try complete", candidate_session)
+        self.assertIn("This interactive try has stopped", candidate_session)
+        self.assertNotIn("This interactive try has finished", candidate_session)
+        self.assertIn('jobState === "succeeded"', candidate_session)
+        self.assertIn('backLabel: "← Candidate"', candidate_session)
+        self.assertIn("retry: closed ? null", candidate_session)
+        self.assertIn('classList.toggle(\n      "complete"', session)
         self.assertIn('getAttribute("src")', session)
         self.assertIn("currentUrl !== model.openUrl", session)
         self.assertIn('setAttribute("src", model.openUrl)', session)
@@ -1126,6 +1164,9 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("const selected = selectedDetail || selectedSummary", panel_body)
         self.assertNotIn("<iframe", presentation)
         self.assertIn('data-open-operator-interface="${escapeHtml(job.job_id)}"', presentation)
+        self.assertIn(".interface-session-back", self.styles)
+        self.assertIn("justify-self: start", self.styles)
+        self.assertIn(".interface-session-notice.complete", self.styles)
 
     def test_candidate_tries_hide_internal_operator_job_vocabulary(self) -> None:
         labels = _function_source(
@@ -1169,8 +1210,8 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             'if (action === "environment_preview") return "Open interactive interface";',
             labels,
         )
-        self.assertIn("<h3>Candidate tries</h3>", panel)
-        self.assertIn("not use the Run's trial budget", panel)
+        self.assertIn("New tries from this Candidate", panel)
+        self.assertIn("not the source Run's recorded trials", panel)
         self.assertIn('return "Try once";', try_label)
         self.assertIn('return "Open interactive interface";', try_label)
         self.assertIn("This try does not use the Run's trial budget", summary)
@@ -1211,6 +1252,11 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "renderFocusedCandidatePage",
             "renderFocusedCandidateActions",
         )
+        embedded = _function_source(
+            self.source,
+            "renderEmbeddedCandidateDetails",
+            "directCandidateTryMode",
+        )
         panel = _function_source(
             self.source,
             "operatorJobsPanelBody",
@@ -1227,9 +1273,12 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "return renderFocusedCandidatePage(detail, page, focusedCandidate);",
             page,
         )
-        self.assertIn("Back to Candidates", focused)
-        self.assertIn("Results from this Run", focused)
-        self.assertIn("Trials with a usable objective", focused)
+        self.assertIn("Back to all Candidates", focused)
+        self.assertIn("candidate-relationship-flow", focused)
+        self.assertIn("Result in the source Run", focused)
+        self.assertIn("Trials with usable results", focused)
+        self.assertIn("Actions on this page create new work", focused)
+        self.assertIn('aria-label="New work created from this Candidate"', focused)
         self.assertIn(
             "operatorJobsSection(selectedCanonicalRunId(), String(candidate.id",
             focused,
@@ -1237,6 +1286,16 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("allJobs.filter", panel)
         self.assertIn("target.candidate_id", panel)
         self.assertNotIn("operatorJobsSection(runId)", run_detail)
+        self.assertIn("runTrialMapHtml(detail)", run_detail)
+        self.assertIn("runLineageHtml(detail.lineage", run_detail)
+        self.assertNotIn('focusedCandidateMode ? "" : runTrialMapHtml', run_detail)
+        self.assertNotIn("Inside this Candidate", embedded)
+        self.assertNotIn("candidate-tab-workspace-heading", embedded)
+        self.assertIn("renderFocusedCandidateActions(candidate, page)", embedded)
+        self.assertIn(
+            "operatorJobsSection(selectedCanonicalRunId(), String(candidate.id",
+            embedded,
+        )
 
     def test_focused_candidate_has_one_primary_try_action_and_mode_sheet(
         self,
@@ -1301,10 +1360,13 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn(".filter((capability) => capability.supported);", start)
         self.assertIn("directCandidateTryMode(modes)", start)
         self.assertNotIn("profiles.length <= 1", start)
+        self.assertIn('preferredAction = ""', start)
+        self.assertIn("directMode && !preferredAction", start)
         self.assertIn("restoreCandidateTryFocus: true", start)
         self.assertIn("state.pendingCandidateTry", start)
         self.assertIn("Ways to try it", sheet)
         self.assertIn('class="candidate-try-mode unavailable"', sheet)
+        self.assertNotIn('aria-disabled="true"', sheet)
         self.assertIn("!selectedMode.eligible", sheet)
         self.assertIn("Try once", self.source)
         self.assertIn("Open interactive interface", self.source)
@@ -1325,19 +1387,40 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("profile_diagnostics", diagnostics)
         self.assertIn("profile.applicable !== false", diagnostics)
         self.assertIn("approve_container_gateway_image", trust_command)
+        self.assertIn("pull_container_image", trust_command)
         self.assertIn(
             "optpilot environment-preview trust approve", trust_command
         )
         self.assertIn("shellSingleQuote(imageRef)", trust_command)
         self.assertIn("escapeHtml(command)", diagnostics)
         self.assertIn("data-copy-preview-trust-command", diagnostics)
-        self.assertIn("then restart Studio", diagnostics)
+        self.assertIn("then try the Candidate again", diagnostics)
         self.assertIn("exact session-only trust list", diagnostics)
         self.assertIn('trustSource === "session"', diagnostics)
+        self.assertIn('trustSource === "realm"', diagnostics)
+        self.assertIn("Approve & download", diagnostics)
+        self.assertIn("Download image", diagnostics)
+        self.assertIn("launch remains offline", diagnostics)
+        self.assertIn("data-approve-preview-image", diagnostics)
+        self.assertIn(
+            'schema: "optpilot.environment-preview-trust-approve-request.v1"',
+            diagnostics,
+        )
+        self.assertIn("/environment-preview-trust", diagnostics)
+        self.assertIn("result.restart_required !== false", diagnostics)
+        self.assertIn("result.image_ready !== true", diagnostics)
+        self.assertIn(
+            'startCandidateTry(selectionId, null, "environment_preview")',
+            diagnostics,
+        )
         self.assertIn("navigator.clipboard.writeText(command)", diagnostics)
         self.assertIn(
             'button.textContent = "Command copied — run it in Terminal"',
             diagnostics,
+        )
+        self.assertIn(
+            'on(els.candidateTryBody, "click", approveCandidatePreviewImage);',
+            self.source,
         )
         self.assertIn(
             'on(els.candidateTryBody, "click", copyCandidatePreviewTrustCommand);',
@@ -1361,7 +1444,8 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         narrow_styles = self.styles[self.styles.index("@media (max-width: 520px)") :]
 
         self.assertIn('aria-labelledby="candidate-actions-title"', actions)
-        self.assertIn('id="candidate-actions-title">Candidate actions', actions)
+        self.assertIn('id="candidate-actions-title">Use this Candidate', actions)
+        self.assertIn("do not change this Run's recorded score or trials", actions)
         self.assertIn('class="candidate-focused-action-toolbar"', actions)
         self.assertLess(
             actions.index('data-try-candidate="'),
@@ -1935,6 +2019,122 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("openActiveInterfaceLocation()", execute)
         self.assertNotIn("Open it from Open work or stop it", execute)
 
+    def test_assistant_launch_result_opens_a_tracked_interface_session(self) -> None:
+        approval = _async_function_source(
+            self.source,
+            "resolveAssistantApproval",
+            "runWorkspaceAction",
+        )
+        tracking = _function_source(
+            self.source,
+            "trackAssistantInterfaceLaunch",
+            "openAssistantInterfaceLaunch",
+        )
+        open_launch = _async_function_source(
+            self.source,
+            "openAssistantInterfaceLaunch",
+            "fetchInterfaceLaunchStatusWithRecovery",
+        )
+        card_lookup = _function_source(
+            self.source,
+            "currentAssistantUiCards",
+            "assistantUiCardsHtml",
+        )
+        binding = _function_source(
+            self.source,
+            "bindAssistantUiCards",
+            "refreshAssistantUiCardActions",
+        )
+        refresh = _function_source(
+            self.source,
+            "refreshAssistantUiCardActions",
+            "executeAssistantUiCardAction",
+        )
+
+        self.assertIn('payload.result.tool === "optpilot_interface_launch"', approval)
+        self.assertIn("trackAssistantInterfaceLaunch(launchedInterface", approval)
+        self.assertIn("await openAssistantInterfaceLaunch(launchCard.coordinate)", approval)
+        self.assertIn("openLaunchInterfaceSession(state.interfaceLaunch)", tracking)
+        self.assertIn("pollComponentInterfaceLaunch(launchKey, launchId)", tracking)
+        self.assertIn("/api/interface-launches/${encodeURIComponent(launchId)}", open_launch)
+        self.assertIn("String(launch.uid || \"\") !== String(coordinate.uid", open_launch)
+        self.assertIn("...assistantApprovalResultCardEvents()", card_lookup)
+        self.assertIn("currentAssistantUiCards().find", binding)
+        self.assertIn("const cards = currentAssistantUiCards();", refresh)
+
+    def test_assistant_backticked_urls_render_as_compact_clickable_links(self) -> None:
+        inline = _function_source(self.source, "inlineMarkdown", "escapeHtml")
+
+        self.assertIn('class="assistant-inline-url"', inline)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', inline)
+        self.assertIn('"Open preview" : "Open link"', inline)
+        self.assertIn(".timeline-content .assistant-inline-url", self.styles)
+
+    def test_catalog_primary_actions_stay_visible_and_new_items_start_at_top(self) -> None:
+        catalog = _function_source(self.source, "renderCatalog", "catalogLoadNotice")
+        detail = _function_source(
+            self.source,
+            "renderComponentDetail",
+            "componentEditableWorkspaceCapability",
+        )
+
+        self.assertIn("renderedComponentKey", catalog)
+        self.assertIn("els.componentDetail.scrollTop = 0", catalog)
+        self.assertIn('class="action-row catalog-primary-actions"', detail)
+        self.assertIn("#componentDetail > .catalog-primary-actions", self.styles)
+        self.assertIn("position: sticky", self.styles)
+
+    def test_catalog_detail_uses_consistent_compact_section_cards(self) -> None:
+        detail = _function_source(
+            self.source,
+            "renderComponentDetail",
+            "componentEditableWorkspaceCapability",
+        )
+
+        self.assertIn('"primary-button" : "ghost-button"', detail)
+        self.assertIn("#componentDetail > .detail-heading", self.styles)
+        self.assertIn("#componentDetail > .detail-grid .kv-panel", self.styles)
+        self.assertIn("#componentDetail > .resource-actions-panel", self.styles)
+        self.assertIn("#componentDetail .resource-action-card .control-grid", self.styles)
+        self.assertIn("grid-template-rows: minmax(0, 1fr) auto auto", self.styles)
+        self.assertIn("#catalogView.active-view .catalog-entity-layout", self.styles)
+        self.assertIn("grid-template-rows: minmax(260px, 42svh) auto", self.styles)
+
+    def test_historical_interface_cards_are_interleaved_at_their_original_time(self) -> None:
+        approval_events = _function_source(
+            self.source,
+            "assistantApprovalResultCardEvents",
+            "currentAssistantUiCards",
+        )
+        timeline = _function_source(
+            self.source,
+            "assistantInterleavedTimelineHtml",
+            "assistantWorkingLabel",
+        )
+        informative = _function_source(
+            self.source,
+            "assistantEventIsInformative",
+            "assistantToolActivity",
+        )
+
+        self.assertIn("ui_card_only: true", approval_events)
+        self.assertIn("const events = [...recordedEvents, ...approvalCardEvents].sort", timeline)
+        self.assertIn("eventTime >= messageTime && eventTime < nextUserTime", timeline)
+        self.assertNotIn("assistantUiCardsHtml(approvalCardEvents", timeline)
+        self.assertIn("if (payload.ui_card_only) return false", informative)
+
+    def test_open_work_uses_one_toggle_and_a_compact_shelf(self) -> None:
+        self.assertIn('id="openWorkButton"', self.html)
+        self.assertNotIn('id="closeOpenWorkButton"', self.html)
+        self.assertNotIn('"closeOpenWorkButton"', self.source)
+        self.assertIn(
+            "Running interfaces, Runs, and items needing attention.",
+            self.html,
+        )
+        self.assertIn("flex: 0 0 218px;", self.styles)
+        self.assertIn("min-height: 62px;", self.styles)
+        self.assertIn("border-left: 3px solid var(--teal);", self.styles)
+
     def test_catalog_interface_poll_keeps_live_output_status_fresh(self) -> None:
         poll = _async_function_source(
             self.source,
@@ -2003,25 +2203,29 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "runCompleteObjectivePanel",
             "runOverview",
         )
+        navigation = _function_source(
+            self.source,
+            "runWorkbenchTabs",
+            "runTabDomId",
+        )
 
-        self.assertIn("runHeadlineResult(detail)", detail)
-        self.assertIn("Trial progress", detail)
-        self.assertIn("Complete Candidates", detail)
+        self.assertIn("runTrialMapHtml(detail)", detail)
+        self.assertIn("run-secondary-navigation", detail)
+        self.assertNotIn("run-content-navigation", detail)
         self.assertIn("activeTechnicalTab", detail)
         self.assertIn('activeTechnicalTab ? "open" : ""', detail)
-        self.assertIn("Technical evidence${activeTechnicalTab", detail)
+        self.assertIn("Evidence & history${activeTechnicalTab", detail)
+        self.assertNotIn('["overview", "Summary"]', navigation)
+        self.assertNotIn('["candidate", "Candidates"]', navigation)
+        self.assertIn('["review", "Shortlist"]', navigation)
         self.assertIn("const onlyCompleteCandidate", overview)
-        self.assertIn("Open only complete Candidate", overview)
-        self.assertIn("best.candidateId || headlineResult.candidateId", overview)
-        self.assertIn(
-            '["Complete Candidate value", headlineResult.candidateId ? headlineResult.value : "-"]',
-            overview,
-        )
-        self.assertIn("headlineResult.sampleCount", overview)
-        self.assertIn(
-            '["Failures requiring attention", (overview && overview.failure_count)',
-            overview,
-        )
+        self.assertNotIn("Open complete Candidate", overview)
+        self.assertIn("run-summary-cards", overview)
+        self.assertIn("How Candidates were judged", overview)
+        self.assertIn("What this Run saved", overview)
+        self.assertIn("Trial attempts", overview)
+        self.assertIn("Observations", overview)
+        self.assertIn("Saved files", overview)
         self.assertIn("runCompleteObjectivePanel(detail)", overview)
         self.assertIn("overview.objective_series", metric_panel)
         self.assertIn("series.total_complete_candidates", metric_panel)
@@ -2035,8 +2239,89 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertNotIn("page.page.has_more", metric_panel)
         self.assertIn('class="run-result-state', overview)
         self.assertIn('class="run-technical-details"', overview)
+        self.assertNotIn('class="run-next-step"', overview)
+        self.assertNotIn("Turn the result into useful work", overview)
         self.assertNotIn("best.observationId", overview)
         self.assertNotIn("best.trialId", overview)
+
+    def test_run_workbench_has_a_candidate_centered_responsive_layout(self) -> None:
+        trial_map = _function_source(
+            self.source,
+            "runTrialMapHtml",
+            "runCandidateInspectorHtml",
+        )
+        candidate_inspector = _function_source(
+            self.source,
+            "runCandidateInspectorHtml",
+            "runTrialInspectorHtml",
+        )
+        inspector = _function_source(
+            self.source,
+            "runTrialInspectorHtml",
+            "bindRunTrialMap",
+        )
+
+        self.assertIn('class="run-outcome-hero run-status-', trial_map)
+        self.assertIn('class="run-general-summary"', trial_map)
+        self.assertIn('class="run-candidate-map-panel"', trial_map)
+        self.assertIn('data-candidate-scroll-target="candidate-section"', trial_map)
+        self.assertIn("data-run-candidate-section", trial_map)
+        self.assertIn('role="tab" data-open-candidate-route=', trial_map)
+        self.assertIn('role="tablist"', trial_map)
+        self.assertIn('class="run-candidate-tab-content"', trial_map)
+        self.assertIn("renderEmbeddedCandidateDetails", trial_map)
+        self.assertLess(
+            trial_map.index('class="run-general-summary"'),
+            trial_map.index('class="run-candidate-map-panel"'),
+        )
+        self.assertIn("Each Candidate is a proposed solution", trial_map)
+        self.assertIn("Open leading Candidate", trial_map)
+        self.assertIn("Trials for this Candidate", candidate_inspector)
+        self.assertIn("Overall", candidate_inspector)
+        self.assertIn("Recorded trials", candidate_inspector)
+        self.assertIn("Observed metrics", inspector)
+        self.assertIn("View attempt history", inspector)
+        self.assertIn("View observation", inspector)
+        self.assertIn(".run-candidate-map", self.styles)
+        self.assertIn("scroll-snap-type: x proximity", self.styles)
+        self.assertIn(".run-candidate-trial-list", self.styles)
+        self.assertIn("#runDetail .run-nested-trial-evidence", self.styles)
+        self.assertIn("#runsView.active-view .runs-layout", self.styles)
+        self.assertIn("grid-template-rows: minmax(260px, 42svh) auto", self.styles)
+        self.assertNotIn(".run-content-navigation", self.styles)
+        self.assertNotIn(".run-candidate-open", self.styles)
+
+    def test_candidate_selection_preserves_run_detail_scroll_position(self) -> None:
+        load_start = self.source.index("async function loadRunDetail(")
+        load_end = self.source.index("function runLineageHtml(", load_start)
+        loading = self.source[load_start:load_end]
+        detail = _function_source(
+            self.source,
+            "renderRunDetail",
+            "runTrialNodes",
+        )
+        bind_start = self.source.index("function bindWorkbenchEntityActions(")
+        bind_end = self.source.index("function updateReviewDraftTitle(", bind_start)
+        binding = self.source[bind_start:bind_end]
+        action_start = self.source.index("async function performWorkbenchAction(")
+        action_end = self.source.index("function renderCandidateInspection(", action_start)
+        action = self.source[action_start:action_end]
+
+        self.assertIn("function restoreRunDetailScroll", self.source)
+        self.assertIn("const preserveSelectedCandidateScroll = Boolean", detail)
+        self.assertIn("options.preserveScroll !== false", detail)
+        self.assertIn("const preservedScrollTop = shouldPreserveScroll", detail)
+        self.assertIn("restoreRunDetailScroll(preservedScrollTop)", detail)
+        self.assertIn("window.requestAnimationFrame(apply)", self.source)
+        self.assertIn(
+            "renderRunDetail({ preserveScroll: options.preserveScroll })", loading
+        )
+        self.assertIn("renderRunDetail({ preserveScroll: true })", binding)
+        self.assertIn("preserveScroll: true", binding)
+        self.assertIn("const preserveRunScroll = Boolean", action)
+        self.assertIn(
+            "renderRunDetail({ preserveScroll: preserveRunScroll })", action
+        )
 
     def test_candidate_inspection_does_not_claim_current_try_availability(self) -> None:
         inspection = _function_source(

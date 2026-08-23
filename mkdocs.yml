@@ -74,12 +74,12 @@ nav:
       - Configuration Reference: configuration.md
       - How a Run Works: how-it-works.md
       - Evidence: evidence.md
-  - Flagship Capabilities:
-      - "DEVS-Gen Gallery": devs-gallery.md
-      - "Generate and Optimize: DEVS-Gen x Policy Search": generate-and-optimize.md
-      - "LLM Policy Search": llm-policy-search.md
-      - "Natural-Language OR Solving (COOPA)": or-solving.md
-      - "Factorio Design Benchmark": factorio-design-benchmark.md
+  - Research Packages:
+      - "DEVS-Gen": devs-gallery.md
+      - "Generate and Optimize: DEVS-Gen x Heuristic Design": generate-and-optimize.md
+      - "LLM-Guided Heuristic Design": llm-policy-search.md
+      - "COOPA": or-solving.md
+      - "Build Your First Package": tutorial-package.md
   - OptPilot Studio:
       - OptPilot Studio: ui.md
       - Workspace Management: studio-workspaces.md

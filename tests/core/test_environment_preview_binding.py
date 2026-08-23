@@ -154,6 +154,7 @@ class EnvironmentPreviewBindingTest(unittest.TestCase):
             broker_authority=object(),
             trusted_gateway_images=(ContainerGatewayImageTrust(_IMAGE),),
         )
+        self.provider.is_image_available = lambda _image_ref: True  # type: ignore[method-assign]
         self.binder = RealmEnvironmentPreviewBinder(
             self.fixture.ledger,
             self.fixture.projection_service,

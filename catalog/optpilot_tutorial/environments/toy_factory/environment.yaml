@@ -1,0 +1,46 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: tutorial-toy-factory
+name: Toy factory
+description: >-
+  A deterministic teaching simulator. Candidates choose staffing, buffer
+  capacity, and an operating mode; the evaluator reports throughput, cost,
+  and one combined score.
+tasks: [learn-optpilot, tune-parameters]
+tags: [tutorial, parameters, deterministic]
+
+evaluator:
+  python: evaluator:evaluate
+  pythonPath: ["."]
+  settings:
+    demand: 72
+
+runtime:
+  sandbox: process
+
+candidate:
+  format: parameters
+  description: A small set of factory operating choices.
+  parameters:
+    schema:
+      workers:
+        valueType: int
+        min: 2
+        max: 8
+        default: 5
+        description: Number of workers assigned to the line.
+      buffer_capacity:
+        valueType: int
+        min: 4
+        max: 20
+        default: 12
+        description: Maximum number of jobs waiting between stations.
+      mode:
+        valueType: categorical
+        values: [efficient, balanced, fast]
+        default: balanced
+        description: Operating emphasis used by the toy model.
+
+metrics:
+  source: return
+  keys: [score, throughput, operating_cost]

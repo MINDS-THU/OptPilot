@@ -18,11 +18,18 @@ _CATALOG = Path(__file__).resolve().parents[2] / "catalog"
 
 
 def _component_files() -> list[Path]:
-    return sorted(
-        path
-        for path in _CATALOG.rglob("*.yaml")
-        if re.match(r"(environment|method)", path.name)
-    )
+    files = []
+    for path in _CATALOG.rglob("*.yaml"):
+        if not re.match(r"(environment|method)", path.name):
+            continue
+        package_root = _CATALOG / path.relative_to(_CATALOG).parts[0]
+        settings_path = package_root / "optpilot.package.yaml"
+        if not settings_path.is_file():
+            continue
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        if settings.get("category") in {"research", "tutorial"}:
+            files.append(path)
+    return sorted(files)
 
 
 class ShippedComponentNamesTest(unittest.TestCase):

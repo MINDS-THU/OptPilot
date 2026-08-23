@@ -411,6 +411,14 @@ class RuntimeBindingCompilerTest(unittest.TestCase):
         encoded = json.dumps(result.to_dict(), sort_keys=True)
         self.assertNotIn("/provider/private", encoded)
 
+    def test_explicit_process_sandbox_accepts_its_disabled_network_contract(self) -> None:
+        study = _study()
+        study.environment["runtime"] = {"networkPolicy": "disabled"}
+
+        result = _compile(_definition(study=study))
+
+        self.assertEqual(result.requested_network_policy, "disabled")
+
     def test_file_candidate_compiles_to_final_projected_replace_layer(self) -> None:
         (
             definition,

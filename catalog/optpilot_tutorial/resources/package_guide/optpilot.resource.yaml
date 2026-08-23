@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: resource
+id: tutorial-package-guide
+name: Package anatomy guide
+description: A small interactive map of the four files in this tutorial package.
+tasks: [learn-optpilot, build-package]
+purpose: template
+tags: [tutorial, package, reference]
+
+interface:
+  label: Package guide
+  description: Open the visual package map in Studio.
+  command: [python, serve.py]
+  cwd: .
+  runtime:
+    sandbox: process
+  timeoutSeconds: 3600
+  presentation:
+    kind: web
+    port: 3000
+    readyPath: /
+    readyTimeoutSeconds: 15

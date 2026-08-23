@@ -1,30 +1,37 @@
 ---
-title: DEVS-Gen Gallery
-description: Optimize two generated discrete-event simulators that ship as ordinary Environments, each with its own hash-locked xdevs runtime.
+title: DEVS-Gen
+description: Generate discrete-event simulations from natural language, then evaluate or optimize them through ordinary OptPilot contracts.
 ---
 
-# DEVS-Gen Gallery
+# DEVS-Gen
 
-`catalog/devs_gallery` packages two simulators produced by the DEVS Simulation
-Generator as ordinary OptPilot Environments. Each folder wraps an
+`catalog/devs_gallery` is the release package for
+[DEVS-Gen](https://arxiv.org/abs/2603.03784). It includes the interactive
+generator and four generated simulators packaged as ordinary OptPilot
+Environments. The two compact parameter-tuning examples wrap an
 **unmodified** generated `devs_project/` with one small OptPilot-authored
 evaluator and a vendored, hash-locked copy of the pure-Python `xdevs` wheel.
 
-Everything on this page runs locally with no API key, no network and no
-external software: both simulators are deterministic and both shipped studies
-finish in seconds. The *generation* side of the story — turning a text spec
-into one of these simulators — is covered in
+The pre-generated examples run locally with no API key or external software.
+Creating a new simulator through the DEVS-Gen interface uses the configured
+`OPENROUTER_API_KEY`. The complete workflow is covered in
 [Generate and Optimize](generate-and-optimize.md).
 
-## The two simulators
+## Included examples
 
 | Environment | Models | Interesting decision | Shipped study objective |
 | --- | --- | --- | --- |
 | `seird-epidemic` | SEIRD compartmental epidemic, fixed-step Euler integration over a 30-day horizon | epidemiological parameters | minimize `deceased` |
 | `abp-protocol` | Alternating Bit Protocol: sender and receiver exchanging 20 packets across two lossy subnets | sender retransmission `timeout` | minimize `retransmissions` |
+| `dispatch-station` | Generated production dispatch simulation | choose the next queued job | evaluate a policy with `total_score` |
+| `triage-clinic` | Generated clinic flow simulation | choose the next patient | evaluate a policy with `total_score` |
 
-Both take `format: parameters` candidates, so any parameters-format Method can
-drive them.
+The first two take `format: parameters` candidates. The last two take
+`format: files` policy candidates and expose the trace and validation context
+needed by the general trace-guided method in
+`catalog/production_agv_scheduling`. This is the intended cross-package
+composition: DEVS-Gen supplies a simulator; another research package supplies
+the optimization method.
 
 ## seird-epidemic
 

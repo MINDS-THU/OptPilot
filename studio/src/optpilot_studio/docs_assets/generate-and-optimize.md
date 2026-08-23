@@ -1,226 +1,99 @@
 ---
-title: "Generate and Optimize: DEVS-Gen x Policy Search"
-description: Generate a simulator from a text spec, get a declared policy hook, and improve the policy with trace-aware LLM search.
+title: "Generate and Optimize: DEVS-Gen × Heuristic Design"
+description: Generate a discrete-event simulator from text, then improve its declared decision policy using simulation traces.
 ---
 
-# Generate and Optimize: DEVS-Gen x Policy Search
+# Generate and Optimize
 
-This walkthrough closes the loop between the two flagship integrations:
+This workflow composes two research packages through public OptPilot contracts:
 
 1. **DEVS-Gen** turns a natural-language specification into a runnable
-   discrete-event simulator that *declares its own optimization contract* —
-   result metrics and, when the spec names an optimizable decision, an
-   editable **policy hook**.
-2. **llm-policy-search** takes any environment that publishes the policy
-   contracts and improves the policy with a manager/editor LLM loop driven
-   by aggregate KPIs and the worst replication's event trace.
+   discrete-event simulator with declared metrics and, when requested, an
+   editable decision-policy hook.
+2. **LLM-Guided Heuristic Design** consumes that hook, repeated-simulation
+   metrics, and exact-replay traces to improve the executable policy.
 
-No hand-written glue code connects them: the generated simulator declares
-the contract, the Studio wizard emits the environment composition, and the
-method reads everything from the environment's declarations.
+Neither package imports the other. The generated Environment describes what a
+Candidate may edit and how it can be replayed; the Method declares which pieces
+of that contract it requires. Studio enables the pairing only when they match.
 
-The checked-in reference composition is
-`catalog/llm_policy_search/environments/dispatch_station/` — a DEVS-Gen
-generated dispatch station whose decision ("which waiting job runs next")
-delegates to an editable `policy.py`.
+## Which route to use
 
-## Step 1 — Generate a simulator with a policy hook
+Use **LLM-Guided Heuristic Design** when the decision is most naturally an
+executable rule that can improve through repeated simulation and trace review.
+Use **COOPA** when the decision is most naturally a mathematical program with
+explicit variables, constraints, and an objective. A project can use both:
+COOPA can propose a plan, while a DEVS-Gen Environment evaluates that plan
+under operational uncertainty.
 
-Use the DEVS-Gen interface (Catalog → `devs-gen-interface` → Open
-interface) or the headless `generate` resource action:
-
-```bash
-optpilot resource run \
-  catalog/devs_gallery/resources/devs-gen-interface/optpilot.resource.yaml \
-  generate \
-  --inputs-file spec.yaml --output-dir generated/
-```
-
-Write the specification so it **names one optimizable decision** — for the
-dispatch station: "when the machine becomes idle, a dispatch decision picks
-which waiting job to serve next; this decision should be optimizable."
-The generator builds the model as it normally would — the decision lives
-inside a deciding component — and then **declares where it lives**: the
-runner's `OPTPILOT_POLICY` literal names the component file and its
-top-level class (or, for delegated designs, a `policy.py` module with a
-zero-argument factory function), alongside the result metrics
-(`OPTPILOT_METRICS`). The manifest builder statically verifies that the
-declared file exists and defines the declared entrypoint before emitting
-the `devs.simulation.v2` `policy` block — a declaration pointing at
-nothing is discarded whole.
-
-A spec without an optimizable decision produces a plain simulator with
-metrics only — the policy block is optional.
-
-## Step 2 — Register: the wizard emits the policy-search variant
-
-When a Studio workspace hands off a v2 bundle **with** a policy block, the
-environment starter emits the file-candidate policy variant instead of the
-plain parameter template:
-
-- `environment.yaml` — the declared file as the editable candidate,
-  `policyValidation` (forbidden imports, plus the entrypoint pin for the
-  function-style contract), an `exact_seed_replay` capability,
-  seeded-replication evaluator settings, and declared metric keys;
-- `optpilot_adapter_policy.py` — seeded replications of the generated
-  simulator (overlaying the candidate file at its declared path),
-  worst-run selection, JSONL→SQLite trace conversion, and the replay
-  callable;
-- `policy_instructions.md` — the method-facing contract. For a
-  component-class hook this is an **editing contract**: preserve the
-  class name, ports, protocol, and DEVS lifecycle verbatim; change only
-  the selection logic. For a `policy.py` function hook it is the snapshot
-  interface contract;
-- `settings/replay.json` — seeds and score metric.
-
-The `dispatch_station` environment in `catalog/llm_policy_search/` is
-exactly this output, kept as a reviewable reference.
-
-## Step 3 — Baseline
-
-`studies/dispatch_baseline_smoke.yaml` runs the generated FCFS-style
-template policy once through the retained runner:
-
-```bash
-optpilot run catalog/llm_policy_search/studies/dispatch_baseline_smoke.yaml \
-  --package-root catalog/llm_policy_search
-```
-
-The baseline scores `mean_total_score = -7.81` (score is the negated
-average waiting time in hours, so higher is better).
-
-## Step 4 — Search
-
-`studies/dispatch_policy_search.yaml` runs the LLM search (13 trials:
-baseline + 3 iterations of 4 candidates; requires `OPENROUTER_API_KEY`):
-
-```bash
-optpilot run catalog/llm_policy_search/studies/dispatch_policy_search.yaml \
-  --package-root catalog/llm_policy_search
-```
-
-Each iteration the manager inspects the aggregate metrics and queries the
-worst seed's SQLite trace, proposes improvement plans, parallel editors
-write complete `policy.py` candidates, the core policy validator enforces
-the environment's declared rules, and improvements are verified by
-exact-seed replay through the environment's declared capability.
-
-One proposal exchange spans several model calls, so the method declares
-`entrypoint.exchangeTimeoutSeconds: 5000`; the retained runner honors the
-declaration (an explicit `--method-request-timeout` remains a launch-time
-override).
-
-## Results
-
-A reference run (13/13 trials succeeded, seeds 7/11/23, deepseek-v4-flash
-via OpenRouter):
-
-| Candidate | mean_total_score | worst_total_score |
-|---|---|---|
-| baseline (generated FCFS template) | −7.81 | −10.11 |
-| best (iteration 1, plan 1) | **−4.53** | **−5.27** |
-
-The best candidate cut the average waiting time by **42%**. Its policy is
-the textbook answer for this system — Shortest Processing Time first with
-arrival-time tiebreaking — discovered in the first iteration from the
-baseline's worst-seed trace; iterations 2 and 3 explored priority and
-aging variants without beating it (one rediscovered the same rule). Every
-one of the 12 LLM candidates outperformed the baseline.
-
-A second reference run exercises the **class-style** contract on the
-generated triage clinic (`clinic-policy-search`), where the whole
-`TriagePolicy` DEVS component file is the editable candidate under a
-generated editing contract:
-
-| Candidate | mean_total_score | worst_total_score |
-|---|---|---|
-| baseline (generated FIFO component) | −3.75 | −6.63 |
-| best (iteration 2) | **−2.26** | **−3.32** |
-
-All 12 whole-component rewrites were valid — every candidate preserved
-the class name, ports, protocol, and DEVS lifecycle and changed only the
-selection logic; the winner implemented Weighted Shortest Processing
-Time (`exam_duration/urgency`) with a waiting-time aging penalty, a 40%
-reduction in urgency-weighted waiting over FIFO.
-
-## Where the pieces live
-
-| Piece | Location |
-|---|---|
-| Generator prompts + policy-hook contract | `catalog/devs_gallery/resources/devs-gen-interface/` |
-| Manifest v2 metrics/policy extraction | `devs_tools/.../result_summary_contract.py` |
-| Generic method | `catalog/llm_policy_search/methods/llm_policy_search/` |
-| Reference composition | `catalog/llm_policy_search/environments/dispatch_station/` |
-| BYO-simulator template | `catalog/llm_policy_search/environments/queue_demo/` |
-
-To adopt the loop for your own simulator — generated or hand-written —
-follow the "Bring your own simulator" section of
-`catalog/llm_policy_search/README.md`, or simply generate with a
-decision-naming spec and let the wizard emit the composition.
-
-## The other way to improve a simulated system
-
-Everything above searches for a good operating rule by trial and error: a
-language model writes a candidate rule, the simulator scores it, better rules
-survive. That suits questions where the rule itself is what you want — *which
-patient should we serve next?* — and where no formula tells you the answer in
-advance.
-
-Some questions are not like that. *How many staff should each shift have?* has
-a countable set of answers, a clear objective, and hard limits. For those,
-stating the problem mathematically and solving it exactly is faster and gives
-an answer you can prove is best. OptPilot ships that route too, in
-[Natural-Language OR Solving](or-solving.md), and you do not need to write any
-mathematics to use it: you describe the problem in ordinary words and the
-solver formulates it for you.
-
-Nothing derives one from the other automatically. Turning a simulator into a
-solvable mathematical problem is a modelling decision, and a wrong one gives a
-confident answer to the wrong question. So the translation is yours to make —
-but it is a short piece of writing, not a research project.
-
-### Writing your simulator down as a problem
-
-The solver's run setup takes a single input, `problem`: your situation in
-plain language. Three things have to be in it, and your simulator already
-tells you all three.
-
-**What you are trying to achieve.** The metric your simulator reports and
-whether you want it larger or smaller. This is the objective your run setup
-already names.
-
-**What you get to decide.** The quantities you are free to choose. In a
-simulator these are the parameters someone tunes, or the resources someone
-sizes — staff per shift, machines per station, vehicles in the fleet. If a
-decision is a *rule* rather than a *number*, it belongs in the trial-and-error
-route above, not here.
-
-**What limits you.** The bounds the simulator enforces: a total budget, a
-maximum wait, a shift length, a fixed headcount.
-
-For the triage clinic used above, that becomes:
+For the solver route, open the `solve-or-problem` Run setup and fill its
+required `problem` input. A usable statement names what to decide, what to
+optimize, and every constraint, for example:
 
 ```text
-Minimise the average time a patient waits before being seen.
-Decide how many nurses are on each of the three daily shifts.
-Constraints: at most 24 nurse-shifts per day in total; at least two
-nurses on every shift; the average wait must not exceed 30 minutes for
-urgent patients.
+Minimise the total distance travelled by two AGVs. Decide which AGV serves
+each transport request and in what order. Each request must be served once;
+an AGV may carry only one load at a time; pickup must precede delivery; and
+the schedule must satisfy all battery and shift-length constraints.
 ```
 
-Paste that into the `problem` input of the **solve-or-problem** run setup and
-launch it. The solver states the formulation it derived, and — in its
-interactive console — lets you correct it before solving, which is worth doing
-the first time: a formulation that mismatches your intent is the most likely
-way this route goes wrong.
+## 1. Generate the simulator
 
-### Which route to use
+Open **DEVS-Gen** in Catalog and launch **DEVS Simulation Generator Interface**,
+or run its headless `generate` Resource action. Describe both the system and the
+decision that should be optimizable—for example:
 
-| Your question | Route |
-|---|---|
-| What rule should decide the next action? | Policy search, above |
-| How many, or how much, of something? | Solve as an OR problem |
-| Neither, or you are not sure | Start with policy search; it needs no modelling decision |
+> Jobs arrive at one machine. Whenever the machine becomes idle, a dispatch
+> policy chooses one waiting job. Expose that decision as an editable policy.
 
-The two are not exclusive. A common pattern is to size the resources exactly,
-then search for the best rule to operate them.
+The generated `devs.simulation.v2` manifest declares metrics and the policy
+entrypoint. A system without an optimizable decision remains a valid simulation
+Environment but will not match policy-design Methods.
+
+## 2. Register the Environment
+
+From the generated Workspace, choose **Set up for Catalog**. For a declared
+policy hook, Studio creates:
+
+- a file-Candidate Environment;
+- baseline candidate files and policy instructions;
+- `policyValidation` rules;
+- seeded evaluator settings and metrics;
+- an `exact_seed_replay` capability that produces a bounded SQLite trace.
+
+DEVS-Gen includes two reviewable reference outputs:
+
+| Environment | Policy-hook style | Location |
+| --- | --- | --- |
+| Dispatch station | `policy.py` factory function | `catalog/devs_gallery/environments/dispatch_station/` |
+| Triage clinic | Editable DEVS component class | `catalog/devs_gallery/environments/triage_clinic/` |
+
+## 3. Pair the Method
+
+In Studio's Run setup flow:
+
+1. Select the generated Environment—or one of the reference Environments.
+2. Select **Trace-guided policy design (language model)** from the
+   **LLM-Guided Heuristic Design** package.
+3. Review the compatibility checks, objective, budget, and seed.
+4. Save the Run setup and launch it.
+
+The Method evaluates the baseline, replays the worst seed, lets a manager query
+the event trace, asks parallel editors for complete policy revisions, validates
+them, and keeps only improvements. The source Environment and prior results are
+never modified.
+
+## 4. Inspect and reuse the result
+
+The Run retains every Candidate, trial, observation, trace, and generated policy
+file. Open the best Candidate to replay it, compare it, save it to the Shortlist,
+or create an editable Workspace.
+
+The same boundary supports other combinations. A COOPA-produced formulation or
+solver policy can be retained as a Candidate and evaluated by a compatible
+DEVS-Gen Environment; translating a mathematical solution into a simulator
+decision hook remains an explicit modeling step rather than hidden glue.
+
+See [LLM-Guided Heuristic Design](llm-policy-search.md) for the Method contract,
+[DEVS-Gen](devs-gallery.md) for generation, and [COOPA](or-solving.md) for
+provenance-aware OR formulation and solver routing.

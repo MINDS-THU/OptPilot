@@ -84,7 +84,7 @@ class FirstStartRegistrationTest(unittest.TestCase):
 
     A Run setup can only be launched from a published version, because a run
     records exactly which bytes produced its result. Nothing published the
-    examples, so a fresh install showed five packages and refused to run any.
+    examples, so a fresh install showed packages and refused to run any.
     """
 
     def test_nothing_is_published_without_a_realm(self) -> None:
@@ -115,7 +115,7 @@ class FirstStartRegistrationTest(unittest.TestCase):
                 return_value=packages,
             ):
                 result = _register_user_packages(
-                    SimpleNamespace(realm_runtime=runtime)
+                    SimpleNamespace(realm_runtime=runtime, catalog_roots=[])
                 )
             self.assertEqual(result, [])
             self.assertEqual(calls, [], "a published package was published again")
@@ -150,9 +150,50 @@ class FirstStartRegistrationTest(unittest.TestCase):
                 patch("sys.stderr"),
             ):
                 result = _register_user_packages(
-                    SimpleNamespace(realm_runtime=runtime)
+                    SimpleNamespace(realm_runtime=runtime, catalog_roots=[])
                 )
         self.assertEqual(result, ["zzz_fine"])
+
+    def test_project_package_is_not_shadowed_by_stale_user_copy(self) -> None:
+        from optpilot.realm.configured_package_ingress import (
+            ConfiguredPackageIngressOutcome,
+        )
+        from optpilot_studio.ui.server import _register_user_packages
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_package = _make_package(
+                root / "project" / "catalog", "devs_gallery"
+            )
+            packages = root / "packages"
+            _make_package(packages, "devs_gallery")
+            _make_package(packages, "only_mine")
+            published = []
+
+            runtime = SimpleNamespace(
+                catalog=SimpleNamespace(read_head=lambda **_k: None),
+                configured_package_ingress=SimpleNamespace(
+                    publish=lambda **kwargs: (
+                        published.append(kwargs["package_id"])
+                        or SimpleNamespace(
+                            outcome=ConfiguredPackageIngressOutcome.PUBLISHED
+                        )
+                    )
+                ),
+            )
+            with patch(
+                "optpilot.realm.config.default_packages_root",
+                return_value=packages,
+            ):
+                result = _register_user_packages(
+                    SimpleNamespace(
+                        realm_runtime=runtime,
+                        catalog_roots=[project_package],
+                    )
+                )
+
+        self.assertEqual(result, ["only_mine"])
+        self.assertEqual(published, ["only_mine"])
 
     def test_the_publishing_identity_follows_the_package_not_its_folder(self) -> None:
         # This is what makes re-installing a package an update rather than a

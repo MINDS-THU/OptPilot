@@ -69,6 +69,7 @@ from optpilot_studio.ui.server import (
     UiState,
     _agent_context_packet,
     _agent_session_by_id,
+    _approve_candidate_environment_preview_image,
     _candidate_debug_runtime_capability,
     _catalog_payload,
     _configured_study_package_root,
@@ -4496,6 +4497,136 @@ class StudioRealmRunsTest(unittest.TestCase):
             [item["id"] for item in refreshed_capability["profiles"]],
             ["candidate"],
         )
+
+    def test_studio_can_approve_the_exact_preview_image_without_restart(
+        self,
+    ) -> None:
+        run_id = self._create_runnable_operator_run(
+            environment_interface=_STUDIO_PREVIEW_INTERFACE
+        )
+        self._enable_fake_environment_preview(trusted_images=())
+        detail = _realm_run_detail(self.state, ref=RunViewRef(run_id=run_id))
+        candidate = detail["pages"]["candidate"]["items"][0]
+        request_id = "88888888-8888-4888-8888-888888888888"
+
+        with self.assertRaisesRegex(
+            RealmConflict,
+            "no longer requires this Preview image preparation",
+        ):
+            _approve_candidate_environment_preview_image(
+                self.state,
+                run_id=run_id,
+                payload={
+                    "schema": "optpilot.environment-preview-trust-approve-request.v1",
+                    "request_id": request_id,
+                    "presentation_selection": candidate["selection"],
+                    "profile_id": "default",
+                    "image_ref": "example/other@sha256:" + "e" * 64,
+                },
+            )
+
+        approved = _approve_candidate_environment_preview_image(
+            self.state,
+            run_id=run_id,
+            payload={
+                "schema": "optpilot.environment-preview-trust-approve-request.v1",
+                "request_id": request_id,
+                "presentation_selection": candidate["selection"],
+                "profile_id": "default",
+                "image_ref": _STUDIO_PREVIEW_IMAGE,
+            },
+        )
+
+        self.assertEqual(
+            approved["schema"],
+            "optpilot.environment-preview-trust-approve-response.v1",
+        )
+        self.assertEqual(approved["image_ref"], _STUDIO_PREVIEW_IMAGE)
+        self.assertTrue(approved["image_ready"])
+        self.assertFalse(approved["downloaded"])
+        self.assertFalse(approved["restart_required"])
+        self.assertTrue(
+            self.runtime.container_web_provider.is_gateway_image_trusted(
+                _STUDIO_PREVIEW_IMAGE
+            )
+        )
+        self.assertEqual(
+            [head.image_ref for head in self.runtime.provider_trust_policy.list_active()],
+            [_STUDIO_PREVIEW_IMAGE],
+        )
+        refreshed = _realm_run_detail(
+            self.state,
+            ref=RunViewRef(run_id=run_id),
+        )
+        refreshed_capability = next(
+            item
+            for item in refreshed["pages"]["candidate"]["items"][0]["eligibility"]
+            if item["action"] == "environment_preview"
+        )
+        self.assertTrue(refreshed_capability["eligible"])
+        replayed = _approve_candidate_environment_preview_image(
+            self.state,
+            run_id=run_id,
+            payload={
+                "schema": "optpilot.environment-preview-trust-approve-request.v1",
+                "request_id": request_id,
+                "presentation_selection": candidate["selection"],
+                "profile_id": "default",
+                "image_ref": _STUDIO_PREVIEW_IMAGE,
+            },
+        )
+        self.assertTrue(replayed["image_ready"])
+        self.assertFalse(replayed["downloaded"])
+
+    def test_studio_downloads_an_approved_preview_image_before_launch(self) -> None:
+        run_id = self._create_runnable_operator_run(
+            environment_interface=_STUDIO_PREVIEW_INTERFACE
+        )
+        engine = self._enable_fake_environment_preview()
+        engine.available_images = set()
+        detail = _realm_run_detail(self.state, ref=RunViewRef(run_id=run_id))
+        candidate = detail["pages"]["candidate"]["items"][0]
+        capability = next(
+            item
+            for item in candidate["eligibility"]
+            if item["action"] == "environment_preview"
+        )
+
+        self.assertFalse(capability["eligible"])
+        self.assertEqual(
+            capability["reason"], "environment_preview_image_unavailable"
+        )
+        diagnostic = capability["profile_diagnostics"][0]
+        self.assertEqual(
+            diagnostic["remediation"],
+            {
+                "kind": "pull_container_image",
+                "image_ref": _STUDIO_PREVIEW_IMAGE,
+            },
+        )
+
+        prepared = _approve_candidate_environment_preview_image(
+            self.state,
+            run_id=run_id,
+            payload={
+                "schema": "optpilot.environment-preview-trust-approve-request.v1",
+                "request_id": "99999999-9999-4999-8999-999999999999",
+                "presentation_selection": candidate["selection"],
+                "profile_id": "default",
+                "image_ref": _STUDIO_PREVIEW_IMAGE,
+            },
+        )
+
+        self.assertEqual(prepared["decision_id"], "")
+        self.assertTrue(prepared["downloaded"])
+        self.assertTrue(prepared["image_ready"])
+        refreshed = _realm_run_detail(self.state, ref=RunViewRef(run_id=run_id))
+        refreshed_capability = next(
+            item
+            for item in refreshed["pages"]["candidate"]["items"][0]["eligibility"]
+            if item["action"] == "environment_preview"
+        )
+        self.assertTrue(refreshed_capability["eligible"])
 
     def test_environment_preview_reports_the_exact_selected_profile(self) -> None:
         base_profile = yaml.safe_load(_STUDIO_PREVIEW_INTERFACE)["interface"]

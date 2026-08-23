@@ -18,6 +18,9 @@ source/
 catalog/*/runs/
 catalog/*/**/runs/
 catalog/local_package/
+# Local research packages that are intentionally outside this release.
+catalog/factorio_design_benchmark/
+catalog/llm_policy_search/
 catalog/*/resources/**/.venv/
 catalog/*/resources/**/.runtime/
 catalog/*/resources/**/.uv-cache/

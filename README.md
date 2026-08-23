@@ -50,38 +50,22 @@ Realm, not a mutable output directory.
 
 ## Current executable surface
 
-The public Realm runner currently supports a deliberately bounded slice:
+The Realm runner supports parameter, bounded-file, and opaque candidate
+contracts; Python and command evaluators; Python batch/session and command
+methods; and declared process or container runtimes. It retains immutable
+inputs, isolated attempt workspaces, method exchanges, observations, artifacts,
+events, and recovery state.
 
-- parameter candidates and bounded file candidates
-- source-backed Python `batch` methods
-- configured Python evaluators
-- local process runtime with bounded, vendored, hash-locked pure-Python
-  dependency preparation, but without arbitrary setup/build commands,
-  containers, or Environment/backend host-derived values
-- launch-scoped `method.runtime.envFromHost` values selected explicitly for the
-  Method process; Studio Runs retain only the names and opaque Settings
-  revisions, while values stay out of process records and Run evidence
-- retained read-only method context, runtime-private file-candidate staging,
-  and isolated per-attempt candidate materialization
-- durable method exchanges, attempt binding/launch/reconciliation, canonical
-  evidence, and terminal recovery
+Packages may explicitly select host environment values for a launch. Studio
+binds the current saved revisions while keeping secret values out of process
+records and Run evidence; direct CLI launches use the exported process
+environment. Unsupported authoring configurations fail during retained
+compilation instead of falling back to an implicit execution path.
 
-Unsupported configs fail during retained compilation. The runner does not fall
-back to the removed directory-based path. Command/session methods, command
-evaluators, opaque candidates, containers, arbitrary setup/build execution,
-Environment/backend host-derived values, and legacy path-backed output
-declarations are not yet executable through this slice.
-
-All nine bundled studies are retained-launchable. The OpenAI editing Study
-additionally needs `OPENROUTER_API_KEY`: add it under Studio Settings → Local
-environment variables, or export it for a CLI launch. Each Run resolves that
-declared value independently: Studio binds the current saved revision at
-launch, and a later Settings change applies only to later Runs. The value is
-handed transiently to the Method process without being copied into the Run or
-process-supervisor record. If an older Run needs recovery after its bound
-revision was changed or removed, it waits instead of silently using the new
-value. Validation success and launch readiness remain separate checks for
-user-authored packages too.
+Package code is trusted code. Container images run only after approval of their
+exact digest, and authored process code is not sandboxed against deliberate
+hostility. See [Local Operations and Security](https://MINDS-THU.github.io/OptPilot/operations/)
+before running packages from an untrusted source.
 
 ## Install
 
@@ -181,11 +165,10 @@ concrete run plans.
 
 ```text
 catalog/
-  devs_gallery/
-  llm_policy_search/
-  or_solving/
-  factorio_design_benchmark/
-  production_agv_scheduling/
+  devs_gallery/                 # DEVS-Gen research package
+  production_agv_scheduling/   # LLM-guided heuristic-design research package
+  or_solving/                  # COOPA research package
+  optpilot_tutorial/           # small package-authoring tutorial
 ```
 
 ## Documentation
@@ -195,7 +178,7 @@ catalog/
 - [Runs and Evidence](https://MINDS-THU.github.io/OptPilot/evidence/)
 - [Configuration](https://MINDS-THU.github.io/OptPilot/configuration/)
 - [Studio UI](https://MINDS-THU.github.io/OptPilot/ui/)
-- [Examples](https://MINDS-THU.github.io/OptPilot/examples/)
+- [Research Packages](https://MINDS-THU.github.io/OptPilot/devs-gallery/)
 
 ## Development
 

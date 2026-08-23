@@ -2489,8 +2489,16 @@ def compile_retained_process_attempt_runtime(
         contract.get("schema") != "optpilot.retained-study-environment-contract.v1"
         or contract.get("access_policy") != expected_access_policy
         or contract.get("mutation_policy") != expected_mutation_policy
-        or contract.get("runtime_requirements")
-        != (_expected_container_runtime_requirements(settings) if is_container else {})
+        or (
+            is_container
+            and contract.get("runtime_requirements")
+            != _expected_container_runtime_requirements(settings)
+        )
+        or (
+            not is_container
+            and contract.get("runtime_requirements")
+            not in ({}, {"networkPolicy": "disabled"})
+        )
         or adapter.get("type") != "configured_environment"
         or adapter.get("implementation") != "builtin.configured_environment"
         or evaluate.get("type") != "python"
@@ -2561,7 +2569,14 @@ def compile_retained_process_attempt_runtime(
     if (
         backend.get("type") != expected_backend["type"]
         or backend.get("implementation") != expected_backend["implementation"]
-        or backend.get("config") != {}
+        or (
+            is_container
+            and backend.get("config") != {}
+        )
+        or (
+            not is_container
+            and backend.get("config") not in ({}, {"networkPolicy": "disabled"})
+        )
     ):
         _fail(
             "backend_unsupported",

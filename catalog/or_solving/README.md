@@ -1,7 +1,7 @@
 # or_solving — natural-language OR solving with COOPA
 
-One-time solve of a natural-language operations-research problem
-(plan §5.3, W3): you describe the problem in plain language at launch time,
+One-time solve of a natural-language operations-research problem: you
+describe the problem in plain language at launch time,
 and the `coopa_solver` method drives the COOPA multi-agent pipeline
 (formulation extraction with confidence-scored refinement → routing to a
 mathematical / combinatorial / metaheuristic / general optimizer agent →
@@ -56,6 +56,5 @@ Trusting the numeric answer remains the user's judgment call over the
 retained artifact — formulation confidence scores and generated code are
 kept precisely so the answer can be audited.
 
-Note the method executes LLM-generated solver code locally (COOPA's design).
-Treat the method runtime as trusted-local-code; revisit under the container
-slice per plan §5.3.
+Note that the method executes LLM-generated solver code locally (COOPA's
+design). Treat the method runtime as trusted local code.

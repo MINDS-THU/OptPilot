@@ -11,8 +11,10 @@
     --good: #2e7d4f; --warn: #b26a00; --bad: #b3372e; --code-bg: #1f1a2b;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; min-height: 0; }
   body { margin: 0; font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
-         background: var(--bg); color: var(--ink); }
+         background: var(--bg); color: var(--ink); display: grid;
+         grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
   header { padding: 14px 22px; background: var(--card); border-bottom: 1px solid var(--line);
            display: flex; align-items: baseline; gap: 12px; }
   header h1 { margin: 0; font-size: 19px; }
@@ -20,10 +22,10 @@
   #status-pill { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 999px;
                  background: var(--accent-soft); color: var(--accent); }
   main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px;
-         padding: 18px 22px; max-width: 1500px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+         width: 100%; height: 100%; min-height: 0; padding: 18px 22px;
+         max-width: 1500px; overflow: hidden; align-items: stretch; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-          padding: 16px 18px; }
+          padding: 16px 18px; min-height: 0; }
   .card h2 { margin: 0 0 10px; font-size: 15px; }
   label { display: block; font-weight: 600; font-size: 13px; margin: 12px 0 4px; }
   .hint { font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
@@ -31,6 +33,15 @@
     width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px;
     font: inherit; background: #fff; }
   textarea { min-height: 120px; resize: vertical; }
+  #input-card { display: grid;
+    grid-template-rows: auto minmax(180px, 1fr) auto auto auto;
+    min-height: 0; overflow: hidden; }
+  #input-card:has(details.adv[open]) {
+    grid-template-rows: auto minmax(140px, 1.15fr) auto minmax(120px, .85fr) auto;
+  }
+  #problem { height: 100%; min-height: 180px; resize: none; }
+  #input-card:has(details.adv[open]) #problem { min-height: 140px; }
+  .mode-control { min-height: 0; }
   .mode-row { display: flex; gap: 8px; margin-top: 6px; }
   .mode-row button { flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 8px;
     background: #fff; font: inherit; cursor: pointer; text-align: left; }
@@ -43,8 +54,16 @@
   .primary:disabled { opacity: .5; cursor: default; }
   .ghost { background: #fff; border: 1px solid var(--line); border-radius: 8px;
            padding: 9px 14px; font: inherit; cursor: pointer; }
-  details.adv { margin-top: 12px; }
+  details.adv { min-height: 24px; margin-top: 12px; }
   details.adv summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details.adv[open] { overflow: auto; overscroll-behavior: contain;
+    border: 1px solid var(--line); border-radius: 8px; background: #faf9fc;
+    padding: 0 12px 12px; scrollbar-gutter: stable; }
+  details.adv[open] summary { position: sticky; top: 0; z-index: 1;
+    margin: 0 -12px 2px; padding: 10px 12px 7px; background: #faf9fc;
+    border-bottom: 1px solid var(--line); color: var(--accent); font-weight: 600; }
+  .input-actions { min-height: 0; }
+  #run-card { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
   .steps { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
   .step { flex: 1; min-width: 110px; padding: 8px 10px; border-radius: 8px; font-size: 12px;
           border: 1px solid var(--line); color: var(--muted); background: var(--card); }
@@ -91,6 +110,25 @@
   .review-actions .col { display: flex; flex-direction: column; gap: 8px; }
   .mock-tag { background: #fff3cd; color: #7a5b00; font-size: 11px; padding: 2px 8px;
               border-radius: 999px; margin-left: 8px; vertical-align: middle; }
+  @media (max-height: 680px) and (min-width: 901px) {
+    main { gap: 12px; padding: 12px 16px; }
+    .card { padding: 12px 14px; }
+    #input-card { grid-template-rows: auto minmax(120px, 1fr) auto auto auto; }
+    #input-card:has(details.adv[open]) {
+      grid-template-rows: auto minmax(100px, 1fr) auto minmax(90px, .8fr) auto;
+    }
+    #problem { min-height: 120px; }
+    #input-card:has(details.adv[open]) #problem { min-height: 100px; }
+    .mode-row button { padding: 7px 9px; }
+    .primary { margin-top: 10px; padding-block: 9px; }
+  }
+  @media (max-width: 900px) {
+    html, body { height: auto; min-height: 100%; }
+    body { display: block; overflow: auto; }
+    main { grid-template-columns: 1fr; height: auto; min-height: 0; overflow: visible; }
+    #input-card { min-height: min(720px, calc(100vh - 96px)); }
+    #run-card { min-height: 360px; overflow: visible; }
+  }
 </style>
 </head>
 <body>
@@ -103,14 +141,16 @@
   <section class="card" id="input-card">
     <h2>Problem</h2>
     <textarea id="problem" placeholder="Describe the operations-research problem in natural language, e.g.&#10;&#10;Maximize 3x + 5y subject to: x <= 4, 2y <= 12, 3x + 2y <= 18, x >= 0, y >= 0."></textarea>
-    <label>Mode</label>
-    <div class="mode-row">
-      <button id="mode-interactive" class="selected" type="button">
-        <b>Interactive</b><small>Review and refine the formulation before solving</small>
-      </button>
-      <button id="mode-auto" type="button">
-        <b>Automatic</b><small>Run the whole pipeline unattended</small>
-      </button>
+    <div class="mode-control">
+      <label>Mode</label>
+      <div class="mode-row">
+        <button id="mode-interactive" class="selected" type="button">
+          <b>Interactive</b><small>Review and refine the formulation before solving</small>
+        </button>
+        <button id="mode-auto" type="button">
+          <b>Automatic</b><small>Run the whole pipeline unattended</small>
+        </button>
+      </div>
     </div>
     <details class="adv">
       <summary>Advanced options</summary>
@@ -125,8 +165,10 @@
       <input type="number" id="maxIter" min="1" max="5" value="2">
       <label><input type="checkbox" id="mock"> Mock run (no COOPA, no network — demo the console)</label>
     </details>
-    <button class="primary" id="start">Start solving</button>
-    <div id="start-error"></div>
+    <div class="input-actions">
+      <button class="primary" id="start">Start solving</button>
+      <div id="start-error"></div>
+    </div>
   </section>
 
   <section class="card" id="run-card">

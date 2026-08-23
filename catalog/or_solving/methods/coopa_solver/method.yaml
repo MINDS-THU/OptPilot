@@ -30,9 +30,8 @@ interface:
     request revisions, then watch the optimizer agents generate solver code
     and the numeric answer. An automatic mode runs the whole pipeline
     unattended, and a mock mode demos the console without COOPA or network.
-    Inside Studio's launch runtime the host COOPA_HOME path is not visible;
-    place a COOPA checkout at methods/coopa_solver/coopa_home (gitignored,
-    never redistributed) before launching.
+    The package includes COOPA at methods/coopa_solver/coopa_home;
+    COOPA_HOME can point to a different checkout for local development.
   command: [bash, ./launch_console.sh]
   cwd: .
   runtime:

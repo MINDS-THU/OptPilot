@@ -29,6 +29,13 @@ def _shipped_studies() -> list[tuple[Path, dict]]:
     for path in sorted(_CATALOG.rglob("*.yaml")):
         if any(part in _TEST_PACKAGES for part in path.parts):
             continue
+        package_root = _CATALOG / path.relative_to(_CATALOG).parts[0]
+        settings_path = package_root / "optpilot.package.yaml"
+        if not settings_path.is_file():
+            continue
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        if settings.get("category") not in {"research", "tutorial"}:
+            continue
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:
@@ -50,7 +57,7 @@ class RunSetupNamesTest(unittest.TestCase):
         self.assertNotIn("title", schema.get("required", []))
 
     def test_there_are_shipped_run_setups_to_check(self) -> None:
-        self.assertGreaterEqual(len(_shipped_studies()), 15)
+        self.assertGreaterEqual(len(_shipped_studies()), 10)
 
     def test_every_shipped_run_setup_has_one(self) -> None:
         missing = [

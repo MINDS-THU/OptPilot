@@ -88,6 +88,22 @@ class InterfaceLaunchGateTest(unittest.TestCase):
         withui = [e["qualified_id"] for e in resources if e.get("has_interface")]
         self.assertIn("devs_gallery/resource/devs-gen-interface", withui)
 
+    def test_coopa_and_production_scheduling_publish_interfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = self._state(Path(tmp_dir))
+            payload = _catalog_payload(state)
+
+        coopa = next(item for item in payload["methods"] if item["id"] == "coopa-solver")
+        production = [
+            item
+            for item in payload["environments"]
+            if item["id"].startswith("production-agv-scheduling-")
+        ]
+
+        self.assertEqual(len(coopa["interface"]["profiles"]), 1)
+        self.assertGreaterEqual(len(production), 7)
+        self.assertTrue(all(len(item["interface"]["profiles"]) == 2 for item in production))
+
     def test_launching_it_requests_approval_rather_than_starting(self) -> None:
         """With its requirements met, opening one is a decision for the person.
 

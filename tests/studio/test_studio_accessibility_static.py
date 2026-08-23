@@ -26,21 +26,25 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         cls.styles = _STYLES.read_text(encoding="utf-8")
 
     def test_dynamic_run_destinations_are_an_accessible_tab_interface(self) -> None:
-        render = _function(self.source, "renderRunDetail", "selectRunActionContext")
-        button = _function(self.source, "runTabButtonHtml", "runTabPanelHtml")
-        panel = _function(self.source, "runTabPanelHtml", "activateRunTab")
+        render = _function(self.source, "runTrialMapHtml", "runCandidateInspectorHtml")
+        keyboard = _function(
+            self.source,
+            "handleCandidateTablistKeydown",
+            "compactCandidateLabel",
+        )
 
         self.assertIn('role="tablist"', render)
-        self.assertIn('aria-label="Run result sections"', render)
-        self.assertIn('aria-orientation="horizontal"', render)
-        self.assertIn('role="tab"', button)
-        self.assertIn('aria-selected="${active ? "true" : "false"}"', button)
-        self.assertIn('aria-controls="run-result-tabpanel"', button)
-        self.assertIn("const keyboardAnchor", button)
-        self.assertIn("const tabSemantics", button)
-        self.assertIn('tabindex="${keyboardAnchor ? "0" : "-1"}"', button)
-        self.assertIn('role="tabpanel"', panel)
-        self.assertIn("aria-labelledby", panel)
+        self.assertIn('aria-label="Candidates in accepted order"', render)
+        self.assertIn('role="tab"', render)
+        self.assertIn('aria-selected="${selected && group.id === selected.id ? "true" : "false"}"', render)
+        self.assertIn('aria-controls="run-candidate-tab-content"', render)
+        self.assertIn('role="tabpanel"', render)
+        self.assertIn("aria-labelledby", render)
+        self.assertIn('tabindex="${selected ? (group.id === selected.id ? "0" : "-1")', render)
+        self.assertIn("ArrowLeft", keyboard)
+        self.assertIn("ArrowRight", keyboard)
+        self.assertIn("Home", keyboard)
+        self.assertIn("End", keyboard)
 
     def test_conversation_workspace_access_has_named_controls(self) -> None:
         card = _function(
@@ -370,6 +374,9 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         self.assertIn('querySelectorAll("[data-open-candidate-route]")', binding)
         self.assertIn("control.dataset.openCandidateRoute === candidateId", binding)
         self.assertIn("target.focus()", binding)
+        self.assertIn('button.dataset.candidateScrollTarget === "candidate-section"', binding)
+        self.assertIn('querySelector("[data-run-candidate-section]")', binding)
+        self.assertIn('target.scrollIntoView({ block: "start", behavior: "smooth" })', binding)
 
     def test_candidate_try_rerenders_focus_status_retry_or_created_job(self) -> None:
         restore = _function(

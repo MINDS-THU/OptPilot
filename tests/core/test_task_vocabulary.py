@@ -53,11 +53,18 @@ class TaskVocabularyTest(unittest.TestCase):
 
 class ShippedComponentTasksTest(unittest.TestCase):
     def _components(self) -> list[Path]:
-        return sorted(
-            path
-            for path in _CATALOG.rglob("*.yaml")
-            if re.match(r"(environment|method|optpilot\.resource)", path.name)
-        )
+        components = []
+        for path in _CATALOG.rglob("*.yaml"):
+            if not re.match(r"(environment|method|optpilot\.resource)", path.name):
+                continue
+            package_root = _CATALOG / path.relative_to(_CATALOG).parts[0]
+            settings_path = package_root / "optpilot.package.yaml"
+            if not settings_path.is_file():
+                continue
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+            if settings.get("category") in {"research", "tutorial"}:
+                components.append(path)
+        return sorted(components)
 
     def test_every_shipped_component_says_what_it_is_for(self) -> None:
         missing = []

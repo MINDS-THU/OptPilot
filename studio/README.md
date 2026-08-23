@@ -10,3 +10,10 @@ Use it from the repository root with:
 uv sync --all-packages --group examples --group docs
 uv run optpilot ui --open-browser
 ```
+
+For the complete local development stack—Docker Desktop, OpenHands, Studio,
+and the containerized workspace Code Server—use:
+
+```bash
+./scripts/start_services.sh
+```

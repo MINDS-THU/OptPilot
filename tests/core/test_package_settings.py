@@ -21,6 +21,7 @@ from optpilot.package_settings import (
     new_package_identity,
     package_identity,
     PackageSettings,
+    PackagePaper,
     validate_package_identity,
     write_package_settings,
 )
@@ -66,15 +67,38 @@ class PackageSettingsFileTests(unittest.TestCase):
 
     def test_written_settings_round_trip(self) -> None:
         identity = new_package_identity()
+        paper = PackagePaper(
+            title="A Research Paper",
+            url="https://arxiv.org/abs/2608.09343",
+        )
         path = write_package_settings(
-            self.root, identity=identity, description="A package."
+            self.root,
+            identity=identity,
+            description="A package.",
+            title="Readable package name",
+            category="research",
+            paper=paper,
         )
         self.assertEqual(path.name, PACKAGE_SETTINGS_FILENAMES[0])
         loaded = load_package_settings(self.root)
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.identity, identity)
         self.assertEqual(loaded.description, "A package.")
+        self.assertEqual(loaded.title, "Readable package name")
+        self.assertEqual(loaded.category, "research")
+        self.assertEqual(loaded.paper, paper)
         self.assertEqual(loaded.package_root, self.root)
+
+    def test_invalid_catalog_metadata_is_rejected(self) -> None:
+        identity = new_package_identity()
+        path = self.root / PACKAGE_SETTINGS_FILENAMES[0]
+        path.write_text(
+            "apiVersion: optpilot.io/v1\nconfig: package\n"
+            f"identity: {identity}\ncategory: public\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "research, tutorial, or local"):
+            load_package_settings(self.root)
 
     def test_the_file_explains_when_to_change_the_identity_and_when_not(
         self,

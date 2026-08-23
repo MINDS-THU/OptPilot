@@ -1,9 +1,11 @@
 # Dynamic Production and AGV Scheduling
 
-This OptPilot package turns the paper's research prototype into a set of
-reusable, inspectable components. It contains one method-agnostic discrete-event
-simulation environment, the proposed process-aware LLM heuristic-design method,
-and every baseline family used in the paper.
+This is the companion package for *LLM-Guided Heuristic Design from Simulation
+Traces*. It contains the general, contract-driven trace-guided policy-design
+Method; the production and AGV scheduling reference Environment; and the
+baseline families used in the paper. The Method has no factory-specific imports
+and can be paired in Studio with any Environment that declares the required
+editable-file, validation, trace, and exact-replay contracts.
 
 ## Design boundary
 
@@ -136,7 +138,12 @@ Studio so it loads the updated trust snapshot:
 ```bash
 uv run optpilot environment-preview trust approve \
   python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+docker pull \
+  python@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 ```
+
+Studio combines these steps into one guided action. The explicit pull happens
+before launch; the Preview execution itself never downloads software.
 
 For a deliberately temporary session, the legacy startup option remains
 available:

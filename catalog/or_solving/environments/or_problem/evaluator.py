@@ -1,4 +1,4 @@
-"""Well-formedness evaluator for one-time OR solution artifacts (W3).
+"""Well-formedness evaluator for one-time OR solution artifacts.
 
 The evaluator deliberately does not re-solve anything: correctness of a
 natural-language OR answer is not machine-checkable in general. It scores

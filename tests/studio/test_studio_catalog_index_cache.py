@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
+import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -213,6 +216,43 @@ class StudioCatalogIndexCacheTest(unittest.TestCase):
         public_first["environments"][0]["id"] = "mutated"
         self.assertEqual(public_second["environments"][0]["id"], "toy")
         self.assertEqual(first["environments"][0]["id"], "toy")
+
+    def test_concurrent_reads_share_one_catalog_build(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        payload = {
+            "roots": [],
+            "environments": [],
+            "methods": [],
+            "studies": [],
+            "resources": [],
+            "sources": [],
+            "builtins": {},
+        }
+        builds: list[float] = []
+
+        def build(state, *, ttl_seconds):
+            builds.append(ttl_seconds)
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            with state._catalog_projection_lock:
+                state._catalog_index_cache = (time.monotonic(), payload)
+            return payload
+
+        with (
+            mock.patch.object(
+                studio_server, "_build_catalog_index_payload", side_effect=build
+            ),
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            first = pool.submit(_catalog_index_payload, self.state)
+            self.assertTrue(started.wait(timeout=5))
+            second = pool.submit(_catalog_index_payload, self.state)
+            release.set()
+            self.assertIs(first.result(timeout=5), payload)
+            self.assertIs(second.result(timeout=5), payload)
+
+        self.assertEqual(builds, [300.0])
 
     def test_zero_ttl_state_keeps_strictly_fresh_reads(self) -> None:
         fresh_state = UiState(

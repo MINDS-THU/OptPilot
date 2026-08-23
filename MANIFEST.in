@@ -1,5 +1,6 @@
 prune .agents
 prune .github
+prune catalog
 prune design
 prune designs
 prune docs

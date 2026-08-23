@@ -8,4 +8,9 @@ config: package
 # characters, so the copy is its own package with its own history.
 # Do not delete the line -- a package without this cannot be read.
 identity: 2a0477aa46d840c66b9cc7429614e0fd
-description: State an operations-research problem in plain language and solve it with a multi-agent pipeline.
+title: COOPA
+category: research
+description: State an operations-research problem in plain language and solve it with a modular, provenance-aware, multi-solver agent pipeline.
+paper:
+  title: "COOPA: A Modular LLM Agent Architecture for Operations Research Problems"
+  url: https://arxiv.org/abs/2606.27611

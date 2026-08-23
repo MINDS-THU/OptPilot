@@ -64,6 +64,14 @@ TASK_SYNONYMS: dict[str, tuple[str, ...]] = {
     "benchmark-method": (
         "benchmark", "compare", "baseline", "evaluate", "measure",
     ),
+    "learn-optpilot": (
+        "learn", "tutorial", "example", "getting", "started", "optpilot",
+        "teach", "training",
+    ),
+    "build-package": (
+        "build", "create", "author", "package", "template", "configure",
+        "environment", "method", "study", "resource",
+    ),
 }
 
 KNOWN_TASK_SLUGS: frozenset[str] = frozenset(TASK_SYNONYMS)

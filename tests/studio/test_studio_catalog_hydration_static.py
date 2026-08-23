@@ -66,8 +66,8 @@ class StudioCatalogHydrationStaticTest(unittest.TestCase):
             "const compatibilityResult = await compatibilityResultPromise",
             loader,
         )
-        self.assertIn('getJson("/api/catalog", { timeoutMs: CORE_REQUEST_TIMEOUT_MS })', loader)
-        self.assertIn('getJson("/api/compatibility", { timeoutMs: CORE_REQUEST_TIMEOUT_MS })', loader)
+        self.assertIn('getJson("/api/catalog", { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS })', loader)
+        self.assertIn('getJson("/api/compatibility", { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS })', loader)
         self.assertIn('catalogResult.status === "fulfilled"', loader)
         self.assertIn("state.catalog = catalogResult.value", loader)
         self.assertIn(

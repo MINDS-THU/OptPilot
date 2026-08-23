@@ -63,34 +63,19 @@ Issues = "https://github.com/MINDS-THU/OptPilot/issues"
 optpilot = "optpilot.cli:main"
 
 [tool.setuptools]
-# The example packages live at catalog/ in the repository, where the docs,
-# tests and CI all reference them, and ship inside the install under a name
-# that cannot collide with anything else. Mapping the directory keeps one
-# copy: moving it under src/ would have rewritten 27 test modules, CI, and
-# every documentation path for no gain.
-package-dir = {"" = "src", "optpilot_examples" = "catalog"}
-# Explicit rather than discovered, because a mapped directory cannot be
-# discovered. test_release_packaging.py asserts this list stays complete, so
-# a new subpackage cannot go missing from the distribution unnoticed.
+# Catalog packages are source-checkout examples and are published separately;
+# the core distribution contains only the optpilot package under src/.
+package-dir = {"" = "src"}
 packages = [
   "optpilot",
   "optpilot.realm",
   "optpilot.realm.migrations",
   "optpilot.schemas",
-  "optpilot_examples",
 ]
 
 [tool.setuptools.package-data]
 "optpilot.schemas" = ["*.json", "defs/*.json"]
 "optpilot.realm" = ["migrations/*.sql"]
-# Everything the example packages are made of: settings, code, vendored
-# wheels, data, notices. Anything omitted here is a package that installs
-# broken, so this stays deliberately broad.
-"optpilot_examples" = ["**/*"]
-
-[tool.setuptools.exclude-package-data]
-# Compiled bytecode from whoever last ran the tests is not part of a package.
-"optpilot_examples" = ["**/__pycache__/**", "**/*.pyc", "**/.DS_Store"]
 
 [tool.uv.workspace]
 members = ["studio"]

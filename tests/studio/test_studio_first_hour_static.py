@@ -87,11 +87,14 @@ class FirstHourStaticTest(unittest.TestCase):
         )
         self.assertIn("Not checked yet", body)
 
-    def test_opening_a_candidate_from_the_trial_map_fetches_it(self) -> None:
-        # Setting the route without loading renders an empty pane.
-        body = _function_source(self.app, "bindRunTrialMap")
+    def test_opening_a_candidate_preserves_position_and_fetches_details(self) -> None:
+        # Candidate selection updates immediately in place, then refreshes its
+        # retained details without jumping the person back to the page top.
+        body = _function_source(self.app, "bindWorkbenchEntityActions")
+        self.assertIn("renderRunDetail({ preserveScroll: true })", body)
         self.assertIn("loadRunDetail(", body)
         self.assertIn("fromRoute: true", body)
+        self.assertIn("preserveScroll: true", body)
 
     def test_every_run_setup_search_field_is_actually_searched(self) -> None:
         # Guards the same class of defect the catalog search had: a search

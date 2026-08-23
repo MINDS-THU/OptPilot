@@ -25,12 +25,12 @@ _CATALOG = Path(__file__).resolve().parents[2] / "catalog"
 #: Environment, method — every shipped pairing that requires policy validation.
 _POLICY_SEARCH_PAIRS = (
     (
-        "llm_policy_search/environments/dispatch_station/environment.yaml",
-        "llm_policy_search/methods/llm_policy_search/method.yaml",
+        "devs_gallery/environments/dispatch_station/environment.yaml",
+        "production_agv_scheduling/methods/process_aware_llm/method.yaml",
     ),
     (
-        "llm_policy_search/environments/queue_demo/environment.yaml",
-        "llm_policy_search/methods/llm_policy_search/method.yaml",
+        "devs_gallery/environments/triage_clinic/environment.yaml",
+        "production_agv_scheduling/methods/process_aware_llm/method.yaml",
     ),
 )
 

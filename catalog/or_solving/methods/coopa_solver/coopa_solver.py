@@ -1,8 +1,8 @@
-"""Command-protocol batch adapter for one-time COOPA OR solving (W3 over F3).
+"""Command-protocol batch adapter for one-time COOPA OR solving.
 
 Executed once per proposal exchange by the retained method worker: reads the
 batch request JSON on stdin, solves the per-launch `problem` study input
-(F2 — delivered under ``settings["inputs"]``), and writes one candidate to
+(delivered under ``settings["inputs"]``), and writes one candidate to
 stdout whose spec carries the numeric answer plus the full solution artifact
 (schema ``optpilot.or-solving-report.v1``) as bounded JSON text.
 
