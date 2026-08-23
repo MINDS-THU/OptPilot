@@ -451,9 +451,25 @@ class EnvironmentPreviewBindingTest(unittest.TestCase):
     def test_recovery_rejects_output_control_file_identity_replacement(self) -> None:
         binding = self.binder.realize(**self.arguments())
         control = binding.output_capture_descriptor.control_file
-        control.unlink()
-        control.write_text("{}\n", encoding="utf-8")
-        control.chmod(0o600)
+        original_inode = control.stat().st_ino
+        # Deliberately NOT unlink-then-recreate. Linux commonly hands the next
+        # file created in a directory the inode just freed by the unlink, so
+        # that pattern produces a replacement with the ORIGINAL's identity --
+        # the one case an inode check cannot see -- and this test failed on
+        # CI's ext4 while passing on macOS, whose filesystem never reuses
+        # inode numbers. Creating the replacement while the original still
+        # exists forces a distinct inode on any filesystem, and matches how a
+        # file is actually swapped in practice: written beside, renamed over.
+        replacement = control.parent / f"{control.name}.replacement"
+        replacement.write_text("{}\n", encoding="utf-8")
+        replacement.chmod(0o600)
+        replacement.replace(control)
+        self.assertNotEqual(
+            control.stat().st_ino,
+            original_inode,
+            "the replacement kept the original inode; the identity check "
+            "cannot be expected to fire",
+        )
         with self.assertRaisesRegex(RealmIntegrityError, "identity was replaced"):
             self.binder.recover_existing(**self.arguments())
 
@@ -809,9 +825,22 @@ class EnvironmentPreviewBindingTest(unittest.TestCase):
         binding = self.binder.realize(**self.arguments())
         descriptor = binding.output_capture_descriptor
         terminal = self.launch_and_release_admission(binding=binding)
-        descriptor.control_file.unlink()
-        descriptor.control_file.write_text('{}\n', encoding="utf-8")
-        descriptor.control_file.chmod(0o600)
+        control = descriptor.control_file
+        original_inode = control.stat().st_ino
+        # Written-beside-then-renamed-over, not unlink-then-recreate, for the
+        # reason documented in the recovery test above: an unlinked inode is
+        # routinely handed straight back on Linux, making the replacement
+        # carry the original identity.
+        replacement = control.parent / f"{control.name}.replacement"
+        replacement.write_text('{}\n', encoding="utf-8")
+        replacement.chmod(0o600)
+        replacement.replace(control)
+        self.assertNotEqual(
+            control.stat().st_ino,
+            original_inode,
+            "the replacement kept the original inode; the identity check "
+            "cannot be expected to fire",
+        )
         arguments = self.arguments()
         arguments.pop("admission_lease")
 
