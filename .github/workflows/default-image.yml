@@ -69,11 +69,23 @@ jobs:
       - name: Verify a stranger can pull it
         run: |
           MANIFEST="https://ghcr.io/v2/${{ steps.owner.outputs.name }}/optpilot-default/manifests/latest"
-          TOKEN=$(curl -fsS "https://ghcr.io/token?scope=repository:${{ steps.owner.outputs.name }}/optpilot-default:pull&service=ghcr.io" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
-          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.oci.image.index.v1+json" \
-            "$MANIFEST")
+          # For a private package the registry refuses one step earlier than
+          # expected: it declines to issue even an anonymous pull token,
+          # answering 401 to the token request itself. The first run assumed
+          # the refusal would come at the manifest fetch, so the empty token
+          # reply crashed the JSON parse and this step ended in a traceback
+          # instead of its own message. Both refusal points now land on the
+          # same explanation.
+          TOKEN=$(curl -sS "https://ghcr.io/token?scope=repository:${{ steps.owner.outputs.name }}/optpilot-default:pull&service=ghcr.io" \
+            | tr -d '\n' | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p')
+          if [ -n "$TOKEN" ]; then
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              "$MANIFEST")
+          else
+            STATUS="no-token"
+          fi
           if [ "$STATUS" != "200" ]; then
             echo "::error::Anonymous pull returned HTTP $STATUS. The image is" \
               "most likely still private -- make the package public in the" \
