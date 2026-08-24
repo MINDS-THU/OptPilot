@@ -3399,6 +3399,7 @@ class UiState:
         )
         if self._runtime_supervisor_claim is not None:
             self._cleanup_orphaned_interface_runtimes()
+            self._cleanup_orphaned_resource_action_runtimes()
         presentation_port_start = max(
             19000, int(runtime_options.port_start) + 1000
         )
@@ -4049,6 +4050,7 @@ class UiState:
                     pass
             try:
                 self._cleanup_orphaned_interface_runtimes()
+                self._cleanup_orphaned_resource_action_runtimes()
             except Exception:
                 recovery_failed.set()
 
@@ -4074,6 +4076,54 @@ class UiState:
                 if not join_before_deadline(thread):
                     return False
         return True
+
+    def _cleanup_orphaned_resource_action_runtimes(self) -> None:
+        """Remove per-run action copies whose run no longer exists.
+
+        Each headless action on a realm-published resource runs in a
+        writable per-run copy under a resource-action-copy-* runtime
+        directory,
+        deleted when the run settles. A crash between copy and settlement
+        leaves the directory behind; this sweep removes any such directory
+        not owned by a live action thread. These runtimes never submit
+        containers, so deletion needs no engine.
+        """
+
+        runtime_directories = getattr(
+            self.workspace_runtime, "_runtime_directories", None
+        )
+        items = (
+            runtime_directories(workspace_prefix="resource-action-copy-")
+            if callable(runtime_directories)
+            else [
+                (path.name, path)
+                for path in self.runtime_dir.glob("resource-action-copy-*")
+            ]
+        )
+        seen_ids = {runtime_id for runtime_id, _path in items}
+        # Directories whose record write was interrupted carry no
+        # runtime.json and are invisible to _runtime_directories; the claim
+        # check inside deletion keeps foreign directories safe.
+        recordless = [
+            (path.name, path)
+            for path in self.runtime_dir.glob("resource-action-copy-*")
+            if path.name not in seen_ids
+        ]
+        for runtime_id, runtime_path in [*items, *recordless]:
+            if runtime_path.parent != self.runtime_dir:
+                continue
+            try:
+                record = self.workspace_runtime._read_record(runtime_id)
+            except RuntimeError:
+                continue
+            request_id = str(record.get("request_id") or "")
+            state_lock = getattr(self, "_lock", None)
+            if request_id and state_lock is not None:
+                with state_lock:
+                    owner = self._resource_action_threads.get(request_id)
+                if owner is not None and owner.is_alive():
+                    continue
+            _delete_resource_action_runtime(self, runtime_id)
 
     def _cleanup_orphaned_interface_runtimes(self) -> None:
         claim = self._runtime_supervisor_claim
@@ -10081,11 +10131,13 @@ _RESOURCE_ACTION_RUN_SCHEMA = "optpilot.studio-resource-action-run.v1"
 
 
 def _resolve_resource_action_source(state: UiState, resource_uid: str) -> Path:
-    """Resolve one runnable local resource config path from a catalog uid.
+    """Resolve one readable resource config path from a catalog uid.
 
-    Headless actions run against the live local package folder (a configured
-    catalog root). Published Realm-projection resources are read through
-    short-lived borrowed projections and are not yet runnable here.
+    For a configured filesystem import this is the author's own writable
+    folder and is directly runnable. For a realm-published entry it points
+    INSIDE a sealed read-only projection: good for reading and compiling the
+    manifest, never for executing setup -- core's setup contract requires an
+    editable copy, which _prepare_resource_action_execution provides.
     """
 
     path = _resolve_catalog_identifier(state, "resource", resource_uid)
@@ -10230,6 +10282,182 @@ def _notify_agent_session_resource_action_done(
         pass
 
 
+def _copy_resource_tree_writable(source: Path, destination: Path) -> None:
+    """Per-run writable copy of a sealed resource tree.
+
+    Directories 0o700, files 0o600 (0o700 when executable) -- the same modes
+    the realm's editable-workspace copy uses. Projections are verified to
+    contain only regular files and directories; anything else is refused
+    rather than copied.
+    """
+
+    destination.mkdir(mode=0o700)
+    for root, dirs, files in os.walk(source):
+        relative = Path(root).relative_to(source)
+        for name in dirs:
+            child = Path(root, name)
+            if child.is_symlink():
+                raise RuntimeError("Resource tree must not contain symlinks.")
+            (destination / relative / name).mkdir(mode=0o700)
+        for name in files:
+            child = Path(root, name)
+            if child.is_symlink() or not child.is_file():
+                raise RuntimeError(
+                    "Resource tree must contain only regular files."
+                )
+            target = destination / relative / name
+            shutil.copyfile(child, target)
+            os.chmod(target, 0o700 if child.stat().st_mode & 0o111 else 0o600)
+
+
+def _delete_resource_action_runtime(state: UiState, runtime_id: str) -> bool:
+    """Delete a per-run action runtime that never submitted a container.
+
+    The stored record is converted to a terminal proof first (basis: no
+    container start was ever submitted on this path), so deletion needs no
+    container engine. Failures are swallowed: leftover directories are
+    durable cleanup debt for the orphan sweep, never a reason to fail the
+    action's own settlement.
+    """
+
+    try:
+        manager = state.workspace_runtime
+        record: JsonDict = {}
+        if manager._record_path(runtime_id).is_file():
+            record = manager._read_record(runtime_id)
+        elif not manager._workspace_runtime_dir(runtime_id).exists():
+            return False
+        # A claimed directory whose record write was interrupted is still
+        # ours to delete: _write_record revalidates the claim, so a foreign
+        # or unclaimed directory raises here and is left for the operator.
+        if not _workspace_runtime_record_proves_terminal(record):
+            record.update(
+                {
+                    "status": "stopped",
+                    "updated_at": _now_iso(),
+                    "terminal_proof": {
+                        "container_name": "",
+                        "terminal_confirmed": True,
+                        "state": "absent",
+                        "basis": "container_start_not_submitted",
+                    },
+                }
+            )
+            manager._write_record(runtime_id, record)
+        return manager.delete(runtime_id)
+    except Exception:
+        return False
+
+
+def _prepare_resource_action_execution(
+    state: UiState, resource_uid: str, request_id: str
+) -> tuple[Path, Callable[[], None], Callable[[str], str]]:
+    """A runnable manifest, the cleanup for what backs it, a text sanitizer.
+
+    A configured filesystem import is the author's own writable folder and
+    runs in place. Anything else resolves inside a sealed read-only realm
+    projection (0o500 throughout, by contract), where core's setup step --
+    "runs in the editable copy" -- cannot hold: the venv build's first mkdir
+    is refused. So the exact revision is borrowed just long enough to copy
+    the resource into a per-run writable runtime directory, the action runs
+    against the copy, and the copy is deleted when the run settles. Output
+    already goes to output_root; nothing from the copy needs to survive.
+    """
+
+    # Readable ids are allowed here: the assistant's tool schema tells the
+    # model to pass a qualified_id or plain id, and a readable name that
+    # resolved to None would silently misroute a realm-published resource
+    # into the sealed projection -- the very failure this function exists to
+    # prevent. The resolved ref (not the raw string) then feeds the borrow,
+    # so it pins the same revision instead of re-resolving the name to None.
+    entry_ref = _catalog_entry_ref_from_value(
+        state, "resource", resource_uid, allow_readable_id=True
+    )
+    if entry_ref is None or entry_ref.source_kind == "configured-filesystem-import":
+        return (
+            _resolve_resource_action_source(state, resource_uid),
+            (lambda: None),
+            (lambda text: text),
+        )
+    source_projection = _borrow_catalog_entry_ref_projection(
+        state,
+        "resource",
+        entry_ref,
+        consumer_kind="resource-action-run",
+        consumer_metadata={"request_id": request_id},
+    )
+    if source_projection is None:
+        return (
+            _resolve_resource_action_source(state, resource_uid),
+            (lambda: None),
+            (lambda text: text),
+        )
+    # "copy" in the prefix keeps these distinct from the sibling
+    # resource-action-runs outputs directory under the same runtime root.
+    # The nonce makes the directory per-ATTEMPT: two concurrent requests
+    # carrying the same request_id must never share a directory, or the
+    # loser's failure cleanup would delete the live winner's copy.
+    runtime_id = (
+        f"resource-action-copy-{request_id.replace('-', '')[:16]}"
+        f"-{uuid.uuid4().hex[:8]}"
+    )
+    runtime_created = False
+    try:
+        source_dir = source_projection.source_path
+        manifest_path, raw = _resource_manifest(source_dir)
+        if manifest_path is None or raw.get("config") != "resource":
+            raise FileNotFoundError(
+                "This Resource has no runnable optpilot.resource.yaml manifest."
+            )
+        runtime_dir = state.workspace_runtime._ensure_workspace_runtime_dir(
+            runtime_id
+        )
+        # Deletable from this moment: _delete_resource_action_runtime writes
+        # the terminal record itself if the one below never lands.
+        runtime_created = True
+        state.workspace_runtime._write_record(
+            runtime_id,
+            {
+                "status": "preparing",
+                "updated_at": _now_iso(),
+                "source_type": "resource-action-run",
+                "transient": True,
+                "container_may_exist": False,
+                "request_id": request_id,
+            },
+        )
+        working_copy = runtime_dir / "resource"
+        _copy_resource_tree_writable(source_dir, working_copy)
+        runnable_manifest = working_copy / manifest_path.relative_to(source_dir)
+    except Exception:
+        source_projection.close()
+        if runtime_created:
+            _delete_resource_action_runtime(state, runtime_id)
+        raise
+    # The copy is self-contained; the borrowed revision is no longer needed.
+    # A close failure (ledger I/O, lease bookkeeping) must not leak the
+    # finished copy with no cleanup handle attached to anything.
+    try:
+        source_projection.close()
+    except Exception:
+        _delete_resource_action_runtime(state, runtime_id)
+        raise
+
+    def cleanup() -> None:
+        _delete_resource_action_runtime(state, runtime_id)
+
+    copy_root = str(working_copy)
+    origin_root = str(source_dir)
+
+    def sanitize(text: str) -> str:
+        # Error and log text otherwise cites the per-run copy, which is
+        # deleted before anyone reads it; the projection origin is the
+        # inspectable tree the bytes actually came from.
+        return text.replace(copy_root, origin_root)
+
+    return runnable_manifest, cleanup, sanitize
+
+
 def _start_resource_action_run(
     state: UiState, payload: Any
 ) -> tuple[JsonDict, HTTPStatus]:
@@ -10257,27 +10485,34 @@ def _start_resource_action_run(
         ):
             raise ValueError("Too many concurrent resource action runs.")
 
-    manifest_path = _resolve_resource_action_source(state, resource_uid)
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        resource_raw = yaml.safe_load(handle) or {}
-    actions = compile_resource_actions(
-        resource_raw, location=str(manifest_path)
+    manifest_path, cleanup_execution, sanitize_run_text = (
+        _prepare_resource_action_execution(state, resource_uid, request_id)
     )
-    action = find_resource_action(actions, action_id)
-    # Resolve declared env/secret grants through Studio Settings (falling back
-    # to the process environment) so actions work when values like API keys
-    # are configured in Settings rather than exported to the Studio process.
-    granted_env = _require_declared_env_from_host(
-        state,
-        (*action.env_from_host, *action.secrets_from_host),
-        action=f"resource action {action.action_id!r}",
-    )
-    action_host_env = {**os.environ, **granted_env}
-    output_root, workspace_id = _resource_action_output_root(
-        state,
-        workspace_id=str(payload.get("workspace_id") or ""),
-        request_id=request_id,
-    )
+    try:
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            resource_raw = yaml.safe_load(handle) or {}
+        actions = compile_resource_actions(
+            resource_raw, location=str(manifest_path)
+        )
+        action = find_resource_action(actions, action_id)
+        # Resolve declared env/secret grants through Studio Settings (falling
+        # back to the process environment) so actions work when values like
+        # API keys are configured in Settings rather than exported to the
+        # Studio process.
+        granted_env = _require_declared_env_from_host(
+            state,
+            (*action.env_from_host, *action.secrets_from_host),
+            action=f"resource action {action.action_id!r}",
+        )
+        action_host_env = {**os.environ, **granted_env}
+        output_root, workspace_id = _resource_action_output_root(
+            state,
+            workspace_id=str(payload.get("workspace_id") or ""),
+            request_id=request_id,
+        )
+    except Exception:
+        cleanup_execution()
+        raise
     record: JsonDict = {
         "request_id": request_id,
         "resource_uid": resource_uid,
@@ -10300,15 +10535,19 @@ def _start_resource_action_run(
                 output_root=output_root,
                 host_env=action_host_env,
             )
+            for key in ("error", "stdout_tail", "stderr_tail"):
+                if isinstance(summary.get(key), str):
+                    summary[key] = sanitize_run_text(summary[key])
             record["summary"] = summary
             record["status"] = "succeeded" if summary.get("ok") else "failed"
             if not summary.get("ok") and summary.get("error"):
                 record["error"] = str(summary["error"])
         except Exception as error:  # surfaced verbatim: local authored action
             record["status"] = "failed"
-            record["error"] = str(error)
+            record["error"] = sanitize_run_text(str(error))
         finally:
             record["finished_at"] = time.time()
+            cleanup_execution()
             with state._lock:
                 if (
                     state._resource_action_threads.get(request_id)
@@ -10320,29 +10559,44 @@ def _start_resource_action_run(
             # the stall it was built to prevent.
             _notify_agent_session_resource_action_done(state, record)
 
+    start_failed = False
     with state._lock:
-        if request_id in state._resource_action_runs:
-            return (
-                _public_resource_action_run(
-                    state._resource_action_runs[request_id]
-                ),
-                HTTPStatus.OK,
+        existing_record = state._resource_action_runs.get(request_id)
+        if existing_record is None:
+            if len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS:
+                for stale_id in [
+                    key
+                    for key, value in state._resource_action_runs.items()
+                    if value.get("status") in {"succeeded", "failed"}
+                ][: max(1, len(state._resource_action_runs) - _MAX_RESOURCE_ACTION_RUNS + 1)]:
+                    state._resource_action_runs.pop(stale_id, None)
+            state._resource_action_runs[request_id] = record
+            thread = threading.Thread(
+                target=execute,
+                name=f"optpilot-resource-action-{request_id[:18]}",
+                daemon=True,
             )
-        if len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS:
-            for stale_id in [
-                key
-                for key, value in state._resource_action_runs.items()
-                if value.get("status") in {"succeeded", "failed"}
-            ][: max(1, len(state._resource_action_runs) - _MAX_RESOURCE_ACTION_RUNS + 1)]:
-                state._resource_action_runs.pop(stale_id, None)
-        state._resource_action_runs[request_id] = record
-        thread = threading.Thread(
-            target=execute,
-            name=f"optpilot-resource-action-{request_id[:18]}",
-            daemon=True,
-        )
-        state._resource_action_threads[request_id] = thread
-        thread.start()
+            state._resource_action_threads[request_id] = thread
+            try:
+                thread.start()
+            except Exception:
+                # A thread that never started would hold its registrations
+                # forever: the record stuck "running", the copy exempt from
+                # the sweep. Unwind both, release the copy, surface the
+                # failure.
+                state._resource_action_threads.pop(request_id, None)
+                state._resource_action_runs.pop(request_id, None)
+                start_failed = True
+    if start_failed:
+        cleanup_execution()
+        raise RuntimeError("Could not start the resource action worker thread.")
+    if existing_record is not None:
+        # A concurrent duplicate won the insert while this call was busy
+        # preparing its own (nonce-distinct) copy; release that copy and
+        # return the winner's record. Deleting a directory tree stays off
+        # the lock.
+        cleanup_execution()
+        return _public_resource_action_run(existing_record), HTTPStatus.OK
     return _public_resource_action_run(record), HTTPStatus.ACCEPTED
 
 
