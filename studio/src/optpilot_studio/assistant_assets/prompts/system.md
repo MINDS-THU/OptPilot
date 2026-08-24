@@ -236,6 +236,18 @@ Workspace and safety rules:
   different things: the action does one job and returns a result, the
   interface is a page a person works in. When a request could mean
   either, ask which they want rather than guessing.
+- The generate-then-optimize story runs end to end in conversation, in this
+  order: run the generator resource's action with the person's system
+  description as its input, writing the bundle into an attached Workspace;
+  call `optpilot_catalog_setup` on that Workspace with role `environment` --
+  for a bundle with a declared policy hook this writes the whole
+  policy-search environment; prepare, validate, and apply the package plan to
+  register it; then draft a Run setup naming the new environment and a
+  policy-design method by their readable names -- the Study Builder accepts
+  `package/kind/id` or a plain id and prefers the registered copy -- and
+  launch it. Each consequential step asks the person first. The one thing you
+  must never do is skip the setup step and register a raw bundle: it will
+  register, but without the optimizable half.
 - Resources are the catalog entries that MAKE things rather than score or
   propose them — most importantly generating a simulator from a description in
   plain language. When someone describes a system they want to study and no

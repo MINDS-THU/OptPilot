@@ -78,6 +78,7 @@ OPTPILOT_AGENT_TOOLS = [
     "optpilot_compatibility_check",
     "optpilot_config_discover",
     "optpilot_config_validate",
+    "optpilot_catalog_setup",
     "optpilot_package_plan_prepare",
     "optpilot_package_plan_update",
     "optpilot_package_plan_validate",
@@ -736,6 +737,37 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Validate an OptPilot environment, method, resource, or study YAML file. Validation errors are actionable repair instructions: fix the reported config/source/import/setup issue and rerun validation.",
         "parameters": _tool_schema({"workspace_id": {"type": "string"}, "path": {"type": "string"}}, ["path"]),
         "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "optpilot_catalog_setup",
+        "description": (
+            "Set up an attached editable Workspace for the Catalog: writes the "
+            "starter settings file for the chosen role, and for a generated "
+            "simulator bundle with a declared policy hook, the full "
+            "policy-search environment -- baseline candidate files, model "
+            "instructions, validation rules, seeded evaluation, and the "
+            "trace-replay capability. The same step as the Set up for Catalog "
+            "button. After it succeeds, validate and apply the package plan to "
+            "register the result."
+        ),
+        "parameters": _tool_schema(
+            {
+                "workspace_id": {"type": "string"},
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "environment", "method", "generator", "viewer",
+                        "template", "reference",
+                    ],
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Catalog id for the component; defaults to the Workspace title.",
+                },
+                "description": {"type": "string"},
+            },
+            ["workspace_id", "role"],
+        ),
     },
     {
         "name": "optpilot_package_plan_prepare",

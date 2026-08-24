@@ -10777,6 +10777,48 @@ def _portable_relative_path(value: Any, label: str) -> str:
     return text
 
 
+def _realm_catalog_ref_for_readable_id(
+    state: UiState, expected_config: str, value: Any
+) -> Optional[CatalogEntryRef]:
+    """Resolve a human-readable name to a REGISTERED catalog entry.
+
+    The Study Builder pins exact Realm catalog revisions, so the generic
+    readable-name resolver is not enough here: the same id can appear both as
+    a registered entry and as its configured-filesystem source, and only the
+    registered one is a valid pinning target. Registered matches win; a
+    filesystem-only match is returned as-is so the caller's established
+    "import into Realm first" refusal names the actual situation.
+    """
+
+    text = str(value or "").strip()
+    if not text or text.startswith(CATALOG_ENTRY_REF_TOKEN_PREFIX):
+        return None
+    key = _CATALOG_KIND_KEYS.get(str(expected_config or ""))
+    if not key:
+        return None
+    entries = [
+        entry
+        for entry in (_catalog_index_payload(state).get(key) or [])
+        if isinstance(entry, dict)
+        and text in {entry.get("qualified_id"), entry.get("catalog_key"), entry.get("id")}
+    ]
+    resolved: List[CatalogEntryRef] = []
+    for entry in entries:
+        ref = _catalog_entry_ref_from_value(state, expected_config, entry.get("uid"))
+        if ref is not None:
+            resolved.append(ref)
+    realm = [ref for ref in resolved if ref.source_kind == "realm-catalog"]
+    if len(realm) == 1:
+        return realm[0]
+    if len(realm) > 1:
+        names = ", ".join(sorted(ref.entry_id for ref in realm))
+        raise ValueError(
+            f"{text!r} is ambiguous: it matches more than one registered "
+            f"{expected_config} ({names}). Use the fuller name."
+        )
+    return resolved[0] if resolved else None
+
+
 def _study_builder_sources(state: UiState, payload: JsonDict) -> StudyBuilderSources:
     """Resolve each component through its own exact, action-owned projection."""
 
@@ -10785,13 +10827,28 @@ def _study_builder_sources(state: UiState, payload: JsonDict) -> StudyBuilderSou
             "Study Builder accepts exact environment_ref and method_ref values; "
             "catalog paths are not action identities."
         )
-    environment_ref = _catalog_entry_ref_from_value(
+    environment_ref = _realm_catalog_ref_for_readable_id(
+        state, "environment", payload.get("environment_ref")
+    ) or _catalog_entry_ref_from_value(
         state, "environment", payload.get("environment_ref")
     )
-    method_ref = _catalog_entry_ref_from_value(
+    method_ref = _realm_catalog_ref_for_readable_id(
+        state, "method", payload.get("method_ref")
+    ) or _catalog_entry_ref_from_value(
         state, "method", payload.get("method_ref")
     )
     if environment_ref is None or method_ref is None:
+        # Name the value when a readable name simply matched nothing, so a
+        # typo reads as a typo rather than as a missing exact reference.
+        for label, value in (
+            ("environment_ref", payload.get("environment_ref")),
+            ("method_ref", payload.get("method_ref")),
+        ):
+            text = str(value or "").strip()
+            if text and not text.startswith(CATALOG_ENTRY_REF_TOKEN_PREFIX) and not isinstance(value, Mapping):
+                raise ValueError(
+                    f"{label} {text!r} does not name any catalog entry."
+                )
         raise ValueError(
             "environment_ref and method_ref are required exact catalog entry refs."
         )
@@ -20130,6 +20187,66 @@ def _execute_agent_tool(
             summary,
             data={"validation": validation, "path": str(path)},
         )
+    if tool == "optpilot_catalog_setup":
+        workspace_id = str(arguments.get("workspace_id") or "").strip()
+        role = str(arguments.get("role") or "").strip().lower()
+        if not workspace_id or not role:
+            raise ValueError("workspace_id and role are required.")
+        component_id = str(arguments.get("id") or "").strip()
+        gate = _agent_permission_gate(
+            state,
+            session_id,
+            tool=tool,
+            arguments={**arguments, "workspace_id": workspace_id, "role": role},
+            permission_key="catalog_registration",
+            approval_kind="catalog_setup",
+            title="Set up Workspace for the Catalog",
+            summary=(
+                f"Write the {role} starter configuration"
+                + (f" '{component_id}'" if component_id else "")
+                + " into the Workspace. For a generated simulator with a "
+                "policy hook this includes the full policy-search "
+                "environment. Files are written into the Workspace only; "
+                "nothing is registered yet."
+            ),
+            targets=[workspace_id],
+            execution_context=execution_context,
+        )
+        if gate is not None:
+            return gate
+        configured = _configure_workspace_catalog_role(
+            state,
+            workspace_id,
+            {
+                "role": role,
+                **({"id": component_id} if component_id else {}),
+                **(
+                    {"description": str(arguments.get("description"))}
+                    if arguments.get("description")
+                    else {}
+                ),
+            },
+        )
+        configuration = configured.get("configuration") or {}
+        created = configuration.get("created_paths") or []
+        detected = configuration.get("detected_simulation")
+        next_action = str(configuration.get("next_action") or "check")
+        summary = (
+            f"Wrote {len(created)} file(s) for the {role} role. "
+            + (
+                "A generated simulation with a policy hook was detected and "
+                "the policy-search environment was written. "
+                if detected
+                else ""
+            )
+            + (
+                "Next: edit the template files it created, then validate."
+                if next_action == "edit-template"
+                else "Next: prepare and validate the package plan, then apply "
+                "it to register."
+            )
+        )
+        return _tool_result(tool, True, summary, data={"configuration": configuration})
     if tool == "optpilot_package_plan_prepare":
         workspace_id = str(
             arguments.get("workspace_id")
