@@ -37,7 +37,7 @@ from .ephemeral_volume_namespace import (
     attach_ephemeral_volume_namespace,
 )
 from .ephemeral_volume_records import EphemeralVolumeRecord, EphemeralVolumeState
-from .errors import RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
+from .errors import add_exception_note, RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
 from .filesystem_quota import FilesystemQuota
 from .inspection import ResolvedCandidateInspectionTarget
 from .leases import LeaseRecord
@@ -1681,7 +1681,7 @@ class RealmEnvironmentPreviewBinder:
                 ),
             )
         except BaseException as error:
-            error.add_note(
+            add_exception_note(error, 
                 "Partially realized Environment Preview resources were retained "
                 "for exact recovery and TTL cleanup."
             )

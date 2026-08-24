@@ -1130,6 +1130,32 @@ class ContentCaptureHandle:
 _CONNECTION_POOL_MAX = 8
 
 
+def _sqlite_library_is_serialized() -> bool:
+    """Whether the linked SQLite serializes concurrent use of one connection.
+
+    The pool's precondition is a property of the C library, not of Python --
+    but Python 3.10 and earlier hard-code ``sqlite3.threadsafety`` to 1 no
+    matter how the library was built; 3.11 began reporting the library's real
+    answer. Gating on the attribute therefore silently disabled the pool on
+    every 3.10 install -- the oldest version the packaging supports -- and
+    quietly reverted exactly the fresh-connection-per-call cost the pool
+    exists to remove. The library itself answers the same question on any
+    interpreter: compile option THREADSAFE=1 is serialized mode.
+    """
+
+    if sqlite3.threadsafety == 3:
+        return True
+    try:
+        probe = sqlite3.connect(":memory:")
+        try:
+            options = [str(row[0]) for row in probe.execute("PRAGMA compile_options")]
+        finally:
+            probe.close()
+    except sqlite3.Error:
+        return False
+    return "THREADSAFE=1" in options
+
+
 class _PooledLedgerConnection(sqlite3.Connection):
     """Ledger connection whose ``close()`` returns it to the ledger's pool.
 
@@ -1188,7 +1214,7 @@ class RealmLedger(
         # fresh-connection-per-call behavior.
         self._connection_pool: list[_PooledLedgerConnection] = []
         self._connection_pool_lock = threading.Lock()
-        self._connection_pool_closed = sqlite3.threadsafety < 3
+        self._connection_pool_closed = not _sqlite_library_is_serialized()
         self._connection_pool_pid = os.getpid()
         self._pin_authority_files()
         connection = self._connect()

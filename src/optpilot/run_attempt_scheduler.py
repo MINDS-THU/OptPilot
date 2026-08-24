@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Literal, Protocol, TypeAlias
 
 from .attempts import AttemptFinalization
-from .realm.errors import RealmConflict, RealmIntegrityError
+from .realm.errors import add_exception_note, RealmConflict, RealmIntegrityError
 from .realm.execution_binding_records import (
     ExecutionBindingRecord,
     ExecutionLaunchIntentRecord,
@@ -383,7 +383,7 @@ class RunAttemptScheduler:
                 continue
             return self._refresh()
         assert last_conflict is not None
-        last_conflict.add_note(
+        add_exception_note(last_conflict, 
             "Attempt preparation could not acquire a stable run head after "
             "repeated concurrent canonical commits."
         )
@@ -698,7 +698,7 @@ class RunAttemptScheduler:
             _validate_started_observation(recovered, recovered_attempt, observation)
             return recovered
         assert last_conflict is not None
-        last_conflict.add_note(
+        add_exception_note(last_conflict, 
             "Attempt launch confirmation could not acquire a stable run head "
             "after repeated concurrent binding commits."
         )
@@ -783,7 +783,7 @@ class RunAttemptScheduler:
             break
         else:
             assert last_conflict is not None
-            last_conflict.add_note(
+            add_exception_note(last_conflict, 
                 "Attempt adoption could not acquire a stable run/owner head "
                 "after repeated concurrent canonical commits."
             )
@@ -870,7 +870,7 @@ class RunAttemptScheduler:
             return self._refresh()
         except Exception as refresh_error:
             if hasattr(primary, "add_note"):
-                primary.add_note(
+                add_exception_note(primary, 
                     f"Canonical refresh after {boundary} also failed: "
                     f"{type(refresh_error).__name__}."
                 )
@@ -1187,7 +1187,7 @@ def _stop_provider_without_masking(
         )
     except Exception as stop_error:
         if hasattr(primary, "add_note"):
-            primary.add_note(
+            add_exception_note(primary, 
                 "Provider stop/drain after failed attempt advance also failed: "
                 f"{type(stop_error).__name__}."
             )
@@ -1200,7 +1200,7 @@ def _stop_heartbeat_without_masking(
         heartbeat.stop()
     except Exception as stop_error:
         if hasattr(primary, "add_note"):
-            primary.add_note(
+            add_exception_note(primary, 
                 "Heartbeat stop after failed attempt advance also failed: "
                 f"{type(stop_error).__name__}."
             )

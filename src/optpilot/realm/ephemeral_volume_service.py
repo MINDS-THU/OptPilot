@@ -38,6 +38,7 @@ from .ephemeral_volume_records import (
     EphemeralVolumeState,
 )
 from .errors import (
+    add_exception_note,
     RealmConflict,
     RealmError,
     RealmExpired,
@@ -1413,7 +1414,7 @@ class RealmEphemeralVolumeService:
                 reason=str(error),
             )
         except BaseException as quarantine_error:
-            error.add_note(
+            add_exception_note(error, 
                 f"ephemeral volume quarantine also failed: {quarantine_error}"
             )
 

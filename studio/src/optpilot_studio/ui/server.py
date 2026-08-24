@@ -106,6 +106,7 @@ from optpilot.realm.environment_preview_binding import (
     EnvironmentPreviewProviderPlanError,
 )
 from optpilot.realm.errors import (
+    add_exception_note,
     ContentRejected,
     RealmCapacityUnavailable,
     RealmConflict,
@@ -2981,7 +2982,7 @@ class WorkspaceRuntimeManager:
                 workspace_id=workspace_id,
                 runtime_path=runtime_path,
             )
-            changed.add_note(f"runtime claim validation failed: {error}")
+            add_exception_note(changed, f"runtime claim validation failed: {error}")
             raise changed from error
         finally:
             if descriptor is not None:

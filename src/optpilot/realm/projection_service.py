@@ -23,6 +23,7 @@ from typing import Any, BinaryIO, Callable, Iterator, Mapping, Optional, Tuple
 from . import content as content_module
 from .content import LocalContentStore
 from .errors import (
+    add_exception_note,
     ContentCorrupt,
     RealmAuthorizationError,
     RealmConflict,
@@ -1850,7 +1851,7 @@ class RealmProjectionService:
                     consumer_fencing_token=receipt.consumer_lease.fencing_token,
                 )
             except BaseException as release_error:
-                error.add_note(
+                add_exception_note(error, 
                     f"projection consumer release also failed: {release_error}"
                 )
             if isinstance(error, RealmIntegrityError):
@@ -2117,7 +2118,7 @@ class RealmProjectionService:
                 try:
                     physical.cleanup()
                 except BaseException as cleanup_error:
-                    error.add_note(f"projection provider rollback also failed: {cleanup_error}")
+                    add_exception_note(error, f"projection provider rollback also failed: {cleanup_error}")
             durable_cleanup: ProjectionRealizationRecord | None = None
             try:
                 durable_cleanup = self._close_and_cleanup(
@@ -2127,7 +2128,7 @@ class RealmProjectionService:
                     ttl_seconds=ttl_seconds,
                 )
             except BaseException as cleanup_error:
-                error.add_note(f"projection realization cleanup also failed: {cleanup_error}")
+                add_exception_note(error, f"projection realization cleanup also failed: {cleanup_error}")
             if (
                 durable_cleanup is not None
                 and durable_cleanup.state is ProjectionRealizationState.CLEANED
@@ -2163,7 +2164,7 @@ class RealmProjectionService:
                             cleanup_token=rollback_token,
                         )
                 except BaseException as cleanup_error:
-                    error.add_note(
+                    add_exception_note(error, 
                         "stale projection builder namespace cleanup also failed: "
                         f"{cleanup_error}"
                     )
@@ -2702,7 +2703,7 @@ class RealmProjectionService:
                 reason=str(error),
             )
         except BaseException as quarantine_error:
-            error.add_note(
+            add_exception_note(error, 
                 f"projection realization quarantine also failed: {quarantine_error}"
             )
 

@@ -39,6 +39,7 @@ from ..runtime_binding import (
 )
 from ._validation import lower_hex_digest, thaw_json
 from .errors import (
+    add_exception_note,
     RealmConflict,
     RealmError,
     RealmExpired,
@@ -962,7 +963,7 @@ class RealmProcessExecutionBinder:
                         raise RealmIntegrityError(
                             "Concurrent durable binding differs from realized resources."
                         ) from error
-                    error.add_note(
+                    add_exception_note(error, 
                         "The exact resources became durably bound and were retained; "
                         "recover the committed binding."
                     )
@@ -976,21 +977,21 @@ class RealmProcessExecutionBinder:
                     refreshed.attempt != attempt
                     or refreshed.resource_ttl_seconds != ttl_seconds
                 ):
-                    error.add_note(
+                    add_exception_note(error, 
                         "Realized unbound resources were retained for TTL cleanup "
                         "because attempt authority changed."
                     )
                     raise
                 current_authority = refreshed
             except BaseException as error:
-                error.add_note(
+                add_exception_note(error, 
                     "Realized unbound resources were retained for deterministic "
                     "recovery and TTL cleanup."
                 )
                 raise
         else:
             assert last_conflict is not None
-            last_conflict.add_note(
+            add_exception_note(last_conflict, 
                 "Preflight retried after repeated unrelated run-head changes; "
                 "realized resources were retained."
             )
@@ -1180,7 +1181,7 @@ class RealmProcessExecutionBinder:
                     original_error=error,
                 )
                 if durable is None:
-                    error.add_note(
+                    add_exception_note(error, 
                         "Provider reservation and realized resources were retained; "
                         "abandon the reservation before unbound cleanup."
                     )
@@ -1191,7 +1192,7 @@ class RealmProcessExecutionBinder:
                     launch_request_digest=launch_request_digest,
                 )
         assert last_conflict is not None
-        last_conflict.add_note(
+        add_exception_note(last_conflict, 
             "Atomic binding retried after repeated unrelated run-head changes; "
             "the provider reservation and resources were retained."
         )
@@ -1218,7 +1219,7 @@ class RealmProcessExecutionBinder:
             return None
         except BaseException as proof_error:
             if original_error is not None:
-                original_error.add_note(
+                add_exception_note(original_error, 
                     "Atomic binding outcome could not be proven: "
                     f"{type(proof_error).__name__}: {proof_error}"
                 )
@@ -2095,7 +2096,7 @@ class RealmProcessExecutionBinder:
                         volume._detach_without_release()
                     except BaseException:
                         pass
-                error.add_note(
+                add_exception_note(error, 
                     "Partially realized resources were retained for typed "
                     "cross-actor recovery and TTL cleanup."
                 )

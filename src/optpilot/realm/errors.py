@@ -58,3 +58,28 @@ class SourceChanged(ContentRejected):
 
 class ContentCorrupt(RealmIntegrityError):
     """A managed immutable object did not match its registered identity."""
+
+
+def add_exception_note(error: BaseException, note: str) -> None:
+    """Attach an explanatory note to an exception on any supported Python.
+
+    ``BaseException.add_note`` arrived in Python 3.11, and OptPilot's floor is
+    3.10 -- where calling it raises AttributeError *while the real error is in
+    flight*, replacing every refusal that annotates itself with an unrelated
+    crash. Twenty-four call sites did exactly that, and the whole 3.10 CI job
+    failed on them while 3.11 and 3.12 stayed green.
+
+    On 3.11+ this is the built-in. On 3.10 the note is appended to
+    ``__notes__``, the same structure the built-in maintains, so handlers that
+    read notes see identical data; the only degradation is that 3.10's own
+    traceback printer does not display notes.
+    """
+
+    if hasattr(error, "add_note"):
+        error.add_note(note)
+        return
+    notes = getattr(error, "__notes__", None)
+    if not isinstance(notes, list):
+        notes = []
+        error.__notes__ = notes  # type: ignore[attr-defined]
+    notes.append(str(note))

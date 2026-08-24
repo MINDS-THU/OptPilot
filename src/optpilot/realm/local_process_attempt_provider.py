@@ -18,7 +18,7 @@ from ..attempts import AttemptFinalization
 from ..run_attempt_heartbeat import RunAttemptHeartbeatCoordinator
 from ._validation import lower_hex_digest, required_text
 from .attempt_finalizer import RealmAttemptFinalizer
-from .errors import RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
+from .errors import add_exception_note, RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
 from .execution_binding_records import (
     ExecutionBindingRecord,
     ExecutionLaunchIntentRecord,
@@ -1153,7 +1153,7 @@ class LocalProcessAttemptProvider:
                 )
                 self._record_terminal(session, proof)
             except Exception as stop_error:
-                heartbeat_error.add_note(
+                add_exception_note(heartbeat_error, 
                     "Stopping and authenticating the worker after heartbeat "
                     "failure also failed: "
                     f"{type(stop_error).__name__}."

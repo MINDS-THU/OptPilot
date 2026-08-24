@@ -30,7 +30,7 @@ from .ephemeral_volume_service import (
     RealmEphemeralVolumeService,
     _volume_operation_identity,
 )
-from .errors import RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
+from .errors import add_exception_note, RealmConflict, RealmError, RealmIntegrityError, RealmNotFound
 from .leases import LeaseRecord
 from .ledger import RealmLedger
 from .layered_volume_realization import compile_local_layered_volume_plan
@@ -1451,7 +1451,7 @@ class RealmOperatorAttemptBinder:
             # As with canonical attempts, deterministic resources stay retained
             # for exact recovery or TTL reconciliation.  Releasing a partial
             # set here could race a concurrent authorized realizer.
-            error.add_note(
+            add_exception_note(error, 
                 "Partially realized Operator Job resources were retained for "
                 "exact recovery and TTL cleanup."
             )

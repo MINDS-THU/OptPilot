@@ -12,8 +12,17 @@ runs everywhere; the build itself is checked by scripts/check_release_artifacts.
 
 from __future__ import annotations
 
-import tomllib
 import unittest
+
+# tomllib arrived in Python 3.11, and OptPilot's floor is 3.10. On 3.10 this
+# import error surfaced as a loader failure in CI -- the one interpreter in
+# the matrix without the module. What these tests check is identical text on
+# every interpreter, and the 3.11 and 3.12 jobs still check it, so on 3.10
+# they skip by name rather than failing to even load.
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    tomllib = None
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +32,10 @@ _PROJECTS = {
 }
 
 
+@unittest.skipIf(
+    tomllib is None,
+    "tomllib is 3.11+; the 3.11 and 3.12 jobs cover these version-independent checks",
+)
 class LicenceShippingTest(unittest.TestCase):
     def test_each_distribution_names_a_licence(self) -> None:
         for name, path in _PROJECTS.items():
