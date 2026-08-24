@@ -10161,6 +10161,75 @@ def _resource_action_output_root(
     return root / "resource-action-output" / stamp, str(workspace.get("id") or "")
 
 
+def _notify_agent_session_resource_action_done(
+    state: UiState, record: JsonDict
+) -> None:
+    """Wake the conversation that started a background action, with its result.
+
+    Runs on the action's own worker thread, after the terminal status is
+    recorded. Failures here must never damage the run record, so everything is
+    defensive: a conversation that has since vanished, or an unreachable
+    agent server, degrades to the transcript note alone -- which the person
+    still sees.
+    """
+
+    session_id = str(record.get("agent_session_id") or "")
+    if not session_id:
+        return
+    status = str(record.get("status") or "")
+    public = _public_resource_action_run(record)
+    result_block = json.dumps(
+        {k: public.get(k) for k in ("status", "result", "error")},
+        indent=2,
+        sort_keys=True,
+        default=str,
+    )
+    if len(result_block) > 12000:
+        result_block = result_block[:12000] + "\n... truncated ..."
+    try:
+        _append_agent_message(
+            state,
+            session_id,
+            {
+                "role": "assistant",
+                "title": "Background action finished",
+                "source": "studio_ui",
+                "content": (
+                    f"The {record.get('action_id')} action finished: {status}."
+                    + (
+                        " Waking the Assistant to continue."
+                        if record.get("agent_conversation_id")
+                        else ""
+                    )
+                ),
+            },
+        )
+    except Exception:
+        return
+    conversation_id = str(record.get("agent_conversation_id") or "")
+    if not conversation_id:
+        return
+    posted = state.agent_adapter.post_background_result(
+        conversation_id,
+        (
+            f"OptPilot background action result for "
+            f"{record.get('action_id')} (request {record.get('request_id')}). "
+            "The action has finished; nothing further is coming for it. Use "
+            "this result to continue the task -- report the outcome to the "
+            "person and take the next step.\n"
+            f"```json\n{result_block}\n```"
+        ),
+    )
+    if not posted.get("sent"):
+        return
+    try:
+        session = _require_agent_session(state, session_id)
+        session["status"] = "waiting_for_agent"
+        _upsert_agent_session(state, session)
+    except Exception:
+        pass
+
+
 def _start_resource_action_run(
     state: UiState, payload: Any
 ) -> tuple[JsonDict, HTTPStatus]:
@@ -10246,6 +10315,10 @@ def _start_resource_action_run(
                     is threading.current_thread()
                 ):
                     state._resource_action_threads.pop(request_id, None)
+            # Success or failure alike: a conversation waiting on this must
+            # hear the outcome either way, or a failed generation looks like
+            # the stall it was built to prevent.
+            _notify_agent_session_resource_action_done(state, record)
 
     with state._lock:
         if request_id in state._resource_action_runs:
@@ -20131,11 +20204,46 @@ def _execute_agent_tool(
                 "inputs": dict(inputs or {}),
             },
         )
+        # A long action outlives any model turn, so the turn will end while
+        # the work runs. Remember which conversation started it: when the
+        # background thread finishes, the outcome is posted back into that
+        # conversation and the loop resumes. Without this, "I'll continue
+        # when the result arrives" was a promise nothing could keep.
+        session = _require_agent_session(state, session_id)
+        with state._lock:
+            record = state._resource_action_runs.get(
+                str(payload.get("request_id") or "")
+            )
+            if record is not None and record.get("status") == "running":
+                record["agent_session_id"] = session_id
+                record["agent_conversation_id"] = str(
+                    session.get("openhands_conversation_id") or ""
+                )
+        _append_agent_message(
+            state,
+            session_id,
+            {
+                "role": "assistant",
+                "title": "Running in the background",
+                "source": "studio_ui",
+                "content": (
+                    f"The {action_id} action is running in the background "
+                    f"(request {payload.get('request_id')}). Its result will "
+                    "be posted into this conversation when it finishes; "
+                    "nothing needs to be done meanwhile."
+                ),
+            },
+        )
         return _tool_result(
             tool,
             True,
-            f"Started {action_id}. Poll optpilot_resource_action_status with "
-            f"request_id {payload.get('request_id')}.",
+            (
+                f"Started {action_id} in the background (request_id "
+                f"{payload.get('request_id')}). Its result will be posted "
+                "into this conversation automatically when it finishes -- do "
+                "not poll for it in a loop. Tell the person it is running, "
+                "then end your turn."
+            ),
             data=payload,
         )
     if tool == "optpilot_resource_action_status":

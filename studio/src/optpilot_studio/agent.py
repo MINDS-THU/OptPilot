@@ -2238,6 +2238,41 @@ class OpenHandsAdapter:
         }
         self._request_json("POST", f"{conversations_url}/{conversation_id}/events", payload=payload, timeout=timeout)
 
+    def post_background_result(self, conversation_id: str, text: str) -> JsonDict:
+        """Post a background job's outcome into the conversation and re-enter it.
+
+        A resource action can run for minutes, and a model cannot hold a turn
+        open that long -- the turn ends, and until now nothing ever re-entered
+        the loop, so "I'll continue when the result arrives" was a promise the
+        architecture could not keep. This delivers the promise from outside:
+        the finished job's outcome is posted as a user-role message with
+        run=true, the agent server resumes the loop, and Studio's session
+        sync harvests whatever the agent does next.
+        """
+
+        if not conversation_id:
+            return {"sent": False, "reason": "missing conversation id"}
+        status = self.status()
+        if status.get("dispatch") != "openhands_http" or not self.config.base_url:
+            return {"sent": False, "reason": "OpenHands HTTP bridge is not active"}
+        conversations_url = self._join_url(self.config.base_url, self.session_endpoint)
+        try:
+            self._request_json(
+                "POST",
+                f"{conversations_url}/{conversation_id}/events",
+                payload={
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "cache_prompt": False, "text": text}
+                    ],
+                    "run": True,
+                },
+                timeout=15.0,
+            )
+        except Exception as exc:
+            return {"sent": False, "reason": str(exc)}
+        return {"sent": True, "conversation_id": conversation_id}
+
     def submit_tool_result(self, conversation_id: str, name: str, call_id: str, result: JsonDict) -> JsonDict:
         if not conversation_id:
             return {"sent": False, "reason": "missing conversation id"}

@@ -236,6 +236,12 @@ Workspace and safety rules:
   different things: the action does one job and returns a result, the
   interface is a page a person works in. When a request could mean
   either, ask which they want rather than guessing.
+- A long-running resource action (generation is one) finishes in the
+  background after your turn ends. Its result is posted into this
+  conversation automatically and re-enters you -- so after starting one, tell
+  the person it is running and END your turn. Never poll its status in a
+  loop, and never promise to "continue when the result arrives" while doing
+  nothing: the continuation happens by itself.
 - The generate-then-optimize story runs end to end in conversation, in this
   order: run the generator resource's action with the person's system
   description as its input, writing the bundle into an attached Workspace;
