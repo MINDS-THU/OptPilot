@@ -3,9 +3,14 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import shlex
+import sys
+from datetime import datetime
 import math
 import time
 from dataclasses import dataclass
+
+from optpilot_studio.stop_gate import decide as stop_gate_decide
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -1062,6 +1067,9 @@ class OpenHandsAdapter:
     def __init__(self, config: Optional[OpenHandsRuntimeConfig] = None) -> None:
         self.config = config or OpenHandsRuntimeConfig.from_env()
         self.system_prompt = load_assistant_system_prompt()
+        #: conversation id -> whether the server holds a Stop hook for it.
+        #: Only definitive answers are cached; unknown is re-asked.
+        self._stop_gate_states: Dict[str, bool] = {}
 
     def status(self) -> JsonDict:
         api_key_configured = bool(self.config.api_key)
@@ -1450,72 +1458,6 @@ class OpenHandsAdapter:
             "events": [{"type": "openhands_chat_completion_completed", "payload": {"conversation_id": next_conversation_id}}],
         }
 
-    #: Wordings a model uses when it has decided to wait for tool results that
-    #: are already in front of it. Deliberately narrow: anything about
-    #: approvals, queues, or long-running work is a legitimate reason to stop
-    #: and must not match.
-    #: Stems rather than full sentences: every live stall so far used fresh
-    #: wording ("let me wait", "give me a moment", "I'm awaiting the tool
-    #: results", "I'll continue as soon as the status result arrives"), so
-    #: enumerating sentences loses by one phrasing per release. Stems cover
-    #: the family; the discriminators in the classifier below carry the
-    #: precision.
-    _WAITING_NARRATION_PATTERNS = (
-        "await",
-        "wait for",
-        "waiting for",
-        "give me a moment",
-        "as soon as the",
-        "once the status",
-        "once the result",
-        "when the status",
-        "when the result",
-        "status returns",
-        "results return",
-        "result arrives",
-        "results arrive",
-        "results come back",
-        "come back to me",
-        "being dispatched",
-        "i'll continue",
-        "i will continue",
-        "i'll proceed",
-        "i will proceed",
-        "to proceed with running",
-        "i'll report",
-        "i will report",
-        "check back",
-        "stand by",
-    )
-
-    @classmethod
-    def _looks_like_waiting_narration(cls, text: Any) -> bool:
-        """Whether this answer is the model narrating a wait instead of acting.
-
-        The corrected tool acknowledgement tells the model, in as many words,
-        that every result arrives in the same turn -- and a small model still
-        answered "give me a moment, let me confirm which resource to use" and
-        ended its turn, twice, live. The words are the only signal there is:
-        the turn is finished, the results were delivered, and the message
-        promises future work. Approval waits are excluded -- stopping for a
-        person IS the correct behaviour.
-        """
-
-        lowered = str(text or "").lower()
-        if not lowered or "approval" in lowered or "approve" in lowered:
-            return False
-        if "?" in lowered:
-            # Every live stall has been statement-shaped. A message that asks
-            # the person something is addressed to them and waiting for THEM,
-            # which is the one wait that is always legitimate.
-            return False
-        if "background" in lowered:
-            # "It is running in the background; the result will be posted
-            # here" is the phrasing the guidance itself teaches for long
-            # actions, whose completion now re-enters the loop from outside.
-            return False
-        return any(pattern in lowered for pattern in cls._WAITING_NARRATION_PATTERNS)
-
     def _dispatch_openhands_agent_server(
         self,
         prompt: str,
@@ -1534,6 +1476,18 @@ class OpenHandsAdapter:
             if not next_conversation_id:
                 raise RuntimeError("OpenHands did not return a conversation id.")
             created = True
+        elif (
+            self._stop_hook_config() is not None
+            and self._conversation_stop_gate_state(conversations_url, next_conversation_id)
+            is False
+        ):
+            # A conversation created before the Stop hook existed has no
+            # stall protection at all -- no hook, and no always-finish
+            # teaching in its stored system prompt. Recreating it is the
+            # same recovery the caller already performs for a conversation
+            # the server has forgotten, and carries the history back in via
+            # the recent-messages context.
+            raise OpenHandsConversationNotFound(next_conversation_id)
         existing_events = [] if created else self._existing_openhands_events(conversations_url, next_conversation_id)
         ignored_event_ids = {
             event_id
@@ -1571,67 +1525,6 @@ class OpenHandsAdapter:
             ignored_response_texts=ignored_texts,
             poll_seconds=3.0,
         )
-        delivered_any_result = any(
-            event.get("type") == "optpilot_tool_result" for event in tool_events
-        )
-        started_background_action = any(
-            event.get("type") == "optpilot_tool_result"
-            and str((event.get("payload") or {}).get("tool") or "")
-            == "optpilot_resource_action_run"
-            and (event.get("payload") or {}).get("ok")
-            for event in tool_events
-        )
-        if (
-            not paused_approval_id
-            and not runtime_error
-            and delivered_any_result
-            and not started_background_action
-            and self._looks_like_waiting_narration(answer)
-        ):
-            # The model ended its turn promising to wait for results that were
-            # already delivered into this very conversation. Nothing external
-            # will ever prompt it again, so left alone this reads to the
-            # person as "it just stopped" -- reported live three times. One
-            # bounded nudge, never two: if the model narrates a wait again
-            # after being told point-blank, that answer is surfaced as-is
-            # rather than looping.
-            ignored_texts.add(self._normalize_response_text(answer))
-            self._request_json(
-                "POST",
-                f"{conversations_url}/{next_conversation_id}/events",
-                payload={
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "cache_prompt": False,
-                            "text": (
-                                "Every tool result you dispatched has already "
-                                "been returned above in this conversation. "
-                                "Nothing further is coming and no one will "
-                                "prompt you again. Read those results now and "
-                                "continue the task to completion or to the "
-                                "next approval."
-                            ),
-                        }
-                    ],
-                    "run": True,
-                },
-            )
-            nudged_answer, nudged_events, runtime_error, paused_approval_id = (
-                self._poll_openhands_answer(
-                    conversations_url,
-                    next_conversation_id,
-                    tool_executor=tool_executor,
-                    ignored_tool_calls=ignored_tool_calls,
-                    ignored_event_ids=ignored_event_ids,
-                    ignored_response_texts=ignored_texts,
-                    poll_seconds=3.0,
-                )
-            )
-            tool_events = [*tool_events, *nudged_events]
-            if nudged_answer:
-                answer = nudged_answer
         if paused_approval_id:
             return {
                 "status": "awaiting_user_approval",
@@ -1798,7 +1691,7 @@ class OpenHandsAdapter:
     def _start_conversation_payload(self, context: JsonDict) -> JsonDict:
         workspace = context.get("selected_workspace") if isinstance(context.get("selected_workspace"), dict) else None
         working_dir = str((workspace or {}).get("root") or ".")
-        return {
+        payload: JsonDict = {
             "agent": {
                 "kind": "Agent",
                 "llm": self._openhands_llm_payload(),
@@ -1809,8 +1702,73 @@ class OpenHandsAdapter:
             "workspace": {"kind": "LocalWorkspace", "working_dir": working_dir},
             "confirmation_policy": {"kind": "NeverConfirm"},
             "initial_message": None,
-            "max_iterations": 20,
+            "max_iterations": 40,
             "stuck_detection": True,
+        }
+        hook_config = self._stop_hook_config()
+        if hook_config:
+            payload["hook_config"] = hook_config
+        return payload
+
+    def _stop_hook_config(self) -> Optional[JsonDict]:
+        """Stop hook that lets a turn end only on finish or a pending dispatch.
+
+        OpenHands finishes a run on ANY plain assistant message, so a model
+        that narrates "I'm awaiting the tool results" ends its turn and the
+        person sees a hang. The gate (stop_gate.py) vetoes that stop with
+        corrective feedback unless the run ended with the finish tool or
+        with an OptPilot dispatch whose result Studio still owes.
+
+        The gate reads the agent-server's on-disk event files: hooks run via
+        a blocking subprocess on the server's only event loop, so calling
+        back over HTTP would deadlock. The conversations directory is
+        resolved from this process's working directory because launch.json
+        starts Studio and the agent-server from the same one; deployments
+        that split them must set OPTPILOT_OPENHANDS_CONVERSATIONS_DIR.
+        A missing directory only ever fails open -- the gate allows the stop.
+        """
+
+        gate_source = Path(__file__).resolve().with_name("stop_gate.py")
+        if not gate_source.exists():
+            return None
+        conversations_root = os.environ.get(
+            "OPTPILOT_OPENHANDS_CONVERSATIONS_DIR"
+        ) or str(Path.cwd() / "workspace" / "conversations")
+        # The hook command is persisted inside the conversation record and
+        # outlives this checkout (worktrees are pruned after merge), while a
+        # missing script makes python itself exit 2 -- the DENY code. Two
+        # defences: the gate is copied next to the conversations it reads,
+        # which shares their lifetime, and the command tests readability
+        # first so a vanished or unreadable gate allows the stop instead of
+        # deny-looping every turn into the max-iterations error.
+        gate_path = gate_source
+        stable_gate = Path(conversations_root).parent / "optpilot_stop_gate.py"
+        try:
+            data = gate_source.read_bytes()
+            if not stable_gate.exists() or stable_gate.read_bytes() != data:
+                stable_gate.parent.mkdir(parents=True, exist_ok=True)
+                stable_gate.write_bytes(data)
+            gate_path = stable_gate
+        except OSError:
+            pass
+        command = f"[ -r {shlex.quote(str(gate_path))} ] || exit 0; " + " ".join(
+            shlex.quote(part)
+            for part in (
+                sys.executable,
+                str(gate_path),
+                "--conversations-root",
+                conversations_root,
+            )
+        )
+        return {
+            "stop": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "command", "command": command, "timeout": 10}
+                    ],
+                }
+            ]
         }
 
     def _openhands_llm_payload(self) -> JsonDict:
@@ -1847,8 +1805,16 @@ class OpenHandsAdapter:
     ) -> tuple[str, List[JsonDict], str, str]:
         search_url = f"{conversations_url}/{conversation_id}/events/search?limit=50&sort_order=TIMESTAMP_DESC"
         deadline = time.monotonic() + max(float(poll_seconds), 0.1)
-        handled_tool_calls: set[str] = set(ignored_tool_calls or set())
-        ignored_events: set[str] = set(ignored_event_ids or set())
+        # The caller's sets are used in place, not copied: the finish-event
+        # retirements and newly handled call ids recorded during this poll
+        # must be visible in the sync_state the caller persists, or a stale
+        # finish surfaces as the answer on the NEXT poll.
+        handled_tool_calls: set[str] = (
+            ignored_tool_calls if ignored_tool_calls is not None else set()
+        )
+        ignored_events: set[str] = (
+            ignored_event_ids if ignored_event_ids is not None else set()
+        )
         ignored_texts: set[str] = {
             self._normalize_response_text(text)
             for text in (ignored_response_texts or set())
@@ -1868,9 +1834,6 @@ class OpenHandsAdapter:
             runtime_error = self._best_runtime_error(events, ignored_events)
             if runtime_error:
                 return "", tool_events, runtime_error, ""
-            finish_text = self._best_finish_text(events, ignored_events, ignored_texts)
-            if finish_text:
-                return finish_text, tool_events, "", ""
             if tool_executor:
                 new_tool_events, paused_approval_id = self._execute_openhands_client_tools(
                     events,
@@ -1880,13 +1843,27 @@ class OpenHandsAdapter:
                     handled_tool_calls,
                 )
                 tool_events.extend(new_tool_events)
+                if new_tool_events or paused_approval_id:
+                    # Work was just forwarded (or paused for approval), so
+                    # the run resumes later: a "finished" state from before
+                    # the forward is stale -- and so is any finish call
+                    # emitted alongside the dispatch. Retire those finish
+                    # events so the resumed run's own ending is the one
+                    # surfaced. Pending dispatches run before the finish
+                    # check so a batch of tool call plus finish can never
+                    # surface the finish text while the call sits unexecuted.
+                    for event in events if isinstance(events, list) else []:
+                        if self._event_finish_text(event):
+                            finish_event_id = self._openhands_event_id(event)
+                            if finish_event_id:
+                                ignored_events.add(finish_event_id)
                 if paused_approval_id:
                     return "", tool_events, "", paused_approval_id
                 if new_tool_events:
-                    # Client-tool results were just forwarded; the agent will
-                    # resume, so a "finished" state from before the forward is
-                    # stale. Keep polling.
                     continue
+            finish_text = self._best_finish_text(events, ignored_events, ignored_texts)
+            if finish_text:
+                return finish_text, tool_events, "", ""
             if self._execution_finished(events):
                 # An agent may end its turn with a plain final message instead
                 # of a finish tool call; the conversation then flips
@@ -1896,6 +1873,17 @@ class OpenHandsAdapter:
                 # This check runs only after any pending client-tool results
                 # were forwarded, so a mid-turn tool dispatch is not mistaken
                 # for the closing answer.
+                if self._plain_finish_awaits_stop_gate(
+                    conversations_url, conversation_id, events
+                ):
+                    # The Stop hook is about to rule on this ending and would
+                    # deny it; surfacing now would show the denied message as
+                    # the final answer and orphan the corrected one. The deny
+                    # flips the status back to "running" within the hook
+                    # timeout; if the hook fails open, the age bound inside
+                    # the helper surfaces the plain message anyway.
+                    time.sleep(2.0)
+                    continue
                 final_text = self._best_final_message_text(
                     events, ignored_events, ignored_texts
                 )
@@ -1972,6 +1960,7 @@ class OpenHandsAdapter:
         # Events arrive newest-first; the first agent-authored message with
         # user-facing text is the closing answer for the finished turn.
         source_events = events if isinstance(events, list) else []
+        newest_user_at = self._newest_user_message_timestamp(source_events)
         for event in source_events:
             if not isinstance(event, dict):
                 continue
@@ -1981,17 +1970,120 @@ class OpenHandsAdapter:
             kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
             if kind != "MessageEvent" or str(event.get("source") or "") != "agent":
                 continue
+            if self._is_stale_for_user_anchor(event, newest_user_at):
+                continue
             text = self._event_assistant_text(event)
             normalized = self._normalize_response_text(text)
             if text and normalized and normalized not in ignored_texts:
                 return text
         return ""
 
+    def _newest_user_message_timestamp(self, events: Any) -> str:
+        """Timestamp of the newest user-role message, tool results included.
+
+        Any user message -- the person's or one Studio posted -- starts a new
+        run server-side, so agent output older than it belongs to an earlier
+        run and must not be surfaced as the current run's answer.
+        """
+
+        source_events = events if isinstance(events, list) else []
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+            if kind == "MessageEvent" and str(event.get("source") or "") == "user":
+                return str(event.get("timestamp") or "")
+        return ""
+
+    @staticmethod
+    def _is_stale_for_user_anchor(event: Any, newest_user_at: str) -> bool:
+        if not newest_user_at or not isinstance(event, dict):
+            return False
+        event_at = str(event.get("timestamp") or "")
+        return bool(event_at) and event_at <= newest_user_at
+
+    def _conversation_stop_gate_state(
+        self, conversations_url: str, conversation_id: str
+    ) -> Optional[bool]:
+        """Whether the server holds a Stop hook for this conversation.
+
+        True/False only when the server's stored record answers the question
+        (the response must look like a real conversation record); None when
+        it cannot be reached or is unrecognisable, so callers fail open.
+        """
+
+        cached = self._stop_gate_states.get(conversation_id)
+        if cached is not None:
+            return cached
+        try:
+            info, _headers = self._request_json(
+                "GET",
+                f"{conversations_url}/{conversation_id}",
+                payload=None,
+                timeout=10.0,
+            )
+        except Exception:
+            return None
+        if not isinstance(info, dict) or not info.get("id"):
+            return None
+        hook_config = info.get("hook_config")
+        stop_hooks = (
+            hook_config.get("stop") if isinstance(hook_config, dict) else None
+        )
+        state = bool(stop_hooks)
+        self._stop_gate_states[conversation_id] = state
+        return state
+
+    def _plain_finish_awaits_stop_gate(
+        self, conversations_url: str, conversation_id: str, events: Any
+    ) -> bool:
+        """Whether surfacing a plain-message finish must wait for the gate.
+
+        The FINISHED status and the plain message reach the events API
+        before the Stop hook has ruled on them. If the gate is registered
+        for this conversation and would deny this ending, the deny is about
+        to inject feedback and flip the status back to running -- surfacing
+        now would show the denied message as the final answer and orphan
+        the corrected one. Bounded by the age of the finished status: past
+        the hook timeout plus margin the hook has clearly failed open, and
+        the plain message stands.
+        """
+
+        if not self._conversation_stop_gate_state(conversations_url, conversation_id):
+            return False
+        source_events = events if isinstance(events, list) else []
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("key") or "") != "execution_status":
+                continue
+            if str(event.get("value") or "").lower() != "finished":
+                return False
+            status_at = str(event.get("timestamp") or "")
+            try:
+                age = (datetime.now() - datetime.fromisoformat(status_at)).total_seconds()
+            except (ValueError, TypeError):
+                # Unparseable or timezone-aware timestamps: fail open and
+                # surface the plain message rather than defer on guesswork.
+                return False
+            if age > 15.0:
+                return False
+            ordered = [e for e in reversed(source_events) if isinstance(e, dict)]
+            allow, _feedback = stop_gate_decide(ordered)
+            return not allow
+        return False
+
     def _best_finish_text(self, events: Any, ignored_events: set[str], ignored_texts: set[str]) -> str:
         source_events = events if isinstance(events, list) else []
+        newest_user_at = self._newest_user_message_timestamp(source_events)
         for event in source_events:
             event_id = self._openhands_event_id(event)
             if event_id and event_id in ignored_events:
+                continue
+            if self._is_stale_for_user_anchor(event, newest_user_at):
+                # A finish written before the last posted user message (a
+                # person's, or a tool result that resumed the run) closed an
+                # EARLIER run; the current run owes its own ending.
                 continue
             text = self._event_finish_text(event)
             normalized = self._normalize_response_text(text)
@@ -2084,13 +2176,38 @@ class OpenHandsAdapter:
 
     def _best_runtime_error(self, events: Any, ignored_events: set[str]) -> str:
         source_events = events if isinstance(events, list) else []
+        newest_user_at = ""
+        for event in source_events:
+            if not isinstance(event, dict):
+                continue
+            kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+            if (
+                kind == "MessageEvent"
+                and str(event.get("source") or "") == "user"
+                and not self._is_tool_result_feedback_event(event)
+            ):
+                newest_user_at = str(event.get("timestamp") or "")
+                break
         generic_status_error = ""
+        saw_status_event = False
         for event in source_events:
             if not isinstance(event, dict):
                 continue
             event_id = self._openhands_event_id(event)
             if event_id and event_id in ignored_events:
                 continue
+            kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+            if kind == "ConversationStateUpdateEvent" and str(event.get("key") or "") == "execution_status":
+                # Status updates supersede each other: only the newest may
+                # report an error, and not when a user message has already
+                # re-opened the conversation past it -- a stale "stuck" or
+                # "error" from a previous run must not fail the current one.
+                if saw_status_event:
+                    continue
+                saw_status_event = True
+                status_at = str(event.get("timestamp") or "")
+                if newest_user_at and status_at and status_at <= newest_user_at:
+                    continue
             error_text = self._event_runtime_error_text(event)
             if not error_text:
                 continue
@@ -2517,6 +2634,11 @@ class OpenHandsAdapter:
         if not isinstance(event, dict):
             return ""
         event_kind = str(event.get("kind") or event.get("type") or event.get("event_type") or "")
+        if event_kind == "HookExecutionEvent":
+            # Hook failures fail open server-side (the stop still happens);
+            # the error field on the event is observability. Sniffing it as
+            # a conversation error would fail a turn that completed fine.
+            return ""
         if event_kind == "ConversationErrorEvent":
             detail = self._content_text(
                 event.get("detail")
@@ -2535,6 +2657,14 @@ class OpenHandsAdapter:
             value = str(event.get("value") or "").lower()
             if key == "execution_status" and value == "error":
                 return "OpenHands conversation entered error state."
+            if key == "execution_status" and value == "stuck":
+                # stuck_detection is on in the start payload; without this
+                # branch a stuck run matches neither "finished" nor "error"
+                # and the session shows "running" forever.
+                return (
+                    "OpenHands detected the Assistant repeating itself and "
+                    "ended the turn."
+                )
         error = self._content_text(event.get("error")).strip()
         return self._redact_secret_text(self._compact_text(error, 1200)) if error else ""
 

@@ -88,7 +88,10 @@ class StudioOpenHandsStaleRecoveryTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "conversation_missing")
         self.assertEqual(result["conversation_id"], "oh-old")
-        self.assertEqual(request_json.call_count, 1)
+        # Two calls, no retries: the stop-gate probe (which swallows its
+        # error and fails open) and the events fetch that reports the
+        # conversation missing.
+        self.assertEqual(request_json.call_count, 2)
 
     def test_adapter_stops_polling_as_soon_as_bound_conversation_is_missing(self) -> None:
         adapter = OpenHandsAdapter(

@@ -6360,7 +6360,12 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(adapter._best_finish_text([plain_message_event], set(), set()), "")
         self.assertEqual(adapter._event_assistant_text(plain_message_event), "I need to wait for the file read results before proceeding.")
 
-    def test_ui_agent_openhands_finish_suppresses_pending_tool_execution(self) -> None:
+    def test_ui_agent_openhands_pending_dispatch_beats_stale_finish(self) -> None:
+        # A model may emit a client-tool call and finish in one batch. The
+        # dispatched call wins: surfacing the finish text while dropping the
+        # call would tell the person work happened that never ran. The call
+        # executes, its result resumes the run, and the stale finish is
+        # retired so the resumed run's own ending is the one surfaced.
         finish_event = {
             "id": "evt-finish",
             "kind": "ActionEvent",
@@ -6402,10 +6407,10 @@ class MvpIntegrationTest(unittest.TestCase):
             poll_seconds=0.2,
         )
 
-        self.assertEqual(answer, "Done before stale tool calls arrive.")
+        self.assertEqual(answer, "")
         self.assertEqual(runtime_error, "")
         self.assertEqual(paused_approval_id, "")
-        self.assertEqual(executed_tools, [])
+        self.assertEqual(executed_tools, ["optpilot_file_read"])
         self.assertTrue(any(event.get("payload", {}).get("tool") == "optpilot_file_read" for event in events))
 
     def test_ui_agent_openhands_runtime_error_is_terminal(self) -> None:
