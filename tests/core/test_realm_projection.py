@@ -8,6 +8,11 @@ import tempfile
 import threading
 import time
 import unittest
+
+from tests.realm_run_support import (
+    TEST_EXPIRY_TTL_SECONDS,
+    TEST_EXPIRY_WAIT_SECONDS,
+)
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -1246,7 +1251,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         with mock.patch(
             "optpilot.realm.projection_service."
             "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
-            0.12,
+            TEST_EXPIRY_TTL_SECONDS,
         ), mock.patch.object(
             self.ledger,
             "claim_projection_materialization",
@@ -1259,7 +1264,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                     store_id=self.store.store_id,
                     spec=spec,
                     holder_id=holder_id,
-                    ttl_seconds=0.12,
+                    ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
                     consumer_kind="run-attempt",
                     consumer_metadata=metadata,
                     sharing_policy="private",
@@ -1283,11 +1288,11 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 store_id=self.store.store_id,
                 spec=spec,
                 holder_id=holder_id,
-                ttl_seconds=0.12,
+                ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
                 consumer_kind="run-attempt",
                 consumer_metadata=metadata,
             )
-        time.sleep(0.18)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         recovered = restarted.recover_existing_private_read_only(
             operation_id=operation_id,
@@ -1295,7 +1300,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             store_id=self.store.store_id,
             spec=spec,
             holder_id=holder_id,
-            ttl_seconds=0.12,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             consumer_kind="run-attempt",
             consumer_metadata=metadata,
         )
@@ -1326,7 +1331,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         with mock.patch(
             "optpilot.realm.projection_service."
             "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
-            0.12,
+            TEST_EXPIRY_TTL_SECONDS,
         ), mock.patch.object(
             self.service,
             "_materialize",
@@ -1339,7 +1344,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                     store_id=self.store.store_id,
                     spec=spec,
                     holder_id=holder_id,
-                    ttl_seconds=0.12,
+                    ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
                     consumer_kind="run-attempt",
                     consumer_metadata=metadata,
                     sharing_policy="private",
@@ -1351,7 +1356,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(len(materializing), 1)
         old_id = materializing[0].realization_id
-        time.sleep(0.18)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         recovered = self.service.recover_existing_private_read_only(
             operation_id=operation_id,
@@ -1359,7 +1364,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             store_id=self.store.store_id,
             spec=spec,
             holder_id=holder_id,
-            ttl_seconds=0.12,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             consumer_kind="run-attempt",
             consumer_metadata=metadata,
         )
@@ -1606,7 +1611,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             store_id=self.store.store_id,
             spec=spec,
             holder_id="private-cleanup-worker-a",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             sharing_policy="private",
         )
         survivor = self.service.project_read_only(
@@ -1625,7 +1630,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             self.service.root_binding.path / survivor.realization.relative_name
         )
         disposable.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         cleaned = self.service.reconcile_projection(
             operation_id="private-cleanup-exact-reconcile",
@@ -1988,25 +1993,25 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         )
 
         def slow_project(**kwargs):
-            time.sleep(0.2)
+            time.sleep(0.8)
             return real_project(**kwargs)
 
         def slow_claim(**kwargs):
-            time.sleep(0.2)
+            time.sleep(0.8)
             return real_claim(**kwargs)
 
         real_heartbeat_start = _BuilderHeartbeat.start
 
         def slow_heartbeat_start(heartbeat):
-            time.sleep(0.2)
+            time.sleep(0.8)
             return real_heartbeat_start(heartbeat)
 
         def slow_record_tree_identity(*args, **kwargs):
-            time.sleep(0.2)
+            time.sleep(0.8)
             return real_record_tree_identity(*args, **kwargs)
 
         def slow_publish(**kwargs):
-            time.sleep(0.2)
+            time.sleep(0.8)
             return real_publish(**kwargs)
 
         self.service._provider.project = slow_project
@@ -2041,7 +2046,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                     "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
                 ),
                 holder_id="worker-a",
-                ttl_seconds=0.09,
+                ttl_seconds=0.6,  # stages below run 0.8s each: renewal, not luck, keeps this alive
             )
             projection.validate()
         self.assertEqual(exact_validation.call_count, 1)
@@ -2057,11 +2062,13 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             5.0,
         )
         # The materialization grace is internal.  The delivered consumer still
-        # receives the short lifetime requested by the caller.
+        # receives the short lifetime requested by the caller -- comfortably
+        # above the 0.6s asked for, and nowhere near the 5s internal grace
+        # this assertion exists to rule out.
         self.assertLess(
             projection.consumer_lease.expires_at
             - projection.consumer_lease.created_at,
-            0.2,
+            1.0,
         )
         renewed = projection.heartbeat(
             operation_id="heartbeat-consumer", ttl_seconds=60
@@ -2079,14 +2086,14 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             store_id=self.store.store_id,
             spec=spec,
             holder_id="short-lived-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         old_id = first.realization.realization_id
         old_wrapper = (
             self.service.root_binding.path / first.realization.relative_name
         )
         first.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         with mock.patch.object(
             self.service._provider,
@@ -2131,7 +2138,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         with mock.patch(
             "optpilot.realm.projection_service."
             "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
-            0.12,
+            TEST_EXPIRY_TTL_SECONDS,
         ), mock.patch.object(
             self.service,
             "_materialize",
@@ -2144,7 +2151,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                     store_id=self.store.store_id,
                     spec=spec,
                     holder_id="dead-builder-holder",
-                    ttl_seconds=0.12,
+                    ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
                 )
         materializing = self.ledger.list_projection_realizations(
             actor_principal_id=self.service.maintenance_principal_id,
@@ -2153,7 +2160,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(len(materializing), 1)
         old_id = materializing[0].realization_id
-        time.sleep(0.18)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         with mock.patch(
             "optpilot.realm.projection_service."
@@ -2206,7 +2213,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
         with mock.patch(
             "optpilot.realm.projection_service."
             "_ACTIVE_MATERIALIZATION_LEASE_MIN_SECONDS",
-            0.12,
+            TEST_EXPIRY_TTL_SECONDS,
         ), mock.patch(
             "optpilot.realm.projection_service."
             "_STALE_BUILD_TAKEOVER_GRACE_SECONDS",
@@ -2229,9 +2236,9 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                     store_id=self.store.store_id,
                     spec=spec,
                     holder_id="creating-crash-holder",
-                    ttl_seconds=0.12,
+                    ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
                 )
-        time.sleep(0.18)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         with mock.patch(
             "optpilot.realm.projection_service."
@@ -2376,12 +2383,12 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
             ),
             holder_id="cleanup-reclaim-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         realization = projection.realization
         wrapper = self.service.root_binding.path / realization.relative_name
         projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         closing = self.ledger.close_projection_realization(
             operation_id="test-maintenance-close",
             actor_principal_id=self.service.maintenance_principal_id,
@@ -2396,7 +2403,7 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
             owner_holder_id="test-cleanup-owner",
             owner_fencing_token=None,
             builder_holder_id="test-cleanup-builder",
-            builder_ttl_seconds=0.08,
+            builder_ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             cleanup_token="9" * 64,
         )
         from optpilot.realm.projection_service import (
@@ -2416,11 +2423,11 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "projection.maintenance.heartbeat/"
                 f"{_cleanup_key(realization.realization_id)}"
             ),
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         old_heartbeat.start()
         old_heartbeat.stop()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         with mock.patch.object(
             self.ledger,
@@ -2509,13 +2516,13 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
             ),
             holder_id="cleanup-proof-before-ledger-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         self.projections.append(projection)
         realization = projection.realization
         wrapper = self.service.root_binding.path / realization.relative_name
         projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         closing = self.ledger.close_projection_realization(
             operation_id="cleanup-proof-before-ledger-close",
             actor_principal_id=self.service.maintenance_principal_id,
@@ -2567,12 +2574,12 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
             ),
             holder_id="cleanup-heartbeat-race-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         self.projections.append(projection)
         realization_id = projection.realization.realization_id
         projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         from optpilot.realm.projection_service import _BuilderHeartbeat
 
         start = _BuilderHeartbeat.start
@@ -2620,14 +2627,14 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
             ),
             holder_id="rename-away-cleanup-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         self.projections.append(projection)
         realization = projection.realization
         wrapper = self.service.root_binding.path / realization.relative_name
         stolen = self.service.root_binding.path / "rename-away-cleanup-stolen"
         projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         wrapper.rename(stolen)
 
         with self.assertRaisesRegex(
@@ -2678,13 +2685,13 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 store_id=self.store.store_id,
                 spec=spec,
                 holder_id=f"reconcile-target-viewer-{index}",
-                ttl_seconds=0.08,
+                ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             )
             for index, spec in enumerate(specs)
         )
         for projection in projections:
             projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
 
         first = self.service.reconcile_projection(
             operation_id="one-reconcile-operation",
@@ -2717,11 +2724,11 @@ class RealmProjectionServiceIntegrationTest(unittest.TestCase):
                 "workspace-a", (TreeMapping(self.receipt.snapshot_ref),)
             ),
             holder_id="disabled-root-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         realization_id = projection.realization.realization_id
         projection.close()
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         self.ledger.set_projection_root_state(
             operation_id="disable-projection-root",
             actor_principal_id=self.service.maintenance_principal_id,

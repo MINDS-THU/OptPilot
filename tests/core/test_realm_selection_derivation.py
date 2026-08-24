@@ -44,6 +44,8 @@ from optpilot.realm.workspaces import (
     WorkspaceSelectionLineage,
 )
 from tests.realm_run_support import (
+    TEST_EXPIRY_TTL_SECONDS,
+    TEST_EXPIRY_WAIT_SECONDS,
     TEST_LEASE_TTL_SECONDS,
     prepare_test_run_closure,
     prepare_test_run_control_manifest,
@@ -953,10 +955,10 @@ class RealmSelectionDerivationTest(unittest.TestCase):
             actor_principal_id="operator",
             selection=selection,
             holder_id="expiring-viewer",
-            ttl_seconds=0.08,
+            ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
         )
         self.projections.append(expiring)
-        time.sleep(0.14)
+        time.sleep(TEST_EXPIRY_WAIT_SECONDS)
         with self.assertRaises(RealmExpired):
             expiring.validate()
         expiring.close()
@@ -974,11 +976,11 @@ class RealmSelectionDerivationTest(unittest.TestCase):
                 actor_principal_id="operator",
                 selection=selection,
                 holder_id="retained-viewer",
-                ttl_seconds=0.08,
+                ttl_seconds=TEST_EXPIRY_TTL_SECONDS,
             )
             self.projections.append(active)
             active.close()
-            time.sleep(0.14)
+            time.sleep(TEST_EXPIRY_WAIT_SECONDS)
             self._retire_source_run()
             with self.assertRaises(SelectionProjectionUnavailable) as unavailable:
                 service.project_selection_read_only(

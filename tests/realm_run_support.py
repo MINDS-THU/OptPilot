@@ -41,6 +41,16 @@ from optpilot.run_control_manifest import (
 # short, explicit TTLs.
 TEST_LEASE_TTL_SECONDS = 3600.0
 
+# Deliberate-expiry tests are the opposite case: their lease MUST lapse, so it
+# cannot take the generous TTL above -- but the 80-120ms leases they used made
+# a second assumption, that everything done while the lease is alive finishes
+# inside that window. A starved CI runner broke it at two of roughly twenty
+# such sites; the rest were identical exposures waiting their turn. One second
+# is still a fast test, and the wait is longer than the TTL by enough margin
+# that a slow machine expires the lease during the wait, not during the work.
+TEST_EXPIRY_TTL_SECONDS = 1.0
+TEST_EXPIRY_WAIT_SECONDS = 1.5
+
 
 def prepare_test_run_control_manifest(
     closure: RunEvaluationClosure,
