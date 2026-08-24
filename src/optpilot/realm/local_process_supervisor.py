@@ -3671,13 +3671,41 @@ class LocalProcessSupervisor:
         connection.execute("PRAGMA journal_mode = WAL")
         return connection
 
+    #: How long a redaction checkpoint keeps retrying before conceding, and
+    #: how often it retries. Module-level so a test can force the concession.
+    _REDACTION_CHECKPOINT_DEADLINE_SECONDS = 5.0
+    _REDACTION_CHECKPOINT_RETRY_INTERVAL_SECONDS = 0.05
+
     def _checkpoint_redacted_registry(self) -> None:
-        with self._connect() as connection:
-            result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-        if result is None or int(result[0]) != 0:
-            raise RealmConflict(
-                "local process registry redaction checkpoint remains pending."
-            )
+        """Truncate the registry's write-ahead log, so redaction is durable.
+
+        The truncation cannot complete while any other connection is mid-read,
+        and SQLite reports that as "busy" rather than waiting for readers.
+        Two callers stopping the same job is exactly that situation: one
+        caller's legitimate read made the other's checkpoint report pending,
+        and the conflict escaped to a caller doing nothing wrong -- observed
+        on a starved CI machine, where the window is widest. A transient
+        reader resolves in milliseconds, so the checkpoint retries within a
+        bounded window; the guarantee is unchanged in that it still refuses
+        to report redaction durable if the log cannot be truncated by the
+        deadline.
+        """
+
+        deadline = (
+            time.monotonic() + self._REDACTION_CHECKPOINT_DEADLINE_SECONDS
+        )
+        while True:
+            with self._connect() as connection:
+                result = connection.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)"
+                ).fetchone()
+            if result is not None and int(result[0]) == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise RealmConflict(
+                    "local process registry redaction checkpoint remains pending."
+                )
+            time.sleep(self._REDACTION_CHECKPOINT_RETRY_INTERVAL_SECONDS)
 
     def _delete_retired_launch_directory(self, row: _LaunchRow) -> None:
         """Delete one exact provider-private directory without path traversal."""

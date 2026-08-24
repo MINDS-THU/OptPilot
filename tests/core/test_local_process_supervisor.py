@@ -105,6 +105,92 @@ class LocalProcessSupervisorTest(unittest.TestCase):
     def _supervisor(self, **kwargs: Any) -> LocalProcessSupervisor:
         return LocalProcessSupervisor(self.provider_root, **kwargs)
 
+    def test_redaction_checkpoint_outwaits_a_transient_reader(self) -> None:
+        """A caller mid-read must not fail the other caller's redaction.
+
+        Truncating the registry's write-ahead log cannot complete while any
+        other connection is reading, and SQLite reports that as busy rather
+        than waiting. Two callers stopping the same job is exactly that
+        interleaving, and one of them saw "checkpoint remains pending" on a
+        slow CI machine for work it did nothing to deserve. A transient
+        reader resolves in milliseconds; the checkpoint now outwaits it,
+        bounded. The reader here holds the registry longer than any real
+        read, and the checkpoint must still succeed once it lets go.
+        """
+
+        supervisor = self._supervisor()
+        import sqlite3 as sqlite_module
+        import threading
+
+        # check_same_thread off because the release deliberately happens on
+        # another thread -- with the default, that COMMIT dies silently inside
+        # the thread, the reader never lets go, and this test times out the
+        # full deadline instead of testing anything.
+        reader = sqlite_module.connect(
+            str(supervisor.database_path), check_same_thread=False
+        )
+        try:
+            reader.execute("BEGIN")
+            reader.execute(
+                "SELECT count(*) FROM sqlite_master"
+            ).fetchone()
+
+            def release_soon() -> None:
+                time.sleep(0.4)
+                reader.execute("COMMIT")
+
+            releaser = threading.Thread(target=release_soon)
+            releaser.start()
+            try:
+                supervisor._checkpoint_redacted_registry()
+            finally:
+                releaser.join()
+        finally:
+            reader.close()
+
+    def test_redaction_checkpoint_still_refuses_when_the_log_stays_pinned(
+        self,
+    ) -> None:
+        """The retry is bounded: durability is never claimed on hope.
+
+        Whether a pinned reader blocks the truncation AT ALL depends on the
+        SQLite build -- one interpreter's library blocks after a thirty-second
+        internal wait, another's does not block at all -- so the concession is
+        forced with a connection that always reports the checkpoint busy. The
+        bounded deadline is this code's own promise; SQLite's blocking
+        behaviour is not what is under test.
+        """
+
+        supervisor = self._supervisor()
+        from unittest import mock
+
+        class _AlwaysBusy:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, _sql):
+                class _Row:
+                    @staticmethod
+                    def fetchone():
+                        return (1, 0, 0)
+
+                return _Row()
+
+        with mock.patch.object(
+            LocalProcessSupervisor,
+            "_REDACTION_CHECKPOINT_DEADLINE_SECONDS",
+            0.2,
+        ), mock.patch.object(
+            supervisor, "_connect", lambda: _AlwaysBusy()
+        ):
+            with self.assertRaisesRegex(
+                RealmConflict, "checkpoint remains pending"
+            ):
+                supervisor._checkpoint_redacted_registry()
+
     def _request(self, code: str) -> ProcessLaunchRequest:
         return ProcessLaunchRequest(
             argv=(sys.executable, "-c", code),
