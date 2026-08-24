@@ -1454,17 +1454,38 @@ class OpenHandsAdapter:
     #: are already in front of it. Deliberately narrow: anything about
     #: approvals, queues, or long-running work is a legitimate reason to stop
     #: and must not match.
+    #: Stems rather than full sentences: every live stall so far used fresh
+    #: wording ("let me wait", "give me a moment", "I'm awaiting the tool
+    #: results", "I'll continue as soon as the status result arrives"), so
+    #: enumerating sentences loses by one phrasing per release. Stems cover
+    #: the family; the discriminators in the classifier below carry the
+    #: precision.
     _WAITING_NARRATION_PATTERNS = (
-        "let me wait",
-        "wait for the actual results",
-        "wait for the results",
-        "results are being dispatched",
-        "once the results return",
-        "once the results come back",
-        "when the results return",
+        "await",
+        "wait for",
+        "waiting for",
         "give me a moment",
-        "haven't come back to me",
-        "have not come back to me",
+        "as soon as the",
+        "once the status",
+        "once the result",
+        "when the status",
+        "when the result",
+        "status returns",
+        "results return",
+        "result arrives",
+        "results arrive",
+        "results come back",
+        "come back to me",
+        "being dispatched",
+        "i'll continue",
+        "i will continue",
+        "i'll proceed",
+        "i will proceed",
+        "to proceed with running",
+        "i'll report",
+        "i will report",
+        "check back",
+        "stand by",
     )
 
     @classmethod
@@ -1482,6 +1503,16 @@ class OpenHandsAdapter:
 
         lowered = str(text or "").lower()
         if not lowered or "approval" in lowered or "approve" in lowered:
+            return False
+        if "?" in lowered:
+            # Every live stall has been statement-shaped. A message that asks
+            # the person something is addressed to them and waiting for THEM,
+            # which is the one wait that is always legitimate.
+            return False
+        if "background" in lowered:
+            # "It is running in the background; the result will be posted
+            # here" is the phrasing the guidance itself teaches for long
+            # actions, whose completion now re-enters the loop from outside.
             return False
         return any(pattern in lowered for pattern in cls._WAITING_NARRATION_PATTERNS)
 
@@ -1543,10 +1574,18 @@ class OpenHandsAdapter:
         delivered_any_result = any(
             event.get("type") == "optpilot_tool_result" for event in tool_events
         )
+        started_background_action = any(
+            event.get("type") == "optpilot_tool_result"
+            and str((event.get("payload") or {}).get("tool") or "")
+            == "optpilot_resource_action_run"
+            and (event.get("payload") or {}).get("ok")
+            for event in tool_events
+        )
         if (
             not paused_approval_id
             and not runtime_error
             and delivered_any_result
+            and not started_background_action
             and self._looks_like_waiting_narration(answer)
         ):
             # The model ended its turn promising to wait for results that were

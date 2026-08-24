@@ -33,6 +33,12 @@ class WaitingNarrationDetectorTest(unittest.TestCase):
             "results — they should arrive shortly.",
             "I've dispatched searches for the COOPA method; the search "
             "results haven't come back to me in this exchange.",
+            "The generation resource is confirmed: "
+            "devs_gallery/resource/devs-gen-interface with a generate action. "
+            "The workspace restaurant-sim is created. I'm awaiting the tool "
+            "results to proceed with running the generation there.",
+            "The generation run has been requested (request c41f25d9). I'll "
+            "continue as soon as the status result arrives.",
         ):
             with self.subTest(text=text[:40]):
                 self.assertTrue(self.adapter._looks_like_waiting_narration(text))
@@ -44,6 +50,13 @@ class WaitingNarrationDetectorTest(unittest.TestCase):
             "Please approve the generate action so I can continue.",
             "The Run is queued and will start when capacity frees up.",
             "Here is the best candidate compared to the baseline.",
+            # Question-shaped messages are addressed to the person, and
+            # waiting for the person is the one wait that is always right.
+            "Shall I proceed with running the generation in restaurant-sim?",
+            # The long-action guidance itself teaches this phrasing, and the
+            # background wake-up finishes the story from outside the turn.
+            "The generation is running in the background; the result will be "
+            "posted here automatically when it finishes.",
             "",
             None,
         ):
@@ -54,7 +67,7 @@ class WaitingNarrationDetectorTest(unittest.TestCase):
 class NudgeIsBoundedTest(unittest.TestCase):
     """One nudge, and a second narration is surfaced rather than looped on."""
 
-    def _dispatch(self, answers):
+    def _dispatch(self, answers, events=None):
         adapter = OpenHandsAdapter(
             config=OpenHandsRuntimeConfig(
                 enabled=True,
@@ -63,16 +76,11 @@ class NudgeIsBoundedTest(unittest.TestCase):
                 base_url="http://127.0.0.1:1",
             )
         )
+        if events is None:
+            events = [{"type": "optpilot_tool_result", "payload": {"ok": True}}]
         polls = []
         for text in answers:
-            polls.append(
-                (
-                    text,
-                    [{"type": "optpilot_tool_result", "payload": {"ok": True}}],
-                    "",
-                    "",
-                )
-            )
+            polls.append((text, list(events), "", ""))
         sent = []
 
         def fake_request(method, url, payload=None, **kwargs):
@@ -131,6 +139,30 @@ class NudgeIsBoundedTest(unittest.TestCase):
         self.assertEqual(poll_count, 1)
         self.assertEqual(
             [p for p in sent if "already been returned" in str(p)], []
+        )
+
+    def test_a_turn_that_started_a_background_action_may_end_waiting(
+        self,
+    ) -> None:
+        # After optpilot_resource_action_run succeeds, the outcome is posted
+        # back into the conversation from outside the turn -- ending with
+        # wait-flavoured phrasing is then the CORRECT behaviour, not a stall.
+        result, poll_count, sent = self._dispatch(
+            ["I'll report the outcome as soon as the run finishes."],
+            events=[
+                {
+                    "type": "optpilot_tool_result",
+                    "payload": {"ok": True, "tool": "optpilot_resource_action_run"},
+                }
+            ],
+        )
+        self.assertEqual(poll_count, 1)
+        self.assertEqual(
+            [p for p in sent if "already been returned" in str(p)], []
+        )
+        self.assertIn(
+            "as soon as the run finishes",
+            result["assistant_message"]["content"],
         )
 
 
