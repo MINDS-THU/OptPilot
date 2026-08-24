@@ -1450,6 +1450,41 @@ class OpenHandsAdapter:
             "events": [{"type": "openhands_chat_completion_completed", "payload": {"conversation_id": next_conversation_id}}],
         }
 
+    #: Wordings a model uses when it has decided to wait for tool results that
+    #: are already in front of it. Deliberately narrow: anything about
+    #: approvals, queues, or long-running work is a legitimate reason to stop
+    #: and must not match.
+    _WAITING_NARRATION_PATTERNS = (
+        "let me wait",
+        "wait for the actual results",
+        "wait for the results",
+        "results are being dispatched",
+        "once the results return",
+        "once the results come back",
+        "when the results return",
+        "give me a moment",
+        "haven't come back to me",
+        "have not come back to me",
+    )
+
+    @classmethod
+    def _looks_like_waiting_narration(cls, text: Any) -> bool:
+        """Whether this answer is the model narrating a wait instead of acting.
+
+        The corrected tool acknowledgement tells the model, in as many words,
+        that every result arrives in the same turn -- and a small model still
+        answered "give me a moment, let me confirm which resource to use" and
+        ended its turn, twice, live. The words are the only signal there is:
+        the turn is finished, the results were delivered, and the message
+        promises future work. Approval waits are excluded -- stopping for a
+        person IS the correct behaviour.
+        """
+
+        lowered = str(text or "").lower()
+        if not lowered or "approval" in lowered or "approve" in lowered:
+            return False
+        return any(pattern in lowered for pattern in cls._WAITING_NARRATION_PATTERNS)
+
     def _dispatch_openhands_agent_server(
         self,
         prompt: str,
@@ -1505,6 +1540,59 @@ class OpenHandsAdapter:
             ignored_response_texts=ignored_texts,
             poll_seconds=3.0,
         )
+        delivered_any_result = any(
+            event.get("type") == "optpilot_tool_result" for event in tool_events
+        )
+        if (
+            not paused_approval_id
+            and not runtime_error
+            and delivered_any_result
+            and self._looks_like_waiting_narration(answer)
+        ):
+            # The model ended its turn promising to wait for results that were
+            # already delivered into this very conversation. Nothing external
+            # will ever prompt it again, so left alone this reads to the
+            # person as "it just stopped" -- reported live three times. One
+            # bounded nudge, never two: if the model narrates a wait again
+            # after being told point-blank, that answer is surfaced as-is
+            # rather than looping.
+            ignored_texts.add(self._normalize_response_text(answer))
+            self._request_json(
+                "POST",
+                f"{conversations_url}/{next_conversation_id}/events",
+                payload={
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "cache_prompt": False,
+                            "text": (
+                                "Every tool result you dispatched has already "
+                                "been returned above in this conversation. "
+                                "Nothing further is coming and no one will "
+                                "prompt you again. Read those results now and "
+                                "continue the task to completion or to the "
+                                "next approval."
+                            ),
+                        }
+                    ],
+                    "run": True,
+                },
+            )
+            nudged_answer, nudged_events, runtime_error, paused_approval_id = (
+                self._poll_openhands_answer(
+                    conversations_url,
+                    next_conversation_id,
+                    tool_executor=tool_executor,
+                    ignored_tool_calls=ignored_tool_calls,
+                    ignored_event_ids=ignored_event_ids,
+                    ignored_response_texts=ignored_texts,
+                    poll_seconds=3.0,
+                )
+            )
+            tool_events = [*tool_events, *nudged_events]
+            if nudged_answer:
+                answer = nudged_answer
         if paused_approval_id:
             return {
                 "status": "awaiting_user_approval",
