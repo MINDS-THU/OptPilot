@@ -20189,11 +20189,31 @@ def _execute_agent_tool(
             item = dict(workspace)
             item["attached_to_current_session"] = item.get("id") in attached
             workspaces.append(item)
+        # Sessions ride along only for "what is attached where" context.
+        # The raw index carried every internal field and, worse, stale
+        # attachments to deleted workspaces -- a model copied one of those
+        # ids into workspace_attach and the turn died on it. Serve only
+        # live attachments and the fields a model can act on.
+        live_ids = {str(item.get("id") or "") for item in workspaces}
+        sessions_slim = [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "status": item.get("status"),
+                "attached_workspace_ids": [
+                    workspace_id
+                    for workspace_id in (item.get("attached_workspace_ids") or [])
+                    if workspace_id in live_ids
+                ],
+            }
+            for item in sessions
+            if isinstance(item, dict)
+        ]
         return _tool_result(
             tool,
             True,
             f"Found {len(workspaces)} workspace(s).",
-            data={"workspaces": workspaces, "sessions": sessions},
+            data={"workspaces": workspaces, "sessions": sessions_slim},
         )
     if tool == "optpilot_workspace_create":
         workspace = _create_ui_workspace(state, arguments)
@@ -24889,7 +24909,15 @@ def _workspace_by_id(state: UiState, workspace_id: str) -> Optional[JsonDict]:
 def _require_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
     workspace = _workspace_by_id(state, workspace_id)
     if not workspace:
-        raise KeyError(workspace_id)
+        # The bare id as the error ("KeyError: 'ws_x'") reached the model as
+        # the whole explanation and derailed a live turn. Old conversations
+        # keep references to deleted workspaces, so a stale id is an
+        # expected input here, not programmer error.
+        raise KeyError(
+            f"Workspace '{workspace_id}' was not found -- it may have been "
+            "deleted. Call optpilot_workspace_list and use an id from its "
+            "workspaces list, or optpilot_workspace_create for a new one."
+        )
     return workspace
 
 
