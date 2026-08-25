@@ -7329,6 +7329,17 @@ def _configured_catalog_sources_payload(state: UiState) -> List[JsonDict]:
 
     with state._catalog_projection_lock:
         realm_records = dict(state._realm_catalog_projections)
+    # One plain index read, not _list_ui_workspaces: building the catalog must
+    # not run that lister's opportunistic pruning of support references, and a
+    # test pins exactly that. Workspace storage being unavailable is not a
+    # reason the catalog cannot render, so an unreadable index reports
+    # "not open" rather than failing the page.
+    try:
+        open_ids = {
+            str(item.get("id") or "") for item in _read_workspace_index(state)
+        }
+    except Exception:
+        open_ids = set()
     result: List[JsonDict] = []
     for root in roots:
         package_id = _catalog_package_id(root)
@@ -7338,6 +7349,7 @@ def _configured_catalog_sources_payload(state: UiState) -> List[JsonDict]:
             state,
             package_id=package_id,
             package_id_ambiguous=package_counts.get(package_id, 0) != 1,
+            package_root=root,
         )
         result.append(
             {
@@ -7357,10 +7369,29 @@ def _configured_catalog_sources_payload(state: UiState) -> List[JsonDict]:
                     if isinstance(head, CatalogPackageHead)
                     else None
                 ),
+                # Whether the folder is already open as a Workspace, and
+                # under which id. Without this the source entry could not
+                # answer "can I prepare a package plan yet, and against
+                # what?" -- the one thing a caller needs from it next.
+                "workspace_id": _configured_source_open_workspace_id(
+                    state, _configured_catalog_source_id(root), open_ids
+                ),
                 "actions": {"open_workspace": capability},
             }
         )
     return sorted(result, key=lambda item: (item["label"], item["source_id"]))
+
+
+def _configured_source_open_workspace_id(
+    state: UiState, source_id: str, open_ids: set[str]
+) -> str:
+    """The id of this source's Workspace, or "" when it is not open."""
+
+    try:
+        workspace_id = _configured_source_workspace_id(state, source_id)
+    except Exception:
+        return ""
+    return workspace_id if workspace_id in open_ids else ""
 
 
 def _configured_catalog_setup_capability(
@@ -7368,6 +7399,7 @@ def _configured_catalog_setup_capability(
     *,
     package_id: str,
     package_id_ambiguous: bool,
+    package_root: Optional[Path] = None,
 ) -> JsonDict:
     code = "ready"
     eligible = True
@@ -7375,7 +7407,18 @@ def _configured_catalog_setup_capability(
         "Open this authorized folder as one editable Workspace without copying it, "
         "then check and register an exact immutable version through Workspace Setup."
     )
-    if package_id_ambiguous:
+    if package_root is not None and _is_bundled_catalog_package(package_root):
+        # Registration refuses these outright (they are OptPilot's own tracked
+        # files). Advertising the first step as ready sent a person -- and a
+        # model -- all the way to a refusal at the end; say it here instead.
+        eligible = False
+        code = "ships_with_optpilot"
+        reason = (
+            "This package ships with OptPilot and cannot be registered into. "
+            "Copy its folder under a new name, give the copy a different "
+            "identity, and register that instead."
+        )
+    elif package_id_ambiguous:
         eligible = False
         code = "configured_package_id_ambiguous"
         reason = (
@@ -7490,6 +7533,22 @@ def _open_configured_catalog_source_workspace(
     """Open or reuse one no-copy Workspace for an authorized configured root."""
 
     root, package_id = _reauthorized_configured_catalog_source(state, source_id)
+    if _is_bundled_catalog_package(root):
+        # The only purpose of this workspace is to register the package, and
+        # registration refuses OptPilot's own tracked folders. Opening it
+        # would hand out an EDITABLE workspace over OptPilot's own files for
+        # a job that cannot finish.
+        raise _with_remedy(
+            RealmConflict(
+                f"{package_id} ships with OptPilot and cannot be registered "
+                "into, so it is not opened as a Workspace."
+            ),
+            _remedy(
+                "Copy its folder under a new name, give the copy a different "
+                "identity value, and open that copy instead.",
+                details={"package": package_id, "reason": "ships_with_optpilot"},
+            ),
+        )
     workspace_id = _configured_source_workspace_id(state, source_id)
     existing = _workspace_by_id(state, workspace_id)
     if existing is not None:
@@ -10682,7 +10741,90 @@ def _resolve_catalog_identifier(
         raw_path = matches[0].get("_source_path")
         if raw_path:
             return Path(str(raw_path)).resolve()
-    raise FileNotFoundError(f"{expected_config} config not found: {value}")
+    raise _catalog_identifier_not_found(catalog, expected_config, identifier)
+
+
+def _catalog_identifier_not_found(
+    catalog: JsonDict, expected_config: str, identifier: str
+) -> BaseException:
+    """The error for an identifier that names no entry of this kind.
+
+    A package id lands here constantly -- a person says "republish
+    devs_gallery" and the model reaches for catalog detail, whose lookup is
+    per ENTRY. The old text ("resource config not found: devs_gallery") named
+    the failure and taught nothing, and a live turn burned itself repeating
+    the same call. The index is already in hand, so say which thing the name
+    actually is.
+    """
+
+    packages = {
+        str(source.get("package_id") or "")
+        for source in (catalog.get("sources") or [])
+        if isinstance(source, Mapping)
+    }
+    for key in ("environments", "methods", "resources", "studies"):
+        for entry in catalog.get(key) or []:
+            if isinstance(entry, Mapping) and entry.get("package_id"):
+                packages.add(str(entry["package_id"]))
+    packages.discard("")
+    if identifier in packages:
+
+        def package_entry_ids(keys: Iterable[str]) -> List[str]:
+            return [
+                str(entry.get("qualified_id") or entry.get("id") or "")
+                for key in keys
+                for entry in (catalog.get(key) or [])
+                if isinstance(entry, Mapping)
+                and str(entry.get("package_id") or "") == identifier
+            ]
+
+        # The worked example has to be valid for THIS lookup, which only ever
+        # searches its own kind. Offering an environment to a resource lookup
+        # buys a second refusal, and that one has no remedy to escape by.
+        kind_key = _CATALOG_KIND_KEYS.get(expected_config, "")
+        same_kind = package_entry_ids([kind_key]) if kind_key else []
+        other_kinds = [
+            uid
+            for uid in package_entry_ids(
+                ("environments", "methods", "resources", "studies")
+            )
+            if uid not in set(same_kind)
+        ]
+        entry_ids = [*same_kind, *other_kinds]
+        if same_kind:
+            takes = (
+                "This lookup takes a single entry's identifier, such as "
+                f"{same_kind[0]!r}."
+            )
+        else:
+            takes = (
+                f"It holds no {expected_config} entry at all, so no "
+                "identifier of that kind exists to inspect."
+            )
+        return _with_remedy(
+            FileNotFoundError(
+                f"{identifier!r} is a catalog package, not one "
+                f"{expected_config} entry. {takes}"
+            ),
+            _remedy(
+                (
+                    f"List what {identifier} contains and pick one entry. A "
+                    "whole package is not inspected or registered through "
+                    "this lookup."
+                ),
+                tool="optpilot_catalog_list",
+                arguments={"query": identifier},
+                details={
+                    "package_id": identifier,
+                    "entries": entry_ids[:12],
+                    "reason": "package_id_is_not_an_entry_uid",
+                },
+            ),
+        )
+    return FileNotFoundError(
+        f"No {expected_config} in the catalog is named {identifier!r}. "
+        "Search the catalog and use an identifier from its results."
+    )
 
 
 #: The catalog keys each kind of entry lives under, for short-name lookups.
@@ -20720,7 +20862,12 @@ def _execute_agent_tool(
             summary = f"Package plan validated; readiness is {plan.get('readiness', 'unknown')}."
             if warnings:
                 summary += f" Warning: {warnings[0]}"
-            if plan.get("classification") == "environment-plus-method" and not plan.get(
+            if _is_configured_whole_package_plan(plan):
+                # A configured whole-package plan is checked statically and
+                # apply exempts it from smoke; steering it to the smoke tool
+                # sent callers into a step that always refuses.
+                summary += " Next run optpilot_package_plan_apply."
+            elif plan.get("classification") == "environment-plus-method" and not plan.get(
                 "studies"
             ):
                 summary += " Next draft a minimal smoke study for the validated environment/method pair, save it under optpilot_configs/studies/, then prepare and validate the package plan again."

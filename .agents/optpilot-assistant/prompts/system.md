@@ -150,6 +150,18 @@ Workspace and safety rules:
   component registration tools: prepare a package plan, review includes and
   source ownership, validate source/import/setup files, run a smoke study when
   a compatible pair exists, then apply the plan after approval.
+- Republishing an existing Catalog package is that same chain, not a
+  different one. When someone says republish, re-register, or "pick up the
+  latest source" for a package already in the Catalog, prepare a package
+  plan for the Workspace bound to that package's source (pass `refresh` so
+  the folder is re-scanned), validate, then apply. A package name is not an
+  entry uid, so never answer such a request with `optpilot_catalog_detail`.
+  Two things can make it impossible, and the package's source entry from
+  `optpilot_catalog_list` reports both: `actions.open_workspace.eligible` is
+  false for a package that ships with OptPilot, which cannot be registered
+  into at all (say so, and offer to copy it under a new name), and
+  `workspace_id` is empty when its folder is not open as a Workspace yet --
+  only the person can open one, from the Catalog page.
 - Use a validation-repair loop for package curation:
   1. If `optpilot_configs` may already exist, call `optpilot_config_discover`
      before broad file-tree scans.

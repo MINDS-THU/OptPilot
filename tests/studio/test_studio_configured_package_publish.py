@@ -11,14 +11,16 @@ from unittest import mock
 
 import yaml
 
-from optpilot.realm.errors import RealmNotFound
+from optpilot.realm.errors import RealmConflict, RealmNotFound
 from optpilot_studio.ui.server import (
     UiState,
     _catalog_payload,
     _configured_catalog_source_id,
     _configured_package_static_validator,
     _handler_factory,
+    _open_configured_catalog_source_workspace,
     _reauthorized_configured_catalog_source,
+    _resolve_catalog_identifier,
 )
 
 
@@ -28,6 +30,20 @@ class StudioConfiguredSourceValidationTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.package = self.root / "catalog" / "mutable-package"
+        environment = self.package / "environments"
+        environment.mkdir(parents=True)
+        (environment / "sim.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "apiVersion": "optpilot.io/v1",
+                    "config": "environment",
+                    "id": "sim",
+                    "name": "Mutable sim",
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
         resource = self.package / "resources" / "viewer"
         resource.mkdir(parents=True)
         (resource / "optpilot.resource.yaml").write_text(
@@ -126,6 +142,72 @@ class StudioConfiguredSourceValidationTest(unittest.TestCase):
         self.assertEqual(
             payload["error"], "Unknown configured catalog source action"
         )
+
+    def test_a_package_name_is_refused_as_an_entry_with_its_entries_named(
+        self,
+    ) -> None:
+        # A person says "republish mutable-package" and a model reaches for
+        # catalog detail. The old error ("resource config not found:
+        # mutable-package") named the failure and taught nothing, and a live
+        # turn burned itself repeating the same call.
+        with self.assertRaises(FileNotFoundError) as caught:
+            _resolve_catalog_identifier(self.state, "resource", "mutable-package")
+        message = str(caught.exception)
+        self.assertIn("catalog package", message)
+        self.assertIn("mutable-package", message)
+        remedy = getattr(caught.exception, "optpilot_remedy", None) or getattr(
+            caught.exception, "remedy", None
+        )
+        self.assertIsNotNone(remedy, "the error must carry a remedy")
+        self.assertEqual(remedy.get("tool"), "optpilot_catalog_list")
+        self.assertEqual(
+            remedy.get("details", {}).get("reason"),
+            "package_id_is_not_an_entry_uid",
+        )
+
+    def test_the_worked_example_is_valid_for_the_kind_that_was_asked(self) -> None:
+        # The example has to fit the lookup that produced it. Offering an
+        # environment uid to a resource lookup buys a second refusal -- and
+        # that one carries no remedy to escape by.
+        with self.assertRaises(FileNotFoundError) as caught:
+            _resolve_catalog_identifier(self.state, "resource", "mutable-package")
+        message = str(caught.exception)
+        example = message.split("such as ")[1].strip(" '\".")
+        self.assertIn("/resource/", example, message)
+        # Following the message verbatim resolves, instead of dead-ending.
+        self.assertTrue(
+            _resolve_catalog_identifier(self.state, "resource", example).exists()
+        )
+
+    def test_a_kind_the_package_lacks_is_said_plainly(self) -> None:
+        with self.assertRaises(FileNotFoundError) as caught:
+            _resolve_catalog_identifier(self.state, "study", "mutable-package")
+        message = str(caught.exception)
+        self.assertIn("no study entry", message)
+        self.assertNotIn("such as", message)
+
+    def test_a_source_entry_reports_whether_its_workspace_is_open(self) -> None:
+        sources = _catalog_payload(self.state)["sources"]
+        entry = next(
+            item for item in sources if item["package_id"] == "mutable-package"
+        )
+        self.assertEqual(entry["workspace_id"], "")
+        opened = _open_configured_catalog_source_workspace(
+            self.state, entry["source_id"]
+        )
+        refreshed = next(
+            item
+            for item in _catalog_payload(self.state)["sources"]
+            if item["package_id"] == "mutable-package"
+        )
+        self.assertEqual(refreshed["workspace_id"], opened["id"])
+
+    def test_an_unknown_name_says_so_without_claiming_a_package(self) -> None:
+        with self.assertRaises(FileNotFoundError) as caught:
+            _resolve_catalog_identifier(self.state, "resource", "no-such-thing")
+        message = str(caught.exception)
+        self.assertIn("no-such-thing", message)
+        self.assertNotIn("catalog package", message)
 
     def test_static_validator_rejects_zero_recognized_entries(self) -> None:
         projected = self.root / "projected-empty-package"
@@ -231,6 +313,66 @@ class StudioConfiguredSourceValidationTest(unittest.TestCase):
         serialized = json.dumps(result.to_dict(), sort_keys=True)
         self.assertEqual(result.facts[0].code, "static_validation_failed")
         self.assertNotIn("/secret/path", serialized)
+
+
+
+
+class BundledPackageSourceTest(unittest.TestCase):
+    """OptPilot's own packages are read-only registration targets.
+
+    Registration refuses them outright ("ships with OptPilot"). Advertising
+    the first step as ready sent a person -- and a model -- all the way to a
+    refusal at the end, after opening an EDITABLE workspace over OptPilot's
+    own tracked files for a job that could never finish.
+    """
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.package = self.root / "catalog" / "bundled-package"
+        resource = self.package / "resources" / "viewer"
+        resource.mkdir(parents=True)
+        (resource / "optpilot.resource.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "apiVersion": "optpilot.io/v1",
+                    "config": "resource",
+                    "id": "viewer",
+                    "name": "Bundled viewer",
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        self.state = UiState(
+            cwd=self.root / "studio",
+            catalog_roots=[self.package],
+            run_roots=[],
+        )
+        self.addCleanup(self.state.close_catalog_projections)
+        patcher = mock.patch(
+            "optpilot_studio.ui.server._bundled_catalog_root",
+            return_value=self.root / "catalog",
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_source_card_says_it_cannot_be_registered_into(self) -> None:
+        sources = _catalog_payload(self.state)["sources"]
+        entry = next(
+            item for item in sources if item["package_id"] == "bundled-package"
+        )
+        action = entry["actions"]["open_workspace"]
+        self.assertFalse(action["eligible"])
+        self.assertEqual(action["code"], "ships_with_optpilot")
+        self.assertIn("ships with OptPilot", action["reason"])
+
+    def test_opening_it_as_a_workspace_is_refused(self) -> None:
+        source_id = _configured_catalog_source_id(self.package.resolve())
+        with self.assertRaises(RealmConflict) as caught:
+            _open_configured_catalog_source_workspace(self.state, source_id)
+        self.assertIn("ships with OptPilot", str(caught.exception))
 
 
 if __name__ == "__main__":

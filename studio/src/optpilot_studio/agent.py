@@ -696,7 +696,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_catalog_detail",
-        "description": "Inspect one reusable catalog entry or saved study plan by kind and its exact uid token.",
+        "description": "Inspect one reusable catalog entry or saved study plan by kind and its exact uid token. This takes a single ENTRY -- a package name (the part before the first slash) is not an entry and is refused; list the package's entries with optpilot_catalog_list instead.",
         "parameters": _tool_schema({"config_kind": CONFIG_KIND_SCHEMA, "uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."}}, ["config_kind", "uid"]),
         "annotations": {"readOnlyHint": True},
     },
@@ -776,10 +776,11 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_package_plan_prepare",
-        "description": "Prepare a package-level curation plan for an attached external workspace, including environments, methods, resources, and studies. After preparing, call optpilot_package_plan_validate before broad source reading.",
+        "description": "Prepare a package-level curation plan for an attached external workspace, including environments, methods, resources, and studies. This chain (prepare, validate, apply) is also how an already-published package gets a new revision, so it is the answer to \"republish\" or \"pick up the latest source\" -- prepare against the Workspace bound to that package's source. Packages that ship with OptPilot cannot be registered into at all; the catalog's source entry says so. After preparing, call optpilot_package_plan_validate before broad source reading.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
-            "package_id": {"type": "string"},
+            "package_id": {"type": "string", "description": "The catalog package this plan publishes, as shown by the package_id of a source in an optpilot_catalog_list result. Omit it for a workspace already bound to one configured source: the identity is locked to that source."},
+            "refresh": {"type": "boolean", "description": "Re-scan the workspace folder instead of returning the plan stored for it. Required when republishing after the source changed, or the stored plan is returned unchanged."},
             "config_paths": {"type": "array", "items": {"type": "string"}},
             "resource_id": {"type": "string"},
             "image_placement": {
