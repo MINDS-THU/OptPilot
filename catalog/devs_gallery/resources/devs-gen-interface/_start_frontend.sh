@@ -113,7 +113,7 @@ fi
 # preview origin. Route backend calls through that same origin so the browser
 # can reach the workspace backend without a separate exposed host port.
 export VITE_AGENT_API_URL="${VITE_AGENT_API_URL:-/__optpilot_port/8000}"
-export VITE_DEVS_DISPLAY_MODEL_ID="${VITE_DEVS_DISPLAY_MODEL_ID:-${DEVS_DISPLAY_MODEL_ID:-deepseek/deepseek-v4-pro}}"
+export VITE_DEVS_DISPLAY_MODEL_ID="${VITE_DEVS_DISPLAY_MODEL_ID:-${DEVS_DISPLAY_MODEL_ID:-openrouter/deepseek/deepseek-v4-pro}}"
 FRONTEND_PORT="${DEVS_INTERFACE_FRONTEND_PORT:-3000}"
 
 if [ -n "${OPTPILOT_INTERFACE_FRONTEND_RUNTIME_ROOT:-}" ]; then

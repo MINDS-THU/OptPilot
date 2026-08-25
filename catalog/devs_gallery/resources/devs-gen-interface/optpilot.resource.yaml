@@ -48,10 +48,18 @@ actions:
         # set in Studio Settings or exported still wins.
         - name: DEVS_INTERFACE_MODEL_ID
           default: openrouter/openai/gpt-5.4
-          description: Model used for generating simulator projects.
+          description: >-
+            Model used for generating simulator projects, as a litellm model
+            ID. OpenRouter models need the "openrouter/" prefix, e.g.
+            "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
+            the OpenRouter key is the granted credential).
         - name: DEVS_INTERFACE_STRONG_MODEL_ID
           default: openrouter/openai/gpt-5.4
-          description: Model used for the harder generation passes.
+          description: >-
+            Model used for the harder generation passes, as a litellm model
+            ID. OpenRouter models need the "openrouter/" prefix, e.g.
+            "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
+            the OpenRouter key is the granted credential).
       secretsFromHost: [OPENROUTER_API_KEY]
     runtime:
       sandbox: process
@@ -117,13 +125,25 @@ interface:
       # Model choices, not secrets -- see the note on the action above.
       - name: DEVS_INTERFACE_MODEL_ID
         default: openrouter/openai/gpt-5.4
-        description: Model used for generating simulator projects.
+        description: >-
+          Model used for generating simulator projects, as a litellm model
+          ID. OpenRouter models need the "openrouter/" prefix, e.g.
+          "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
+          the OpenRouter key is the granted credential).
       - name: DEVS_INTERFACE_STRONG_MODEL_ID
         default: openrouter/openai/gpt-5.4
-        description: Model used for the harder generation passes.
+        description: >-
+          Model used for the harder generation passes, as a litellm model
+          ID. OpenRouter models need the "openrouter/" prefix, e.g.
+          "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
+          the OpenRouter key is the granted credential).
       - name: DEVS_DISPLAY_MODEL_ID
         default: openrouter/openai/gpt-5.4
-        description: Model used for explaining and visualising a project.
+        description: >-
+          Model used for explaining and visualising a project, as a litellm
+          model ID. OpenRouter models need the "openrouter/" prefix, e.g.
+          "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
+          the OpenRouter key is the granted credential).
     secretsFromHost: [OPENROUTER_API_KEY]
   resources:
     cpu: 2
