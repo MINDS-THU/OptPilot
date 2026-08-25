@@ -73,10 +73,19 @@ def _session_summary_with_pending_approvals(count: int) -> dict:
         return next(item for item in summaries if item["id"] == session["id"])
 
 
-def _open_work_items(session_summaries: list) -> list:
+def _open_work_items(
+    session_summaries: list, background_actions: dict | None = None
+) -> list:
     """Run the shipped buildOpenWorkItems() over the given session summaries."""
 
-    projection = _function_source(_APP.read_text(encoding="utf-8"), "buildOpenWorkItems")
+    app_source = _APP.read_text(encoding="utf-8")
+    projection = _function_source(app_source, "buildOpenWorkItems")
+    # The real helper, not a stub: the card's subtitle is built from it.
+    projection = (
+        _function_source(app_source, "backgroundActionElapsedLabel")
+        + "\n"
+        + projection
+    )
     state = {
         "interfaceLaunch": None,
         "studyLaunch": None,
@@ -84,6 +93,8 @@ def _open_work_items(session_summaries: list) -> list:
         "openWorkErrors": {},
         "agentSessions": session_summaries,
     }
+    if background_actions is not None:
+        state["agentBackgroundActionsBySession"] = background_actions
     # Stubs stand in for the collaborators the approval branch does not need;
     # the two assistant helpers mirror their real one-line implementations.
     harness = f"""
@@ -176,6 +187,87 @@ class OpenWorkApprovalCardArithmeticTests(unittest.TestCase):
 
         self.assertEqual(summary["pending_approval_count"], 0)
         self.assertEqual([item for item in items if item["kind"] == "approval"], [])
+
+
+class OpenWorkBackgroundActionTests(unittest.TestCase):
+    """A job the conversation started is visible on the shelf while it runs.
+
+    The shelf reads state.agentBackgroundActionsBySession, NOT
+    session.background_actions: mergeAgentSessionPayload normalizes every
+    session through a field whitelist, so the wire's background_actions
+    never survives onto state.agentSessions. Reading the session field left
+    the shelf permanently empty while the same job showed as running inside
+    its conversation -- reported live.
+    """
+
+    @staticmethod
+    def _session(session_id: str = "as_demo") -> dict:
+        return {
+            "id": session_id,
+            "title": "Generate a simulator",
+            "status": "idle",
+            "effective_status": "idle",
+            "pending_approval_count": 0,
+            "active_approval_ids": [],
+            "queued_approval_count": 0,
+        }
+
+    @staticmethod
+    def _action(status: str = "running") -> dict:
+        return {
+            "request_id": "req-1",
+            "action_id": "generate",
+            "resource_id": "devs-gen-interface",
+            "workspace_id": "ws_1",
+            "status": status,
+            "started_at": 0,
+        }
+
+    def test_a_running_action_appears_without_the_session_field(self) -> None:
+        # The session carries no background_actions -- exactly what the
+        # whitelist leaves behind -- and the card must still appear.
+        session = self._session()
+        self.assertNotIn("background_actions", session)
+        items = _open_work_items(
+            [session], {"as_demo": [self._action("running")]}
+        )
+        cards = [item for item in items if item["kind"] == "background-action"]
+        self.assertEqual(len(cards), 1, items)
+        self.assertEqual(cards[0]["section"], "Running")
+        self.assertEqual(cards[0]["status"], "running")
+        self.assertIn("generate", cards[0]["title"])
+        self.assertIn("devs-gen-interface", cards[0]["title"])
+
+    def test_a_settled_action_leaves_the_shelf(self) -> None:
+        for status in ("succeeded", "failed"):
+            with self.subTest(status=status):
+                items = _open_work_items(
+                    [self._session()], {"as_demo": [self._action(status)]}
+                )
+                self.assertEqual(
+                    [item for item in items if item["kind"] == "background-action"],
+                    [],
+                )
+
+    def test_the_shelf_survives_a_state_without_the_slice(self) -> None:
+        # Older state shapes (and the other harnesses here) carry no slice at
+        # all; reading it must not throw and blank the whole shelf.
+        items = _open_work_items([self._session()])
+        self.assertEqual(
+            [item for item in items if item["kind"] == "background-action"], []
+        )
+
+    def test_the_shelf_never_reads_the_stripped_session_field(self) -> None:
+        # The durable pin: session.background_actions is normalized away, so
+        # any future edit reaching for it silently empties the shelf again.
+        projection = _function_source(
+            _APP.read_text(encoding="utf-8"), "buildOpenWorkItems"
+        )
+        code = "\n".join(
+            line for line in projection.splitlines()
+            if not line.strip().startswith("//")
+        )
+        self.assertNotIn("session.background_actions", code)
 
 
 if __name__ == "__main__":

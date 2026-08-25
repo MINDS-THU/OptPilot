@@ -2399,7 +2399,12 @@ function buildOpenWorkItems() {
   // ends; without a shelf item the only way to know one is alive is to
   // scroll its transcript.
   (state.agentSessions || []).forEach((session) => {
-    const actions = Array.isArray(session.background_actions) ? session.background_actions : [];
+    // Read the per-session slice, NOT session.background_actions:
+    // mergeAgentSessionPayload normalizes every session through a field
+    // whitelist, so the wire's background_actions never survives onto
+    // state.agentSessions and this shelf stayed empty while the same job
+    // showed as running in its conversation.
+    const actions = (state.agentBackgroundActionsBySession || {})[session.id] || [];
     actions.forEach((action) => {
       if (!action || action.status !== "running") return;
       items.push({
