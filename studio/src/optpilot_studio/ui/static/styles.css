@@ -6520,6 +6520,59 @@ body.assistant-open .agent-panel {
   font-size: 10.5px;
 }
 
+.background-action-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.background-action-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid #d7e2ea;
+  border-left: 3px solid #2f80ed;
+  border-radius: 8px;
+  background: #f6faff;
+}
+
+.background-action-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.background-action-body strong {
+  font-size: 13px;
+}
+
+.background-action-body small {
+  color: #5b6b78;
+  font-size: 11px;
+}
+
+.background-action-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2f80ed;
+  flex: none;
+  animation: background-action-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes background-action-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .background-action-dot { animation: none; }
+}
+
 .approval-stack {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

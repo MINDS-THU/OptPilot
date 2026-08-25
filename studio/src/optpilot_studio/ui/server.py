@@ -19242,6 +19242,42 @@ def _agent_effective_status(state: UiState, session: JsonDict) -> str:
     return str(session.get("status") or "idle")
 
 
+def _session_background_action_runs(state: UiState, session_id: str) -> List[JsonDict]:
+    """Slim live projections of this conversation's background action runs.
+
+    Rides every session payload (full and summary) so the transcript can
+    show a live running/succeeded/failed indicator and the Open Work shelf
+    can list running jobs, without a per-request polling fan-out. Slim on
+    purpose: the stdout/stderr tails stay on GET /api/resource-actions/<id>.
+    Records live in memory only -- after a Studio restart the list is empty
+    and the static transcript notes remain the history.
+    """
+
+    if not session_id:
+        return []
+    with state._lock:
+        records = [
+            dict(record)
+            for record in state._resource_action_runs.values()
+            if str(record.get("agent_session_id") or "") == session_id
+        ]
+    records.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
+    return [
+        {
+            "request_id": record.get("request_id"),
+            "resource_uid": record.get("resource_uid"),
+            "resource_id": record.get("resource_id"),
+            "action_id": record.get("action_id"),
+            "workspace_id": record.get("workspace_id") or "",
+            "status": record.get("status"),
+            "started_at": record.get("started_at"),
+            "finished_at": record.get("finished_at"),
+            "error": str(record.get("error") or "")[:300],
+        }
+        for record in records[:8]
+    ]
+
+
 def _decorate_agent_session_status(state: UiState, payload: JsonDict) -> JsonDict:
     session_id = str(payload.get("id") or "")
     active_ids = _agent_pending_approval_ids(state, session_id) if session_id else []
@@ -19258,6 +19294,7 @@ def _decorate_agent_session_status(state: UiState, payload: JsonDict) -> JsonDic
     payload["active_approval_ids"] = active_ids[:1]
     payload["queued_approval_count"] = max(len(active_ids) - 1, 0)
     payload["forwarding_failed_approval_ids"] = forwarding_failed_ids
+    payload["background_actions"] = _session_background_action_runs(state, session_id)
     return payload
 
 
@@ -20448,7 +20485,7 @@ def _execute_agent_tool(
         )
         if gate is not None:
             return gate
-        payload, _status = _start_resource_action_run(
+        payload, start_status = _start_resource_action_run(
             state,
             {
                 "request_id": request_id,
@@ -20458,6 +20495,10 @@ def _execute_agent_tool(
                 "inputs": dict(inputs or {}),
             },
         )
+        # HTTPStatus.OK means the request id matched an existing run: nothing
+        # new started, so a second "running in the background" note would
+        # fabricate a launch that never happened.
+        already_running = start_status == HTTPStatus.OK
         # A long action outlives any model turn, so the turn will end while
         # the work runs. Remember which conversation started it: when the
         # background thread finishes, the outcome is posted back into that
@@ -20473,30 +20514,42 @@ def _execute_agent_tool(
                 record["agent_conversation_id"] = str(
                     session.get("openhands_conversation_id") or ""
                 )
-        _append_agent_message(
-            state,
-            session_id,
-            {
-                "role": "assistant",
-                "title": "Running in the background",
-                "source": "studio_ui",
-                "content": (
-                    f"The {action_id} action is running in the background "
-                    f"(request {payload.get('request_id')}). Its result will "
-                    "be posted into this conversation when it finishes; "
-                    "nothing needs to be done meanwhile."
-                ),
-            },
-        )
+        if not already_running:
+            _append_agent_message(
+                state,
+                session_id,
+                {
+                    "role": "assistant",
+                    "title": "Running in the background",
+                    "source": "studio_ui",
+                    "content": (
+                        f"The {action_id} action is running in the background "
+                        f"(request {payload.get('request_id')}). Its result will "
+                        "be posted into this conversation when it finishes; "
+                        "nothing needs to be done meanwhile."
+                    ),
+                },
+            )
         return _tool_result(
             tool,
             True,
             (
-                f"Started {action_id} in the background (request_id "
-                f"{payload.get('request_id')}). Its result will be posted "
-                "into this conversation automatically when it finishes -- do "
-                "not poll for it in a loop. Tell the person it is running, "
-                "then end your turn."
+                (
+                    f"This exact request ({payload.get('request_id')}) is "
+                    f"already tracked; current status: "
+                    f"{payload.get('status')}. Nothing new was started. Its "
+                    "result will be posted into this conversation "
+                    "automatically -- do not poll for it in a loop. Tell the "
+                    "person, then end your turn."
+                )
+                if already_running
+                else (
+                    f"Started {action_id} in the background (request_id "
+                    f"{payload.get('request_id')}). Its result will be posted "
+                    "into this conversation automatically when it finishes -- do "
+                    "not poll for it in a loop. Tell the person it is running, "
+                    "then end your turn."
+                )
             ),
             data=payload,
         )

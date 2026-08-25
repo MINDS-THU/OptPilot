@@ -116,6 +116,7 @@ const state = {
   agentSessionCreateError: "",
   conversationWorkspaceError: "",
   agentApprovalsBySession: {},
+  agentBackgroundActionsBySession: {},
   assistantApprovalKeysBySession: {},
   agentEventsBySession: {},
   handledPreviewEventIds: new Set(),
@@ -355,6 +356,7 @@ function initializeApp() {
   setInterval(runScheduledPolls, 1000);
   setInterval(() => { if (!document.hidden) refreshInterfaceLaunchActivity(); }, 1000);
   setInterval(() => { if (!document.hidden) refreshActiveStudyLaunchElapsed(); }, 1000);
+  setInterval(() => { if (!document.hidden) refreshBackgroundActionElapsed(); }, 1000);
   document.addEventListener("visibilitychange", resumePollingOnReturn);
   for (const eventName of ["pointerdown", "keydown"]) {
     document.addEventListener(eventName, notePollingUserInteraction, { capture: true, passive: true });
@@ -1971,6 +1973,11 @@ function mergeAgentSessionPayload(session) {
   const hasApprovals = Array.isArray(session.approvals);
   if (hasApprovals) state.agentApprovalsBySession[session.id] = session.approvals;
   else if (!state.agentApprovalsBySession[session.id]) state.agentApprovalsBySession[session.id] = [];
+  if (Array.isArray(session.background_actions)) {
+    state.agentBackgroundActionsBySession[session.id] = session.background_actions;
+  } else if (!state.agentBackgroundActionsBySession[session.id]) {
+    state.agentBackgroundActionsBySession[session.id] = [];
+  }
   if (hasEvents) state.agentEventsBySession[session.id] = session.events;
   else if (!state.agentEventsBySession[session.id]) state.agentEventsBySession[session.id] = [];
   if (hasMessages) {
@@ -2087,7 +2094,10 @@ function sameStringList(left, right) {
 }
 
 async function refreshAgentWorkspaceState() {
-  await Promise.all([loadUiWorkspaces(), loadCatalogAndCompatibility()]);
+  await Promise.all([
+    loadUiWorkspaces(),
+    loadCatalogAndCompatibility({ strict: false }),
+  ]);
   rebuildDerivedState();
   if (state.view === "catalog") renderCatalog();
   renderWorkspace();
@@ -2385,6 +2395,26 @@ function buildOpenWorkItems() {
       active: false,
     });
   });
+  // Background actions a conversation started keep running after the turn
+  // ends; without a shelf item the only way to know one is alive is to
+  // scroll its transcript.
+  (state.agentSessions || []).forEach((session) => {
+    const actions = Array.isArray(session.background_actions) ? session.background_actions : [];
+    actions.forEach((action) => {
+      if (!action || action.status !== "running") return;
+      items.push({
+        key: `background-action:${action.request_id}`,
+        kind: "background-action",
+        session_id: String(session.id || ""),
+        typeLabel: "Background action",
+        section: "Running",
+        title: `${action.action_id || "action"} · ${action.resource_id || action.resource_uid || "resource"}`,
+        subtitle: `Running for ${backgroundActionElapsedLabel(action.started_at)} · Click to open the conversation`,
+        status: "running",
+        active: true,
+      });
+    });
+  });
   const projectedItems = items.map((item) => {
     const error = String(state.openWorkErrors[item.key] || "");
     if (!error) return item;
@@ -2506,7 +2536,7 @@ function renderOpenWork() {
 
 function openOpenWorkItem(item) {
   if (!item) return;
-  if (item.kind === "approval") {
+  if (item.kind === "approval" || item.kind === "background-action") {
     void selectAgentSession(item.session_id);
     return;
   }
@@ -4648,6 +4678,10 @@ function assistantTimelineSignature(session, isRegistration = false) {
       status: approval && approval.status || "",
       key: approvalDisplayKey(approval),
     })),
+    backgroundActions: currentAssistantBackgroundActions(session).map((item) => ({
+      id: item && item.request_id || "",
+      status: item && item.status || "",
+    })),
   });
 }
 
@@ -5169,8 +5203,51 @@ function scrollAssistantApprovalIntoView() {
   els.agentTimeline.scrollTop = els.agentTimeline.scrollHeight;
 }
 
+function currentAssistantBackgroundActions(session = currentAgentSession()) {
+  if (!session) return [];
+  const items = state.agentBackgroundActionsBySession[session.id] || [];
+  return items.filter((item) => item && item.status === "running");
+}
+
+function backgroundActionElapsedLabel(startedAt) {
+  const started = Number(startedAt || 0) * 1000;
+  if (!started) return "a moment";
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function assistantBackgroundActionsHtml(session) {
+  // Live pulse for jobs the conversation started and then stepped away
+  // from: the person can tell "still working" from "dead" without asking.
+  // Terminal states leave the strip -- the finished/failed note in the
+  // transcript takes over as the durable record.
+  const running = currentAssistantBackgroundActions(session);
+  if (!running.length) return "";
+  return `
+    <div class="background-action-strip">
+      ${running.map((item) => `
+        <div class="background-action-card" data-background-action-request="${escapeHtml(item.request_id || "")}">
+          <span class="background-action-dot" aria-hidden="true"></span>
+          <div class="background-action-body">
+            <strong>${escapeHtml(item.action_id || "action")} · ${escapeHtml(item.resource_id || item.resource_uid || "resource")}</strong>
+            <small>Running for <span data-background-action-elapsed data-started-at="${escapeHtml(String(item.started_at || ""))}">${escapeHtml(backgroundActionElapsedLabel(item.started_at))}</span>${item.workspace_id ? ` · workspace ${escapeHtml(item.workspace_id)}` : ""}</small>
+          </div>
+          <span class="status-pill status-running">running</span>
+        </div>
+      `).join("")}
+    </div>`;
+}
+
+function refreshBackgroundActionElapsed() {
+  document.querySelectorAll("[data-background-action-elapsed]").forEach((node) => {
+    const label = backgroundActionElapsedLabel(node.dataset.startedAt);
+    if (node.textContent !== label) node.textContent = label;
+  });
+}
+
 function assistantTimelineHtml(session) {
-  return `${assistantInterleavedTimelineHtml(session)}${assistantApprovalsHtml()}`;
+  return `${assistantInterleavedTimelineHtml(session)}${assistantBackgroundActionsHtml(session)}${assistantApprovalsHtml()}`;
 }
 
 function assistantApprovalsHtml() {
@@ -6309,11 +6386,28 @@ async function resolveAssistantApproval(sessionId, approvalId, action) {
     : `[data-reject-approval="${cssEscape(approvalId)}"]`;
   const card = document.querySelector(selector) && document.querySelector(selector).closest(".approval-card");
   if (card) card.classList.add("is-resolving");
+  let payload = null;
   try {
-    const payload = await postJson(
+    payload = await postJson(
       `/api/agent-sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}/${action}`,
       action === "reject" ? { reason: "Rejected in the assistant panel." } : {},
     );
+  } catch (error) {
+    // A network-level failure (no HTTP status, e.g. WebKit's "Load failed")
+    // can mean the connection died while the server finished the approval
+    // fine -- re-check before branding it failed and persisting the card.
+    if (error && error.status === undefined) {
+      await loadAgentSessions().catch(() => {});
+      renderAssistant();
+      const stillPending = (state.agentApprovalsBySession[sessionId] || [])
+        .some((item) => item && item.id === approvalId && item.status === "pending");
+      if (!stillPending) return;
+    }
+    pushAssistantMessage(["tool", "Approval failed", String(error.message || error)]);
+    renderAssistant();
+    return;
+  }
+  try {
     if (payload.approval) {
       const approvals = state.agentApprovalsBySession[sessionId] || [];
       state.agentApprovalsBySession[sessionId] = approvals.map((item) => item.id === approvalId ? payload.approval : item);
@@ -6347,8 +6441,10 @@ async function resolveAssistantApproval(sessionId, approvalId, action) {
     }
     await refreshAgentWorkspaceState();
   } catch (error) {
-    pushAssistantMessage(["tool", "Approval failed", String(error.message || error)]);
-    renderAssistant();
+    // The approval itself succeeded; these follow-up refreshes each report
+    // their own failures on their own surfaces. Branding them "Approval
+    // failed" persisted a bogus failure card into the transcript.
+    console.warn("Post-approval refresh failed", error);
   }
 }
 

@@ -228,6 +228,83 @@ class AssistantResourceActionTest(unittest.TestCase):
             )
         )
 
+    def test_session_payloads_carry_live_background_actions(self) -> None:
+        # The transcript's live indicator and the Open Work shelf both read
+        # this slim list off every session payload; heavy stdout/stderr
+        # tails stay on the per-request status endpoint.
+        from optpilot_studio.ui.server import (
+            _agent_session_by_id,
+            _session_background_action_runs,
+        )
+
+        session_id = self.session["id"]
+        with self.state._lock:
+            self.state._resource_action_runs["fake-run"] = {
+                "request_id": "fake-run",
+                "resource_uid": self.resource_uid,
+                "resource_id": "demo-generator",
+                "action_id": "generate",
+                "workspace_id": "",
+                "status": "running",
+                "started_at": time.time(),
+                "finished_at": None,
+                "summary": {"stdout_tail": "x" * 4000},
+                "error": None,
+                "agent_session_id": session_id,
+            }
+        try:
+            live = _session_background_action_runs(self.state, session_id)
+            self.assertEqual([item["request_id"] for item in live], ["fake-run"])
+            self.assertEqual(live[0]["status"], "running")
+            self.assertNotIn("summary", live[0])
+            self.assertNotIn("stdout_tail", live[0])
+            payload = _agent_session_by_id(self.state, session_id)
+            self.assertEqual(
+                [item["request_id"] for item in payload["background_actions"]],
+                ["fake-run"],
+            )
+            other = _session_background_action_runs(self.state, "someone-else")
+            self.assertEqual(other, [])
+        finally:
+            with self.state._lock:
+                self.state._resource_action_runs.pop("fake-run", None)
+
+    def test_a_replayed_approved_run_fabricates_no_second_launch_note(self) -> None:
+        # Approving a repeat of an already-running request must not append
+        # another "Running in the background" note: nothing new started.
+        from optpilot_studio.ui.server import _read_agent_messages
+
+        request_id = str(uuid.uuid4())
+        for _attempt in range(2):
+            started = _execute_agent_tool(
+                self.state,
+                self.session["id"],
+                "optpilot_resource_action_run",
+                {
+                    "resource_uid": self.resource_uid,
+                    "action_id": "generate",
+                    "inputs": {"name": "demo"},
+                    "request_id": request_id,
+                },
+            )
+            self.assertFalse(started["ok"])
+            approvals = [
+                item
+                for item in _read_agent_approvals(self.state, self.session["id"])
+                if item["status"] == "pending"
+            ]
+            approved = _approve_agent_action(
+                self.state, self.session["id"], approvals[0]["id"]
+            )
+            self.assertTrue(approved["result"]["ok"], approved)
+        self._await(request_id)
+        notes = [
+            message
+            for message in _read_agent_messages(self.state, self.session["id"])
+            if message.get("title") == "Running in the background"
+        ]
+        self.assertEqual(len(notes), 1, notes)
+
     def test_an_unknown_workspace_is_refused(self) -> None:
         from optpilot_studio.ui.server import _start_resource_action_run
 
