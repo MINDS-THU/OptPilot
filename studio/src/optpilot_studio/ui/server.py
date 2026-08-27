@@ -33763,7 +33763,13 @@ def _configure_workspace_catalog_role(
                                 "steps": [
                                     {
                                         "uses": "python-venv",
-                                        "cwd": "..",
+                                        # The bundle's own folder: its
+                                        # requirements lock is inside it, and
+                                        # ".." alone resolved to an empty
+                                        # Workspace root, so registration
+                                        # failed on a lock that was there all
+                                        # along.
+                                        "cwd": bundle_root_ref,
                                         "requirements": [
                                             simulation_handoff["python_runtime"][
                                                 "requirements_lock"

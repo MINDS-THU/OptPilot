@@ -159,5 +159,24 @@ class PolicyEnvironmentPathsTest(unittest.TestCase):
         )
 
 
+class SetupStepFollowsTheBundleTest(unittest.TestCase):
+    """The venv is built where the requirements lock actually is.
+
+    The generated environment's setup step ran with cwd "..", the Workspace
+    root, while the bundle's runtime_dependencies/requirements.lock sits
+    inside the bundle. Registration then failed validation on a lock file
+    that was present the whole time.
+    """
+
+    def test_the_generated_setup_step_uses_the_bundle_as_its_cwd(self) -> None:
+        import inspect
+
+        from optpilot_studio.ui import server
+
+        source = inspect.getsource(server._configure_workspace_catalog_role)
+        self.assertIn('"cwd": bundle_root_ref', source)
+        self.assertNotIn('"cwd": "..",', source)
+
+
 if __name__ == "__main__":
     unittest.main()
