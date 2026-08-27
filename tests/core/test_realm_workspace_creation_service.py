@@ -18,6 +18,7 @@ from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.refs import SnapshotRef, request_digest
 from optpilot.realm.workspace_assembly import (
+    workspace_source_prefix,
     WorkspaceAssemblyConflict,
     WorkspaceFocus,
     WorkspaceRequestSource,
@@ -311,13 +312,13 @@ class RealmWorkspaceCreationServiceTest(unittest.TestCase):
             expected_workspace_revision=1,
         )
         self.assertEqual(
-            (checkout.root_path / "environments/toy/environment.yaml").read_text(
+            (checkout.root_path / f"{workspace_source_prefix(environment)}/environments/toy/environment.yaml").read_text(
                 encoding="utf-8"
             ),
             "config: environment\n",
         )
         self.assertEqual(
-            (checkout.root_path / "methods/search/method.yaml").read_text(
+            (checkout.root_path / f"{workspace_source_prefix(method)}/methods/search/method.yaml").read_text(
                 encoding="utf-8"
             ),
             "config: method\n",
@@ -605,7 +606,10 @@ class RealmWorkspaceCreationServiceTest(unittest.TestCase):
         self.assertTrue(replay.recovered)
         self.assertEqual(replay.workspace_id, composer.workspace_id)
 
-    def test_file_directory_collision_leaves_no_workspace_or_attempt(self) -> None:
+    def test_two_packages_sharing_a_name_are_kept_apart(self) -> None:
+        # One package has a file where the other has a folder. Before each
+        # package got its own folder this was fatal to the pairing; now the
+        # two simply never meet.
         file_source, _ = self._publish_package(
             "file-collision",
             files={"resources/shared": "a file\n"},
@@ -616,45 +620,71 @@ class RealmWorkspaceCreationServiceTest(unittest.TestCase):
             files={"resources/shared/child.txt": "a child\n"},
             owned_paths=("resources/shared",),
         )
-        operation_id = "workspace-creation/file-directory-collision"
+
+        created = self.runtime.editable_workspaces.create_workspace(
+            operation_id="workspace-creation/file-directory-kept-apart",
+            title="Two packages",
+            seed=self._seed(file_source, directory_source),
+        )
+
+        self.assertEqual(created.outcome, "union")
+        checkout = self.runtime.editable_workspaces.open_workspace(
+            operation_id=self._op("open-kept-apart"),
+            workspace_id=created.workspace_id,
+            expected_workspace_revision=1,
+        )
+        self.assertTrue(
+            (checkout.root_path / f"{workspace_source_prefix(file_source)}/resources/shared").is_file()
+        )
+        self.assertTrue(
+            (
+                checkout.root_path
+                / f"{workspace_source_prefix(directory_source)}/resources/shared/child.txt"
+            ).is_file()
+        )
+
+    def test_a_refused_assembly_leaves_no_workspace_or_attempt(self) -> None:
+        # Which conflict refused it is the assembly module's business; what
+        # matters here is that nothing is left behind when it does. Two
+        # sources claiming one folder is the live case (two revisions of one
+        # package), and it is raised from the same place as any other.
+        left, _ = self._publish_package(
+            "cleanup-left",
+            files={"resources/left/left.txt": "left\n"},
+            owned_paths=("resources/left",),
+        )
+        right, _ = self._publish_package(
+            "cleanup-right",
+            files={"resources/right/right.txt": "right\n"},
+            owned_paths=("resources/right",),
+        )
+        operation_id = "workspace-creation/refused-assembly"
         before_counts = self._content_counts()
 
-        with self.assertRaisesRegex(
-            WorkspaceAssemblyConflict, "file-directory conflict"
+        def refuse(*args: Any, **kwargs: Any):
+            raise WorkspaceAssemblyConflict(
+                code="source-prefix",
+                path="shared",
+                other_path="shared",
+                left_root_ref=left.entity_ref_parsed
+                if hasattr(left, "entity_ref_parsed")
+                else SnapshotRef.parse(left.entity_ref),
+                right_root_ref=SnapshotRef.parse(right.entity_ref),
+            )
+
+        with mock.patch(
+            "optpilot.realm.editable_workspace_service.compile_workspace_assembly",
+            side_effect=refuse,
         ):
-            self.runtime.editable_workspaces.create_workspace(
-                operation_id=operation_id,
-                title="Conflicting roots",
-                seed=self._seed(file_source, directory_source),
-            )
+            with self.assertRaisesRegex(WorkspaceAssemblyConflict, "source folder"):
+                self.runtime.editable_workspaces.create_workspace(
+                    operation_id=operation_id,
+                    title="Refused assembly",
+                    seed=self._seed(left, right),
+                )
 
         self.assertEqual(self._content_counts(), before_counts)
         self._assert_failed_creation_is_inactive(operation_id, expected_attempts=0)
-
-    def test_portable_case_collision_leaves_no_workspace_or_attempt(self) -> None:
-        uppercase, _ = self._publish_package(
-            "uppercase-collision",
-            files={"resources/Tool/left.txt": "left\n"},
-            owned_paths=("resources/Tool",),
-        )
-        lowercase, _ = self._publish_package(
-            "lowercase-collision",
-            files={"resources/tool/right.txt": "right\n"},
-            owned_paths=("resources/tool",),
-        )
-        operation_id = "workspace-creation/portable-case-collision"
-        before_counts = self._content_counts()
-
-        with self.assertRaisesRegex(WorkspaceAssemblyConflict, "portable paths"):
-            self.runtime.editable_workspaces.create_workspace(
-                operation_id=operation_id,
-                title="Portable path collision",
-                seed=self._seed(uppercase, lowercase),
-            )
-
-        self.assertEqual(self._content_counts(), before_counts)
-        self._assert_failed_creation_is_inactive(operation_id, expected_attempts=0)
-
     def test_finalization_failure_aborts_attempt_owner_and_retry_succeeds(
         self,
     ) -> None:

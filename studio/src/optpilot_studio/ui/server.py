@@ -149,6 +149,7 @@ from optpilot.realm.run_views import RunViewRef
 from optpilot.realm.selections import SelectionRef
 from optpilot.realm.shortlist_service import ShortlistCardDraft, ShortlistDraft
 from optpilot.realm.workspace_assembly import (
+    workspace_source_prefix,
     WorkspaceFocus,
     WorkspaceRequestSource,
     WorkspaceSelectionSeed,
@@ -11500,6 +11501,28 @@ def _study_builder_workspace_seed(
     )
 
 
+def _study_builder_component_paths(
+    sources: StudyBuilderSources, assembly_outcome: str
+) -> tuple[str, str]:
+    """Where each component sits inside the assembled workspace.
+
+    One package is adopted whole, so its own layout is the workspace's. Two
+    packages are each mounted under a folder of their own -- otherwise their
+    root files would collide -- and every component path moves with them.
+    """
+
+    if assembly_outcome == "adopt":
+        return sources.environment_ref.focus_path, sources.method_ref.focus_path
+    environment_prefix = workspace_source_prefix(
+        sources.environment_source.selection
+    )
+    method_prefix = workspace_source_prefix(sources.method_source.selection)
+    return (
+        f"{environment_prefix}/{sources.environment_ref.focus_path}",
+        f"{method_prefix}/{sources.method_ref.focus_path}",
+    )
+
+
 def _create_study_builder_workspace(
     state: UiState,
     *,
@@ -11744,6 +11767,7 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
     if payload.get("seed") not in (None, ""):
         draft["reproducibility"] = {"seed": int(payload.get("seed"))}
     workspace: Optional[JsonDict] = None
+    stored_layout: Any = None
     component_origins = _study_builder_component_origins(sources)
     assembly_digest = ""
     assembly_outcome = ""
@@ -11814,6 +11838,9 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
                 )
             assembly_digest = str(origin.get("assembly_digest") or "")
             assembly_outcome = str(origin.get("assembly_outcome") or "")
+            # A workspace assembled before components were mounted under
+            # their own folders is flat, and says so by carrying no layout.
+            stored_layout = origin.get("assembly_layout")
             if not re.fullmatch(r"[0-9a-f]{64}", assembly_digest):
                 raise RealmIntegrityError(
                     "Study Builder workspace assembly digest is invalid."
@@ -11879,11 +11906,22 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
         study_path = (root / Path(*PurePosixPath(study_relative_path).parts)).resolve()
         if not _is_relative_to(study_path, root):
             raise RealmIntegrityError("Study Builder path escaped its workspace.")
+        if isinstance(stored_layout, Mapping):
+            environment_ws_path = _portable_relative_path(
+                stored_layout.get("environment"), "stored environment path"
+            )
+            method_ws_path = _portable_relative_path(
+                stored_layout.get("method"), "stored method path"
+            )
+        else:
+            environment_ws_path, method_ws_path = _study_builder_component_paths(
+                sources, assembly_outcome
+            )
         environment_path = (
-            root / Path(*PurePosixPath(environment_ref.focus_path).parts)
+            root / Path(*PurePosixPath(environment_ws_path).parts)
         ).resolve()
         method_path = (
-            root / Path(*PurePosixPath(method_ref.focus_path).parts)
+            root / Path(*PurePosixPath(method_ws_path).parts)
         ).resolve()
         if not environment_path.is_file() or not method_path.is_file():
             raise RealmIntegrityError(
@@ -11891,10 +11929,10 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
             )
         study_parent = PurePosixPath(study_relative_path).parent.as_posix()
         draft["environmentConfig"] = posixpath.relpath(
-            environment_ref.focus_path, start=study_parent
+            environment_ws_path, start=study_parent
         )
         draft["methodConfig"] = posixpath.relpath(
-            method_ref.focus_path, start=study_parent
+            method_ws_path, start=study_parent
         )
         draft_yaml = yaml.safe_dump(draft, sort_keys=False)
         study_path.parent.mkdir(parents=True, exist_ok=True)
@@ -11908,6 +11946,13 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
             "assembly_digest": assembly_digest,
             "assembly_outcome": assembly_outcome,
             "components": component_origins,
+            # Beside components, never inside it: that list is compared for
+            # strict equality when a draft is updated, so anything added
+            # there would read as "the components changed".
+            "assembly_layout": {
+                "environment": environment_ws_path,
+                "method": method_ws_path,
+            },
             "draft_id": draft_id,
             "study_relative_path": study_relative_path,
         }

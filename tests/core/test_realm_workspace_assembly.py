@@ -174,7 +174,10 @@ class WorkspaceAssemblyTests(unittest.TestCase):
         self.assertEqual(result.lineage.distinct_root_refs, (manifest.snapshot_ref,))
         self.assertEqual(len(result.lineage.sources), 2)
 
-    def test_union_merges_only_directory_ancestors_and_preserves_paths(self) -> None:
+    def test_each_source_is_mounted_under_its_own_folder(self) -> None:
+        # Packages carry files of their own, so pouring two into one pile
+        # collided before reaching anything that mattered. Each keeps its
+        # own folder and stays whole.
         environment = _tree(
             TreeEntry.directory("src"),
             TreeEntry.directory("src/environment"),
@@ -195,18 +198,17 @@ class WorkspaceAssemblyTests(unittest.TestCase):
         self.assertEqual(
             tuple(entry.path for entry in result.tree_manifest.entries),
             (
-                "src",
-                "src/environment",
-                "src/environment/config.yaml",
-                "src/method",
-                "src/method/config.yaml",
+                "environment",
+                "environment/src",
+                "environment/src/environment",
+                "environment/src/environment/config.yaml",
+                "method",
+                "method/src",
+                "method/src/method",
+                "method/src/method/config.yaml",
             ),
         )
-        self.assertNotIn(
-            result.root_ref,
-            result.lineage.distinct_root_refs,
-        )
-
+        self.assertNotIn(result.root_ref, result.lineage.distinct_root_refs)
     def test_compilation_is_independent_of_source_input_order(self) -> None:
         first = _source(
             _tree(TreeEntry.directory("a"), _file("a/one.txt", b"one")),
@@ -295,8 +297,11 @@ class WorkspaceAssemblyTests(unittest.TestCase):
                 WorkspaceSeed.build((resolved_without_focus,)),
             )
 
-    def test_same_path_files_conflict_even_when_their_bytes_match(self) -> None:
-        shared_file = _file("shared.txt", b"identical")
+    def test_two_packages_may_each_carry_the_same_file_name(self) -> None:
+        # Every package has a README and a package manifest. This is the
+        # collision that made pairing a component from one package with a
+        # component from another impossible.
+        shared_file = _file("README.md", b"identical")
         left = _tree(
             shared_file,
             TreeEntry.directory("left"),
@@ -308,53 +313,57 @@ class WorkspaceAssemblyTests(unittest.TestCase):
             _file("right/only.txt", b"right"),
         )
 
-        with self.assertRaises(WorkspaceAssemblyConflict) as raised:
-            _compile(
-                _source(left, package_id="left"),
-                _source(right, package_id="right"),
-            )
+        result = _compile(
+            _source(left, package_id="left"),
+            _source(right, package_id="right"),
+        )
 
-        self.assertEqual(raised.exception.code, "file-file")
-        self.assertEqual(raised.exception.path, "shared.txt")
-
-    def test_file_directory_overlap_is_rejected(self) -> None:
+        paths = tuple(entry.path for entry in result.tree_manifest.entries)
+        self.assertIn("left/README.md", paths)
+        self.assertIn("right/README.md", paths)
+    def test_a_file_and_a_folder_of_one_name_no_longer_meet(self) -> None:
+        # They sit in different mounted folders, so the shape that used to
+        # collide is simply kept apart.
         left = _tree(_file("shared", b"file"))
         right = _tree(
             TreeEntry.directory("shared"),
             _file("shared/child.txt", b"child"),
         )
 
+        result = _compile(
+            _source(left, package_id="left"),
+            _source(right, package_id="right"),
+        )
+
+        paths = tuple(entry.path for entry in result.tree_manifest.entries)
+        self.assertIn("left/shared", paths)
+        self.assertIn("right/shared/child.txt", paths)
+    def test_two_roots_claiming_one_folder_are_rejected(self) -> None:
+        # Two revisions of one package name the same folder. Refusing is what
+        # stops them being silently combined into a single workspace.
+        first = _tree(_file("model.py", b"first"))
+        second = _tree(_file("model.py", b"second"))
+
         with self.assertRaises(WorkspaceAssemblyConflict) as raised:
             _compile(
-                _source(left, package_id="left"),
-                _source(right, package_id="right"),
+                _source(first, package_id="shared"),
+                _source(second, package_id="shared"),
             )
 
-        self.assertEqual(raised.exception.code, "file-directory")
+        self.assertEqual(raised.exception.code, "source-prefix")
         self.assertEqual(raised.exception.path, "shared")
 
-    def test_casefolded_cross_root_collision_is_rejected(self) -> None:
-        upper = _tree(
-            TreeEntry.directory("Source"),
-            _file("Source/model.py", b"upper"),
-        )
-        lower = _tree(
-            TreeEntry.directory("source"),
-            _file("source/config.yaml", b"lower"),
-        )
+    def test_folder_names_that_differ_only_by_case_are_rejected(self) -> None:
+        upper = _tree(_file("model.py", b"upper"))
+        lower = _tree(_file("config.yaml", b"lower"))
 
         with self.assertRaises(WorkspaceAssemblyConflict) as raised:
             _compile(
-                _source(upper, package_id="upper"),
-                _source(lower, package_id="lower"),
+                _source(upper, package_id="Shared"),
+                _source(lower, package_id="shared"),
             )
 
-        self.assertEqual(raised.exception.code, "portable-path")
-        self.assertEqual(
-            {raised.exception.path, raised.exception.other_path},
-            {"Source", "source"},
-        )
-
+        self.assertEqual(raised.exception.code, "source-prefix")
     def test_seed_rejects_sources_spanning_content_stores(self) -> None:
         first = _source(_tree(_file("first.txt")), package_id="first", store_id="one")
         second = _source(

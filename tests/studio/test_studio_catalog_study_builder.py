@@ -1253,10 +1253,39 @@ class StudioCatalogStudyBuilderTest(unittest.TestCase):
         self._assert_public_path_free(result)
         workspace = self._workspace(result["workspace_id"])
         root = Path(str(workspace["root"]))
-        self.assertTrue((root / "environments/toy/environment.yaml").is_file())
-        self.assertTrue((root / "methods/fixed/method.yaml").is_file())
+        # Two packages, so each is mounted under a folder of its own: their
+        # root files would otherwise collide and the pairing would be
+        # impossible. The recorded layout is how the draft finds them again.
+        self.assertTrue(
+            (
+                root
+                / environment_package_id
+                / "environments/toy/environment.yaml"
+            ).is_file()
+        )
+        self.assertTrue(
+            (root / method_package_id / "methods/fixed/method.yaml").is_file()
+        )
         origin = workspace["catalog_origin"]
         self.assertEqual(origin["assembly_outcome"], "union")
+        self.assertEqual(
+            origin["assembly_layout"],
+            {
+                "environment": f"{environment_package_id}/environments/toy/environment.yaml",
+                "method": f"{method_package_id}/methods/fixed/method.yaml",
+            },
+        )
+        study = yaml.safe_load(
+            (root / origin["study_relative_path"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            study["environmentConfig"],
+            f"../{environment_package_id}/environments/toy/environment.yaml",
+        )
+        self.assertEqual(
+            study["methodConfig"],
+            f"../{method_package_id}/methods/fixed/method.yaml",
+        )
         self.assertRegex(origin["assembly_digest"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             [

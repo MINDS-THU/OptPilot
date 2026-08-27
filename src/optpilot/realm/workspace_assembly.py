@@ -5,17 +5,24 @@ side effects.  It binds exact Realm selections to already verified immutable
 tree manifests and compiles the content identity that a later transactional
 workspace-creation service may retain.
 
-V1 unions package roots at their existing relative paths.  Directory ancestors
-may be shared, but every other overlap is rejected.  In particular, two files
-at the same path conflict even when their bytes are identical; only an
-identical immutable root is deduplicated before the union is compiled.
+One root is adopted unchanged.  Two or more distinct roots are each mounted
+under a folder named for their source, because packages carry files of their
+own -- a README, a package manifest -- and pouring two of them into one pile
+collided on those before reaching anything that mattered: pairing a component
+from one package with a component from another was impossible.  A package
+moves as a unit, so files inside it keep finding each other.
+
+Within a mounted tree every overlap is still rejected: two files at one path
+conflict even when their bytes are identical, and two roots claiming the same
+folder are refused rather than disambiguated, which is what keeps two
+revisions of one package from being silently combined.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ._validation import lower_hex_digest, required_text
@@ -871,7 +878,11 @@ class WorkspaceAssemblyConflict(ValueError):
         self.other_path = other_path
         self.left_root_ref = left_root_ref
         self.right_root_ref = right_root_ref
-        if code == "portable-path":
+        if code == "source-prefix":
+            detail = (
+                f"source folder {path!r} is claimed by two source roots"
+            )
+        elif code == "portable-path":
             detail = f"portable paths {other_path!r} and {path!r} collide"
         else:
             detail = f"path {path!r} has a {code} conflict"
@@ -1042,8 +1053,33 @@ def compile_workspace_assembly(
         manifest = manifests_by_root[ordered_roots[0]]
         outcome = "adopt"
     else:
+        # Each distinct root is mounted under its own folder. Claimed in the
+        # seed's canonical order, so the layout is input-order independent,
+        # and a folder claimed twice is refused: that is what still rejects
+        # two revisions of one package being combined into one workspace.
+        prefixes: dict[SnapshotRef, str] = {}
+        claimed: dict[str, SnapshotRef] = {}
+        for source in resolved_seed.sources:
+            root_ref = source.anchor.root_ref
+            if root_ref in prefixes:
+                continue
+            prefix = workspace_source_prefix(source.anchor.selection)
+            other = claimed.get(prefix.casefold())
+            if other is not None:
+                raise WorkspaceAssemblyConflict(
+                    code="source-prefix",
+                    path=prefix,
+                    other_path=prefixes[other],
+                    left_root_ref=other,
+                    right_root_ref=root_ref,
+                )
+            claimed[prefix.casefold()] = root_ref
+            prefixes[root_ref] = prefix
         manifest = _compile_whole_tree_union(
-            tuple((root_ref, manifests_by_root[root_ref]) for root_ref in ordered_roots)
+            tuple(
+                (prefixes[root_ref], root_ref, manifests_by_root[root_ref])
+                for root_ref in ordered_roots
+            )
         )
         outcome = "union"
     lineage = WorkspaceAssemblyLineage.build(
@@ -1138,13 +1174,41 @@ def _match_request_to_resolved_seed(
             )
 
 
+def _entry_under_prefix(entry: TreeEntry, prefix: str) -> TreeEntry:
+    """The same node, one folder deeper.
+
+    A frozen dataclass, so this builds a new entry and re-validates the path:
+    a mounted tree that would exceed the portable depth or length limits is
+    refused here, before anything is published.
+    """
+
+    return replace(entry, path=f"{prefix}/{entry.path}")
+
+
+def workspace_source_prefix(selection: SelectionRef) -> str:
+    """One portable folder name for this source inside a union workspace."""
+
+    prefix = selection.source_id
+    if not isinstance(prefix, str) or "/" in prefix:
+        raise ValueError("workspace union source id must be one path component.")
+    validate_portable_path(prefix)
+    return prefix
+
+
 def _compile_whole_tree_union(
-    roots: tuple[tuple[SnapshotRef, TreeManifest], ...],
+    roots: tuple[tuple[str, SnapshotRef, TreeManifest], ...],
 ) -> TreeManifest:
     entries_by_path: dict[str, tuple[TreeEntry, SnapshotRef]] = {}
     paths_by_portable_key: dict[str, str] = {}
-    for root_ref, manifest in roots:
-        for entry in manifest.entries:
+    for prefix, root_ref, manifest in roots:
+        mounted = (
+            TreeEntry.directory(prefix),
+            *(
+                _entry_under_prefix(entry, prefix)
+                for entry in manifest.entries
+            ),
+        )
+        for entry in mounted:
             portable_key = "/".join(
                 component.casefold() for component in entry.path.split("/")
             )
@@ -1182,6 +1246,7 @@ def _compile_whole_tree_union(
 
 
 __all__ = [
+    "workspace_source_prefix",
     "MAX_WORKSPACE_ASSEMBLY_FOCUSES",
     "MAX_WORKSPACE_ASSEMBLY_LINEAGE_BYTES",
     "MAX_WORKSPACE_ASSEMBLY_REQUEST_BYTES",
