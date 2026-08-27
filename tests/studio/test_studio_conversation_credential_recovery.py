@@ -118,5 +118,33 @@ class DispatchRecoveryTest(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
 
 
+class SyncRecoveryTest(unittest.TestCase):
+    """The same loss reached while harvesting a turn, not starting one."""
+
+    def test_a_synced_conversation_that_lost_its_key_is_reported_missing(self) -> None:
+        # The tick harvests an in-flight turn after a restart: without this
+        # the session failed outright and blamed the person's key.
+        adapter = _adapter()
+        with mock.patch.object(
+            adapter, "_poll_openhands_answer",
+            return_value=("", [], "LLMAuthenticationError: OpenrouterException", ""),
+        ), mock.patch.object(
+            adapter, "_request_json", return_value=({"items": [AUTH_EVENT]}, {})
+        ):
+            with self.assertRaises(OpenHandsConversationNotFound):
+                adapter.sync_conversation("conversation-old")
+
+    def test_other_sync_failures_still_report_normally(self) -> None:
+        adapter = _adapter()
+        with mock.patch.object(
+            adapter, "_poll_openhands_answer",
+            return_value=("", [], "MaxIterationsReached", ""),
+        ), mock.patch.object(
+            adapter, "_request_json", return_value=({"items": [OTHER_EVENT]}, {})
+        ):
+            result = adapter.sync_conversation("conversation-old")
+        self.assertEqual(result.get("status"), "failed")
+
+
 if __name__ == "__main__":
     unittest.main()

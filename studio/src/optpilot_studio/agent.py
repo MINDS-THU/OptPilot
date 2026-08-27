@@ -1662,6 +1662,17 @@ class OpenHandsAdapter:
             poll_seconds=poll_seconds,
             allow_silent_finish=True,
         )
+        if runtime_error and self._conversation_lost_its_credential(
+            conversations_url, conversation_id
+        ):
+            # Same loss as on the dispatch path, reached while harvesting an
+            # in-flight turn instead of starting one: the agent-server was
+            # restarted under a live conversation, which now holds no
+            # credential and can never hold one again. Reported as a lost
+            # conversation so the caller clears the binding and the next
+            # message opens a fresh one, rather than failing the session with
+            # an authentication complaint about a key that is perfectly good.
+            raise OpenHandsConversationNotFound(conversation_id)
         if paused_approval_id:
             return {
                 "status": "awaiting_user_approval",
