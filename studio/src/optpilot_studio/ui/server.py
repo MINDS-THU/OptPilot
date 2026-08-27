@@ -548,6 +548,19 @@ CATALOG_PROJECTION_TTL_SECONDS = 24 * 60 * 60
 # consumer leases outlive this window by orders of magnitude
 # (CATALOG_PROJECTION_TTL_SECONDS), so debounced heartbeats remain ample.
 CATALOG_REFRESH_TTL_SECONDS = 5.0
+#: Studio advances a busy conversation itself. Before this, a turn only moved
+#: while a browser tab polled it: the agent-server finished a run in 23
+#: seconds and the session sat on "waiting_for_agent" for 4.6 hours because
+#: the only open tab was in the background, where the page stops polling.
+#: 5s matches the page's own cadence, so an unattended turn is no slower.
+STUDIO_AGENT_TICK_INTERVAL_SECONDS = 5.0
+#: The same ceiling the page uses for concurrent session syncs.
+_AGENT_TICK_MAX_SESSIONS_PER_CYCLE = 4
+_AGENT_TICK_BACKOFF_CEILING_SECONDS = 300.0
+#: The poll loop sleeps 2s unconditionally between reads, so any window under
+#: that yields exactly one read. A repeating tick wants that: what this cycle
+#: misses, the next one catches 5s later.
+_AGENT_TICK_POLL_SECONDS = 0.75
 _PACKAGE_PLAN_APPLY_LOCK = threading.RLock()
 CATALOG_PACKAGE_DIRS = {"environments", "methods", "resources", "studies"}
 EXCLUDED_SCAN_DIRS = {
@@ -3239,8 +3252,12 @@ class UiState:
         workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
         runtime_supervisor_claim: Optional[StudioRuntimeSupervisorClaim] = None,
         catalog_refresh_ttl_seconds: float = 0.0,
+        agent_tick_interval_seconds: float = 0.0,
     ):
         self.cwd = cwd.resolve()
+        # Off unless asked for: hundreds of tests build a UiState directly and
+        # must not each leak a polling thread. run_ui opts in.
+        self.agent_tick_interval_seconds = max(0.0, float(agent_tick_interval_seconds))
         self._runtime_supervisor_claim = runtime_supervisor_claim
         if runtime_supervisor_claim is not None:
             runtime_supervisor_claim.assert_active_for(self.cwd)
@@ -3441,6 +3458,11 @@ class UiState:
         # job record yet; results live for the Studio process lifetime only.
         self._resource_action_runs: Dict[str, JsonDict] = {}
         self._resource_action_threads: Dict[str, threading.Thread] = {}
+        self._agent_tick_threads: Dict[str, threading.Thread] = {}
+        #: session id -> (next attempt monotonic, current delay). A session
+        #: that never progresses backs off to one sync every few minutes
+        #: instead of hammering a dead conversation forever.
+        self._agent_tick_backoff: Dict[str, tuple[float, float]] = {}
         # Closing Studio stops new process-local scheduling and joins these
         # tracked reconcilers before coordination/Realm storage is closed.
         self._background_execution_closing = threading.Event()
@@ -3449,6 +3471,7 @@ class UiState:
         _reconcile_visible_study_launches(self)
         _reconcile_visible_operator_jobs(self)
         _reconcile_visible_run_executions(self)
+        _start_agent_session_tick(self)
         # The person's packages must be launchable, not merely listed. Costs
         # one cheap lookup each once they are published; never fatal.
         try:
@@ -3937,6 +3960,7 @@ class UiState:
                     self._study_launch_threads,
                     self._run_execution_threads,
                     self._operator_job_threads,
+                    getattr(self, "_agent_tick_threads", {}),
                 )
                 if any(
                     thread is current_thread
@@ -4470,6 +4494,7 @@ def run_ui(
             workspace_runtime=runtime_options,
             runtime_supervisor_claim=runtime_supervisor_claim,
             catalog_refresh_ttl_seconds=CATALOG_REFRESH_TTL_SECONDS,
+        agent_tick_interval_seconds=STUDIO_AGENT_TICK_INTERVAL_SECONDS,
         )
         handler_cls = _handler_factory(state)
         server = ThreadingHTTPServer((host, port), handler_cls)
@@ -10334,9 +10359,13 @@ def _notify_agent_session_resource_action_done(
     if not posted.get("sent"):
         return
     try:
-        session = _require_agent_session(state, session_id)
-        session["status"] = "waiting_for_agent"
-        _upsert_agent_session(state, session)
+        # Under the operation lock: a tick finishing at this instant would
+        # otherwise write its stale captured record back over the flip and
+        # re-create the stall this whole mechanism exists to end.
+        with _agent_session_operation_lock(state, session_id):
+            session = _require_agent_session(state, session_id)
+            session["status"] = "waiting_for_agent"
+            _upsert_agent_session(state, session)
     except Exception:
         pass
 
@@ -23559,7 +23588,9 @@ def _append_agent_message(
     return {"session": updated, "message": message}
 
 
-def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
+def _sync_agent_session(
+    state: UiState, session_id: str, *, poll_seconds: float = 3.0
+) -> JsonDict:
     sync_started_at = _now_iso()
     with _agent_session_operation_lock(state, session_id):
         session = _require_agent_session(state, session_id)
@@ -23596,7 +23627,7 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
                 ignored_tool_calls=handled_tool_calls,
                 ignored_event_ids=ignored_event_ids,
                 ignored_response_texts=ignored_response_texts,
-                poll_seconds=3.0,
+                poll_seconds=poll_seconds,
             )
         except OpenHandsConversationNotFound:
             _clear_openhands_runtime_binding(session)
@@ -23699,6 +23730,147 @@ def _sync_agent_session(state: UiState, session_id: str) -> JsonDict:
             if sync_state:
                 session["openhands_pending_sync"] = sync_state
         return _upsert_agent_session(state, session)
+
+
+def _agent_tick_candidate_session_ids(state: UiState, *, now: float) -> List[str]:
+    """Busy sessions due for an unattended sync, oldest stall first.
+
+    Reads the session index only -- never a session payload, which recovers
+    messages and writes as a side effect. A session is a candidate when it
+    holds a conversation and its stored status says work may still be
+    outstanding; anything awaiting a person, idle, errored or archived is
+    left alone.
+    """
+
+    candidates: List[tuple[str, str]] = []
+    backoff = getattr(state, "_agent_tick_backoff", {})
+    for session in _read_agent_session_index(state):
+        if not isinstance(session, dict) or session.get("archived"):
+            continue
+        session_id = str(session.get("id") or "")
+        if not session_id or not str(session.get("openhands_conversation_id") or ""):
+            continue
+        if str(session.get("status") or "") not in {"waiting_for_agent", "running"}:
+            continue
+        due_at, _delay = backoff.get(session_id, (0.0, 0.0))
+        if due_at > now:
+            continue
+        candidates.append((str(session.get("updated_at") or ""), session_id))
+    candidates.sort()
+    return [session_id for _updated_at, session_id in candidates][
+        :_AGENT_TICK_MAX_SESSIONS_PER_CYCLE
+    ]
+
+
+def _agent_tick_note_progress(state: UiState, session_id: str) -> None:
+    state._agent_tick_backoff.pop(session_id, None)
+
+
+def _agent_tick_note_no_progress(
+    state: UiState, session_id: str, *, now: float, interval: float
+) -> None:
+    _due_at, delay = state._agent_tick_backoff.get(session_id, (0.0, 0.0))
+    delay = min(
+        max(interval, delay * 2 if delay else interval),
+        _AGENT_TICK_BACKOFF_CEILING_SECONDS,
+    )
+    state._agent_tick_backoff[session_id] = (now + delay, delay)
+
+
+def _run_agent_session_tick_cycle(
+    state: UiState, *, now: Optional[float] = None
+) -> List[str]:
+    """Advance up to a few busy sessions; return the ids actually synced.
+
+    One reachability probe gates the whole cycle: a down agent-server makes
+    every sync burn its poll window for nothing, and reports no error to
+    distinguish itself from a slow model.
+    """
+
+    now = time.monotonic() if now is None else now
+    interval = max(getattr(state, "agent_tick_interval_seconds", 0.0), 1.0)
+    claim = getattr(state, "_runtime_supervisor_claim", None)
+    if claim is not None:
+        claim.assert_active_for(state.cwd)
+    adapter = state.agent_adapter
+    status = adapter.status() if adapter is not None else {}
+    if not isinstance(status, dict):
+        return []
+    if status.get("dispatch") != "openhands_http" or not status.get("connected"):
+        return []
+    synced: List[str] = []
+    for session_id in _agent_tick_candidate_session_ids(state, now=now):
+        if state._background_execution_closing.is_set():
+            break
+        lock = _agent_session_operation_lock(state, session_id)
+        # A client sync, a message post, or an approval already owns this
+        # session; skipping is the whole point of not queueing behind them.
+        if not lock.acquire(blocking=False):
+            continue
+        try:
+            payload = _sync_agent_session(
+                state, session_id, poll_seconds=_AGENT_TICK_POLL_SECONDS
+            )
+        except Exception:
+            # A session archived mid-cycle raises KeyError, a 502 escapes as a
+            # plain RuntimeError, and this tree can raise OSError on any write.
+            # None of them may end the thread.
+            _agent_tick_note_no_progress(
+                state, session_id, now=now, interval=interval
+            )
+        else:
+            synced.append(session_id)
+            if str(payload.get("status") or "") in {"waiting_for_agent", "running"}:
+                _agent_tick_note_no_progress(
+                    state, session_id, now=now, interval=interval
+                )
+            else:
+                _agent_tick_note_progress(state, session_id)
+        finally:
+            lock.release()
+    return synced
+
+
+def _start_agent_session_tick(state: UiState) -> bool:
+    """Start the one thread that advances conversations with nobody watching."""
+
+    interval = getattr(state, "agent_tick_interval_seconds", 0.0)
+    if interval <= 0:
+        return False
+    if getattr(state, "_runtime_supervisor_claim", None) is None:
+        return False
+    if state._background_execution_closing.is_set():
+        return False
+
+    def loop() -> None:
+        try:
+            while not state._background_execution_closing.is_set():
+                try:
+                    _run_agent_session_tick_cycle(state)
+                except Exception:
+                    # Whole-cycle net: enumeration itself can fail on this
+                    # storage. The next cycle re-reads from scratch.
+                    pass
+                if state._background_execution_closing.wait(interval):
+                    return
+        finally:
+            with state._lock:
+                if (
+                    state._agent_tick_threads.get("agent-tick")
+                    is threading.current_thread()
+                ):
+                    state._agent_tick_threads.pop("agent-tick", None)
+
+    with state._lock:
+        existing = state._agent_tick_threads.get("agent-tick")
+        if existing is not None and existing.is_alive():
+            return False
+        thread = threading.Thread(
+            target=loop, name="optpilot-agent-session-tick", daemon=True
+        )
+        state._agent_tick_threads["agent-tick"] = thread
+    thread.start()
+    return True
 
 
 def _is_timeout_like(exc: Exception) -> bool:
@@ -31465,6 +31637,54 @@ def _discover_workspace_configs(state: UiState, workspace_id: str) -> JsonDict:
     }
 
 
+#: Where a headless resource action writes its results inside a Workspace.
+#: A generated simulator lands in resource-action-output/<request>/<name>/,
+#: not at the Workspace root, so a bundle is looked for there too.
+_RESOURCE_ACTION_OUTPUT_DIRNAME = "resource-action-output"
+
+
+def _generated_simulation_bundle_root(root: Path) -> Optional[Path]:
+    """Where this Workspace's generated simulator lives, if it holds one.
+
+    The Workspace root wins, so a hand-placed bundle behaves as before.
+    Otherwise the one bundle a generate action wrote is used: without this,
+    setup silently fell back to generic starter files and the declared
+    policy hook never became an optimizable environment -- the exact seam
+    between generating a simulator and optimizing it.
+
+    Ambiguity is never guessed at: several bundles means the person says
+    which, because picking one would quietly register the wrong simulator.
+    """
+
+    if (root / "simulation.json").is_file():
+        return root
+    outputs = root / _RESOURCE_ACTION_OUTPUT_DIRNAME
+    if not outputs.is_dir():
+        return None
+    candidates: List[Path] = []
+    try:
+        for request_dir in sorted(outputs.iterdir()):
+            if not request_dir.is_dir():
+                continue
+            for child in sorted(request_dir.iterdir()):
+                if child.is_dir() and (child / "simulation.json").is_file():
+                    candidates.append(child)
+    except OSError:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        named = ", ".join(
+            str(item.relative_to(root)) for item in candidates[:6]
+        )
+        raise ValueError(
+            "This Workspace holds more than one generated simulator "
+            f"({named}). Keep the one to register and remove the rest, or "
+            "register them from separate Workspaces."
+        )
+    return None
+
+
 def _workspace_simulation_handoff(root: Path) -> Optional[JsonDict]:
     """Read the portable generated-simulation manifest without importing code."""
 
@@ -32141,6 +32361,7 @@ def _simulation_policy_variant_starter_files(
     component_id: str,
     description: str,
     simulation_handoff: JsonDict,
+    bundle_prefix: str = "",
 ) -> List[tuple[Path, str]]:
     """Starter files for the file-candidate (editable policy) variant.
 
@@ -32151,6 +32372,10 @@ def _simulation_policy_variant_starter_files(
     """
 
     policy = simulation_handoff["policy"]
+    # Where the bundle sits relative to this config's own folder. A generate
+    # action writes it under resource-action-output/<request>/<name>/, so
+    # "../" alone would point at an empty Workspace root.
+    bundle_root_ref = f"../{bundle_prefix}" if bundle_prefix else ".."
     policy_file = str(policy["file"])
     policy_basename = PurePosixPath(policy_file).name
     entrypoint = str(policy["entrypoint"])
@@ -32200,9 +32425,15 @@ def _simulation_policy_variant_starter_files(
                 },
             },
             "trialWorkspace": [
-                {"from": "../run.py", "to": "simulator/run.py"},
-                {"from": "../simulation.json", "to": "simulator/simulation.json"},
-                {"from": "../devs_project", "to": "simulator/devs_project"},
+                {"from": f"{bundle_root_ref}/run.py", "to": "simulator/run.py"},
+                {
+                    "from": f"{bundle_root_ref}/simulation.json",
+                    "to": "simulator/simulation.json",
+                },
+                {
+                    "from": f"{bundle_root_ref}/devs_project",
+                    "to": "simulator/devs_project",
+                },
             ],
             "candidate": {
                 "format": "files",
@@ -32220,7 +32451,7 @@ def _simulation_policy_variant_starter_files(
                     {
                         "name": policy_basename,
                         "type": "candidate_template",
-                        "path": f"../{policy_file}",
+                        "path": f"{bundle_root_ref}/{policy_file}",
                     },
                     {
                         "name": "replay_settings",
@@ -33426,9 +33657,18 @@ def _configure_workspace_catalog_role(
     if not component_id:
         raise ValueError("Catalog id cannot be empty.")
     description = str(payload.get("description") or "").strip()
-    simulation_handoff = (
-        _workspace_simulation_handoff(root) if role == "environment" else None
+    bundle_root = (
+        _generated_simulation_bundle_root(root) if role == "environment" else None
     )
+    simulation_handoff = (
+        _workspace_simulation_handoff(bundle_root) if bundle_root is not None else None
+    )
+    bundle_prefix = (
+        PurePosixPath(bundle_root.relative_to(root)).as_posix()
+        if bundle_root is not None and bundle_root != root
+        else ""
+    )
+    bundle_root_ref = f"../{bundle_prefix}" if bundle_prefix else ".."
 
     if role in RESOURCE_PURPOSES:
         relative = Path("optpilot.resource.yaml")
@@ -33512,13 +33752,16 @@ def _configure_workspace_catalog_role(
                 **(
                     {
                         "trialWorkspace": [
-                            {"from": "../run.py", "to": "simulator/run.py"},
                             {
-                                "from": "../simulation.json",
+                                "from": f"{bundle_root_ref}/run.py",
+                                "to": "simulator/run.py",
+                            },
+                            {
+                                "from": f"{bundle_root_ref}/simulation.json",
                                 "to": "simulator/simulation.json",
                             },
                             {
-                                "from": "../devs_project",
+                                "from": f"{bundle_root_ref}/devs_project",
                                 "to": "simulator/devs_project",
                             },
                         ]
@@ -33571,7 +33814,7 @@ def _configure_workspace_catalog_role(
             # reviewed template (seeds and scoring need a human decision).
             support_files.extend(
                 _simulation_policy_variant_starter_files(
-                    component_id, description, simulation_handoff
+                    component_id, description, simulation_handoff, bundle_prefix
                 )
             )
         needs_editing = not launch_ready

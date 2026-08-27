@@ -1459,6 +1459,38 @@ class OpenHandsAdapter:
             "events": [{"type": "openhands_chat_completion_completed", "payload": {"conversation_id": next_conversation_id}}],
         }
 
+    def _conversation_lost_its_credential(
+        self, conversations_url: str, conversation_id: str
+    ) -> bool:
+        """Whether this conversation failed for want of a credential.
+
+        Read from the error event's own classification, not its prose: the
+        server marks an authentication failure with kind "auth" and the code
+        LLMAuthenticationError. Any doubt answers False -- recreating a
+        conversation discards its server-side history, so it must never be
+        done on a guess.
+        """
+
+        try:
+            data, _headers = self._request_json(
+                "GET",
+                f"{conversations_url}/{conversation_id}"
+                "/events/search?limit=20&sort_order=TIMESTAMP_DESC",
+                payload=None,
+                timeout=10.0,
+            )
+        except Exception:
+            return False
+        for event in (data.get("items") or []) if isinstance(data, dict) else []:
+            if not isinstance(event, dict):
+                continue
+            if str(event.get("kind") or "") != "ConversationErrorEvent":
+                continue
+            blob = json.dumps(event)
+            if '"kind": "auth"' in blob or "LLMAuthenticationError" in blob:
+                return True
+        return False
+
     def _dispatch_openhands_agent_server(
         self,
         prompt: str,
@@ -1547,6 +1579,21 @@ class OpenHandsAdapter:
                     "paused_approval_id": paused_approval_id,
                 },
             }
+        if runtime_error and not created and self._conversation_lost_its_credential(
+            conversations_url, next_conversation_id
+        ):
+            # A conversation created before this agent-server process started
+            # holds no credential: the server persists the conversation but
+            # not its API key (meta.json records agent/llm/api_key = null),
+            # so every later turn is sent unauthenticated and OpenRouter
+            # answers 401 while the key itself is perfectly good -- a fresh
+            # conversation works, and switch_llm does not repair the old one
+            # (both verified live). The conversation is unusable, so report it
+            # the same way a deleted one is reported and let the caller
+            # recreate it with this turn's context. The recreated conversation
+            # is created here, so a genuinely bad key still surfaces as the
+            # authentication failure it is instead of looping.
+            raise OpenHandsConversationNotFound(next_conversation_id)
         if runtime_error:
             return {
                 "status": "failed",
