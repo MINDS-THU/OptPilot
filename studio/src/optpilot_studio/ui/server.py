@@ -23847,13 +23847,14 @@ def _run_agent_session_tick_cycle(
                 state, session_id, now=now, interval=interval
             )
         else:
+            # A sync that returns is a healthy sync, even when the turn is
+            # still running: a model thinking for five minutes produces no
+            # progress every cycle, and backing off for that meant the tick
+            # was sleeping out a long delay at the exact moment the turn
+            # finally finished -- the stall this exists to end. Only a
+            # failing sync earns a longer wait.
             synced.append(session_id)
-            if str(payload.get("status") or "") in {"waiting_for_agent", "running"}:
-                _agent_tick_note_no_progress(
-                    state, session_id, now=now, interval=interval
-                )
-            else:
-                _agent_tick_note_progress(state, session_id)
+            _agent_tick_note_progress(state, session_id)
         finally:
             lock.release()
     return synced

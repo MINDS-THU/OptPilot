@@ -205,10 +205,27 @@ class CycleTest(unittest.TestCase):
             self.assertEqual(_run_agent_session_tick_cycle(self.state, now=100.0), [])
         self.assertIn("as_broken", self.state._agent_tick_backoff)
 
-    def test_no_progress_backs_off_and_progress_clears_it(self) -> None:
-        _session(self.state, "as_stuck")
+    def test_a_long_turn_keeps_the_steady_cadence(self) -> None:
+        # A model thinking for minutes yields "still running" every cycle.
+        # Backing off for that left the tick asleep at the moment the turn
+        # finally finished -- observed live, the session sat on
+        # waiting_for_agent while its conversation had already finished.
+        _session(self.state, "as_thinking")
         with mock.patch("optpilot_studio.ui.server._sync_agent_session") as sync:
-            sync.return_value = {"id": "as_stuck", "status": "waiting_for_agent"}
+            sync.return_value = {"id": "as_thinking", "status": "waiting_for_agent"}
+            for _ in range(4):
+                self.assertEqual(
+                    _run_agent_session_tick_cycle(self.state, now=100.0),
+                    ["as_thinking"],
+                )
+        self.assertNotIn("as_thinking", self.state._agent_tick_backoff)
+
+    def test_a_failing_session_backs_off_and_recovery_clears_it(self) -> None:
+        _session(self.state, "as_stuck")
+        with mock.patch(
+            "optpilot_studio.ui.server._sync_agent_session",
+            side_effect=RuntimeError("HTTP 502"),
+        ):
             _run_agent_session_tick_cycle(self.state, now=100.0)
             first_due, first_delay = self.state._agent_tick_backoff["as_stuck"]
             _run_agent_session_tick_cycle(self.state, now=first_due)
