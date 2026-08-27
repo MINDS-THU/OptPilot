@@ -20872,7 +20872,7 @@ def _execute_agent_tool(
         data = _update_package_plan(
             state,
             str(arguments.get("workspace_id") or ""),
-            str(arguments.get("plan_id") or ""),
+            _agent_package_plan_id(state, arguments),
             arguments,
         )
         return _tool_result(tool, True, "Package plan updated.", data=data)
@@ -20880,7 +20880,7 @@ def _execute_agent_tool(
         data = _validate_package_plan(
             state,
             str(arguments.get("workspace_id") or ""),
-            str(arguments.get("plan_id") or ""),
+            _agent_package_plan_id(state, arguments),
         )
         plan = data.get("package_plan", {})
         ok = bool(plan.get("validation", {}).get("valid"))
@@ -20917,7 +20917,7 @@ def _execute_agent_tool(
             approval_kind="package_plan_smoke",
             title="Run package plan smoke study",
             summary="Materialize the package plan in a temporary folder and run the selected smoke study.",
-            targets=[str(arguments.get("plan_id") or "")],
+            targets=[_agent_package_plan_id(state, arguments)],
             require_approval=_assistant_permission(state, "smoke_test")
             == "approval_required",
             execution_context=execution_context,
@@ -20927,7 +20927,7 @@ def _execute_agent_tool(
         data = _smoke_package_plan(
             state,
             str(arguments.get("workspace_id") or ""),
-            str(arguments.get("plan_id") or ""),
+            _agent_package_plan_id(state, arguments),
             arguments,
         )
         ok = bool(data.get("smoke", {}).get("valid"))
@@ -20949,7 +20949,7 @@ def _execute_agent_tool(
                 "Publish the exact validated artifact as the next canonical "
                 "Realm catalog package revision."
             ),
-            targets=[str(arguments.get("plan_id") or "")],
+            targets=[_agent_package_plan_id(state, arguments)],
             execution_context=execution_context,
         )
         if gate is not None:
@@ -20957,7 +20957,7 @@ def _execute_agent_tool(
         data = _apply_package_plan(
             state,
             str(arguments.get("workspace_id") or ""),
-            str(arguments.get("plan_id") or ""),
+            _agent_package_plan_id(state, arguments),
         )
         return _tool_result(
             tool,
@@ -35041,6 +35041,33 @@ def _configured_package_plan_validation(immutable_root: Path) -> JsonDict:
         "configured_source_validation": facts,
         "test_policy": "static-only",
     }
+
+
+def _package_plan_id_for_workspace(state: UiState, workspace_id: str) -> str:
+    """The plan id preparation derives for this Workspace.
+
+    A plan id is deterministic in (actor, workspace), so a caller never has
+    to carry one: making the model repeat it only invented a way to get the
+    call wrong, and a missing plan_id ended a live turn.
+    """
+
+    return "pkg_plan_" + request_digest(
+        {
+            "actor_id": _studio_actor_id(state),
+            "schema": "optpilot.workspace-registration-plan.v1",
+            "workspace_id": workspace_id,
+        }
+    )[:20]
+
+
+def _agent_package_plan_id(state: UiState, arguments: Mapping[str, Any]) -> str:
+    """The plan the caller named, or this Workspace's own."""
+
+    named = str(arguments.get("plan_id") or "").strip()
+    if named:
+        return named
+    workspace_id = str(arguments.get("workspace_id") or "").strip()
+    return _package_plan_id_for_workspace(state, workspace_id) if workspace_id else ""
 
 
 def _validate_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:

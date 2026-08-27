@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from optpilot_studio.stop_gate import decide as stop_gate_decide
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -795,7 +795,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Update package plan includes, excludes, source hints, package id, or smoke-study choices before validation.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
-            "plan_id": {"type": "string"},
+            "plan_id": {"type": "string", "description": "Optional: the workspace's current plan is used when omitted, so this is only needed to name a different one."},
             "package_id": {"type": "string"},
             "components": {"type": "array", "items": {"type": "object"}},
             "resources": {"type": "array", "items": {"type": "object"}},
@@ -805,12 +805,12 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
                 "enum": ["component", "package"],
                 "description": "Where captured installed software is recorded when the package already has an image: only the components being registered (default) or the whole package. Ask the person before choosing 'package'.",
             },
-        }, ["workspace_id", "plan_id"]),
+        }, ["workspace_id"]),
     },
     {
         "name": "optpilot_package_plan_validate",
         "description": "Materialize and seal a package plan, then run non-executing schema, source, setup-file, retained-study semantic, and local source-closure checks. Python imports and callable construction are deliberately deferred to the approval-gated package smoke. If validation fails, repair missing adapters, source hints, setup files, or unsupported study semantics, then rerun validation.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id"]),
         "annotations": {"readOnlyHint": True},
     },
     {
@@ -818,16 +818,16 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
         "description": "Request an approval-gated smoke study for a validated package plan in a temporary package. Studio pauses the assistant and asks the user to approve or reject before the study runs.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
-            "plan_id": {"type": "string"},
+            "plan_id": {"type": "string", "description": "Optional: the workspace's current plan is used when omitted, so this is only needed to name a different one."},
             "study": {"type": "string"},
             "max_trials": {"type": "integer", "minimum": 1},
             "timeout_seconds": {"type": "integer", "minimum": 1},
-        }, ["workspace_id", "plan_id"]),
+        }, ["workspace_id"]),
     },
     {
         "name": "optpilot_package_plan_apply",
         "description": "Publish a validated package artifact as the next canonical Realm catalog package revision after approval. Environment-plus-method packages must pass a smoke study first; one-sided packages must at least be component-ready.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id", "plan_id"]),
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "plan_id": {"type": "string"}}, ["workspace_id"]),
     },
     {
         "name": "optpilot_study_draft",
@@ -2697,6 +2697,20 @@ class OpenHandsAdapter:
             # Hook failures fail open server-side (the stop still happens);
             # the error field on the event is observability. Sniffing it as
             # a conversation error would fail a turn that completed fine.
+            return ""
+        classification = event.get("classification")
+        if (
+            event_kind == "AgentErrorEvent"
+            or (
+                isinstance(classification, Mapping)
+                and classification.get("retryable") is True
+            )
+        ):
+            # A per-step failure the server itself marks retryable -- a tool
+            # call missing an argument, say. It is handed back to the model,
+            # which is free to correct it, and the conversation carries on to
+            # finish normally. Reporting it as the turn's outcome told the
+            # person a recoverable hiccup had killed their session.
             return ""
         if event_kind == "ConversationErrorEvent":
             detail = self._content_text(
