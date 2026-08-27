@@ -20442,7 +20442,7 @@ def _execute_agent_tool(
         )
         _refuse_secret_file(path, root)
         if not path.is_file():
-            raise FileNotFoundError(_relative_path(path, root))
+            raise _missing_workspace_path_error(path, root, expected="file")
         if path.stat().st_size > 1_000_000:
             raise ValueError("File is too large to read through the assistant tool.")
         return _tool_result(
@@ -21483,6 +21483,34 @@ def _require_editable_workspace(workspace: JsonDict) -> None:
         )
 
 
+def _missing_workspace_path_error(
+    path: Path, root: Path, *, expected: str = "path"
+) -> FileNotFoundError:
+    """The error for a Workspace path that is not there.
+
+    The bare relative path used to be the whole message -- a tool answered
+    the model with "simulator" and nothing else, so it guessed another path,
+    and another, until the repetition detector stopped the conversation.
+    Name what was looked for, where, and the one call that lists what is
+    actually present.
+    """
+
+    relative = _relative_path(path, root)
+    return _with_remedy(
+        FileNotFoundError(
+            f"No {expected} named {relative!r} exists in this Workspace. "
+            "List the Workspace to see what it holds before reading a path."
+        ),
+        _remedy(
+            f"List the Workspace and use a path from the result: {relative!r} "
+            "is not there.",
+            tool="optpilot_file_tree",
+            arguments={"path": "."},
+            details={"missing_path": relative, "expected": expected},
+        ),
+    )
+
+
 def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[JsonDict]:
     if target.is_file():
         stat = target.stat()
@@ -21490,7 +21518,7 @@ def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[Js
             {"path": _relative_path(target, root), "type": "file", "size": stat.st_size}
         ]
     if not target.exists() or not target.is_dir():
-        raise FileNotFoundError(_relative_path(target, root))
+        raise _missing_workspace_path_error(target, root, expected="file or folder")
     files: List[JsonDict] = []
     stack = [target]
     while stack and len(files) < max_files:
@@ -21702,7 +21730,7 @@ def _agent_file_editor_view(
             },
         )
     if not path.is_file():
-        raise FileNotFoundError(_relative_path(path, root))
+        raise _missing_workspace_path_error(path, root, expected="file")
     if path.stat().st_size > 1_000_000:
         raise ValueError("File is too large to view through file_editor.")
     content = path.read_text(encoding="utf-8", errors="replace")
@@ -21751,7 +21779,7 @@ def _agent_file_editor_str_replace(
     tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict
 ) -> JsonDict:
     if not path.is_file():
-        raise FileNotFoundError(_relative_path(path, root))
+        raise _missing_workspace_path_error(path, root, expected="file")
     old_str = arguments.get("old_str")
     if old_str in (None, ""):
         raise ValueError("old_str is required for str_replace.")
@@ -21789,7 +21817,7 @@ def _agent_file_editor_insert(
     tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict
 ) -> JsonDict:
     if not path.is_file():
-        raise FileNotFoundError(_relative_path(path, root))
+        raise _missing_workspace_path_error(path, root, expected="file")
     if "insert_line" not in arguments:
         raise ValueError("insert_line is required for insert.")
     if "new_str" not in arguments:
@@ -21894,7 +21922,7 @@ def _agent_tool_shell_run(
     if cwd.is_file():
         cwd = cwd.parent
     if not cwd.exists() or not cwd.is_dir():
-        raise FileNotFoundError(_relative_path(cwd, root))
+        raise _missing_workspace_path_error(cwd, root, expected="folder")
     command = _normalize_shell_command(arguments.get("command"))
     if not command:
         raise ValueError("command is required.")
