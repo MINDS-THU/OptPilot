@@ -11749,19 +11749,51 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
     assembly_outcome = ""
     try:
         if requested_workspace_id:
+            # What the workspace IS comes before what updating it requires:
+            # naming a workspace that is not a Run-setup draft used to be
+            # reported as a missing revision, which sent the caller looking
+            # for a number that could never have helped.
+            workspace = _require_ui_workspace(state, requested_workspace_id)
+            if workspace.get("ownership") != "realm-managed":
+                raise _with_remedy(
+                    ValueError(
+                        f"{requested_workspace_id} is not a Run-setup draft, "
+                        "so there is no draft here to update. Start a new one "
+                        "instead of naming a Workspace."
+                    ),
+                    _remedy(
+                        "Draft a new Run setup: leave workspace_id out and "
+                        "name the environment and method to pair.",
+                        tool="optpilot_study_draft",
+                        arguments={"environment": "", "method": ""},
+                        details={
+                            "workspace_id": requested_workspace_id,
+                            "reason": "not_a_run_setup_draft",
+                        },
+                    ),
+                )
             expected_revision = payload.get("expected_workspace_revision")
             if (
                 isinstance(expected_revision, bool)
                 or not isinstance(expected_revision, int)
                 or expected_revision <= 0
             ):
-                raise ValueError(
-                    "expected_workspace_revision is required when updating a draft."
-                )
-            workspace = _require_ui_workspace(state, requested_workspace_id)
-            if workspace.get("ownership") != "realm-managed":
-                raise ValueError(
-                    "Study Builder drafts require a Realm-managed workspace."
+                raise _with_remedy(
+                    ValueError(
+                        "Updating an existing Run-setup draft needs its "
+                        "current revision as expected_workspace_revision, so "
+                        "a concurrent edit is not overwritten."
+                    ),
+                    _remedy(
+                        "Pass the draft's current revision, or leave "
+                        "workspace_id out to start a new draft.",
+                        details={
+                            "workspace_id": requested_workspace_id,
+                            "current_revision": int(
+                                workspace.get("realm_workspace_revision") or 0
+                            ),
+                        },
+                    ),
                 )
             if int(workspace.get("realm_workspace_revision") or 0) != expected_revision:
                 raise RealmConflict("Workspace revision changed.")
