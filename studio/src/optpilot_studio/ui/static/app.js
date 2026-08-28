@@ -14684,6 +14684,7 @@ const RUN_STOP_REASONS = {
   method_failed: "The method stopped working while proposing candidates. Its error is in the trial evidence below.",
   protocol_error: "The method sent something OptPilot could not read. This usually means the method's code returned the wrong shape.",
   method_completed: "The method finished proposing candidates before the budget was used up.",
+  no_successful_observation: "Every trial's evaluation failed, so there was nothing to compare. Open Trial results under Evidence & history below to see what each evaluation reported.",
 };
 
 function runCompletionMessage(summary, status) {
@@ -16629,6 +16630,11 @@ function renderObservationItem(item, page) {
     ["Attempt", data.attempt_id || "-"],
     ["Outcome", data.outcome || "-"],
     ["Phase", phase || "-"],
+    ...(data.error_type ? [["Error type", data.error_type]] : []),
+    ...(data.error_summary
+      ? [[data.outcome === "success" ? "Reported error" : "Why it failed",
+          data.error_summary + (data.error_summary_truncated ? "\n... (truncated)" : "")]]
+      : []),
     ["Wall clock seconds", data.wall_clock_seconds ?? "-"],
     ["Metrics", data.metric_count ?? 0],
     ["Constraints", data.constraint_count ?? 0],
@@ -16649,7 +16655,7 @@ function renderObservationItem(item, page) {
       </summary>
       ${renderSpecializedWorkbenchBody(item, page, `
         <dl class="workbench-data-grid observation-evidence">
-          ${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${formatCell(value)}</dd></div>`).join("")}
+          ${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${formatCell(value, { preserveLines: true })}</dd></div>`).join("")}
         </dl>
         ${renderObservationMeasurements(data)}
       `)}
@@ -16749,7 +16755,17 @@ function renderWorkbenchItem(item, page) {
           </div>
         ` : ""}
         <dl class="workbench-data-grid">
-          ${Object.entries(data).map(([key, value]) => `<div><dt>${escapeHtml(fieldLabel(key))}</dt><dd>${formatCell(value)}</dd></div>`).join("") || `<div><dt>Data</dt><dd>-</dd></div>`}
+          ${Object.entries(data)
+            .filter(([key, value]) => {
+              //: A "... truncated" flag is worth a row only when it is set;
+              //: printing "false" beside every bounded field is noise.
+              if (key.endsWith("_truncated") && value !== true) return false;
+              //: Likewise the cause: a row that did not fail has none, and an
+              //: empty cell beside every successful attempt is just clutter.
+              if ((key === "error_type" || key === "error_summary") && value == null) return false;
+              return true;
+            })
+            .map(([key, value]) => `<div><dt>${escapeHtml(fieldLabel(key))}</dt><dd>${formatCell(value, { preserveLines: true })}</dd></div>`).join("") || `<div><dt>Data</dt><dd>-</dd></div>`}
         </dl>
         ${renderSelectionTechnicalDetails(selection, item)}
       </div>
@@ -23113,10 +23129,16 @@ function statusClass(status) {
   return `status-${escapeHtml(value)}`;
 }
 
-function formatCell(value) {
+function formatCell(value, { preserveLines = false } = {}) {
   if (value == null || value === "") return "-";
   if (typeof value === "object") return `<pre class="inline-json">${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
-  return escapeHtml(String(value));
+  const text = String(value);
+  //: A recorded failure cause is several lines of an evaluator's own output.
+  //: Collapsed into one line it reads as noise, so keep its shape where the
+  //: caller has room for it -- opt-in, because a table cell does not. It
+  //: stays escaped either way: this text is data, never markup.
+  if (preserveLines && text.includes("\n")) return `<pre class="inline-json">${escapeHtml(text)}</pre>`;
+  return escapeHtml(text);
 }
 
 function formatMetric(value) {

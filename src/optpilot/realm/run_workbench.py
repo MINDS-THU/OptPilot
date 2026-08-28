@@ -19,6 +19,8 @@ import heapq
 import hashlib
 import json
 import math
+import re
+from collections import deque
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
@@ -363,6 +365,116 @@ def _bounded_text(value: str | None) -> tuple[str | None, bool]:
     )
 
 
+_TRACEBACK_FRAME = re.compile(r'^\s*File "')
+_SOURCE_ANCHOR = re.compile(r"[\s^~]+")
+
+# One ordered pass over host-identifying text.  The `keep` branches are tried
+# first and pass through untouched: a runtime-scope label is already logical,
+# and an endpoint URL is usually the whole diagnosis.  Everything in `drop`
+# names this machine.  A POSIX path may contain spaces (`Application Support`
+# is on the default macOS realm root), so it absorbs a space only when a later
+# separator proves the space is inside the path rather than the end of it.
+_SCRUBBED = re.compile(
+    r"""
+      (?P<keep>
+          \[runtime-scope-\d+\][^\s"'<>]*
+        | (?<![\w.-])(?!file:)[A-Za-z][A-Za-z0-9+.-]*://(?![^\s"'<>/]*@)[^\s"'<>]*
+      )
+    | (?P<drop>
+          [A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>/]*@[^\s"'<>]*
+        | file://[^\s"'<>]*
+        | (?<!\w)[A-Za-z]:[\\/][^\s"'<>]*
+        | \\\\[^\s"'<>]+
+        | (?<![\]:])/(?:[^\s"'<>]|[ ](?=[^\s"'<>]*/)){6,}
+      )
+    """,
+    re.VERBOSE,
+)
+
+# Scrubbing and bounding happen on the tail, so only a small multiple of the
+# row bound is ever scanned by the regex; a captured stderr can be megabytes.
+_DIAGNOSTIC_SCAN_BYTES = RUN_WORKBENCH_MAX_TEXT_BYTES * 4
+
+
+def _scrub_paths(value: str) -> str:
+    return _SCRUBBED.sub(lambda match: match.group("keep") or "<path>", value)
+
+
+def _bounded_tail_text(value: str) -> tuple[str, bool]:
+    """Bound diagnostic text from the END, where its meaning lives.
+
+    ``_bounded_text`` keeps the head, which is right for a label.  A failure
+    reads the other way round: the frames come first and the exception line
+    last, so head truncation returns the part that says nothing.
+    """
+
+    encoded = value.encode("utf-8", errors="strict")
+    if len(encoded) <= RUN_WORKBENCH_MAX_TEXT_BYTES:
+        return value, False
+    return (
+        encoded[-RUN_WORKBENCH_MAX_TEXT_BYTES:].decode("utf-8", errors="ignore"),
+        True,
+    )
+
+
+_EXCEPTION_TYPE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+
+
+def _diagnostic_type(error: Mapping[str, Any]) -> str | None:
+    """Name the exception class an evaluator failed with, if it reported one.
+
+    The whole error mapping is worker-supplied -- an adapter chooses its own
+    ``event_summary`` -- so this half cannot be trusted either.  A real class
+    name is a dotted identifier and so cannot contain a separator; anything
+    else is prose from a misbehaving adapter and is scrubbed like prose.
+    """
+
+    if not isinstance(error, Mapping):
+        return None
+    value = error.get("type")
+    if not isinstance(value, str) or not value:
+        return None
+    if _EXCEPTION_TYPE.match(value):
+        return _bounded_text(value)[0]
+    return _bounded_text(_scrub_paths(value))[0]
+
+
+def _diagnostic_summary(error: Mapping[str, Any]) -> tuple[str | None, bool]:
+    """Project why an evaluation failed as bounded, host-path-free text.
+
+    Traceback frame lines carry the host paths; the exception lines carry the
+    meaning.  Dropping the frames makes path-freedom structural rather than a
+    scrub that has to be right, and it spends the row bound on the diagnosis
+    instead of on the stack that precedes it.
+    """
+
+    if not isinstance(error, Mapping):
+        return None, False
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None, False
+    kept: deque[str] = deque()
+    kept_bytes = 0
+    dropped = False
+    for line in message.splitlines():
+        stripped = line.strip()
+        if (
+            not stripped
+            or _TRACEBACK_FRAME.match(line)
+            or _SOURCE_ANCHOR.fullmatch(stripped)
+        ):
+            continue
+        kept.append(line)
+        kept_bytes += len(line.encode("utf-8")) + 1
+        while kept_bytes > _DIAGNOSTIC_SCAN_BYTES and len(kept) > 1:
+            dropped = True
+            kept_bytes -= len(kept.popleft().encode("utf-8")) + 1
+    if not kept:
+        return None, False
+    text, truncated = _bounded_tail_text(_scrub_paths("\n".join(kept)))
+    return text, truncated or dropped
+
+
 def _encode_page_token(payload: Mapping[str, Any]) -> str:
     return (
         base64.urlsafe_b64encode(_canonical_json_bytes(payload))
@@ -577,6 +689,10 @@ class RunWorkbenchReadModel:
             trial = trials_by_id[attempt.logical_trial_id]
             candidate = candidates_by_key[trial.candidate_key]
             observation = observation_by_attempt.get(attempt.attempt_id)
+            attempt_error: Mapping[str, Any] = (
+                {} if observation is None else observation.envelope.error
+            )
+            attempt_cause, attempt_cause_truncated = _diagnostic_summary(attempt_error)
             correlations = [
                 _correlation(
                     relation="candidate",
@@ -621,6 +737,9 @@ class RunWorkbenchReadModel:
                         "state": attempt.state,
                         "outcome": attempt.outcome,
                         "code": attempt.code,
+                        "error_type": _diagnostic_type(attempt_error),
+                        "error_summary": attempt_cause,
+                        "error_summary_truncated": attempt_cause_truncated,
                         "head_transition_index": attempt.head_transition_index,
                         "observation_id": (
                             None if observation is None else observation.observation_id
@@ -640,6 +759,7 @@ class RunWorkbenchReadModel:
             trial = trials_by_id[attempt.logical_trial_id]
             candidate = candidates_by_key[trial.candidate_key]
             phase, phase_truncated = _bounded_text(observation.envelope.phase)
+            cause, cause_truncated = _diagnostic_summary(observation.envelope.error)
             rows["observation"].append(
                 _row(
                     run_id=run_id,
@@ -680,6 +800,9 @@ class RunWorkbenchReadModel:
                         "outcome": observation.status,
                         "phase": phase,
                         "phase_truncated": phase_truncated,
+                        "error_type": _diagnostic_type(observation.envelope.error),
+                        "error_summary": cause,
+                        "error_summary_truncated": cause_truncated,
                         "wall_clock_seconds": observation.envelope.wall_clock_seconds,
                         "objective_metric": metric_name,
                         "objective_value": _finite_objective_value(

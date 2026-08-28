@@ -142,6 +142,7 @@ class RunHonestyStaticTest(unittest.TestCase):
             "method_failed",
             "protocol_error",
             "method_completed",
+            "no_successful_observation",
         ):
             with self.subTest(code=code):
                 self.assertIn(f"{code}:", self.app)

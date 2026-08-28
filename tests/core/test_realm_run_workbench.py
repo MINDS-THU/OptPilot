@@ -84,6 +84,9 @@ from optpilot.realm.run_workbench import (
     RUN_WORKBENCH_PAGE_SCHEMA,
     RUN_WORKBENCH_SELECTION_SCHEMA,
     RunWorkbenchReadModel,
+    _diagnostic_summary,
+    _diagnostic_type,
+    _scrub_paths,
 )
 from optpilot.realm.run_timeline import RUN_TIMELINE_PAGE_SCHEMA
 from optpilot.run_control_manifest import RetryPolicy
@@ -377,6 +380,135 @@ class RealmRunWorkbenchTest(unittest.TestCase):
         )
         self.run_revision = receipt.revision.revision
         self.owner_revision = receipt.owner_commit.owner_revision
+
+    def _adopt_failed_attempt_b(self, message: str) -> None:
+        """Adopt the second attempt the way a crashed evaluator reports one."""
+
+        envelope = AttemptEnvelope(
+            attempt_id=self.attempt_b.attempt.attempt_id,
+            evaluation_spec_digest=self.attempt_b.attempt.evaluation_spec_digest,
+            binding_id=self.attempt_b.attempt.binding_id,
+            outcome="failed",
+            phase="environment_evaluation",
+            wall_clock_seconds=0.07,
+            validation={"accepted": True, "errors": []},
+            materialization={"runtime_spec": {}, "metadata": {}},
+            metric_values={},
+            constraint_results={},
+            output_declarations=(),
+            event_summary={},
+            execution_metadata={"worker": "test"},
+            error={
+                "phase": "environment_evaluation",
+                "type": "RuntimeError",
+                "message": message,
+                "traceback": message,
+            },
+        )
+        finalization = AttemptFinalization(
+            attempt_id=self.attempt_b.attempt.attempt_id,
+            evaluation_spec_digest=self.attempt_b.attempt.evaluation_spec_digest,
+            binding_id=self.attempt_b.attempt.binding_id,
+            effective_outcome="failed",
+            effective_code="attempt_failed",
+            captured_artifacts=(),
+            envelope=envelope,
+        )
+        receipt = self.ledger.adopt_run_attempt(
+            operation_id=self.op("adopt-attempt-b1-failed"),
+            actor_principal_id="operator",
+            run_id=self.created.run.run_id,
+            attempt_id=self.attempt_b.attempt.attempt_id,
+            expected_run_revision=self.run_revision,
+            expected_owner_revision=self.owner_revision,
+            change_id=self.attempt_b.attempt.capture_change_id,
+            finalization=finalization,
+            **self.controller_arguments(),
+        )
+        self.run_revision = receipt.revision.revision
+        self.owner_revision = receipt.owner_commit.owner_revision
+
+    def _crashed_evaluator_message(self) -> str:
+        host = str(self.root)
+        return (
+            "Simulation exited with 1: [Entry] Running Simulation\n"
+            "Traceback (most recent call last):\n"
+            '  File "<frozen runpy>", line 198, in _run_module_as_main\n'
+            '  File "[runtime-scope-1]/simulator/run_model.py", line 113, in <module>\n'
+            "    core_model = RestaurantModel(\n"
+            "                 ^^^^^^^^^^^^^^^^\n"
+            f'  File "{host}/python3.12/random.py", line 167, in seed\n'
+            "    raise TypeError('The only supported seed types are: None,')\n"
+            "TypeError: The only supported seed types are: None, int, float, str.\n"
+            f"Working copy was {host}/scratch/attempt\n"
+            "[Entry] Simulation failed (RC=1)\n"
+        )
+
+    def _attempt_row(self, attempt_id: str) -> dict:
+        page = self.model().page("attempt", limit=RUN_WORKBENCH_MAX_PAGE_SIZE)
+        for row in page["items"]:
+            if row["id"] == attempt_id:
+                return row["data"]
+        raise AssertionError(f"no attempt row for {attempt_id}")
+
+    def _observation_row(self, attempt_id: str) -> dict:
+        # Observation ids are content-derived, so find the row by its attempt.
+        page = self.model().page("observation", limit=RUN_WORKBENCH_MAX_PAGE_SIZE)
+        for row in page["items"]:
+            if row["data"]["attempt_id"] == attempt_id:
+                return row["data"]
+        raise AssertionError(f"no observation row for {attempt_id}")
+
+    def test_failed_observation_row_says_why_without_naming_the_host(self) -> None:
+        # A failed Run that records nothing legible costs an archaeology
+        # session; the cause is stored, so the row must carry it.
+        self._adopt_failed_attempt_b(self._crashed_evaluator_message())
+        data = self._observation_row("attempt-b1")
+
+        self.assertEqual(data["error_type"], "RuntimeError")
+        summary = data["error_summary"]
+        self.assertIn("TypeError: The only supported seed types", summary)
+        self.assertIn("core_model = RestaurantModel(", summary)
+        self.assertIn("[Entry] Simulation failed (RC=1)", summary)
+        self.assertFalse(data["error_summary_truncated"])
+
+        # Traceback frames name the host; they are dropped, and any absolute
+        # path surviving in evaluator prose is scrubbed.
+        self.assertNotIn(str(self.root), json.dumps(self.model().page("observation")))
+        for line in summary.splitlines():
+            self.assertFalse(line.lstrip().startswith('File "'), line)
+        self.assertIn("Working copy was <path>", summary)
+
+    def test_failed_attempt_row_mirrors_the_cause_of_its_observation(self) -> None:
+        self._adopt_failed_attempt_b(self._crashed_evaluator_message())
+        attempt = self._attempt_row("attempt-b1")
+        observation = self._observation_row("attempt-b1")
+
+        self.assertEqual(attempt["error_type"], observation["error_type"])
+        self.assertEqual(attempt["error_summary"], observation["error_summary"])
+        self.assertEqual(
+            attempt["error_summary_truncated"],
+            observation["error_summary_truncated"],
+        )
+
+    def test_successful_rows_carry_no_cause(self) -> None:
+        data = self._observation_row("attempt-a1")
+        self.assertIsNone(data["error_type"])
+        self.assertIsNone(data["error_summary"])
+        self.assertFalse(data["error_summary_truncated"])
+
+        attempt = self._attempt_row("attempt-a1")
+        self.assertIsNone(attempt["error_type"])
+        self.assertIsNone(attempt["error_summary"])
+
+    def test_projected_cause_stays_inside_the_row_text_bound(self) -> None:
+        self._adopt_failed_attempt_b("boom: " + "y" * (RUN_WORKBENCH_MAX_TEXT_BYTES * 4))
+        data = self._observation_row("attempt-b1")
+
+        self.assertTrue(data["error_summary_truncated"])
+        self.assertLessEqual(
+            len(data["error_summary"].encode("utf-8")), RUN_WORKBENCH_MAX_TEXT_BYTES
+        )
 
     def model(self) -> RunWorkbenchReadModel:
         snapshot = self.ledger.read_run_snapshot(
@@ -3138,6 +3270,145 @@ class RealmCandidateResultProjectionTest(unittest.TestCase):
             self.assertEqual(comparison["finality"], "final")
         self.assertEqual(results["candidate-d"]["comparison"]["rank"], 3)
         self.assertEqual(page["candidate_result_summary"]["finality"], "final")
+
+
+
+class RunWorkbenchDiagnosticSummaryTest(unittest.TestCase):
+    """The reducer that decides what a person learns from a failed trial."""
+
+    def test_exception_line_survives_a_stack_that_would_fill_the_bound(self) -> None:
+        # Head truncation alone spends the whole bound on frames and stops
+        # before the exception, shipping a field that says nothing.
+        message = "\n".join(
+            [f'  File "/Users/someone/f{index}.py", line {index}, in g' for index in range(200)]
+            + ["ValueError: the real cause"]
+        )
+        summary, truncated = _diagnostic_summary({"message": message})
+
+        self.assertEqual(summary, "ValueError: the real cause")
+        self.assertFalse(truncated)
+        self.assertLessEqual(
+            len(summary.encode("utf-8")), RUN_WORKBENCH_MAX_TEXT_BYTES
+        )
+
+    def test_runtime_scope_labels_are_kept_but_absolute_paths_are_not(self) -> None:
+        summary, _ = _diagnostic_summary(
+            {"message": "opened [runtime-scope-1]/simulator/x.py then /Users/a/secret/y.txt"}
+        )
+
+        self.assertEqual(
+            summary, "opened [runtime-scope-1]/simulator/x.py then <path>"
+        )
+
+    def test_a_host_path_containing_a_space_is_scrubbed_whole(self) -> None:
+        # The default macOS realm root is ~/Library/Application Support/...,
+        # so a path with a space is the ordinary case, not the exotic one. A
+        # scrub that stops at the first space republishes the rest verbatim.
+        for message in (
+            "[Errno 2] missing: "
+            "'/Users/someone/Library/Application Support/OptPilot/realm/x.json'",
+            "[Errno 13] denied: "
+            "'/Volumes/Macintosh HD/Users/someone/.optpilot/credentials.json'",
+            "ConfigError: missing under /Volumes/Backup Drive/Users/someone/cfg",
+        ):
+            with self.subTest(message=message):
+                summary, _ = _diagnostic_summary({"message": message})
+                self.assertNotIn("someone", summary)
+                self.assertNotIn("/Users/", summary)
+                self.assertIn("<path>", summary)
+
+    def test_windows_unc_and_file_uri_paths_are_scrubbed(self) -> None:
+        for value in (
+            r"C:\Users\someone\AppData\thing.json missing",
+            "C:/Users/someone/AppData/thing.json missing",
+            r"\\fileserver\share\someone\x.json missing",
+            "file:///Users/someone/x.txt unreadable",
+            "fetch https://someone:secret@internal.host/x failed",
+        ):
+            with self.subTest(value=value):
+                scrubbed = _scrub_paths(value)
+                self.assertNotIn("someone", scrubbed)
+                self.assertIn("<path>", scrubbed)
+
+    def test_an_endpoint_url_survives_because_it_is_usually_the_diagnosis(
+        self,
+    ) -> None:
+        summary, _ = _diagnostic_summary(
+            {"message": "POST https://api.example.com/v1/chat failed with 401"}
+        )
+        self.assertEqual(summary, "POST https://api.example.com/v1/chat failed with 401")
+
+    def test_the_exception_line_survives_a_stack_that_carries_source_lines(
+        self,
+    ) -> None:
+        # Frames are dropped, but their source lines are not -- enough of them
+        # overflow the bound, and head truncation would return the middle of
+        # the stack instead of the cause.
+        message = (
+            "Traceback (most recent call last):\n"
+            + "".join(
+                f'  File "/Users/someone/deep/module_{index}.py", line {index}, in go\n'
+                f"    result = compute(argument_{index}, another_argument_{index})\n"
+                for index in range(60)
+            )
+            + "ValueError: the actual cause is right here"
+        )
+        summary, truncated = _diagnostic_summary({"message": message})
+
+        self.assertTrue(truncated)
+        self.assertEqual(
+            summary.splitlines()[-1], "ValueError: the actual cause is right here"
+        )
+        self.assertNotIn("someone", summary)
+        self.assertLessEqual(
+            len(summary.encode("utf-8")), RUN_WORKBENCH_MAX_TEXT_BYTES
+        )
+
+    def test_a_line_merely_starting_with_a_marker_is_kept(self) -> None:
+        # Only a line that is nothing but locator markers is an anchor line.
+        summary, _ = _diagnostic_summary(
+            {"message": "x = f(y)\n    ~^^^^^^\n~ tilde output\nValueError: boom"}
+        )
+        self.assertIn("~ tilde output", summary)
+        self.assertNotIn("~^^^^^^", summary)
+
+    def test_an_adapter_authored_type_cannot_publish_a_path(self) -> None:
+        self.assertEqual(_diagnostic_type({"type": "RuntimeError"}), "RuntimeError")
+        self.assertEqual(_diagnostic_type({"type": "pkg.mod.MyError"}), "pkg.mod.MyError")
+        self.assertNotIn(
+            "someone",
+            _diagnostic_type({"type": "ErrorAt/Users/someone/secret/thing.py"}),
+        )
+
+    def test_scanning_a_huge_message_stays_bounded_work(self) -> None:
+        # A captured stderr can be megabytes, and every failed row projects one.
+        message = "\n".join(
+            f"line {index} /Users/someone/path/number/{index}" for index in range(20000)
+        )
+        summary, truncated = _diagnostic_summary({"message": message})
+
+        self.assertTrue(truncated)
+        self.assertNotIn("someone", summary)
+        self.assertLessEqual(
+            len(summary.encode("utf-8")), RUN_WORKBENCH_MAX_TEXT_BYTES
+        )
+
+    def test_a_message_that_is_only_frames_reduces_to_nothing(self) -> None:
+        self.assertEqual(
+            _diagnostic_summary({"message": '  File "/a/b/c.py", line 1, in x'}),
+            (None, False),
+        )
+
+    def test_absent_or_unusable_errors_project_nothing(self) -> None:
+        for error in ({}, {"message": None}, {"message": 42}, {"message": ""}, None):
+            with self.subTest(error=error):
+                self.assertEqual(_diagnostic_summary(error), (None, False))
+                self.assertIsNone(_diagnostic_type(error))
+
+    def test_error_type_is_projected_only_when_it_is_named(self) -> None:
+        self.assertEqual(_diagnostic_type({"type": "RuntimeError"}), "RuntimeError")
+        self.assertIsNone(_diagnostic_type({"type": ""}))
+        self.assertIsNone(_diagnostic_type({"type": 7}))
 
 
 if __name__ == "__main__":
