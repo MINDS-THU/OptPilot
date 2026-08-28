@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import tempfile
 import threading
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -1967,6 +1970,108 @@ class RealmRetainedBatchRunDriverTest(unittest.TestCase):
         self.assertEqual(recovered_worker.ack_calls, [])
         self.assertEqual(recovered_worker.callback_calls, [])
         self.assertEqual(recovered_driver.method_runtime_provider.generations, [])
+
+
+
+class RecordedMethodCauseTest(unittest.TestCase):
+    """What a broken method is allowed to write into the durable stream."""
+
+    def reduce(self, cause):
+        return retained_batch_run_driver._recorded_method_cause(cause)
+
+    def test_a_worker_cause_becomes_a_bounded_path_free_record(self) -> None:
+        recorded = self.reduce(
+            {
+                "type": "RuntimeError",
+                "message": (
+                    "FileNotFoundError: [Errno 2] No such file or directory: "
+                    "'/Users/someone/Library/Application Support/OptPilot/env/simulator'"
+                ),
+            }
+        )
+
+        self.assertEqual(recorded["type"], "RuntimeError")
+        self.assertIn("FileNotFoundError", recorded["message"])
+        self.assertNotIn("someone", recorded["message"])
+        self.assertNotIn("/Users/", recorded["message"])
+        self.assertIn("<path>", recorded["message"])
+        self.assertFalse(recorded["truncated"])
+
+    def test_traceback_frames_never_reach_the_record(self) -> None:
+        recorded = self.reduce(
+            {
+                "type": "RuntimeError",
+                "message": (
+                    "Traceback (most recent call last):\n"
+                    '  File "/Users/someone/method.py", line 3, in observe\n'
+                    "    raise ValueError('boom')\n"
+                    "ValueError: boom"
+                ),
+            }
+        )
+
+        for line in recorded["message"].splitlines():
+            self.assertFalse(line.lstrip().startswith('File "'), line)
+        self.assertIn("ValueError: boom", recorded["message"])
+        self.assertNotIn("someone", recorded["message"])
+
+    def test_an_unrecoverable_cause_records_nothing(self) -> None:
+        for cause in (None, {}, "not a mapping", {"type": None}):
+            with self.subTest(cause=cause):
+                self.assertIsNone(self.reduce(cause))
+
+
+class RecoveredWorkerDiagnosticTest(unittest.TestCase):
+    """Reading the worker's private diagnostic back before its volume dies."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def runtime(self):
+        from optpilot import retained_batch_runtime
+
+        handle = retained_batch_runtime.RetainedPythonBatchRuntime.__new__(
+            retained_batch_runtime.RetainedPythonBatchRuntime
+        )
+        object.__setattr__(handle, "_volume", SimpleNamespace(path=self.root))
+        return handle
+
+    def write(self, *lines: str) -> None:
+        (self.root / "worker-diagnostics.jsonl").write_text(
+            "".join(f"{line}\n" for line in lines), encoding="utf-8"
+        )
+
+    def test_the_matching_diagnostic_is_recovered(self) -> None:
+        self.write(
+            "a stray line the method printed to stdout",
+            json.dumps({"diagnostic_id": "a" * 32, "exception_type": "KeyError", "message": "other"}),
+            json.dumps(
+                {
+                    "diagnostic_id": "b" * 32,
+                    "exception_type": "RuntimeError",
+                    "message": "the real cause",
+                    "traceback": "frames that must not travel",
+                }
+            ),
+        )
+        cause = self.runtime()._recorded_cause("b" * 32)
+
+        self.assertEqual(cause, {"type": "RuntimeError", "message": "the real cause"})
+        self.assertNotIn("traceback", cause)
+
+    def test_every_failure_to_recover_is_silent(self) -> None:
+        # A method failure must stay a method failure even when its
+        # explanation cannot be read back.
+        handle = self.runtime()
+        self.assertIsNone(handle._recorded_cause("c" * 32))
+        self.write("{ not json at all")
+        self.assertIsNone(handle._recorded_cause("c" * 32))
+        self.assertIsNone(handle._recorded_cause(None))
+        self.assertIsNone(handle._recorded_cause(""))
 
 
 if __name__ == "__main__":

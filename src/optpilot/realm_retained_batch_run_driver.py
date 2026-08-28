@@ -50,6 +50,7 @@ from .realm.method_exchange_records import (
     method_exchange_sequence,
 )
 from .realm.refs import canonical_json_bytes
+from .realm.run_workbench import reduce_run_diagnostic
 from .realm.run_projection import RunSummaryProjection
 from .realm.run_records import RunCreateReceipt
 from .realm.run_snapshot import RunLedgerSnapshot
@@ -234,22 +235,45 @@ class RunControllerTakeoverExpectation:
         )
 
 
+def _recorded_method_cause(
+    cause: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Reduce a worker's private cause into what a Run may durably record.
+
+    The reduction happens here, before the ledger write, so the durable
+    exchange stream keeps its no-tracebacks, no-host-paths promise
+    structurally rather than by the reader remembering to redact.
+    """
+
+    if not isinstance(cause, Mapping):
+        return None
+    error_type, summary, truncated = reduce_run_diagnostic(cause)
+    if error_type is None and summary is None:
+        return None
+    return {"type": error_type, "message": summary, "truncated": truncated}
+
+
 @dataclass(frozen=True)
 class _Invocation:
     response_digest: str
     response: Mapping[str, Any] | None = None
     failure_outcome: str | None = None
     error_code: str | None = None
+    error_json: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _lower_digest(self.response_digest, "method response digest")
         if self.failure_outcome is None:
-            if self.response is None or self.error_code is not None:
+            if (
+                self.response is None
+                or self.error_code is not None
+                or self.error_json is not None
+            ):
                 raise ValueError("Successful invocation requires only a response.")
         elif self.failure_outcome not in {"method_failed", "protocol_error"}:
             raise ValueError("Invocation failure outcome is unsupported.")
         elif self.response is not None or self.error_code is None:
-            raise ValueError("Failed invocation requires only an error code.")
+            raise ValueError("Failed invocation requires an error code.")
 
 
 @dataclass(frozen=True)
@@ -988,6 +1012,7 @@ class RealmRetainedBatchRunDriver:
                 outcome=invocation.failure_outcome,
                 response_digest=invocation.response_digest,
                 error_code=invocation.error_code,
+                error_json=invocation.error_json,
             )
         assert invocation.response is not None
         try:
@@ -1104,6 +1129,7 @@ class RealmRetainedBatchRunDriver:
         outcome: str,
         response_digest: str,
         error_code: str | None,
+        error_json: Mapping[str, Any] | None = None,
     ) -> RunMethodExchangeCompletionRecord:
         receipt = self.runtime.ledger.complete_run_method_proposal_exchange(
             operation_id=(
@@ -1117,6 +1143,7 @@ class RealmRetainedBatchRunDriver:
             outcome=outcome,
             response_digest=response_digest,
             error_code=error_code,
+            error_json=error_json,
             expected_run_revision=self.authority.run_revision,
             controller_lease_id=self.authority.controller_lease_id,
             controller_holder_id=self.authority.controller_holder_id,
@@ -1144,12 +1171,15 @@ class RealmRetainedBatchRunDriver:
             except (KeyError, TypeError, ValueError):
                 outcome = "protocol_error"
                 error_code = "method_response_invalid"
+                error_json = None
             else:
                 outcome = "acknowledged"
                 error_code = None
+                error_json = None
         else:
             outcome = invocation.failure_outcome
             error_code = invocation.error_code
+            error_json = invocation.error_json
         receipt = self.runtime.ledger.complete_run_method_observation_exchange(
             operation_id=(
                 f"run/{self.authority.run_id}/method/{preparation.round_index}/"
@@ -1162,6 +1192,7 @@ class RealmRetainedBatchRunDriver:
             outcome=outcome,
             response_digest=invocation.response_digest,
             error_code=error_code,
+            error_json=error_json,
             expected_run_revision=self.authority.run_revision,
             controller_lease_id=self.authority.controller_lease_id,
             controller_holder_id=self.authority.controller_holder_id,
@@ -1183,6 +1214,7 @@ class RealmRetainedBatchRunDriver:
                 response_digest=error.response_digest,
                 failure_outcome=outcome,
                 error_code=error.code,
+                error_json=_recorded_method_cause(error.cause),
             )
         except RetainedBatchProtocolError as error:
             if (

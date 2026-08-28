@@ -378,7 +378,7 @@ def _sqlite_catalog_paths_overlap(left: object, right: object) -> int:
     return int(catalog_paths_overlap(left, right))
 
 
-_CURRENT_SCHEMA_VERSION = 37
+_CURRENT_SCHEMA_VERSION = 38
 _MIGRATION_DIRECTORY = Path(__file__).with_name("migrations")
 _MIGRATIONS = (
     (1, _MIGRATION_DIRECTORY / "0001_realm_core.sql"),
@@ -427,6 +427,7 @@ _MIGRATIONS = (
     (35, _MIGRATION_DIRECTORY / "0035_provider_trust_policy.sql"),
     (36, _MIGRATION_DIRECTORY / "0036_provider_trust_contract.sql"),
     (37, _MIGRATION_DIRECTORY / "0037_run_deletion.sql"),
+    (38, _MIGRATION_DIRECTORY / "0038_method_exchange_failure_cause.sql"),
 )
 _ID_NAMESPACE = uuid.UUID("a811e801-fdc1-43c8-b985-dcab229ffcea")
 _MAX_OPERATION_ID_BYTES = 512
@@ -15980,6 +15981,7 @@ class RealmLedger(
         controller_holder_id: str,
         controller_fencing_token: int,
         error_code: str | None = None,
+        error_json: Mapping[str, Any] | None = None,
     ) -> RunMethodObservationCompletionReceipt:
         """Complete ``observe`` honestly and atomically with its run effect.
 
@@ -15995,6 +15997,7 @@ class RealmLedger(
             outcome=outcome,
             response_digest=response_digest,
             error_code=error_code,
+            error_json=error_json,
         )
         if completion_input.outcome == "acknowledged":
             self.acknowledge_run_method_observation_exchange(
@@ -16276,8 +16279,8 @@ class RealmLedger(
             "logical_trial_ids_json, committed_run_revision, "
             "controller_generation, controller_lease_id, "
             "controller_fencing_token, completed_by_principal_id, "
-            "completed_txn_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "completed_txn_id, created_at, error_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 completion.exchange_id,
                 completion.run_id,
@@ -16298,6 +16301,13 @@ class RealmLedger(
                 completion.completed_by_principal_id,
                 completion.completed_txn_id,
                 completion.created_at,
+                (
+                    None
+                    if completion.error_json is None
+                    else canonical_json_bytes(dict(completion.error_json)).decode(
+                        "utf-8"
+                    )
+                ),
             ),
         )
 
@@ -16418,6 +16428,7 @@ class RealmLedger(
             response_digest=completion.response_digest,
             result_digest=result_digest,
             error_code=completion.error_code,
+            error_json=completion.error_json,
             logical_trial_ids=tuple(logical_trial_ids),
             committed_run_revision=committed_run_revision,
             controller_generation=int(run_row["controller_generation"]),
@@ -16552,6 +16563,7 @@ class RealmLedger(
             response_digest=completion.response_digest,
             result_digest=method_observation_result_digest(completion.outcome),
             error_code=completion.error_code,
+            error_json=completion.error_json,
             logical_trial_ids=exchange_input.logical_trial_ids,
             committed_run_revision=committed_run_revision,
             controller_generation=int(run_row["controller_generation"]),
@@ -17789,6 +17801,7 @@ class RealmLedger(
         controller_holder_id: str,
         controller_fencing_token: int,
         error_code: str | None = None,
+        error_json: Mapping[str, Any] | None = None,
         expected_owner_revision: int | None = None,
         change_id: str | None = None,
         plan: RunAdmissionPlan | None = None,
@@ -17812,6 +17825,7 @@ class RealmLedger(
             outcome=outcome,
             response_digest=response_digest,
             error_code=error_code,
+            error_json=error_json,
         )
         admission: RunAdmissionReceipt | None = None
         control: RunSubmissionControlReceipt | None = None
@@ -32747,6 +32761,30 @@ def _method_exchange_preparation_from_row(
         ) from error
 
 
+def _optional_method_exchange_error_json(
+    row: sqlite3.Row,
+) -> Optional[Mapping[str, Any]]:
+    """Decode a failed exchange's recorded cause, tolerating older rows.
+
+    A completion written before this column existed reads NULL. That means
+    "no detail was retained", which is what the reader must show -- not an
+    empty explanation, and not an error.
+    """
+
+    try:
+        raw = row["error_json"]
+    except (IndexError, KeyError):
+        return None
+    if raw is None:
+        return None
+    value = _load_canonical_json_value(raw, "method exchange error json")
+    if not isinstance(value, Mapping):
+        raise RealmIntegrityError(
+            "Persisted method exchange error json must be an object."
+        )
+    return value
+
+
 def _method_exchange_completion_from_row(
     row: Optional[sqlite3.Row],
 ) -> RunMethodExchangeCompletionRecord:
@@ -32770,6 +32808,7 @@ def _method_exchange_completion_from_row(
                 row["prepared_input_digest"], "prepared method input digest"
             ),
             outcome=_text(row["outcome"], "method exchange outcome"),
+            error_json=_optional_method_exchange_error_json(row),
             response_digest=_text(
                 row["response_digest"], "method exchange response digest"
             ),

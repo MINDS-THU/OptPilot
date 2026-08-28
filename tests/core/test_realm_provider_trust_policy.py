@@ -11,6 +11,9 @@ from unittest import mock
 import optpilot.realm.ledger as ledger_module
 from optpilot.realm.errors import RealmConflict, RealmIntegrityError, RealmNotFound
 from optpilot.realm.ledger import RealmLedger
+from optpilot.realm.ledger import (
+    _CURRENT_SCHEMA_VERSION as CURRENT_SCHEMA_VERSION,
+)
 from optpilot.realm.owners import OwnerPermission
 from optpilot.realm.provider_trust_policy import RealmProviderTrustPolicyService
 from optpilot.realm.provider_trust_records import (
@@ -229,7 +232,7 @@ class RealmProviderTrustPolicyMigrationTest(unittest.TestCase):
                 with sqlite3.connect(database) as connection:
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        37,
+                        CURRENT_SCHEMA_VERSION,
                     )
                     self.assertEqual(
                         connection.execute(

@@ -26,6 +26,9 @@ from optpilot.realm.interface_outputs import (
     seal_interface_output_generation,
 )
 from optpilot.realm.ledger import RealmLedger
+from optpilot.realm.ledger import (
+    _CURRENT_SCHEMA_VERSION as CURRENT_SCHEMA_VERSION,
+)
 from optpilot.realm.owners import OwnerMembership, OwnerPermission, OwnerState
 from optpilot.realm.selection_service import RealmSelectionActionService
 from optpilot.realm.service import RealmContentService
@@ -1245,14 +1248,14 @@ class RealmInterfaceOutputSessionMigrationTest(unittest.TestCase):
                 with sqlite3.connect(database) as connection:
                     self.assertEqual(
                         connection.execute("PRAGMA user_version").fetchone()[0],
-                        37,
+                        CURRENT_SCHEMA_VERSION,
                     )
                     self.assertEqual(
                         connection.execute(
                             "SELECT value FROM realm_meta "
                             "WHERE key = 'schema_version'"
                         ).fetchone(),
-                        ("37",),
+                        (str(CURRENT_SCHEMA_VERSION),),
                     )
                     self.assertEqual(
                         connection.execute(

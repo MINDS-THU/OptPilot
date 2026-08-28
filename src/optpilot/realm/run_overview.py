@@ -290,6 +290,23 @@ class RunOverviewProjection:
             },
             "points": list(sampled_points),
         }
+        # A Run that stopped because its method broke has no failed trial to
+        # open: the trials that ran may all have succeeded. Carry the method's
+        # own recorded cause here, where the status already lives.
+        method_error_type = None
+        method_error_summary = None
+        method_error_truncated = False
+        for completion in reversed(tuple(snapshot.method_exchange_completions)):
+            if completion.outcome not in {"method_failed", "protocol_error"}:
+                continue
+            recorded = completion.error_json
+            if not isinstance(recorded, Mapping):
+                continue
+            method_error_type = recorded.get("type")
+            method_error_summary = recorded.get("message")
+            method_error_truncated = bool(recorded.get("truncated"))
+            break
+
         payload = {
             "schema": RUN_OVERVIEW_PROJECTION_SCHEMA,
             "run_id": snapshot.run.run_id,
@@ -302,6 +319,9 @@ class RunOverviewProjection:
                 "submission_state": selected_summary.submission_state,
                 "stop_code": selected_summary.stop_code,
                 "finality": selected_results.summary["finality"],
+                "method_error_type": method_error_type,
+                "method_error_summary": method_error_summary,
+                "method_error_summary_truncated": method_error_truncated,
             },
             "objective": {
                 "metric": selected_summary.objective_metric,

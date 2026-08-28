@@ -10,6 +10,9 @@ from pathlib import Path
 from optpilot.realm.content import AllowedTreeSource, LocalContentStore
 from optpilot.realm.errors import RealmConflict, RealmNotFound
 from optpilot.realm.ledger import RealmLedger
+from optpilot.realm.ledger import (
+    _CURRENT_SCHEMA_VERSION as CURRENT_SCHEMA_VERSION,
+)
 from optpilot.realm.owners import OwnerMembership
 from optpilot.realm.refs import BlobRef
 from optpilot.realm.workspaces import (
@@ -921,7 +924,7 @@ class RealmWorkspaceLedgerTest(unittest.TestCase):
 
 
 class RealmWorkspaceMigrationTest(unittest.TestCase):
-    def test_v1_database_upgrades_through_current_v37_with_all_checksums(self) -> None:
+    def test_v1_database_upgrades_through_current_schema_with_all_checksums(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "realm.sqlite3"
             v1_path = (
@@ -955,13 +958,14 @@ class RealmWorkspaceMigrationTest(unittest.TestCase):
             connection = sqlite3.connect(database)
             try:
                 self.assertEqual(
-                    connection.execute("PRAGMA user_version").fetchone()[0], 37
+                    connection.execute("PRAGMA user_version").fetchone()[0],
+                    CURRENT_SCHEMA_VERSION,
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT version FROM schema_migrations ORDER BY version"
                     ).fetchall(),
-                    [(version,) for version in range(1, 38)],
+                    [(version,) for version in range(1, CURRENT_SCHEMA_VERSION + 1)],
                 )
                 self.assertIsNotNone(
                     connection.execute(

@@ -629,6 +629,98 @@ class RealmMethodExchangeLedgerTest(unittest.TestCase):
                 controller_fencing_token=self.controller.fencing_token,
             )
 
+    def _prepared_observation(self, label: str):
+        """Admit a candidate, cancel its trial, and prepare the observe call."""
+
+        prepared = self.prepare_proposal(operation_id=self.op(f"propose-{label}"))
+        self.complete_admission(prepared, operation_id=self.op(f"admit-{label}"))
+        cancelled = self.cancel_trial()
+        return self.ledger.prepare_run_method_exchange(
+            operation_id=self.op(f"prepare-{label}"),
+            actor_principal_id="operator",
+            run_id="run-a",
+            round_index=1,
+            expected_run_revision=cancelled.revision.revision,
+            expected_controller_generation=cancelled.run.controller_generation,
+            controller_lease_id=self.controller.lease_id,
+            controller_holder_id=self.controller.holder_id,
+            controller_fencing_token=self.controller.fencing_token,
+            exchange_input=self.observation_input(
+                MethodTerminalTransitionRef(cancelled.transition)
+            ),
+        )
+
+    def _failed_observation(self, *, error_json, operation: str):
+        observation = self._prepared_observation(operation)
+        return self.ledger.complete_run_method_observation_exchange(
+            operation_id=self.op(operation),
+            actor_principal_id="operator",
+            run_id="run-a",
+            round_index=1,
+            prepared_input_digest=observation.input_digest,
+            outcome="method_failed",
+            response_digest=method_worker_response_digest(
+                {"ok": False, "error": {"code": "worker_crashed"}}
+            ),
+            error_code="observe_worker_failed",
+            error_json=error_json,
+            expected_run_revision=observation.prepared_run_revision,
+            controller_lease_id=self.controller.lease_id,
+            controller_holder_id=self.controller.holder_id,
+            controller_fencing_token=self.controller.fencing_token,
+        )
+
+    def test_a_failed_exchange_records_why_the_method_failed(self) -> None:
+        # Without this the only account of a broken method is the word
+        # "method_failed", and a Run whose trials all succeeded has no failed
+        # trial to open instead.
+        completed = self._failed_observation(
+            error_json={
+                "type": "RuntimeError",
+                "message": "FileNotFoundError: [Errno 2] no such directory: '<path>'",
+                "truncated": False,
+            },
+            operation="complete-observe-with-cause",
+        )
+        recorded = completed.completion.error_json
+
+        self.assertEqual(recorded["type"], "RuntimeError")
+        self.assertIn("FileNotFoundError", recorded["message"])
+        self.assertFalse(recorded["truncated"])
+
+        snapshot = self.ledger.read_run_snapshot(
+            actor_principal_id="operator", run_id="run-a"
+        )
+        durable = snapshot.method_exchange_completions[-1]
+        self.assertEqual(durable.error_json, recorded)
+
+    def test_a_failed_exchange_without_a_recovered_cause_records_none(self) -> None:
+        # The worker's diagnostic volume is erased seconds after it dies, so
+        # the cause is sometimes genuinely unrecoverable. That must read as
+        # "nothing retained", never as an empty explanation.
+        completed = self._failed_observation(
+            error_json=None, operation="complete-observe-without-cause"
+        )
+        self.assertIsNone(completed.completion.error_json)
+
+    def test_an_acknowledged_exchange_cannot_carry_a_cause(self) -> None:
+        observation = self._prepared_observation("ack-cause")
+        with self.assertRaises(ValueError):
+            self.ledger.complete_run_method_observation_exchange(
+                operation_id=self.op("ack-with-cause"),
+                actor_principal_id="operator",
+                run_id="run-a",
+                round_index=1,
+                prepared_input_digest=observation.input_digest,
+                outcome="acknowledged",
+                response_digest=method_worker_response_digest({"ok": True}),
+                error_json={"type": "RuntimeError", "message": "x", "truncated": False},
+                expected_run_revision=observation.prepared_run_revision,
+                controller_lease_id=self.controller.lease_id,
+                controller_holder_id=self.controller.holder_id,
+                controller_fencing_token=self.controller.fencing_token,
+            )
+
     def test_oversized_admission_is_rejected_before_owner_change_and_can_close_typed(self) -> None:
         prepared = self.prepare_proposal(operation_id=self.op("prepare-oversized"))
         change = self.begin_change()

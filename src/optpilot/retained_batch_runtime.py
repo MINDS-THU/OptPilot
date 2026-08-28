@@ -258,6 +258,7 @@ class RetainedBatchMethodError(RuntimeError):
         message: str,
         diagnostic_id: str | None,
         response_digest: str,
+        cause: Mapping[str, Any] | None = None,
     ) -> None:
         if not isinstance(code, str) or _SAFE_ERROR_CODE.fullmatch(code) is None:
             raise ValueError("retained batch method error code is invalid.")
@@ -277,6 +278,12 @@ class RetainedBatchMethodError(RuntimeError):
         self.message = selected_message
         self.diagnostic_id = diagnostic_id
         self.response_digest = selected_digest
+        # The worker's public response deliberately says only "the retained
+        # method operation failed", so that its digest stays reproducible.
+        # The real cause lives in the worker's private diagnostic log on a
+        # volume that is erased seconds later, which is why it is read back
+        # here rather than left to be looked up by id afterwards.
+        self.cause = dict(cause) if isinstance(cause, Mapping) else None
         super().__init__(f"Retained batch method operation failed ({code}).")
 
 
@@ -3199,9 +3206,45 @@ class RetainedPythonBatchRuntime:
                 message=error["message"],
                 diagnostic_id=error["diagnostic_id"],
                 response_digest=response_digest,
+                cause=self._recorded_cause(error.get("diagnostic_id")),
             )
         except (KeyError, TypeError, ValueError):
             raise protocol_error() from None
+
+    def _recorded_cause(self, diagnostic_id: Any) -> Mapping[str, Any] | None:
+        """Read one private diagnostic back before its volume is erased.
+
+        Every failure path here returns None: a method failure must be
+        reported as a method failure even when its explanation cannot be
+        recovered, and never as a protocol error.
+        """
+
+        if not isinstance(diagnostic_id, str) or not diagnostic_id:
+            return None
+        try:
+            path = self._volume.path / _DIAGNOSTIC_FILE
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or not line.startswith("{"):
+                        # The sink doubles as the method's redirected stdout,
+                        # so unparseable lines are expected, not an error.
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if (
+                        isinstance(event, Mapping)
+                        and event.get("diagnostic_id") == diagnostic_id
+                    ):
+                        return {
+                            "type": event.get("exception_type"),
+                            "message": event.get("message"),
+                        }
+        except Exception:
+            return None
+        return None
 
     def _lookup_terminal_proof(self) -> WorkerTerminalProof | None:
         if self._reservation is None:

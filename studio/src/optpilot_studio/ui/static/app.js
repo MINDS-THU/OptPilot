@@ -13153,7 +13153,7 @@ function renderRunDetail(options = {}) {
   const overviewCounts = overview && overview.counts || {};
   const trialCounts = overviewCounts.logical_trials || {};
   const plannedTrials = trialCounts.planned ?? budget.max_trials;
-  const completionMessage = runCompletionMessage(summary, status);
+  const completionMessage = runCompletionMessage(summary, status, overview);
   const canStopRun = Boolean(run.can_stop);
   const technicalTabs = runTechnicalTabs();
   const activeTechnicalTab = technicalTabs.find(([tab]) => tab === state.activeRunTab);
@@ -14681,19 +14681,24 @@ function runHeadlineResult(detail) {
 //: and none of them said what to do next.
 const RUN_STOP_REASONS = {
   max_failures: "Too many trials failed, so the Run stopped early. Open a failed trial below to see what its evaluation reported.",
-  method_failed: "The method stopped working while proposing candidates. Its error is in the trial evidence below.",
+  method_failed: "The method stopped working, so no further Candidates could be tried. Trials that already finished keep their results.",
   protocol_error: "The method sent something OptPilot could not read. This usually means the method's code returned the wrong shape.",
   method_completed: "The method finished proposing candidates before the budget was used up.",
   no_successful_observation: "Every trial's evaluation failed, so there was nothing to compare. Open Trial results under Evidence & history below to see what each evaluation reported.",
 };
 
-function runCompletionMessage(summary, status) {
+function runCompletionMessage(summary, status, overview) {
   const stopCode = String(summary && summary.stop_code || "");
   const reason = RUN_STOP_REASONS[stopCode];
   if (["failed"].includes(status)) {
-    return reason
+    //: When the method itself broke, the Run records what it reported. That
+    //: is the only account of the failure -- unlike an evaluation, there is
+    //: no failed trial to open, and older Runs recorded nothing at all.
+    const cause = methodFailureSentence(overview);
+    const head = reason
       ? `This Run stopped before it could finish. ${reason}`
       : "This Run stopped before it could finish.";
+    return cause ? `${head} ${cause}` : head;
   }
   if (["cancelled", "canceled"].includes(status)) return "This Run was stopped. Results already recorded are still available.";
   if (["completed", "succeeded"].includes(status)) {
@@ -14701,6 +14706,16 @@ function runCompletionMessage(summary, status) {
     if (reason) return reason;
   }
   return "";
+}
+
+function methodFailureSentence(overview) {
+  const status = overview && overview.status || {};
+  const summary = typeof status.method_error_summary === "string" ? status.method_error_summary.trim() : "";
+  const type = typeof status.method_error_type === "string" ? status.method_error_type.trim() : "";
+  if (!summary && !type) return "";
+  const detail = summary || type;
+  const truncated = status.method_error_summary_truncated ? " ..." : "";
+  return `It reported: ${detail}${truncated}`;
 }
 
 function runOverviewBestReason(reason) {

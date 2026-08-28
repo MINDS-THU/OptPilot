@@ -122,6 +122,43 @@ def _exact_keys(payload: Mapping[str, Any], expected: set[str], label: str) -> N
         )
 
 
+MAX_METHOD_ERROR_MESSAGE_BYTES = 512
+
+
+def _checked_error_json(
+    value: Any, outcome: str, label: str
+) -> Mapping[str, Any] | None:
+    """Validate the bounded, path-free cause a failed exchange may carry.
+
+    The stream's promise is that it holds no tracebacks and no host paths, so
+    the text is reduced before it ever reaches here. What this enforces is the
+    shape and the bound -- and that only a failure carries one, because a
+    completed exchange has nothing to explain.
+    """
+
+    if value is None:
+        return None
+    if outcome not in {"method_failed", "protocol_error"}:
+        raise ValueError(f"nonfailed {label} cannot have error_json.")
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} error_json must be a mapping.")
+    _exact_keys(value, {"type", "message", "truncated"}, f"{label} error_json")
+    error_type = value["type"]
+    message = value["message"]
+    truncated = value["truncated"]
+    if error_type is not None:
+        required_text(error_type, f"{label} error type", max_bytes=256)
+    if message is not None:
+        required_text(
+            message, f"{label} error message", max_bytes=MAX_METHOD_ERROR_MESSAGE_BYTES
+        )
+    if not isinstance(truncated, bool):
+        raise TypeError(f"{label} error_json truncated must be a boolean.")
+    if error_type is None and message is None:
+        raise ValueError(f"{label} error_json must name a type or a message.")
+    return {"type": error_type, "message": message, "truncated": truncated}
+
+
 def method_worker_response_digest(response: Any) -> str:
     """Hash the full bounded canonical JSON object returned by a method worker.
 
@@ -562,6 +599,7 @@ class RunMethodProposalCompletion:
     outcome: str
     response_digest: str
     error_code: str | None = None
+    error_json: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         positive_int(self.round_index, "method round index")
@@ -577,6 +615,11 @@ class RunMethodProposalCompletion:
                 raise ValueError("method proposal error_code must be a lowercase token.")
         elif self.error_code is not None:
             raise ValueError("successful method proposal completion cannot have error_code.")
+        object.__setattr__(
+            self,
+            "error_json",
+            _checked_error_json(self.error_json, self.outcome, "method proposal completion"),
+        )
 
     def to_dict(self) -> JsonDict:
         return dict(self.__dict__)
@@ -596,6 +639,7 @@ class RunMethodObservationCompletion:
     outcome: str
     response_digest: str
     error_code: str | None = None
+    error_json: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         positive_int(self.round_index, "method round index")
@@ -615,6 +659,13 @@ class RunMethodObservationCompletion:
             raise ValueError(
                 "acknowledged method observation cannot have error_code."
             )
+        object.__setattr__(
+            self,
+            "error_json",
+            _checked_error_json(
+                self.error_json, self.outcome, "method observation completion"
+            ),
+        )
 
     def to_dict(self) -> JsonDict:
         return dict(self.__dict__)
@@ -646,6 +697,7 @@ class RunMethodExchangeCompletionRecord:
     completed_by_principal_id: str
     completed_txn_id: int
     created_at: float
+    error_json: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         required_text(self.exchange_id, "method exchange id", max_bytes=512)
@@ -675,6 +727,11 @@ class RunMethodExchangeCompletionRecord:
                 raise ValueError("method exchange error_code must be a lowercase token.")
         elif self.error_code is not None:
             raise ValueError("nonfailed method exchange cannot have error_code.")
+        object.__setattr__(
+            self,
+            "error_json",
+            _checked_error_json(self.error_json, self.outcome, "method exchange completion"),
+        )
         if self.kind == "observation" and self.result_digest != (
             method_observation_result_digest(self.outcome)
         ):

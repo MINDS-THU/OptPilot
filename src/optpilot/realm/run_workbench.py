@@ -475,6 +475,20 @@ def _diagnostic_summary(error: Mapping[str, Any]) -> tuple[str | None, bool]:
     return text, truncated or dropped
 
 
+def reduce_run_diagnostic(
+    error: Mapping[str, Any],
+) -> tuple[str | None, str | None, bool]:
+    """Reduce one worker-reported error to (type, summary, truncated).
+
+    The same reduction a failed evaluation gets, exposed for the method side:
+    a method's failure is recorded through a different path but has to obey
+    the same two rules -- bounded, and free of host paths.
+    """
+
+    summary, truncated = _diagnostic_summary(error)
+    return _diagnostic_type(error), summary, truncated
+
+
 def _encode_page_token(payload: Mapping[str, Any]) -> str:
     return (
         base64.urlsafe_b64encode(_canonical_json_bytes(payload))
@@ -1099,6 +1113,7 @@ __all__ = [
     "RUN_WORKBENCH_MAX_OBSERVATION_METRICS",
     "RUN_WORKBENCH_MAX_PAGE_SIZE",
     "RUN_WORKBENCH_MAX_TEXT_BYTES",
+    "reduce_run_diagnostic",
     "RUN_WORKBENCH_PAGE_SCHEMA",
     "RUN_WORKBENCH_SELECTION_SCHEMA",
     "RunWorkbenchReadModel",

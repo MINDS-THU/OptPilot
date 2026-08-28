@@ -10,6 +10,9 @@ from pathlib import Path
 from optpilot.realm.content import LocalContentStore
 from optpilot.realm.errors import RealmConflict, RealmIntegrityError
 from optpilot.realm.ledger import RealmLedger
+from optpilot.realm.ledger import (
+    _CURRENT_SCHEMA_VERSION as CURRENT_SCHEMA_VERSION,
+)
 from optpilot.realm.run_definition import RUN_METHOD_SOURCE_ROLE
 from tests.realm_run_support import (
     TEST_LEASE_TTL_SECONDS,
@@ -560,7 +563,7 @@ class RealmRunDefinitionLedgerTest(unittest.TestCase):
 
 
 class RealmRunDefinitionMigrationTest(unittest.TestCase):
-    def test_empty_v7_realm_upgrades_to_current_v37(self) -> None:
+    def test_empty_v7_realm_upgrades_to_current_schema(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "realm.sqlite3"
             migration_directory = (
@@ -602,19 +605,20 @@ class RealmRunDefinitionMigrationTest(unittest.TestCase):
             connection = sqlite3.connect(database)
             try:
                 self.assertEqual(
-                    connection.execute("PRAGMA user_version").fetchone()[0], 37
+                    connection.execute("PRAGMA user_version").fetchone()[0],
+                    CURRENT_SCHEMA_VERSION,
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT value FROM realm_meta WHERE key = 'schema_version'"
                     ).fetchone()[0],
-                    "37",
+                    str(CURRENT_SCHEMA_VERSION),
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT version FROM schema_migrations ORDER BY version"
                     ).fetchall(),
-                    [(version,) for version in range(1, 38)],
+                    [(version,) for version in range(1, CURRENT_SCHEMA_VERSION + 1)],
                 )
             finally:
                 connection.close()
