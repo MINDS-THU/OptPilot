@@ -32814,17 +32814,58 @@ def _convert_trace(jsonl_path, database_path, kpis):
         connection.close()
 
 
+_SIMULATOR_MEMBERS = ("run.py", "simulation.json", "devs_project")
+
+
+def _environment_source_simulator():
+    """Find the directory holding the simulator this adapter replays.
+
+    Evaluation never needs this -- the trial workspace is materialized from
+    the environment's declared paths -- but replay starts from a bare
+    workspace and must assemble the same simulator/ tree itself. Where the
+    members live depends on how the environment was authored: in a
+    simulator/ directory beside this adapter, one level up at the workspace
+    root, or under resource-action-output/<id>/simulator in a generated
+    bundle. The errors below name the layout rather than a path on purpose:
+    this text is reported through a boundary that redacts absolute paths,
+    and a message built from one would arrive saying nothing.
+    """
+
+    root = Path(__file__).resolve().parent
+    candidates = [root / "simulator", root, root.parent]
+    for base in (root, root.parent):
+        candidates.extend(sorted(base.glob("resource-action-output/*/simulator")))
+    for base in candidates:
+        if all((base / name).exists() for name in _SIMULATOR_MEMBERS):
+            return base
+    raise FileNotFoundError(
+        "This environment source has no simulator tree (run.py, "
+        "simulation.json, devs_project) beside its adapter, at its root, or "
+        "under resource-action-output/, so replay cannot assemble a workspace."
+    )
+
+
 def _prepared_simulator(workspace, candidate_dir):
     simulator = workspace / "simulator"
     if not simulator.is_dir():
         # Replay contexts run in a bare workspace without the trial
-        # materialization; copy the environment-source simulator tree.
-        source = Path(__file__).resolve().parent / "simulator"
-        shutil.copytree(
-            source,
-            simulator,
-            ignore=shutil.ignore_patterns("__pycache__", "runtime_dependencies"),
-        )
+        # materialization; assemble the simulator/ tree member by member,
+        # mirroring the trial mapping, so replay sees exactly what
+        # evaluation saw.
+        source = _environment_source_simulator()
+        simulator.mkdir(parents=True)
+        for name in _SIMULATOR_MEMBERS:
+            member = source / name
+            if member.is_dir():
+                shutil.copytree(
+                    member,
+                    simulator / name,
+                    ignore=shutil.ignore_patterns(
+                        "__pycache__", "runtime_dependencies"
+                    ),
+                )
+            else:
+                shutil.copyfile(member, simulator / name)
         # The environment source projection is read-only; the copy must be
         # writable so the candidate policy can overlay its declared file.
         import os as _os

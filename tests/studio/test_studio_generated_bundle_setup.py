@@ -178,5 +178,104 @@ class SetupStepFollowsTheBundleTest(unittest.TestCase):
         self.assertNotIn('"cwd": "..",', source)
 
 
+
+class PolicyAdapterReplayResolutionTest(unittest.TestCase):
+    """The starter adapter's replay path finds the simulator it evaluates.
+
+    Evaluation materializes simulator/ into the trial workspace, so it never
+    exercises the adapter's fallback. Replay starts from a bare workspace and
+    must assemble the tree itself -- and the adapter is written into
+    optpilot_configs/, so a fallback that only looks beside the adapter file
+    finds nothing and every replay fails after a perfectly good evaluation.
+    """
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        from optpilot_studio.ui.server import _simulation_policy_adapter_starter
+
+        self.code = _simulation_policy_adapter_starter(
+            "devs_project/RestaurantSystem_libs/SeatingCoordinator.py",
+            "devs_project.run_restaurantsystem",
+        )
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def load(self, adapter_path: Path):
+        import types
+
+        module = types.ModuleType("policy_adapter_under_test")
+        module.__file__ = str(adapter_path)
+        exec(compile(self.code, str(adapter_path), "exec"), module.__dict__)
+        return module
+
+    def members(self, base: Path) -> None:
+        (base / "devs_project").mkdir(parents=True, exist_ok=True)
+        (base / "devs_project" / "model.py").write_text("x = 1\n")
+        (base / "run.py").write_text("print('run')\n")
+        (base / "simulation.json").write_text("{}\n")
+
+    def test_the_adapter_written_into_optpilot_configs_finds_the_root(self) -> None:
+        # The layout catalog_setup itself writes: adapter one level below the
+        # simulator members. This is the case that used to fail.
+        base = self.root / "workspace"
+        (base / "optpilot_configs").mkdir(parents=True)
+        self.members(base)
+        module = self.load(base / "optpilot_configs" / "adapter.py")
+
+        self.assertEqual(module._environment_source_simulator(), base)
+
+    def test_a_generated_bundle_layout_still_resolves(self) -> None:
+        base = self.root / "bundle"
+        simulator = base / "resource-action-output" / "req-1" / "simulator"
+        self.members(simulator)
+        module = self.load(base / "adapter.py")
+
+        self.assertEqual(module._environment_source_simulator(), simulator)
+
+    def test_a_sibling_simulator_directory_still_resolves(self) -> None:
+        base = self.root / "plain"
+        self.members(base / "simulator")
+        module = self.load(base / "adapter.py")
+
+        self.assertEqual(module._environment_source_simulator(), base / "simulator")
+
+    def test_replay_assembles_the_trial_shape_and_overlays_the_candidate(self) -> None:
+        base = self.root / "workspace"
+        (base / "optpilot_configs").mkdir(parents=True)
+        self.members(base)
+        workspace = self.root / "replay-ws"
+        workspace.mkdir()
+        candidate = self.root / "candidate"
+        candidate.mkdir()
+        (candidate / "SeatingCoordinator.py").write_text("policy = True\n")
+        module = self.load(base / "optpilot_configs" / "adapter.py")
+
+        simulator = module._prepared_simulator(workspace, candidate)
+
+        self.assertTrue((simulator / "simulation.json").is_file())
+        self.assertTrue((simulator / "devs_project" / "model.py").is_file())
+        self.assertEqual(
+            (
+                simulator
+                / "devs_project"
+                / "RestaurantSystem_libs"
+                / "SeatingCoordinator.py"
+            ).read_text(),
+            "policy = True\n",
+        )
+
+    def test_a_missing_tree_raises_a_path_free_layout_error(self) -> None:
+        base = self.root / "empty"
+        (base / "optpilot_configs").mkdir(parents=True)
+        module = self.load(base / "optpilot_configs" / "adapter.py")
+
+        with self.assertRaises(FileNotFoundError) as caught:
+            module._environment_source_simulator()
+        self.assertNotIn(str(self.root), str(caught.exception))
+        self.assertIn("simulator tree", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
