@@ -78,32 +78,51 @@ Studio can run the Assistant in several modes:
 | OpenHands agent server | Assistant tool execution through the Studio bridge. | OpenHands-compatible agent server plus model/API key. |
 | Workspace tools | Read/write files, run shell commands, and open previews in Workspaces made available to the Conversation. | OpenHands bridge and a Workspace runtime. |
 
-The OpenHands bridge has been checked with
-`openhands-agent-server==1.29.0`. OpenHands currently expects Python 3.12, so
-run it from a Python 3.12 environment when enabling tool execution. Studio gives
-OpenHands a small native inspection/planning tool set for codebase search.
-Terminal and file-editing calls use OpenHands-compatible Studio tool names, but
-they are still Studio client tools: Studio executes them through Conversation
-Workspace-access checks, editable-Workspace rules, runtime execution, and approvals instead
-of letting OpenHands edit files or run shell commands directly.
+The OpenHands bridge has been checked with the OpenHands packages at `1.40.1`.
+OpenHands currently expects Python 3.12, so
+run it from a Python 3.12 environment when enabling tool execution. The only
+native OpenHands tool enabled by OptPilot is `task_tracker`. Filesystem search,
+inspection, editing, and terminal commands use OpenHands-compatible Studio
+client-tool names. Studio executes those calls through Conversation
+Workspace-access checks, editable-Workspace rules, runtime execution, and
+approvals instead of letting OpenHands access the host filesystem or shell
+directly.
 
-Install the runtime packages in the source-checkout environment:
+Install the runtime packages in a Python 3.12 source-checkout environment. The
+manual commands below use the default `.venv`. If you deliberately prepare the
+environment elsewhere, use its Python path for installation and set
+`OPTPILOT_DEV_VENV` when using the full-stack launcher:
 
 ```bash
-uv pip install -U openhands-sdk openhands-tools openhands-workspace openhands-agent-server
+uv venv --python 3.12 .venv
+uv sync --all-packages --group examples --group docs
+uv pip install --python .venv/bin/python -U \
+  openhands-sdk==1.40.1 openhands-tools==1.40.1 \
+  openhands-workspace==1.40.1 openhands-agent-server==1.40.1
 ```
 
 Start OpenHands:
 
 ```bash
-OPENHANDS_SUPPRESS_BANNER=1 uv run --no-sync agent-server --host 127.0.0.1 --port 8781
+OPENHANDS_SUPPRESS_BANNER=1 uv run --no-sync agent-server \
+  --host 127.0.0.1 \
+  --port 8781 \
+  --import-modules optpilot_studio.openhands_client_tools
 ```
+
+The import module is required: it installs the client-tool acknowledgement that
+keeps the Assistant processing Studio's result in the same turn.
 
 Start Studio:
 
 ```bash
 uv run optpilot ui --host 127.0.0.1 --port 8765
 ```
+
+For the complete Docker, OpenHands, Studio, and workspace Code Server stack,
+run `./scripts/start_services.sh`. It uses `.venv` by default and honors
+`OPTPILOT_DEV_VENV` or `UV_PROJECT_ENVIRONMENT`; it does not depend on editor
+launch settings or a machine-specific path.
 
 Configure the Assistant in Studio Settings, or use environment variables:
 
@@ -140,17 +159,20 @@ flowchart TB
 
 ## Settings And Local Variables
 
-Studio settings have two scopes:
+Studio settings have three areas:
 
 | Settings area | Purpose |
 | --- | --- |
-| OptPilot | OpenHands URL, model, API key, OptPilot capabilities, and approval defaults. |
-| Local environment variables | Machine-local environment variables that component configs may request through `envFromHost`. |
+| Assistant | OpenHands URL, model, and API key. Core OptPilot tools are built in; preview-only Skill, MCP, and custom-tool records are not editable in this release. |
+| Permissions | Defaults for Assistant-proposed file, execution, publishing, launch, stop, Resource, and interface actions. |
+| Local values | Project-scoped environment values that component configs may request through `envFromHost`. |
 
 Values are write-only in the browser. Studio can show that a value is
 configured, but it does not echo the value back into the page. They are stored
-as plaintext in OptPilot's local settings file, with mode `0600` where the
-platform supports it. This local file is not a secret vault.
+as plaintext in `<Studio start directory>/.optpilot-ui/settings.json`, with
+mode `0600` where the platform supports it. If that project directory is
+synchronized, the settings file may be synchronized too. It is not a secret
+vault.
 
 Components should declare the environment variables they need. For example, an
 LLM Method can declare `OPENROUTER_API_KEY` in its runtime environment
@@ -180,7 +202,7 @@ Workspace that the user explicitly makes available to the Conversation.
 It can inspect read-only context such as:
 
 - visible Studio selection and exact object coordinates
-- available Workspace code through native OpenHands search tools
+- available Workspace code through Studio-backed file and terminal tools
 - Catalog entries
 - Study configs
 - Run summaries and evidence files
@@ -202,19 +224,23 @@ private launch-scoped runtime and output storage.
 
 ## Approvals
 
-Higher-impact actions are approval-gated in Studio. This includes:
+File reads and writes are Workspace-scoped by default: the Conversation must
+have an attached editable Workspace, and Studio still rejects control paths,
+credential files, and escapes. In Settings, **File writes** can instead be set
+to **Always request approval** or **Disabled**.
 
-- writing files
-- running shell commands
-- launching Studies and Runs
+Execution and lifecycle actions are approval-gated in Studio. This includes:
+
+- every shell command and smoke test
+- launching Studies, interfaces, and Resource actions
 - stopping jobs
-- applying package plans
+- registering or updating packages
+- file writes when **Always request approval** is selected
 
-OpenHands-native tools are limited to low-risk inspection and planning, such as
-`grep`, `glob`, and `task_tracker`. Studio exposes OpenHands-compatible
-`optpilot_terminal` and `optpilot_file_editor` as client tools so the model gets
-familiar software-engineering interfaces while OptPilot keeps control of paths,
-Workspace runtime, and approvals.
+OpenHands-native tools are limited to `task_tracker` for planning. Studio
+exposes OpenHands-compatible `optpilot_terminal` and `optpilot_file_editor` as
+client tools so the model can search, inspect, edit, and run commands while
+OptPilot keeps control of paths, Workspace runtime, and approvals.
 
 Approval records are stored under `.optpilot-ui/` with the local Conversation
 state. Pending approvals remain visible in their Conversation; the

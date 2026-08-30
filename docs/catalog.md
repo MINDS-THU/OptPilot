@@ -14,11 +14,14 @@ published in the Realm and mutable filesystem packages configured as import
 sources. In the source checkout, `catalog/` supplies the default configured
 packages.
 
-The repository ships one package:
+The repository ships three research packages and one tutorial package:
 
 ```text
 catalog/
+  devs_gallery/
   production_agv_scheduling/
+  or_solving/
+  optpilot_tutorial/
 ```
 
 The core CLI can validate a package folder:
@@ -28,22 +31,31 @@ optpilot package validate path/to/package
 ```
 
 By default, package validation checks recognized OptPilot config files and
-their schemas. Use the deeper checks before publishing or using a package
-made from an external codebase:
+their schemas without importing authored Python. Start an external codebase
+with the static source and setup-file checks:
 
 ```bash
 optpilot package validate path/to/package \
   --check-source \
-  --check-setup-files \
-  --check-imports
+  --check-setup-files
 ```
 
-These checks verify public source paths, setup files, and Python callable
-imports under the portable package layout. Public source paths must resolve
-inside the package; a path that only works because the original external
-workspace is still on your machine is not portable package source.
+These checks verify public source paths and setup files under the portable
+package layout. Public source paths must resolve inside the package; a path
+that only works because the original external workspace is still on your
+machine is not portable package source.
 
-These checks still do not install dependencies or prove that every study can
+`--check-imports` goes further by importing each declared Python callable in a
+normal child process. Importing executes module top-level code with the host
+process's user and environment authority; it is **not a sandbox**. Review and
+trust the package first, or run this opt-in check inside a disposable isolated
+environment:
+
+```bash
+optpilot package validate path/to/trusted-package --check-imports
+```
+
+Validation still does not install dependencies or prove that every study can
 complete. For a release-quality package, validate the package, validate the
 study files you intend to advertise, and smoke-run at least one small study.
 
@@ -70,12 +82,12 @@ missing wherever the package travels.
 
 This is reported as the `dependency_host_provisioned` capability code and as a
 per-component warning; it does not make the package invalid, because a
-component may be knowingly host-provisioned. The job-shop methods used in
-OptPilot's own test material are:
-they need native `ortools` and `torch` closures and are installed through the
-`examples` dependency group. To resolve a warning, vendor the dependency into
-the component's locked runtime, retain it as package source, or document the
-component as host-provisioned. Pass `--no-dependency-check` to skip the scan.
+component may be knowingly host-provisioned. Native or platform-specific
+dependencies often cannot enter the retained pure-Python wheel layer. To
+resolve a warning, declare a supported locked dependency, retain portable
+source inside the package, or document the component as host-provisioned with
+exact installation steps. Pass `--no-dependency-check` only when you
+deliberately want to skip the scan.
 
 If a package declares component `runtime.setup` or interface
 `runtime.setup`, check the setup
@@ -112,14 +124,18 @@ Packages are the bridge between the core CLI and Studio:
   versions, edit eligible work in Workspaces, open interfaces,
   draft studies, and launch studies.
 
-The packages that ship are just packages:
+The packages that ship use the same public layout as third-party packages:
 
 ```text
+catalog/devs_gallery/
 catalog/production_agv_scheduling/
+catalog/or_solving/
+catalog/optpilot_tutorial/
 ```
 
-It is useful as a template, but user packages should live beside it rather than
-overwriting it.
+They are useful as references, but the tracked `catalog/` is release source.
+Create user packages in an external project or per-user packages root rather
+than beside or inside these bundled folders.
 
 ## Where Things Are Stored
 
@@ -127,22 +143,28 @@ OptPilot separates authored imports, immutable published packages, editable
 workspaces, and canonical runs:
 
 ```text
-catalog/production_agv_scheduling/  bundled configured filesystem import
-catalog/my_package/          optional user-authored filesystem import
-private per-user Realm       package revisions, workspace revisions,
-                             retained study definitions, canonical runs,
-                             and private runtime storage
+repository catalog/          bundled example source (tracked, not user storage)
+per-user packages root       editable packages owned by this user
+external --catalog roots     other editable configured filesystem imports
+private per-user Realm       immutable package/workspace revisions, retained
+                             study definitions, Runs, and runtime storage
 .optpilot-ui/                 Studio settings and local coordination records
 ```
+
+The per-user packages root defaults to
+`~/Library/Application Support/OptPilot/packages` on macOS,
+`%LOCALAPPDATA%\OptPilot\packages` on Windows, and
+`$XDG_DATA_HOME/optpilot/packages` (or `~/.local/share/optpilot/packages`) on
+Linux. Set `OPTPILOT_PACKAGES_ROOT` before starting Studio to override it.
 
 Filesystem packages should stay reviewable source. They are mutable imports,
 not immutable catalog revisions. `optpilot run` captures an explicit package
 root into the private Realm; it does not write a run folder back into the
 catalog or project. In Studio, a configured source uses **Link local folder**;
 other editable projects use **Edit in Workspace** or **Save as Workspace**.
-Their shared **Workspace Setup** flow performs **Check files to register**,
-**Run optional test** or **Run required test** when applicable, and **Register
-checked version**. Registering produces an immutable Realm package revision.
+Their shared **Publish** flow performs **Check files**, **Run optional test** or
+**Run required test** when applicable, and **Publish checked version**.
+Publishing produces an immutable Realm package revision.
 Any filesystem checkout used to display or run that revision is a rebuildable
 projection, not publication authority.
 
@@ -152,7 +174,7 @@ flowchart LR
   Package["Realm package revision\nimmutable tree"]
   Inspect["Inspect\nread-only"]
   Draft["managed editable workspace\nrevisioned"]
-  Setup["Workspace Setup\nCheck + Test + Register"]
+  Setup["Publish\nConfigure → Check files → Test → Publish"]
   Definition["retained study definition"]
   Run["canonical Realm run"]
   Workbench["Studio Workbench"]
@@ -173,14 +195,13 @@ flowchart LR
 A catalog is the collection of packages available to OptPilot. A package is one
 folder inside that collection.
 
-For source-controlled filesystem imports, add a new sibling under `catalog/`;
-do not overwrite a bundled package or another user package:
+For source-controlled filesystem imports, use a separate catalog root; do not
+add user work to the repository's tracked release catalog:
 
 ```text
-catalog/
-  production_agv_scheduling/ # bundled research package
-  scheduling_case_study/ # another package
-  my_lab_project/        # user-owned package
+my-optpilot-packages/
+  scheduling_case_study/
+  my_lab_project/
 ```
 
 This keeps authored imports removable, reviewable, and easy to update. Realm
@@ -191,21 +212,25 @@ qualified exact entry shown by Studio rather than relying on a bare id.
 ## Adding A Package
 
 Use a new package when you want to bring a project, case study, or team example
-into OptPilot without mixing it into the bundled examples. Place the folder
-under `catalog/`, validate it, or launch Studio with an extra catalog path:
+into OptPilot without mixing it into the bundled examples. Give the folder an
+`optpilot.package.yaml` with its own 32-character lowercase hexadecimal
+identity, then validate it and launch Studio with its parent catalog path:
 
 ```bash
-uv run optpilot package validate catalog/my_package
+uv run optpilot package validate path/to/my-optpilot-packages/my_package \
+  --check-source --check-setup-files --check-imports
 ```
 
 ```bash
-uv run optpilot ui --catalog catalog/production_agv_scheduling --catalog path/to/my_package
+uv run optpilot ui --catalog catalog --catalog path/to/my-optpilot-packages
 ```
 
 A useful package usually includes:
 
 - a short README that says what the package contains and which study to run first
+- `optpilot.package.yaml` with stable identity, human title, category, and description
 - environment and method configs with the source files needed to run them
+- human-facing `name`/`title`, descriptions, and task slugs on Catalog entries
 - study files that validate the package on small examples
 - dependency files or setup commands for components that need installation
 - small sample data; large or licensed data should have clear download instructions
@@ -217,46 +242,20 @@ and keep user-owned work separate from bundled examples.
 
 ## First User Package Recipe
 
-For a first local package:
-
-1. Create `catalog/my_package/`.
-2. Add one environment config under `environments/`.
-3. Add one method config under `methods/`.
-4. Add one study under `studies/` that binds them.
-5. Run `uv run optpilot package validate catalog/my_package`.
-6. Run `uv run optpilot validate catalog/my_package/studies/my_study.yaml`.
-7. Run `uv run optpilot run catalog/my_package/studies/my_study.yaml --package-root catalog/my_package`.
-8. Confirm the summary reports `run_status: succeeded`, zero unexpected final
-   logical failures, and a canonical `run_id` you can inspect in Studio.
-9. Launch Studio with the package visible:
-
-```bash
-uv run optpilot ui --catalog catalog/production_agv_scheduling --catalog catalog/my_package
-```
-
-10. In Catalog, find the package under **Configured sources** and choose **Open
-    local folder**. Studio reuses that folder as one connected Workspace and
-    opens **Workspace Setup**.
-11. Choose **Check files to register**, choose **Run optional test** or **Run
-    required test** when offered, then choose **Register checked version**.
-    After registration, open the stable Catalog item to view source, edit it in
-    a Workspace, use it in a Study, or open its declared interface.
-
-Schema-only package validation proves that recognized config files are
-structurally valid. The deeper package checks catch missing public source
-paths, setup files, and import targets. A retained run is still the proof that
-the package is inside the current executable parameter-or-file/Python/process/batch
-slice and that candidate generation and evaluation work together
-for at least one small study.
+[Build Your First Package](tutorial-package.md) is the self-contained creation,
+validation, smoke, Run, registration, and update guide. It starts from the
+bundled tutorial but copies it to an external root and assigns a fresh package
+identity. Use [Executable Capabilities](capabilities.md) to distinguish a
+schema-valid package from one the retained runner can execute.
 
 ## Registering A Configured Source
 
 Studio lists configured filesystem packages as separate mutable source cards,
-even when a registered Realm package has the same entry ids. Choose **Open
+even when a registered Realm package has the same entry ids. Choose **Link
 local folder** to connect or reopen that existing folder as one editable
-Workspace without copying it. Workspace Setup preserves the configured package
+Workspace without copying it. The **Publish** tab preserves the configured package
 identity and existing Catalog-head authority, checks the exact files to
-register, and uses the same **Register checked version** action as every other
+publish, and uses the same **Publish checked version** action as every other
 editable project.
 
 The browser submits only an opaque source id. It does not receive or submit the
@@ -280,11 +279,11 @@ OptPilot configs plus portable source and setup-file references, but it does not
 import Python or execute setup. Before normal YAML loading, a hard event-count
 and nesting-depth preflight rejects aliases; reported facts do not expose file
 paths. This is deliberately whole-package ingress; it
-does not select a subtree or rewrite paths. Use the Workspace Setup
+does not select a subtree or rewrite paths. Use the **Publish** tab's
 **Configure** step when curation or a different portable layout is required.
 
 Publication then uses the same exact-head Realm service as every Workspace
-**Register checked version** operation.
+**Publish checked version** operation.
 If the source's owned tree already matches the current revision, the result is
 unchanged; otherwise one new immutable revision is committed. Ownership derives
 from both the package id and configured source identity, so another same-named
@@ -301,7 +300,7 @@ actions then work on the immutable Realm revision.
 
 ## Under The Hood: Package Preparation
 
-Workspace Setup internally maintains a package plan. This is an implementation
+The **Publish** flow internally maintains a package plan. This is an implementation
 record, not another user workflow or button. **Configure** classifies the
 Workspace as environment-only, method-only, environment-plus-method,
 resource-only, or not yet classifiable.
@@ -339,7 +338,7 @@ Package-plan readiness has four practical states:
 ## Package Layout
 
 ```text
-catalog/my_package/
+path/to/my_package/
   environments/
     my_environment/
       environment.yaml
@@ -398,8 +397,8 @@ The `path` shown in the browser is a logical `catalog://...` label. It is not a
 host path and is not accepted as immutable action authority. Packages supplied
 with `--catalog` remain configured filesystem imports: Studio can browse them,
 but they have no immutable revision/digest guarantee before publication.
-Choose **Link local folder** and complete Workspace Setup to register the
-complete folder, or use **Configure** when its contents need curation.
+Choose **Link local folder** and complete **Publish** to publish the complete
+folder, or use **Configure** when its contents need curation.
 Exact-version features such as Catalog **Edit in Workspace** and Study Builder
 use the registered revision, not the mutable source card.
 
@@ -427,7 +426,7 @@ If you create a source-controlled package manually, use normal Python import
 strings that match its portable folder layout.
 
 For example, if your evaluator lives at
-`catalog/my_package/environments/my_environment/evaluator.py`, reference it as:
+`path/to/my_package/environments/my_environment/evaluator.py`, reference it as:
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -467,7 +466,7 @@ def evaluate(candidate_runtime, context):
     }
 ```
 
-If your method lives at `catalog/my_package/methods/my_method/method.py`,
+If your method lives at `path/to/my_package/methods/my_method/method.py`,
 reference it as:
 
 ```yaml
@@ -581,6 +580,7 @@ actions:
         valueType: int
         default: 7
     grants:
+      network: enabled
       envFromHost: [DEVS_INTERFACE_MODEL_ID]
       secretsFromHost: [OPENROUTER_API_KEY]
     timeoutSeconds: 900
@@ -588,6 +588,12 @@ actions:
 
 The execution contract:
 
+- The current headless executor is a host process. Because it cannot enforce
+  network isolation, an action declaring (or defaulting to)
+  `network: disabled` fails closed before execution. Declare
+  `network: enabled` only after reviewing the command and only when that host
+  access is acceptable. A future isolated executor can honor the disabled
+  policy without changing the action contract.
 - Validated input values (declared defaults applied) are written to a JSON
   file named by `OPTPILOT_RESOURCE_ACTION_INPUTS_FILE`; results belong under
   the directory named by `OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT`.
@@ -611,6 +617,7 @@ The execution contract:
 
   ```yaml
   grants:
+    network: enabled
     envFromHost:
       - name: MY_MODEL_ID
         default: openrouter/openai/gpt-5.4
@@ -626,9 +633,11 @@ The execution contract:
   names, because a default secret is either useless or a credential written
   into a settings file. Ask for it instead.
 
-  Defaults are not retained in the evidence record. That record says which
-  authorities a component was granted; which value satisfied one is resolution
-  detail, exactly as it already is for a value read from the host.
+  Public interface declarations retain their defaults and descriptions so an
+  immutable preview can reproduce the declared launch behavior. Resolved host
+  values and all secret values are never retained. Resource-action summaries
+  likewise retain declaration names and redact secret values from returned
+  logs; they do not create a Realm evidence record.
 - An optional `runtime` block (process sandbox) may declare `setup` steps;
   the local headless path runs them in the resource root before the command,
   so setup scripts should be idempotent. Container runtimes are not
@@ -644,6 +653,18 @@ The execution contract:
   therefore cannot use the offline pure-wheel lock that environments and
   methods use.
 - One invocation is bounded by the action's `timeoutSeconds` (max one day).
+
+Before a direct Studio run, the confirmation shows the registered command,
+network grant, timeout, ordinary environment names, and secret names (never
+their values). Assistant-initiated actions use the same disclosed contract and
+approval boundary. Injected secret values are redacted from returned stdout,
+stderr, summaries, and Assistant-visible results.
+
+Studio obtains that review from the server immediately before opening the
+confirmation. The returned digest binds the action declaration and the complete
+Resource file tree; the browser must return it with the run request. If the
+manifest, setup, command, or any executable input changes after review, the run
+is rejected and Studio reloads the Catalog so you can review the new version.
 
 Run actions from the CLI:
 
@@ -717,8 +738,8 @@ one durable Workspace and changes the card actions to **Open Workspace** and
 **Set up for Catalog**. The latter opens that same Workspace's ordinary Setup
 flow, where
 the user can configure an Environment, Method, Generator, Viewer, or other
-resource; **Check files to register**; run the optional or required test when
-shown; and **Register checked version**. Studio does not assume that arbitrary
+resource; **Check files**; run the optional or required test when shown; and
+**Publish checked version**. Studio does not assume that arbitrary
 generated source is already an Environment. Only a complete folder can become
 a Workspace; a file output is temporary and read-only.
 

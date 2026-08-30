@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 JsonDict = Dict[str, Any]
@@ -33,7 +33,11 @@ class OpenHandsConversationNotFound(RuntimeError):
 
 OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENHANDS_SESSION_ENDPOINT = "/api/conversations"
-DEFAULT_OPENHANDS_NATIVE_TOOLS = ("grep", "glob", "task_tracker")
+# Native OpenHands filesystem tools resolve paths in the agent-server process,
+# outside Studio's attached-Workspace and credential-file checks.  Keep only
+# the process-local planning tool native; every filesystem operation must use
+# a Studio-backed client tool.
+DEFAULT_OPENHANDS_NATIVE_TOOLS = ("task_tracker",)
 ALLOWED_OPENHANDS_NATIVE_TOOLS = frozenset(DEFAULT_OPENHANDS_NATIVE_TOOLS)
 OPENHANDS_COMPAT_AGENT_TOOLS = ("optpilot_terminal", "optpilot_file_editor")
 FALLBACK_OPTPILOT_ASSISTANT_SYSTEM_PROMPT = """You are OptPilot Assistant inside OptPilot Studio.
@@ -637,7 +641,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_shell_run",
-        "description": "Run a bounded command in an editable attached workspace. Risky commands return an approval request.",
+        "description": "Run a bounded command in an editable attached workspace. Every command requires explicit Studio approval.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
             "cwd": {"type": "string"},
@@ -648,7 +652,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_terminal",
-        "description": "OpenHands-compatible terminal interface executed by OptPilot Studio inside the selected editable workspace runtime. Runs one bounded shell command; risky commands return a Studio approval request.",
+        "description": "OpenHands-compatible terminal interface executed by OptPilot Studio inside the selected editable workspace runtime. Runs one bounded shell command; every command requires explicit Studio approval.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
             "cwd": {"type": "string"},
@@ -895,8 +899,8 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_smoke_test_study",
-        "description": "Run a small validated study in a temporary private Realm.",
-        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "max_trials": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 10}}, ["study_path"]),
+        "description": "Request explicit approval, then run a small validated study in a temporary private Realm. Supply values in inputs when the Study declares required per-launch inputs; never invent them.",
+        "parameters": _tool_schema({"workspace_id": {"type": "string"}, "study_path": {"type": "string"}, "inputs": {"type": "object"}, "max_trials": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 10}}, ["study_path"]),
     },
     {
         "name": "optpilot_interface_launch",
@@ -939,13 +943,21 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_capability_list",
-        "description": "List configured assistant skills, MCP servers, custom tools, and permission defaults.",
+        "description": (
+            "List stored preview records for future assistant skills, MCP "
+            "servers, and custom tools, plus active permission defaults. "
+            "Preview records are not loaded into this Assistant runtime."
+        ),
         "parameters": _tool_schema({"capability_kind": {"type": "string", "enum": ["skill", "mcp_server", "custom_tool"]}}),
         "annotations": {"readOnlyHint": True},
     },
     {
         "name": "optpilot_capability_detail",
-        "description": "Inspect one configured assistant capability by kind and id.",
+        "description": (
+            "Inspect one stored assistant-capability preview by kind and id. "
+            "The record is not an active runtime capability, and secret auth "
+            "material is never returned."
+        ),
         "parameters": _tool_schema({"capability_kind": {"type": "string", "enum": ["skill", "mcp_server", "custom_tool"]}, "id": {"type": "string"}}, ["capability_kind", "id"]),
         "annotations": {"readOnlyHint": True},
     },
@@ -1036,11 +1048,11 @@ def _is_local_address(url: str) -> bool:
 def require_encrypted_transport_for_secret(url: str) -> None:
     """Refuse to put a credential on the wire unencrypted.
 
-    Studio lets a person point the Assistant at any address, and the key for
-    the configured model is sent to it as a bearer token. If that address is
-    plain HTTP on another machine, the key crosses the network in the clear
-    where anyone on the path can take it -- and a key taken this way is valid
-    everywhere, not only here.
+    Studio lets a person point the Assistant at any address, and credentials
+    can be sent either in a request body (the OpenHands model configuration)
+    or as a bearer token. If that address is plain HTTP on another machine,
+    the key crosses the network in the clear where anyone on the path can take
+    it -- and a key taken this way is valid everywhere, not only here.
 
     Loopback is exempt: nothing is on the wire, and requiring certificates for
     a locally-run agent server would only push people to disable the check.
@@ -1055,6 +1067,70 @@ def require_encrypted_transport_for_secret(url: str) -> None:
         "and the address is not https, so the key would cross the network in "
         "readable form. Use an https address, or run the service on this "
         "machine."
+    )
+
+
+def _payload_contains_api_key(value: Any) -> bool:
+    """Return whether a JSON-like request body carries a non-empty API key."""
+
+    if isinstance(value, Mapping):
+        for raw_key, child in value.items():
+            key = str(raw_key).strip().lower().replace("-", "_")
+            if key in {"api_key", "apikey"} and str(child or "").strip():
+                return True
+            if _payload_contains_api_key(child):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(_payload_contains_api_key(child) for child in value)
+    return False
+
+
+def _headers_contain_credentials(value: Optional[Mapping[str, Any]]) -> bool:
+    """Return whether caller-supplied headers carry authentication material."""
+
+    if not isinstance(value, Mapping):
+        return False
+    credential_headers = {
+        "api-key",
+        "apikey",
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+    }
+    return any(
+        str(name).strip().lower() in credential_headers
+        and bool(str(header_value or "").strip())
+        for name, header_value in value.items()
+    )
+
+
+class _RejectCredentialRedirects(HTTPRedirectHandler):
+    """Never forward an authenticated Assistant request through a redirect."""
+
+    def redirect_request(
+        self,
+        request: Request,
+        file_pointer: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> Request:
+        raise RuntimeError(
+            "Refused an HTTP redirect for a credential-bearing Assistant "
+            f"request ({code}: {request.full_url} -> {new_url}). Configure "
+            "the Assistant base URL and endpoint to the final, non-redirecting "
+            "address so Authorization headers and API keys are never forwarded."
+        )
+
+
+def _open_credential_request(request: Request, *, timeout: float) -> Any:
+    """Open one authenticated request with redirect following disabled."""
+
+    return build_opener(_RejectCredentialRedirects()).open(
+        request,
+        timeout=timeout,
     )
 
 
@@ -1115,13 +1191,23 @@ class OpenHandsAdapter:
         }
 
     def _server_reachable(self) -> bool:
+        def reachable_status(value: Any) -> bool:
+            try:
+                return (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and 200 <= value < 500
+                )
+            except Exception:
+                return False
+
         try:
             request = Request(self.config.base_url or "", method="GET")
             with urlopen(request, timeout=0.6) as response:
-                return 200 <= response.status < 500
+                return reachable_status(getattr(response, "status", None))
         except HTTPError as exc:
-            return 200 <= exc.code < 500
-        except (OSError, URLError, ValueError):
+            return reachable_status(getattr(exc, "code", None))
+        except Exception:
             return False
 
     @property
@@ -2833,18 +2919,29 @@ class OpenHandsAdapter:
         extra_headers: Optional[JsonDict] = None,
         timeout: float = 60.0,
     ) -> tuple[JsonDict, JsonDict]:
+        # The model key normally travels inside the OpenHands conversation
+        # body, not in Studio's Authorization header.  Guard both channels at
+        # this final HTTP boundary so a new call site cannot accidentally send
+        # either credential over remote plaintext HTTP.
+        carries_credentials = bool(
+            bearer_token
+            or _payload_contains_api_key(payload)
+            or _headers_contain_credentials(extra_headers)
+        )
+        if carries_credentials:
+            require_encrypted_transport_for_secret(url)
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         headers = {"Accept": "application/json"}
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if bearer_token:
-            require_encrypted_transport_for_secret(url)
             headers["Authorization"] = f"Bearer {bearer_token}"
         if extra_headers:
             headers.update({str(key): str(value) for key, value in extra_headers.items() if value})
         request = Request(url, data=body, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=timeout) as response:
+            opener = _open_credential_request if carries_credentials else urlopen
+            with opener(request, timeout=timeout) as response:
                 raw = response.read().decode("utf-8", errors="replace")
                 data = json.loads(raw) if raw.strip() else {}
                 return data if isinstance(data, dict) else {"data": data}, dict(response.headers.items())

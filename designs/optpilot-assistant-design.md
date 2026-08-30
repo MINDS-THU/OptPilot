@@ -5,6 +5,13 @@ description: Design for the OpenHands-backed OptPilot Assistant in the GUI.
 
 # OptPilot Assistant Design
 
+> **Historical design snapshot.** This file preserves the original proposal;
+> it is not the current tool, approval, or security contract. Use
+> [Assistant](../docs/assistant.md),
+> [Executable Capabilities](../docs/capabilities.md), and the
+> [release-readiness review](../docs/release-readiness-review.md) for the
+> release surface.
+
 This document designs the OpenHands-backed assistant inside OptPilot Studio.
 The assistant is a global dialogue sidecar that can open beside Catalog,
 Studies, Runs, or the embedded code editor. It helps users create, adapt, run,

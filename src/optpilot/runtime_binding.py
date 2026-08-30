@@ -17,7 +17,7 @@ import fnmatch
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Dict, NoReturn, Tuple
 
@@ -34,7 +34,7 @@ from .realm.refs import (
     canonical_json_bytes,
     request_digest,
 )
-from .realm.run_closure import ScopeLayer, ScopePath
+from .realm.run_closure import ScopePath
 from .realm.run_definition import RunDefinitionManifest
 from .realm.run_records import NormalizedCandidateEnvelope
 from .retained_study_compiler import (

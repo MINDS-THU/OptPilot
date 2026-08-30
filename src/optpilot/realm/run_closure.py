@@ -33,7 +33,7 @@ from .errors import RealmIntegrityError
 from .manifests import validate_portable_path
 from .owners import OwnerMembership
 from .refs import PhysicalContentRef, SnapshotRef, canonical_json_bytes, request_digest
-from ..host_env import host_env_names
+from ..host_env import HostEnvDeclaration, compile_host_env_declarations
 from ..image_reference import IMAGE_DIGEST_RE
 
 
@@ -809,6 +809,14 @@ class InterfaceGrantSpec:
     network: str = "disabled"
     env_from_host: Tuple[str, ...] = field(default_factory=tuple)
     secrets_from_host: Tuple[str, ...] = field(default_factory=tuple)
+    # Public package fallbacks are retained with the grant so a preview rebuilt
+    # from immutable Run evidence behaves like the authored interface. Resolved
+    # host values and secrets are never stored. This field is part of equality:
+    # changing a default changes launch behavior and retained serialization.
+    env_from_host_declarations: Tuple[HostEnvDeclaration, ...] = field(
+        default_factory=tuple,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         if self.network not in _INTERFACE_NETWORK_GRANTS:
@@ -834,12 +842,50 @@ class InterfaceGrantSpec:
         for name in (*environment, *secrets):
             if _ENV_NAME_RE.fullmatch(name) is None:
                 raise ValueError(f"interface host environment name {name!r} is invalid.")
+        declarations = tuple(self.env_from_host_declarations)
+        if not declarations:
+            # Normalize direct construction and historical names-only records
+            # to the same semantic representation used by current authoring.
+            declarations = tuple(HostEnvDeclaration(name) for name in environment)
+        if any(not isinstance(item, HostEnvDeclaration) for item in declarations):
+            raise TypeError(
+                "interface host environment declarations must be HostEnvDeclaration values."
+            )
+        if declarations and tuple(item.name for item in declarations) != environment:
+            raise ValueError(
+                "interface host environment declarations must match the retained names."
+            )
         object.__setattr__(self, "env_from_host", environment)
         object.__setattr__(self, "secrets_from_host", secrets)
+        object.__setattr__(self, "env_from_host_declarations", declarations)
+
+    @property
+    def authoring_env_from_host(self) -> Tuple[Any, ...]:
+        """Return declarations with public defaults for launch-time resolution.
+
+        Older retained records contain names only. A current authored or
+        retained profile preserves any public fallback and description.
+        """
+
+        if not self.env_from_host_declarations:
+            return tuple(self.env_from_host)
+        result = []
+        for declaration in self.env_from_host_declarations:
+            if declaration.default is None:
+                result.append(declaration.name)
+                continue
+            item: JsonDict = {
+                "name": declaration.name,
+                "default": declaration.default,
+            }
+            if declaration.description:
+                item["description"] = declaration.description
+            result.append(item)
+        return tuple(result)
 
     def to_dict(self) -> JsonDict:
         return {
-            "envFromHost": list(self.env_from_host),
+            "envFromHost": list(self.authoring_env_from_host),
             "network": self.network,
             "secretsFromHost": list(self.secrets_from_host),
         }
@@ -851,21 +897,20 @@ class InterfaceGrantSpec:
             {"envFromHost", "network", "secretsFromHost"},
             "interface grants",
         )
-        # An authored declaration may name a value or name it with a default.
-        # Only the NAMES are retained: this record says which authorities the
-        # interface was granted, and a default is a fallback applied when the
-        # value is resolved -- the same standing as a value read from the
-        # host, whose contents are deliberately kept out of the record too.
-        # Keeping defaults out also leaves the retained shape, and therefore
-        # every digest computed from it, unchanged.
+        # An authored declaration may name a value or name it with a public
+        # package default. The declaration is retained because it changes
+        # launch behavior; resolved host values and secrets remain excluded.
+        declarations = compile_host_env_declarations(
+            payload["envFromHost"], location="interface grants.envFromHost"
+        )
+        declarations = tuple(
+            sorted(declarations, key=lambda item: item.name.encode("utf-8"))
+        )
         return cls(
             network=payload["network"],
-            env_from_host=tuple(
-                host_env_names(
-                    payload["envFromHost"], location="interface grants.envFromHost"
-                )
-            ),
+            env_from_host=tuple(item.name for item in declarations),
             secrets_from_host=tuple(payload["secretsFromHost"]),
+            env_from_host_declarations=declarations,
         )
 
     @classmethod

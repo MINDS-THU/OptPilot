@@ -12,6 +12,8 @@ const SELECTION_CONTENT_TREE_ENTRY_LIMIT = 1000;
 const SELECTION_CONTENT_PREVIEW_CHUNK_LIMIT = 32 * 1024;
 const SELECTION_CONTENT_PREVIEW_LIMIT = 128 * 1024;
 const ASSISTANT_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1";
+const STUDIO_SECURITY_CONTEXT_SCHEMA = "optpilot.studio-security-context.v1";
+const RESOURCE_ACTION_REVIEW_SCHEMA = "optpilot.studio-resource-action-review.v1";
 const ASSISTANT_UI_CARD_KINDS = new Set(["catalog-use", "interface", "run-setup", "run"]);
 const ASSISTANT_UI_CARD_OPERATIONS = new Set([
   "configure-run",
@@ -263,9 +265,17 @@ const state = {
   settingsOpen: false,
   settingsTab: "assistant",
   settingsLoading: false,
+  settingsSaving: false,
   settingsError: "",
+  settingsSaveError: "",
+  settingsSaveNotices: [],
+  settingsSaveSucceeded: false,
+  settingsDirty: false,
+  settingsCloseWarning: false,
+  settingsStoragePath: "",
   settingsReturnFocus: null,
   environmentVariableDrafts: [],
+  environmentVariableClears: [],
   pendingWorkspaceCleanup: null,
   workspaceCleanupReturnFocus: null,
   pendingRegistrationConfirmation: null,
@@ -342,6 +352,8 @@ function storeSessionValue(key, value) {
 }
 
 let appInitialized = false;
+let studioSecurityContext = null;
+let studioSecurityContextPromise = null;
 const operatorJobsPanelRenderCache = new WeakMap();
 
 function initializeApp() {
@@ -351,6 +363,10 @@ function initializeApp() {
   bindEvents();
   applyStudioRoute({ loadRun: false, render: false });
   renderAll();
+  // Prime the per-process mutation credential before the first click. Mutation
+  // helpers still await this request themselves, so a slow initial load cannot
+  // accidentally send an unprotected POST or DELETE.
+  void loadStudioSecurityContext().catch(() => {});
   void loadAll();
   markAllPollsRan();
   setInterval(runScheduledPolls, 1000);
@@ -565,6 +581,8 @@ function cacheElements() {
     "settingsLoadStatusTitle",
     "settingsLoadStatusBody",
     "settingsRetryButton",
+    "settingsDirtyStatus",
+    "settingsResetPermissionsButton",
     "openHandsEnabled",
     "openHandsBaseUrl",
     "openHandsSessionEndpoint",
@@ -576,10 +594,8 @@ function cacheElements() {
     "environmentVariableName",
     "environmentVariableValue",
     "environmentVariableAddButton",
-    "assistantSkillsInput",
-    "assistantMcpServersInput",
-    "assistantMcpFilterRegex",
-    "assistantCustomToolsInput",
+    "environmentVariableError",
+    "settingsStoragePath",
     "assistantPermissionFileWrite",
     "assistantPermissionShellRun",
     "assistantPermissionCatalogRegistration",
@@ -658,10 +674,8 @@ function bindEvents() {
     button.addEventListener("click", () => setView(button.dataset.view));
   });
   document.querySelectorAll("[data-settings-tab]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.settingsTab = button.dataset.settingsTab || "assistant";
-      renderSettingsModal();
-    });
+    button.addEventListener("click", () => activateSettingsTab(button.dataset.settingsTab));
+    button.addEventListener("keydown", handleSettingsTabKeydown);
   });
   document.querySelectorAll("[data-component-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -694,16 +708,28 @@ function bindEvents() {
     });
   });
   on(els.refreshButton, "click", loadAll);
-  on(els.settingsCloseButton, "click", closeSettings);
-  on(els.settingsCancelButton, "click", closeSettings);
+  on(els.settingsCloseButton, "click", requestCloseSettings);
+  on(els.settingsCancelButton, "click", () => closeSettings({ discard: state.settingsDirty }));
   on(els.settingsSaveButton, "click", saveSettings);
   on(els.settingsRetryButton, "click", retrySettingsLoad);
+  on(els.settingsResetPermissionsButton, "click", resetRecommendedPermissions);
   on(els.environmentVariableAddButton, "click", addEnvironmentVariableDraft);
   on(els.environmentVariablesList, "click", (event) => {
     const removeButton = event.target && event.target.closest && event.target.closest("[data-env-draft-remove]");
-    if (!removeButton) return;
-    state.environmentVariableDrafts = state.environmentVariableDrafts.filter((item) => item.name !== removeButton.dataset.envDraftRemove);
-    renderEnvironmentVariablesList();
+    if (removeButton) {
+      state.environmentVariableDrafts = state.environmentVariableDrafts.filter((item) => item.name !== removeButton.dataset.envDraftRemove);
+      markSettingsDirty();
+      renderEnvironmentVariablesList({ focusName: removeButton.dataset.envDraftRemove });
+      return;
+    }
+    const clearButton = event.target && event.target.closest && event.target.closest("[data-env-clear]");
+    if (!clearButton) return;
+    const name = clearButton.dataset.envClear;
+    state.environmentVariableClears = state.environmentVariableClears.includes(name)
+      ? state.environmentVariableClears.filter((item) => item !== name)
+      : [...state.environmentVariableClears, name];
+    markSettingsDirty();
+    renderEnvironmentVariablesList({ focusName: name });
   });
   on(els.environmentVariableValue, "keydown", (event) => {
     if (event.key === "Enter") {
@@ -711,8 +737,10 @@ function bindEvents() {
       addEnvironmentVariableDraft();
     }
   });
+  on(els.settingsDialog, "input", markSettingsDirty);
+  on(els.settingsDialog, "change", markSettingsDirty);
   on(els.settingsModal, "click", (event) => {
-    if (event.target === els.settingsModal) closeSettings();
+    if (event.target === els.settingsModal) requestCloseSettings();
   });
   on(els.settingsModal, "keydown", handleSettingsModalKeydown);
   on(els.workspaceCleanupKeepButton, "click", cancelPendingWorkspaceDelete);
@@ -949,6 +977,7 @@ async function loadAgentSettings() {
     if (!coreRequestIsCurrent("agentSettings", requestSeq)) return { ok: false, stale: true };
     state.agentSettings = payload.settings || null;
     state.agentRuntimeStatus = payload.status || null;
+    state.settingsStoragePath = String(payload.settings_path || "");
     markPlatformStatusSuccess("agentSettings");
     return { ok: true };
   } catch (error) {
@@ -1989,12 +2018,12 @@ function mergeAgentSessionPayload(session) {
     // messages that the server list does not contain yet.
     const serverMessages = session.messages.map(agentMessageFromPayload);
     const serverKeys = new Set(
-      serverMessages.map((item) => `${item && item[0] || ""} ${item && item[2] || ""}`),
+      serverMessages.map((item) => `${item && item[0] || ""}\u0000${item && item[2] || ""}`),
     );
     const pendingLocal = (state.assistantMessagesBySession[session.id] || []).filter((item) => {
       const id = String(item && item[3] && item[3].id || "");
       if (!id.startsWith("local-")) return false;
-      return !serverKeys.has(`${item && item[0] || ""} ${item && item[2] || ""}`);
+      return !serverKeys.has(`${item && item[0] || ""}\u0000${item && item[2] || ""}`);
     });
     state.assistantMessagesBySession[session.id] = [...serverMessages, ...pendingLocal];
   }
@@ -3058,14 +3087,29 @@ function syncManagedModalBackgroundInert() {
 
 async function openSettings(options = {}) {
   if (options && options.tab) state.settingsTab = options.tab;
+  const openedFromMobileRail = Boolean(state.shell.mobileRailOpen);
   const activeElement = document.activeElement;
-  state.settingsReturnFocus = activeElement && activeElement !== document.body
+  state.settingsReturnFocus = openedFromMobileRail
+    ? els.railToggleButton
+    : activeElement && activeElement !== document.body
     ? activeElement
     : null;
+  if (openedFromMobileRail) {
+    state.shell.mobileRailOpen = false;
+    renderShell();
+  }
   state.settingsOpen = true;
   state.settingsLoading = true;
+  state.settingsSaving = false;
   state.settingsError = "";
+  state.settingsSaveError = "";
+  state.settingsSaveNotices = [];
+  state.settingsSaveSucceeded = false;
+  state.settingsDirty = false;
+  state.settingsCloseWarning = false;
   state.environmentVariableDrafts = [];
+  state.environmentVariableClears = [];
+  clearEnvironmentVariableError();
   renderSettingsModal();
   window.requestAnimationFrame(() => {
     if (els.settingsCloseButton) els.settingsCloseButton.focus();
@@ -3083,6 +3127,7 @@ async function loadSettingsForModal() {
   state.settingsLoading = false;
   if (result && result.ok) {
     fillSettingsForm();
+    state.settingsDirty = false;
   } else {
     state.settingsError = boundedPublicActionError(
       result && result.error,
@@ -3096,13 +3141,40 @@ function retrySettingsLoad() {
   void loadSettingsForModal();
 }
 
+function requestCloseSettings() {
+  // Once the save request is in flight, closing would make “Discard changes”
+  // misleading: the server may already have committed them.
+  if (state.settingsSaving) return;
+  if (!state.settingsDirty) {
+    closeSettings();
+    return;
+  }
+  state.settingsCloseWarning = true;
+  renderSettingsModal();
+  window.requestAnimationFrame(() => {
+    if (els.settingsCancelButton) els.settingsCancelButton.focus();
+  });
+}
+
 function closeSettings(options = {}) {
+  if (state.settingsDirty && !options.discard) {
+    requestCloseSettings();
+    return;
+  }
   const returnFocus = state.settingsReturnFocus;
   state.settingsOpen = false;
   state.settingsLoading = false;
+  state.settingsSaving = false;
   state.settingsError = "";
+  state.settingsSaveError = "";
+  state.settingsSaveNotices = [];
+  state.settingsSaveSucceeded = false;
+  state.settingsDirty = false;
+  state.settingsCloseWarning = false;
   state.settingsReturnFocus = null;
   state.environmentVariableDrafts = [];
+  state.environmentVariableClears = [];
+  clearEnvironmentVariableError();
   renderSettingsModal();
   if (options.restoreFocus !== false) {
     window.requestAnimationFrame(() => {
@@ -3118,10 +3190,55 @@ function handleSettingsModalKeydown(event) {
   if (!state.settingsOpen || !els.settingsModal) return;
   if (event.key === "Escape") {
     event.preventDefault();
-    closeSettings();
+    requestCloseSettings();
     return;
   }
   trapModalFocus(event, els.settingsModal, els.settingsDialog);
+}
+
+function settingsTabButtons() {
+  return Array.from(document.querySelectorAll("[data-settings-tab]"));
+}
+
+function activateSettingsTab(tabName, options = {}) {
+  const tabs = settingsTabButtons();
+  if (!tabs.some((button) => button.dataset.settingsTab === tabName)) return;
+  state.settingsTab = tabName;
+  renderSettingsModal();
+  if (options.focus) {
+    const active = tabs.find((button) => button.dataset.settingsTab === tabName);
+    if (active) active.focus();
+  }
+}
+
+function handleSettingsTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = settingsTabButtons();
+  if (!tabs.length) return;
+  const current = Math.max(0, tabs.indexOf(event.currentTarget));
+  const next = event.key === "Home"
+    ? 0
+    : event.key === "End"
+    ? tabs.length - 1
+    : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault();
+  activateSettingsTab(tabs[next].dataset.settingsTab, { focus: true });
+}
+
+function markSettingsDirty(event) {
+  if (!state.settingsOpen || state.settingsLoading || state.settingsSaving) return;
+  if (event && [els.environmentVariableName, els.environmentVariableValue].includes(event.target)) {
+    clearEnvironmentVariableError();
+  }
+  if (event && event.target === els.openHandsApiKey) {
+    els.openHandsApiKey.removeAttribute("aria-invalid");
+  }
+  state.settingsDirty = true;
+  state.settingsCloseWarning = false;
+  state.settingsSaveError = "";
+  state.settingsSaveNotices = [];
+  state.settingsSaveSucceeded = false;
+  renderSettingsModal();
 }
 
 function renderSettingsModal() {
@@ -3133,40 +3250,80 @@ function renderSettingsModal() {
     const error = String(state.settingsError || "");
     const saveError = String(state.settingsSaveError || "");
     const notices = Array.isArray(state.settingsSaveNotices) ? state.settingsSaveNotices : [];
-    const showing = state.settingsLoading || error || saveError || notices.length;
+    const showing = state.settingsLoading
+      || state.settingsSaving
+      || error
+      || saveError
+      || state.settingsCloseWarning
+      || state.settingsSaveSucceeded
+      || notices.length;
     els.settingsLoadStatus.hidden = !showing;
-    els.settingsLoadStatus.classList.toggle("error", Boolean(error || saveError));
+    els.settingsLoadStatus.classList.toggle("error", Boolean((error || saveError) && !state.settingsCloseWarning));
+    els.settingsLoadStatus.classList.toggle("warning", Boolean(state.settingsCloseWarning));
+    els.settingsLoadStatus.classList.toggle("success", Boolean(state.settingsSaveSucceeded && !saveError));
     if (els.settingsLoadStatusTitle) {
       els.settingsLoadStatusTitle.textContent = state.settingsLoading
         ? "Loading Studio settings…"
+        : state.settingsSaving
+        ? "Saving Studio settings…"
         : error
         ? "Studio settings could not be loaded"
+        : state.settingsCloseWarning
+        ? "You have unsaved changes"
         : saveError
         ? "That setting was not saved"
-        : "Saved, with one thing left out";
+        : notices.length
+        ? "Saved, with one thing left out"
+        : "Settings saved";
     }
     if (els.settingsLoadStatusBody) {
       els.settingsLoadStatusBody.textContent = state.settingsLoading
         ? "Reading the saved local configuration."
+        : state.settingsSaving
+        ? "Applying the changes and refreshing Assistant status."
         : error
         ? `The form was not changed. ${error} Check Studio status, then try again.`
+        : state.settingsCloseWarning
+        ? "Save the changes, or use Discard changes to close without them."
         : saveError
         ? `Nothing was changed. ${saveError}`
-        : notices.join(" ");
+        : notices.length
+        ? notices.join(" ")
+        : "Your saved configuration is now in use.";
     }
     if (els.settingsRetryButton) els.settingsRetryButton.hidden = state.settingsLoading || !error;
   }
   if (els.settingsSaveButton) {
-    els.settingsSaveButton.disabled = state.settingsLoading || Boolean(state.settingsError);
+    els.settingsSaveButton.disabled = state.settingsLoading
+      || state.settingsSaving
+      || Boolean(state.settingsError)
+      || !state.settingsDirty;
+    els.settingsSaveButton.textContent = state.settingsSaving ? "Saving…" : "Save changes";
+  }
+  if (els.settingsCancelButton) {
+    els.settingsCancelButton.disabled = state.settingsSaving;
+    els.settingsCancelButton.textContent = state.settingsDirty ? "Discard changes" : "Cancel";
+  }
+  if (els.settingsCloseButton) els.settingsCloseButton.disabled = state.settingsSaving;
+  if (els.settingsDirtyStatus) {
+    els.settingsDirtyStatus.textContent = state.settingsDirty ? "Unsaved changes" : "All changes saved";
+    els.settingsDirtyStatus.classList.toggle("dirty", state.settingsDirty);
   }
   const settingsBody = els.settingsModal.querySelector(".settings-body");
-  if (settingsBody) settingsBody.setAttribute("aria-busy", state.settingsLoading ? "true" : "false");
-  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+  const formBlocked = state.settingsLoading || state.settingsSaving || Boolean(state.settingsError);
+  if (settingsBody) {
+    settingsBody.setAttribute("aria-busy", (state.settingsLoading || state.settingsSaving) ? "true" : "false");
+    settingsBody.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      control.disabled = formBlocked;
+    });
+  }
+  settingsTabButtons().forEach((button) => {
     const active = (button.dataset.settingsTab || "assistant") === state.settingsTab;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
   });
-  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+  els.settingsDialog.querySelectorAll("[data-settings-panel]").forEach((panel) => {
     panel.hidden = (panel.dataset.settingsPanel || "assistant") !== state.settingsTab;
   });
   renderOpenHandsStatus();
@@ -3174,7 +3331,6 @@ function renderSettingsModal() {
 
 function fillSettingsForm() {
   const openhands = currentOpenHandsSettings();
-  const capabilities = currentAssistantCapabilities();
   const permissions = currentAssistantPermissions();
   if (els.openHandsEnabled) els.openHandsEnabled.checked = Boolean(openhands.enabled);
   if (els.openHandsBaseUrl) els.openHandsBaseUrl.value = openhands.base_url || "";
@@ -3185,19 +3341,20 @@ function fillSettingsForm() {
     els.openHandsApiKey.placeholder = openhands.api_key_configured ? "Configured; leave blank to keep" : "Paste API key";
   }
   if (els.openHandsClearApiKey) els.openHandsClearApiKey.checked = false;
+  state.environmentVariableClears = [];
   renderEnvironmentVariablesList();
   if (els.environmentVariableName) els.environmentVariableName.value = "";
   if (els.environmentVariableValue) els.environmentVariableValue.value = "";
-  if (els.assistantSkillsInput) els.assistantSkillsInput.value = settingsJson(capabilities.skills || []);
-  if (els.assistantMcpServersInput) els.assistantMcpServersInput.value = settingsJson(mcpServersObject(capabilities.mcp_servers || []));
-  if (els.assistantMcpFilterRegex) els.assistantMcpFilterRegex.value = capabilities.mcp_filter_regex || "";
-  if (els.assistantCustomToolsInput) els.assistantCustomToolsInput.value = settingsJson(capabilities.custom_tools || []);
+  clearEnvironmentVariableError();
+  if (els.settingsStoragePath) {
+    els.settingsStoragePath.textContent = state.settingsStoragePath || "this project's settings file";
+  }
   setSelectValue(els.assistantPermissionFileWrite, permissions.file_write || "attached_editable");
   setSelectValue(els.assistantPermissionShellRun, permissions.shell_run || "approval_required");
   setSelectValue(els.assistantPermissionCatalogRegistration, permissions.catalog_registration || "approval_required");
   setSelectValue(els.assistantPermissionStudyLaunch, permissions.study_launch || "approval_required");
   setSelectValue(els.assistantPermissionJobStop, permissions.job_stop || "approval_required");
-  setSelectValue(els.assistantPermissionSmokeTest, permissions.smoke_test || "safe_without_approval");
+  setSelectValue(els.assistantPermissionSmokeTest, permissions.smoke_test || "approval_required");
   setSelectValue(els.assistantPermissionResourceAction, permissions.resource_action || "approval_required");
   setSelectValue(els.assistantPermissionInterfaceLaunch, permissions.interface_launch || "approval_required");
 }
@@ -3205,11 +3362,6 @@ function fillSettingsForm() {
 function currentOpenHandsSettings() {
   const assistant = state.agentSettings && state.agentSettings.assistant || {};
   return assistant.openhands || {};
-}
-
-function currentAssistantCapabilities() {
-  const assistant = state.agentSettings && state.agentSettings.assistant || {};
-  return assistant.capabilities || { skills: [], mcp_servers: [], custom_tools: [] };
 }
 
 function currentAssistantPermissions() {
@@ -3224,10 +3376,14 @@ function currentEnvironmentSettings() {
 function environmentVariableRecords() {
   const variables = currentEnvironmentSettings().variables || [];
   const saved = Array.isArray(variables) ? variables : Object.entries(variables).map(([name, value]) => ({ name, configured: Boolean(value) }));
-  const records = saved.map((record) => ({ ...record, pending: false }));
+  const records = saved.map((record) => ({
+    ...record,
+    pending: false,
+    removePending: state.environmentVariableClears.includes(record.name),
+  }));
   state.environmentVariableDrafts.forEach((draft) => {
     const index = records.findIndex((record) => record.name === draft.name);
-    const pendingRecord = { name: draft.name, configured: true, pending: true };
+    const pendingRecord = { name: draft.name, configured: true, pending: true, removePending: false };
     if (index >= 0) {
       records[index] = { ...records[index], ...pendingRecord };
     } else {
@@ -3238,10 +3394,10 @@ function environmentVariableRecords() {
 }
 
 function configuredEnvironmentVariableNames() {
-  return new Set(environmentVariableRecords().filter((item) => item.configured).map((item) => item.name));
+  return new Set(environmentVariableRecords().filter((item) => item.configured && !item.removePending).map((item) => item.name));
 }
 
-function renderEnvironmentVariablesList() {
+function renderEnvironmentVariablesList(options = {}) {
   if (!els.environmentVariablesList) return;
   const records = environmentVariableRecords();
   if (!records.length) {
@@ -3249,57 +3405,109 @@ function renderEnvironmentVariablesList() {
     return;
   }
   els.environmentVariablesList.innerHTML = records.map((record) => `
-    <label class="env-secret-row">
+    <div class="env-secret-row${record.removePending ? " pending-removal" : ""}">
       <span>
         <strong>${escapeHtml(record.name || "")}</strong>
-        <small>${record.pending ? "ready to save" : record.configured ? "stored locally" : "not configured"}</small>
+        <small>${record.pending ? "new value staged" : record.removePending ? "will be removed when saved" : record.configured ? "stored locally" : "not configured"}</small>
       </span>
       <span class="env-secret-row-actions">
-        ${statusPill(record.pending ? "pending" : record.configured ? "configured" : "missing")}
+        ${statusPill(record.pending ? "pending" : record.removePending ? "remove on save" : record.configured ? "configured" : "missing")}
         ${record.pending
-          ? `<button class="ghost-button env-draft-remove" data-env-draft-remove="${escapeHtml(record.name || "")}" type="button">Remove</button>`
-          : `<span class="checkbox-row">
-              <input type="checkbox" data-env-clear="${escapeHtml(record.name || "")}" />
-              <span>Remove</span>
-            </span>`}
+          ? `<button class="ghost-button env-row-action" data-env-draft-remove="${escapeHtml(record.name || "")}" type="button" aria-label="Remove staged value for ${escapeHtml(record.name || "")}">Remove staged value</button>`
+          : `<button class="ghost-button env-row-action" data-env-clear="${escapeHtml(record.name || "")}" type="button" aria-pressed="${record.removePending ? "true" : "false"}" aria-label="${record.removePending ? "Keep" : "Remove"} saved value for ${escapeHtml(record.name || "")}">${record.removePending ? "Undo" : "Remove"}</button>`}
       </span>
-    </label>
+    </div>
   `).join("");
+  if (options.focusName) {
+    window.requestAnimationFrame(() => {
+      const escapedName = window.CSS && typeof window.CSS.escape === "function"
+        ? window.CSS.escape(options.focusName)
+        : String(options.focusName).replace(/[^A-Za-z0-9_-]/g, "");
+      const target = els.environmentVariablesList.querySelector(`[data-env-clear="${escapedName}"], [data-env-draft-remove="${escapedName}"]`)
+        || els.environmentVariableAddButton;
+      if (target) target.focus();
+    });
+  }
+}
+
+function clearEnvironmentVariableError() {
+  if (els.environmentVariableError) {
+    els.environmentVariableError.hidden = true;
+    els.environmentVariableError.textContent = "";
+  }
+  [els.environmentVariableName, els.environmentVariableValue].forEach((input) => {
+    if (!input) return;
+    input.classList.remove("invalid-input");
+    input.removeAttribute("aria-invalid");
+  });
+}
+
+function setEnvironmentVariableError(message, target) {
+  clearEnvironmentVariableError();
+  if (els.environmentVariableError) {
+    els.environmentVariableError.textContent = message;
+    els.environmentVariableError.hidden = false;
+  }
+  if (target) {
+    target.classList.add("invalid-input");
+    target.setAttribute("aria-invalid", "true");
+    target.focus();
+  }
+}
+
+function pendingEnvironmentVariableInput(options = {}) {
+  if (!els.environmentVariableName || !els.environmentVariableValue) return null;
+  const name = els.environmentVariableName.value.trim();
+  const value = els.environmentVariableValue.value;
+  if (!name && !value && options.allowEmpty) return null;
+  if (!name) {
+    const error = new Error("Enter a variable name before staging this value.");
+    error.target = els.environmentVariableName;
+    throw error;
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    const error = new Error("Variable names must start with a letter or underscore and use only letters, numbers, and underscores.");
+    error.target = els.environmentVariableName;
+    throw error;
+  }
+  if (!value) {
+    const error = new Error("Enter a value, or leave both fields empty.");
+    error.target = els.environmentVariableValue;
+    throw error;
+  }
+  return { name, value };
 }
 
 function addEnvironmentVariableDraft() {
-  if (!els.environmentVariableName || !els.environmentVariableValue) return;
-  const name = els.environmentVariableName.value.trim();
-  const value = els.environmentVariableValue.value;
-  els.environmentVariableName.classList.toggle("invalid-input", !name);
-  els.environmentVariableValue.classList.toggle("invalid-input", !value);
-  if (!name || !value) return;
+  let draft;
+  try {
+    draft = pendingEnvironmentVariableInput({ allowEmpty: false });
+  } catch (error) {
+    setEnvironmentVariableError(String(error.message || error), error.target);
+    return;
+  }
+  const { name, value } = draft;
   const existing = state.environmentVariableDrafts.find((item) => item.name === name);
   if (existing) {
     existing.value = value;
   } else {
     state.environmentVariableDrafts.push({ name, value });
   }
+  state.environmentVariableClears = state.environmentVariableClears.filter((item) => item !== name);
   els.environmentVariableName.value = "";
   els.environmentVariableValue.value = "";
-  els.environmentVariableName.classList.remove("invalid-input");
-  els.environmentVariableValue.classList.remove("invalid-input");
+  clearEnvironmentVariableError();
+  markSettingsDirty();
   renderEnvironmentVariablesList();
 }
 
 function environmentSettingsPayload() {
-  const set = state.environmentVariableDrafts.map((item) => ({ name: item.name, value: item.value }));
-  const name = els.environmentVariableName ? els.environmentVariableName.value.trim() : "";
-  const value = els.environmentVariableValue ? els.environmentVariableValue.value : "";
-  if (name && value) set.push({ name, value });
-  const clear = Array.from(document.querySelectorAll("[data-env-clear]:checked"))
-    .map((input) => input.dataset.envClear)
-    .filter(Boolean);
+  const values = new Map(state.environmentVariableDrafts.map((item) => [item.name, item.value]));
+  const composed = pendingEnvironmentVariableInput({ allowEmpty: true });
+  if (composed) values.set(composed.name, composed.value);
+  const set = Array.from(values, ([name, value]) => ({ name, value }));
+  const clear = state.environmentVariableClears.filter((name) => !values.has(name));
   return { set, clear };
-}
-
-function settingsJson(value) {
-  return JSON.stringify(value || [], null, 2);
 }
 
 function setSelectValue(element, value) {
@@ -3308,49 +3516,34 @@ function setSelectValue(element, value) {
   if (element.value !== value && element.options.length) element.selectedIndex = 0;
 }
 
-function parseJsonInput(element, fallback, label) {
-  if (!element) return fallback;
-  element.classList.remove("invalid-input");
-  const raw = element.value.trim();
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    element.classList.add("invalid-input");
-    throw new Error(`${label} must be valid JSON.`);
-  }
-}
 
-function mcpServersObject(records) {
-  const servers = {};
-  (records || []).forEach((record) => {
-    const key = record.name || record.id;
-    if (!key) return;
-    const server = {};
-    if (record.url) server.url = record.url;
-    if (record.command) server.command = record.command;
-    if (record.args && record.args.length) server.args = record.args;
-    if (record.auth) server.auth = record.auth;
-    if (record.transport) server.transport = record.transport;
-    servers[key] = server;
-  });
-  return servers;
-}
-
-function mcpServersFromObject(value) {
-  return Object.entries(value || {}).map(([name, config]) => ({
-    id: name,
-    name,
-    ...(config && typeof config === "object" ? config : {}),
-    enabled: true,
-  }));
+function resetRecommendedPermissions() {
+  setSelectValue(els.assistantPermissionFileWrite, "attached_editable");
+  setSelectValue(els.assistantPermissionShellRun, "approval_required");
+  setSelectValue(els.assistantPermissionCatalogRegistration, "approval_required");
+  setSelectValue(els.assistantPermissionStudyLaunch, "approval_required");
+  setSelectValue(els.assistantPermissionJobStop, "approval_required");
+  setSelectValue(els.assistantPermissionSmokeTest, "approval_required");
+  setSelectValue(els.assistantPermissionResourceAction, "approval_required");
+  setSelectValue(els.assistantPermissionInterfaceLaunch, "approval_required");
+  markSettingsDirty();
 }
 
 function renderOpenHandsStatus() {
   const status = state.agentRuntimeStatus || {};
   if (!els.openHandsStatus) return;
+  const ready = Boolean(
+    status.enabled
+    && !status.error
+    && (status.connected || status.dispatch === "openrouter_chat")
+  );
+  els.openHandsStatus.classList.toggle("ready", ready);
+  els.openHandsStatus.classList.toggle("attention", Boolean(status.enabled && !ready));
+  els.openHandsStatus.classList.toggle("off", Boolean(!status.enabled && !status.error));
   const model = status.model || currentOpenHandsSettings().model || "-";
-  const server = status.base_url || currentOpenHandsSettings().base_url || "-";
+  const server = status.mode === "model chat"
+    ? "No server · direct model chat"
+    : status.base_url || currentOpenHandsSettings().base_url || "-";
   const keyLabel = status.api_key_configured || currentOpenHandsSettings().api_key_configured ? "API key configured" : "API key missing";
   els.openHandsStatus.innerHTML = `
     <div>
@@ -3376,7 +3569,7 @@ function assistantPublicRuntimeLabel(status) {
 function assistantRuntimeLabel(status) {
   if (!status || status.error) return "OptPilot settings unavailable";
   if (!status.enabled) return "OpenHands disabled";
-  if (status.mode === "configured") return status.connected ? "OpenHands ready" : "OpenHands not reachable";
+  if (status.mode === "configured") return status.connected ? "OpenHands server reachable" : "OpenHands server not reachable";
   if (status.mode) return `OpenHands ${status.mode}`;
   return "OpenHands not configured";
 }
@@ -3387,27 +3580,37 @@ function assistantRuntimeDetail(status) {
   if (!status.model) return "Choose a model before sending messages.";
   if (!status.api_key_configured) return "Add an API key before sending messages.";
   if (status.mode === "model chat") return "No agent server URL is configured; messages use the chat fallback.";
-  if (status.mode === "configured" && status.connected) return "Runtime dispatch is available.";
+  if (status.mode === "configured" && status.connected) return "The configured server answered. Conversation requests use this connection.";
   if (status.mode === "configured") return "Agent server is configured but not reachable.";
   if (status.dispatch === "queued") return "Complete assistant settings before sending messages.";
   return "Runtime dispatch is available.";
 }
 
 async function saveSettings() {
-  let capabilities;
+  if (state.settingsSaving || !state.settingsDirty) return;
+  let environment;
   try {
-    const skills = parseJsonInput(els.assistantSkillsInput, [], "AgentSkills");
-    const mcpServers = parseJsonInput(els.assistantMcpServersInput, {}, "MCP servers");
-    const customTools = parseJsonInput(els.assistantCustomToolsInput, [], "Custom tools");
-    capabilities = {
-      skills: Array.isArray(skills) ? skills : [],
-      mcp_servers: mcpServersFromObject(mcpServers && typeof mcpServers === "object" && !Array.isArray(mcpServers) ? mcpServers : {}),
-      mcp_filter_regex: els.assistantMcpFilterRegex ? els.assistantMcpFilterRegex.value.trim() : "",
-      custom_tools: Array.isArray(customTools) ? customTools : [],
-    };
+    environment = environmentSettingsPayload();
   } catch (error) {
-    state.agentRuntimeStatus = { runtime: "openhands", enabled: false, mode: "settings error", error: String(error.message || error) };
-    renderOpenHandsStatus();
+    state.settingsSaveError = String(error.message || error);
+    state.settingsSaveSucceeded = false;
+    activateSettingsTab("environment");
+    setEnvironmentVariableError(state.settingsSaveError, error.target);
+    renderSettingsModal();
+    return;
+  }
+  if (
+    els.openHandsApiKey
+    && els.openHandsApiKey.value.trim()
+    && els.openHandsClearApiKey
+    && els.openHandsClearApiKey.checked
+  ) {
+    state.settingsSaveError = "Choose either Replace API key or Remove the saved API key, not both.";
+    state.settingsSaveSucceeded = false;
+    activateSettingsTab("assistant");
+    els.openHandsApiKey.setAttribute("aria-invalid", "true");
+    els.openHandsApiKey.focus();
+    renderSettingsModal();
     return;
   }
   const payload = {
@@ -3419,34 +3622,53 @@ async function saveSettings() {
       api_key: els.openHandsApiKey ? els.openHandsApiKey.value.trim() : "",
       clear_api_key: Boolean(els.openHandsClearApiKey && els.openHandsClearApiKey.checked),
     },
-    capabilities,
-    environment: environmentSettingsPayload(),
+    // Capability records are inactive previews in this release. Omitting the
+    // section preserves legacy data exactly instead of lossy browser
+    // round-tripping records that the product cannot load or invoke.
+    environment,
     permissions: {
       file_write: els.assistantPermissionFileWrite ? els.assistantPermissionFileWrite.value : "attached_editable",
       shell_run: els.assistantPermissionShellRun ? els.assistantPermissionShellRun.value : "approval_required",
       catalog_registration: els.assistantPermissionCatalogRegistration ? els.assistantPermissionCatalogRegistration.value : "approval_required",
       study_launch: els.assistantPermissionStudyLaunch ? els.assistantPermissionStudyLaunch.value : "approval_required",
       job_stop: els.assistantPermissionJobStop ? els.assistantPermissionJobStop.value : "approval_required",
-      smoke_test: els.assistantPermissionSmokeTest ? els.assistantPermissionSmokeTest.value : "safe_without_approval",
+      smoke_test: els.assistantPermissionSmokeTest ? els.assistantPermissionSmokeTest.value : "approval_required",
       resource_action: els.assistantPermissionResourceAction ? els.assistantPermissionResourceAction.value : "approval_required",
       interface_launch: els.assistantPermissionInterfaceLaunch ? els.assistantPermissionInterfaceLaunch.value : "approval_required",
     },
   };
-  const result = await postJson("/api/agent/settings", payload, { tolerateError: true });
+  state.settingsSaving = true;
+  state.settingsSaveError = "";
+  state.settingsSaveNotices = [];
+  state.settingsSaveSucceeded = false;
+  state.settingsCloseWarning = false;
+  renderSettingsModal();
+  let result;
+  try {
+    result = await postJson("/api/agent/settings", payload, { tolerateError: true });
+  } catch (error) {
+    result = { error: String(error.message || error) };
+  }
+  state.settingsSaving = false;
   if (result.error) {
     // A refused value means the save did not happen -- it does not mean the
     // Assistant is broken. Reporting it as "unavailable" made a typo look
     // like an outage and hid the sentence saying which value was wrong.
     state.settingsSaveError = String(result.error);
     state.settingsSaveNotices = [];
+    state.settingsSaveSucceeded = false;
   } else {
     state.settingsSaveError = "";
     state.settingsSaveNotices = Array.isArray(result.notices) ? result.notices : [];
+    state.settingsSaveSucceeded = true;
+    state.settingsDirty = false;
     state.agentSettings = result.settings || state.agentSettings;
     state.agentRuntimeStatus = result.status || state.agentRuntimeStatus;
+    state.settingsStoragePath = String(result.settings_path || state.settingsStoragePath || "");
     state.environmentVariableDrafts = [];
+    state.environmentVariableClears = [];
+    fillSettingsForm();
   }
-  fillSettingsForm();
   renderSettingsModal();
   renderPlatformStatus();
   renderCatalog();
@@ -7775,14 +7997,14 @@ function targetSetupSummaryHtml(target) {
     && runtime.setup.steps[0]
     && runtime.setup.steps[0].uses === "python-venv",
   );
-  const envFromHost = [
+  const envFromHost = envNameList([
     ...(runtime.envFromHost || []),
     ...((runtime.setup && runtime.setup.envFromHost) || []),
     ...profiles.flatMap((profile) => [
       ...(profile.grants && profile.grants.envFromHost || []),
       ...(profile.grants && profile.grants.secretsFromHost || []),
     ]),
-  ];
+  ]);
   if (!setup && !envFromHost.length) return "";
   if (preparedPython) {
     return `<p><small>Prepared Python dependencies declared. Check verifies the declaration and referenced lock-file paths; Test verifies the supplied packages, prepares them, and runs the Study with its normal runtime.</small></p>`;
@@ -10315,10 +10537,13 @@ function renderComponentDetail() {
       ${kvPanel("Runtime", component.kind === "environment" ? [
         ["Timeout", summary.runtime && summary.runtime.timeoutSeconds],
         ["Sandbox", summary.runtime && summary.runtime.sandbox],
+        ["Image", summary.runtime && summary.runtime.image],
+        ["Image source", summary.runtime && summary.runtime.source === "package" ? "Package default" : summary.runtime && summary.runtime.image ? "Component" : null],
         ["Interface", hasInterface ? `${activeProfiles.length} profile${activeProfiles.length === 1 ? "" : "s"}; port ${activeInterface.presentation.port}` : "not declared"],
       ] : [
         ["Runtime", summary.runtime && summary.runtime.type],
         ["Image", summary.runtime && summary.runtime.image],
+        ["Image source", summary.runtime && summary.runtime.source === "package" ? "Package default" : summary.runtime && summary.runtime.image ? "Component" : null],
         ["Interface", hasInterface ? `${activeProfiles.length} profile${activeProfiles.length === 1 ? "" : "s"}; port ${activeInterface.presentation.port}` : "not declared"],
       ])}
     </div>
@@ -10571,18 +10796,19 @@ function componentEnvRequirementsPanel(raw = {}) {
     <div class="env-requirements-panel">
       <div>
         <strong>Environment variables</strong>
-        <p>These names are declared by runtime envFromHost or interface grants. Studio injects only declared variables.</p>
+        <p>These names are declared by runtime envFromHost or interface grants. Studio injects only declared variables. An exported value in the Studio process may still satisfy launch when it is not saved here; this panel never reads or displays that value. Launch availability checks are authoritative.</p>
       </div>
       <div class="env-requirements-list">
         ${requirements.map((item) => {
           const isConfigured = configured.has(item.name);
+          const usesDefault = !isConfigured && item.default !== undefined;
           return `
             <div class="env-requirement-row">
               <span>
                 <strong>${escapeHtml(item.name)}</strong>
-                <small>${escapeHtml(item.phase)} · ${escapeHtml(item.path)}</small>
+                <small>${escapeHtml(item.phase)} · ${escapeHtml(item.path)}${item.description ? ` · ${escapeHtml(item.description)}` : ""}</small>
               </span>
-              ${statusPill(isConfigured ? "configured" : "missing")}
+              ${statusPill(isConfigured ? "saved in Studio Settings" : usesDefault ? "package default" : "not saved in Studio Settings")}
             </div>
           `;
         }).join("")}
@@ -10595,8 +10821,8 @@ function componentEnvRequirementsPanel(raw = {}) {
 function componentEnvRequirements(raw = {}) {
   const requirements = [];
   const add = (phase, path, names) => {
-    envNameList(names).forEach((name) => {
-      requirements.push({ phase, path, name });
+    hostEnvDeclarations(names).forEach((declaration) => {
+      requirements.push({ phase, path, ...declaration });
     });
   };
   const runtime = raw.runtime && typeof raw.runtime === "object" ? raw.runtime : {};
@@ -10620,9 +10846,28 @@ function componentEnvRequirements(raw = {}) {
 }
 
 function envNameList(value) {
+  return hostEnvDeclarations(value).map((item) => item.name);
+}
+
+function hostEnvDeclarations(value) {
   return []
     .concat(Array.isArray(value) ? value : [])
-    .map((item) => String(item || "").trim())
+    .map((item) => {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const name = String(item.name || "").trim();
+        if (!name) return null;
+        const declaration = {
+          name,
+          description: String(item.description || "").trim(),
+        };
+        if (Object.prototype.hasOwnProperty.call(item, "default")) {
+          declaration.default = String(item.default);
+        }
+        return declaration;
+      }
+      const name = String(item || "").trim();
+      return name ? { name, description: "" } : null;
+    })
     .filter(Boolean);
 }
 
@@ -18207,10 +18452,11 @@ async function closeSelectionContentView(options = {}) {
 function releaseSelectionContentViewOnUnload() {
   const view = state.selectionContentView;
   const contentSessionId = state.selectionContentSessionId;
-  if (!view || !contentSessionId) return;
+  const mutationHeaders = studioMutationHeadersIfReady();
+  if (!view || !contentSessionId || !mutationHeaders) return;
   fetch(`/api/content-views/${encodeURIComponent(view.handle)}/close`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: mutationHeaders,
     body: JSON.stringify({
       schema: "optpilot.selection-content-view-close-request.v1",
       content_session_id: contentSessionId,
@@ -22632,9 +22878,41 @@ function resourceActionKey(uid, actionId) {
   return `${uid}::${actionId}`;
 }
 
+function resourceActionSetupDescriptions(action) {
+  const runtime = action && action.runtime && typeof action.runtime === "object" ? action.runtime : {};
+  const setup = runtime.setup && typeof runtime.setup === "object" ? runtime.setup : {};
+  const steps = Array.isArray(setup.steps) ? setup.steps : [];
+  const contract = [];
+  if (setup.timeoutSeconds) contract.push(`timeout=${String(setup.timeoutSeconds)} seconds`);
+  if (setup.env && typeof setup.env === "object") {
+    contract.push(`environment names=${Object.keys(setup.env).sort().join(", ") || "none"}`);
+  }
+  const operations = steps.map((rawStep, index) => {
+    const step = rawStep && typeof rawStep === "object" ? rawStep : {};
+    const uses = String(step.uses || "unknown");
+    const operation = uses === "command"
+      ? `command ${(Array.isArray(step.command) ? step.command : []).map(String).join(" ")}`
+      : uses;
+    const options = Object.entries(step)
+      .filter(([name]) => !["uses", "command", "env"].includes(name))
+      .map(([name, value]) => `${name}=${JSON.stringify(value)}`);
+    if (step.env && typeof step.env === "object") {
+      options.push(`env names=${Object.keys(step.env).sort().join(", ") || "none"}`);
+    }
+    return `${index + 1}. ${operation}${options.length ? ` (${options.join("; ")})` : ""}`;
+  });
+  return [...contract, ...operations];
+}
+
 function resourceActionRunStatusHtml(run) {
   if (!run) return "";
+  if (run.status === "reviewing") {
+    return `<p class="resource-action-status" role="status">Preparing the current action for review…</p>`;
+  }
   if (run.status === "running") {
+    if (run.confirming_submission) {
+      return `<p class="resource-action-status" role="status">Confirming whether Studio accepted this action…</p>`;
+    }
     return `<p class="resource-action-status" role="status">Running… started ${new Date((run.started_at || 0) * 1000).toLocaleTimeString()}</p>`;
   }
   const result = run.result || {};
@@ -22669,6 +22947,13 @@ function resourceActionsPanel(item) {
     const errors = state.resourceActionErrors.get(key) || {};
     const run = state.resourceActionRuns.get(key);
     const inputs = action.inputs && typeof action.inputs === "object" ? action.inputs : {};
+    const grants = action.grants && typeof action.grants === "object" ? action.grants : {};
+    const network = String(grants.network || "disabled");
+    const environmentNames = envNameList(grants.envFromHost);
+    const secretNames = envNameList(grants.secretsFromHost);
+    const command = Array.isArray(action.command) ? action.command.map(String) : [];
+    const setupDescriptions = resourceActionSetupDescriptions(action);
+    const locallyExecutable = network === "enabled";
     const fields = Object.entries(inputs)
       .map(([name, declaration]) => (
         declaration && typeof declaration === "object"
@@ -22683,7 +22968,7 @@ function resourceActionsPanel(item) {
           : ""
       ))
       .join("");
-    const running = Boolean(run && run.status === "running");
+    const running = Boolean(run && ["reviewing", "running"].includes(run.status));
     return `
       <article class="resource-action-card">
         <div class="resource-action-heading">
@@ -22691,8 +22976,16 @@ function resourceActionsPanel(item) {
             <strong>${escapeHtml(String(action.label || action.id))}</strong>
             ${action.description ? `<p class="study-card-help">${escapeHtml(String(action.description))}</p>` : ""}
           </div>
-          <button class="primary-button resource-action-run" type="button" data-run-resource-action="${escapeHtml(action.id)}" ${running ? "disabled" : ""}>${running ? "Running…" : "Run action"}</button>
+          <button class="primary-button resource-action-run" type="button" data-run-resource-action="${escapeHtml(action.id)}" ${running || !locallyExecutable ? "disabled" : ""}>${run && run.status === "reviewing" ? "Preparing review…" : running ? "Running…" : locallyExecutable ? "Review and run" : "Isolated runtime required"}</button>
         </div>
+        <dl class="detail-grid resource-action-contract">
+          <div><dt>Command</dt><dd><code>${escapeHtml(command.join(" ") || "-")}</code></dd></div>
+          <div><dt>Setup</dt><dd>${setupDescriptions.length ? setupDescriptions.map((description) => `<code>${escapeHtml(description)}</code>`).join("<br>") : "none"}</dd></div>
+          <div><dt>Network</dt><dd>${escapeHtml(network)}${locallyExecutable ? " · host process" : " · unavailable in the host-process executor"}</dd></div>
+          <div><dt>Timeout</dt><dd>${escapeHtml(String(action.timeoutSeconds || 0))} seconds</dd></div>
+          <div><dt>Environment</dt><dd>${escapeHtml(environmentNames.join(", ") || "none")}</dd></div>
+          <div><dt>Secrets</dt><dd>${escapeHtml(secretNames.join(", ") || "none")} (names only)</dd></div>
+        </dl>
         ${fields ? `<div class="control-grid">${fields}</div>` : `<p class="study-card-help">This action takes no inputs.</p>`}
         ${resourceActionRunStatusHtml(run)}
       </article>
@@ -22760,28 +23053,99 @@ function collectResourceActionInputs(item, action) {
 async function runResourceActionFromCatalog(item, actionId) {
   const uid = String(item.uid || item.id || "");
   const key = resourceActionKey(uid, actionId);
-  const action = (item.raw_config.actions || []).find((entry) => entry && entry.id === actionId);
-  if (!action) return;
-  const collected = collectResourceActionInputs(item, action);
+  const catalogAction = (item.raw_config.actions || []).find((entry) => entry && entry.id === actionId);
+  if (!catalogAction) return;
+  const collected = collectResourceActionInputs(item, catalogAction);
   if (collected.errors.length) {
     renderCatalog();
     return;
   }
-  const requestId = newRequestId();
-  state.resourceActionRuns.set(key, { status: "running", started_at: Date.now() / 1000, request_id: requestId });
+  state.resourceActionRuns.set(key, { status: "reviewing" });
   renderCatalog();
-  let payload;
+  let review;
   try {
-    payload = await postJson("/api/resource-actions/run", {
-      request_id: requestId,
-      resource_uid: uid,
-      action_id: actionId,
-      inputs: collected.values,
-    }, { timeoutMs: 20000 });
+    const payload = await getJson(
+      `/api/resource-actions/review?resource_uid=${encodeURIComponent(uid)}&action_id=${encodeURIComponent(actionId)}`,
+      { timeoutMs: 20000 },
+    );
+    review = validatedResourceActionReview(payload, uid, actionId);
   } catch (error) {
     state.resourceActionRuns.set(key, {
       status: "failed",
-      error: boundedPublicActionError(error, "The action could not be started."),
+      error: boundedPublicActionError(error, "The Resource action could not be reviewed."),
+    });
+    renderCatalog();
+    return;
+  }
+  const action = review.action;
+  if (stableJsonStringify(action) !== stableJsonStringify(catalogAction)) {
+    await loadCatalogAndCompatibility({ strict: false });
+    state.resourceActionRuns.set(key, {
+      status: "failed",
+      error: "The Resource action changed since this Catalog card was loaded. Review the updated action and try again.",
+    });
+    renderCatalog();
+    return;
+  }
+  const grants = action.grants && typeof action.grants === "object" ? action.grants : {};
+  const command = Array.isArray(action.command) ? action.command.map(String).join(" ") : "";
+  const setupDescriptions = resourceActionSetupDescriptions(action);
+  const environmentNames = envNameList(grants.envFromHost);
+  const secretNames = envNameList(grants.secretsFromHost);
+  const confirmed = window.confirm([
+    `Run ${String(action.label || action.id)}?`,
+    `Command: ${command || "-"}`,
+    ...(setupDescriptions.length
+      ? setupDescriptions.map((description) => `Setup: ${description}`)
+      : ["Setup: none"]),
+    `Network: ${String(grants.network || "disabled")} (host process)`,
+    `Timeout: ${String(action.timeoutSeconds || 0)} seconds`,
+    `Environment names: ${environmentNames.join(", ") || "none"}`,
+    `Secret names: ${secretNames.join(", ") || "none"}`,
+    "The action writes into a fresh output folder. Secret values are not shown and are redacted from returned logs.",
+  ].join("\n"));
+  if (!confirmed) {
+    state.resourceActionRuns.delete(key);
+    renderCatalog();
+    return;
+  }
+  const requestId = newRequestId();
+  const startedAt = Date.now() / 1000;
+  const runRequest = resourceActionRunRequest(requestId, uid, actionId, collected.values, review);
+  state.resourceActionRuns.set(key, { status: "running", started_at: startedAt, request_id: requestId });
+  renderCatalog();
+  let payload;
+  try {
+    payload = await postJson(
+      "/api/resource-actions/run",
+      runRequest,
+      { timeoutMs: 20000 },
+    );
+  } catch (error) {
+    if (!error || !error.status) {
+      // A timeout, disconnect, or malformed response does not prove the POST
+      // failed. Keep the one approved request identity and reconcile it by
+      // status; a confirmed 404 may replay only this exact request object.
+      // Minting a new id here could execute a network-capable action twice.
+      state.resourceActionRuns.set(key, {
+        status: "running",
+        started_at: startedAt,
+        request_id: requestId,
+        confirming_submission: true,
+      });
+      renderCatalog();
+      pollResourceActionRun(key, requestId, { recoveryRequest: runRequest });
+      return;
+    }
+    if (error && error.status === 409) {
+      await loadCatalogAndCompatibility({ strict: false });
+    }
+    state.resourceActionRuns.set(key, {
+      status: "failed",
+      request_id: requestId,
+      error: error && error.status === 409
+        ? "The Resource action changed after review. Review the updated action and try again."
+        : boundedPublicActionError(error, "The action could not be started."),
     });
     renderCatalog();
     return;
@@ -22791,7 +23155,42 @@ async function runResourceActionFromCatalog(item, actionId) {
   pollResourceActionRun(key, requestId);
 }
 
-async function pollResourceActionRun(key, requestId) {
+function validatedResourceActionReview(payload, resourceUid, actionId) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Studio returned an invalid Resource action review.");
+  }
+  const digest = String(payload.action_contract_digest || "").trim();
+  const action = payload.action;
+  if (
+    payload.schema !== RESOURCE_ACTION_REVIEW_SCHEMA
+    || String(payload.resource_uid || "") !== resourceUid
+    || !action
+    || typeof action !== "object"
+    || Array.isArray(action)
+    || String(action.id || "") !== actionId
+    || !/^[0-9a-f]{64}$/.test(digest)
+  ) {
+    throw new Error("Studio returned a Resource action review that does not match this action.");
+  }
+  return { ...payload, action_contract_digest: digest };
+}
+
+function resourceActionRunRequest(requestId, resourceUid, actionId, inputs, review) {
+  const approvedDigest = String(review && review.action_contract_digest || "").trim();
+  if (!/^[0-9a-f]{64}$/.test(approvedDigest)) {
+    throw new Error("Review this Resource action before running it.");
+  }
+  return {
+    request_id: requestId,
+    resource_uid: resourceUid,
+    action_id: actionId,
+    inputs,
+    _approved_action_contract_digest: approvedDigest,
+  };
+}
+
+async function pollResourceActionRun(key, requestId, options = {}) {
+  let recoveryRequest = options.recoveryRequest || null;
   for (let attempt = 0; attempt < 43200; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const current = state.resourceActionRuns.get(key);
@@ -22800,8 +23199,36 @@ async function pollResourceActionRun(key, requestId) {
     try {
       payload = await getJson(`/api/resource-actions/${encodeURIComponent(requestId)}`, { timeoutMs: 12000 });
     } catch (error) {
-      continue;
+      if (!recoveryRequest || !error || error.status !== 404) continue;
+      try {
+        // The status endpoint established that the request is not recorded.
+        // Retry the already-approved body verbatim with the same id; the
+        // server's full-request idempotency check prevents a second action.
+        payload = await postJson(
+          "/api/resource-actions/run",
+          recoveryRequest,
+          { timeoutMs: 20000 },
+        );
+        recoveryRequest = null;
+      } catch (retryError) {
+        // A transport failure remains ambiguous, so keep polling with the same
+        // request. A typed HTTP response is definitive and can be surfaced.
+        if (!retryError || !retryError.status) continue;
+        if (retryError.status === 409) {
+          await loadCatalogAndCompatibility({ strict: false });
+        }
+        state.resourceActionRuns.set(key, {
+          status: "failed",
+          request_id: requestId,
+          error: retryError.status === 409
+            ? "The Resource action changed after review. Review the updated action and try again."
+            : boundedPublicActionError(retryError, "The action could not be started."),
+        });
+        renderCatalog();
+        return;
+      }
     }
+    recoveryRequest = null;
     state.resourceActionRuns.set(key, payload);
     if (payload.status !== "running") {
       renderCatalog();
@@ -23072,14 +23499,54 @@ async function getJson(url, options = {}) {
   return response.json();
 }
 
+async function loadStudioSecurityContext() {
+  if (studioSecurityContext) return studioSecurityContext;
+  if (studioSecurityContextPromise) return studioSecurityContextPromise;
+  studioSecurityContextPromise = getJson("/api/security-context", {
+    timeoutMs: PLATFORM_STATUS_TIMEOUT_MS,
+  }).then((payload) => {
+    const token = String(payload && payload.csrf_token || "").trim();
+    const header = String(payload && payload.csrf_header || "").trim();
+    if (
+      !payload
+      || payload.schema !== STUDIO_SECURITY_CONTEXT_SCHEMA
+      || !token
+      || header !== "X-OptPilot-CSRF-Token"
+    ) {
+      throw new Error("Studio returned an invalid local security context.");
+    }
+    studioSecurityContext = { csrf_token: token, csrf_header: header };
+    return studioSecurityContext;
+  }).finally(() => {
+    studioSecurityContextPromise = null;
+  });
+  return studioSecurityContextPromise;
+}
+
+function studioMutationHeadersIfReady() {
+  if (!studioSecurityContext) return null;
+  return {
+    "Content-Type": "application/json",
+    [studioSecurityContext.csrf_header]: studioSecurityContext.csrf_token,
+  };
+}
+
+async function studioMutationHeaders() {
+  await loadStudioSecurityContext();
+  const headers = studioMutationHeadersIfReady();
+  if (!headers) throw new Error("Studio's local mutation credential is unavailable.");
+  return headers;
+}
+
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 async function postJson(url, payload, options = {}) {
+  const headers = await studioMutationHeaders();
   const response = await fetchWithTimeout(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
     keepalive: Boolean(options.keepalive),
   }, Number(options.timeoutMs || 0));
@@ -23114,9 +23581,19 @@ function newRequestId() {
 }
 
 async function deleteJson(url, options = {}) {
-  const response = await fetch(url, { method: "DELETE" });
+  const headers = await studioMutationHeaders();
+  const response = await fetchWithTimeout(
+    url,
+    { method: "DELETE", headers },
+    Number(options.timeoutMs || 0),
+  );
   const json = await response.json();
-  if (!response.ok && !options.tolerateError) throw new Error(json.error || `${response.status} ${response.statusText}`);
+  if (!response.ok && !options.tolerateError) {
+    const error = new Error(json.error || `${response.status} ${response.statusText}`);
+    error.status = response.status;
+    error.payload = json;
+    throw error;
+  }
   return json;
 }
 
@@ -23137,10 +23614,10 @@ function capabilityItem(capability) {
 
 function statusClass(status) {
   const value = String(status || "unknown");
-  if (["success", "succeeded", "completed", "compatible", "ready", "valid", "schema valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "configured", "published", "docker", "podman"].includes(value)) return "status-ready";
+  if (["success", "succeeded", "completed", "compatible", "ready", "valid", "schema valid", "launched", "passed", "editable", "registered", "available", "saved", "connected", "configured", "published", "docker", "podman", "saved in Studio Settings", "package default"].includes(value)) return "status-ready";
   if (["failed", "cancelled", "invalid", "incompatible", "unavailable", "offline", "missing", "off", "setup"].includes(value)) return "status-failed";
   if (["running", "validating", "opening", "sealing", "preparing"].includes(value)) return "status-running";
-  if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited", "pending"].includes(value)) return "status-review";
+  if (["review", "draft", "read-only", "idle", "optional", "host", "chat", "limited", "pending", "not saved in Studio Settings"].includes(value)) return "status-review";
   return `status-${escapeHtml(value)}`;
 }
 

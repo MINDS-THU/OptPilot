@@ -178,6 +178,29 @@ class MalformedFileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_package_settings(self.root)
 
+    def test_unknown_fields_raise_instead_of_being_silently_ignored(self) -> None:
+        identity = new_package_identity()
+        self._write(
+            "apiVersion: optpilot.io/v1\n"
+            "config: package\n"
+            f"identity: {identity}\n"
+            "titel: misspelled\n"
+        )
+        with self.assertRaisesRegex(ValueError, "unknown keys: titel"):
+            load_package_settings(self.root)
+
+    def test_unknown_runtime_fields_raise(self) -> None:
+        identity = new_package_identity()
+        self._write(
+            "apiVersion: optpilot.io/v1\n"
+            "config: package\n"
+            f"identity: {identity}\n"
+            "runtime:\n"
+            "  backend: local\n"
+        )
+        with self.assertRaisesRegex(ValueError, "runtime has unknown keys: backend"):
+            load_package_settings(self.root)
+
 
 class EnsureIdentityTests(unittest.TestCase):
     def setUp(self) -> None:

@@ -7,13 +7,9 @@ whole permissions object from the controls it has, so the first time anyone
 opens Settings and saves, the missing key silently returns to its default --
 undoing a choice the person made deliberately, with no message.
 
-That matters most for the two keys added last, since one of them decides
-whether the Assistant may run code without asking.
-
-These read the client files as text, the established pattern for browser
-contracts in this suite. Note that `grep` cannot search app.js: it contains
-two NUL characters used as string delimiters, so the file reads as binary and
-matches are silently suppressed. Read it in Python, as here.
+That matters most for execution permissions, which must never silently become
+less restrictive. These tests read the client files as text, the established
+pattern for browser contracts in this suite.
 """
 
 from __future__ import annotations
@@ -53,6 +49,9 @@ class PermissionControlTest(unittest.TestCase):
         for key in DEFAULT_ASSISTANT_PERMISSIONS:
             with self.subTest(permission=key):
                 self.assertIn(f'id="{_element_id(key)}"', self.html)
+
+    def test_browser_source_contains_no_binary_nul_bytes(self) -> None:
+        self.assertNotIn("\x00", self.app)
 
     def test_every_control_is_read_and_written_by_the_client(self) -> None:
         for key in DEFAULT_ASSISTANT_PERMISSIONS:

@@ -12,6 +12,7 @@ So the same unknown value is refused when saved and tolerated when read.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,11 +95,25 @@ class RefuseUnusableCapabilitiesTest(unittest.TestCase):
     def _state(self, tmp: Path) -> UiState:
         return UiState(cwd=tmp, catalog_roots=[], run_roots=[])
 
+    def test_settings_does_not_offer_inactive_capability_editors(self) -> None:
+        import optpilot_studio
+
+        page = (
+            Path(optpilot_studio.__file__).parent
+            / "ui"
+            / "static"
+            / "index.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("preview-only in this release", page)
+        self.assertIn("intentionally not editable here", page)
+        self.assertNotIn('id="assistantSkillsInput"', page)
+        self.assertNotIn('id="assistantMcpServersInput"', page)
+        self.assertNotIn('id="assistantCustomToolsInput"', page)
+
     def test_a_narrowed_tool_list_says_what_it_left_out(self) -> None:
-        # Narrowing is deliberate -- OptPilot ships its own terminal and file
-        # editor, so enabling OpenHands' would give the Assistant two of each.
-        # Doing it silently is what left a person believing they had switched
-        # something on.
+        # Narrowing is deliberate. Native filesystem and shell tools execute
+        # outside Studio's Workspace boundary; only task tracking is safe to
+        # keep inside the agent-server process.
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))
             saved = _update_agent_settings(
@@ -106,28 +121,32 @@ class RefuseUnusableCapabilitiesTest(unittest.TestCase):
                 {"openhands": {"native_tools": ["grep", "terminal", "file_editor"]}},
             )
         self.assertEqual(
-            saved["settings"]["assistant"]["openhands"]["native_tools"], ["grep"]
+            saved["settings"]["assistant"]["openhands"]["native_tools"], []
         )
         notices = " ".join(saved.get("notices") or [])
+        self.assertIn("grep", notices)
         self.assertIn("terminal", notices)
         self.assertIn("file_editor", notices)
 
-    def test_nothing_is_said_when_nothing_was_left_out(self) -> None:
+    def test_unsafe_native_filesystem_tools_are_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))
             saved = _update_agent_settings(
                 state, {"openhands": {"native_tools": ["grep", "glob"]}}
             )
-        self.assertFalse(saved.get("notices"))
+        notices = " ".join(saved.get("notices") or [])
+        self.assertIn("grep", notices)
+        self.assertIn("glob", notices)
+        self.assertIn("Workspace boundary", notices)
 
-    def test_supported_tools_still_save(self) -> None:
+    def test_task_tracker_is_the_only_supported_native_tool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             state = self._state(Path(tmp_dir))
             _update_agent_settings(
-                state, {"openhands": {"native_tools": ["grep", "glob"]}}
+                state, {"openhands": {"native_tools": ["task_tracker"]}}
             )
             stored = _agent_settings_payload(state)["settings"]["assistant"]
-        self.assertEqual(stored["openhands"]["native_tools"], ["grep", "glob"])
+        self.assertEqual(stored["openhands"]["native_tools"], ["task_tracker"])
 
     def test_a_server_with_no_way_to_reach_it_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -153,3 +172,34 @@ class RefuseUnusableCapabilitiesTest(unittest.TestCase):
             )
             stored = _agent_settings_payload(state)["settings"]["assistant"]
         self.assertEqual(len(stored["capabilities"]["mcp_servers"]), 1)
+
+    def test_legacy_mcp_auth_is_never_returned_from_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = self._state(Path(tmp_dir))
+            state.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            state.settings_path.write_text(
+                json.dumps(
+                    {
+                        "assistant": {
+                            "capabilities": {
+                                "mcp_servers": [
+                                    {
+                                        "id": "legacy",
+                                        "name": "Legacy",
+                                        "url": "https://mcp.example.com",
+                                        "auth": "bearer-secret-value",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = _agent_settings_payload(state)
+
+        serialized = json.dumps(payload)
+        self.assertNotIn("bearer-secret-value", serialized)
+        record = payload["settings"]["assistant"]["capabilities"]["mcp_servers"][0]
+        self.assertNotIn("auth", record)
+        self.assertTrue(record["auth_configured"])

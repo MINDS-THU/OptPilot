@@ -317,6 +317,8 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
         serialized = json.dumps(result.to_dict(), sort_keys=True)
         self.assertNotIn(str(self.root), serialized)
         self.assertNotIn("OPENROUTER_API_KEY", serialized)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
 
         path = self.root / "published" / "request-1.json"
         write_execution_result(path, result)
@@ -419,6 +421,8 @@ class StudioInterfaceOutputExecutionTest(unittest.TestCase):
         self.assertIn("live-keeper", observed)
         self.assertIn("python3", observed)
         self.assertNotIn("cp", observed)
+        self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stderr.closed)
 
         unsafe = io.BytesIO()
         with tarfile.open(fileobj=unsafe, mode="w") as archive:

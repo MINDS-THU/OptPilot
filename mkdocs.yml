@@ -68,6 +68,7 @@ nav:
       - Your First Run: getting-started.md
   - OptPilot Core:
       - Core Model: concepts.md
+      - Executable Capabilities: capabilities.md
       - Candidate Contracts: candidate-contracts.md
       - Methods: methods.md
       - Packages and Catalogs: catalog.md
@@ -84,7 +85,9 @@ nav:
       - OptPilot Studio: ui.md
       - Workspace Management: studio-workspaces.md
       - OptPilot Assistant: assistant.md
-  - Contributor Guide: development.md
+  - Contributor Guide:
+      - Development: development.md
+      - Release Readiness Review: release-readiness-review.md
 
 extra:
   generator: false

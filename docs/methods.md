@@ -204,15 +204,12 @@ proposal order after the batch barrier.
 
 ## Runtime isolation
 
-The current retained method worker is a supervised local process bound to exact
-retained source and durable method-exchange checkpoints. Python batch methods
-run in-process inside that worker; command batch methods run as one bounded
-subprocess per exchange inside the same projection, prepared runtime, and
-declared `envFromHost` surface. Study execution currently supports neither
-method build nor container runtime features.
-
-Container runtime fields remain part of the broader authoring schema/target.
-They become executable only after they compile through the same path-free
-bindings, narrow logical scopes, launch authority, reconciliation, and cleanup
-guarantees as the current process slice. They must not receive a broad package
-or Realm mount.
+The retained method worker is supervised and bound to exact retained source and
+durable method-exchange checkpoints. Python batch Methods run through the
+prepared Python runtime; Python-headed command batch Methods run as one bounded
+subprocess per exchange in the same projection and declared `envFromHost`
+surface. A supported Method may select a local process or an approved,
+digest-pinned container runtime. Builds and arbitrary setup commands are not
+supported, and a container never receives a broad package or Realm mount. See
+[Executable Capabilities](capabilities.md) for the exact release boundary and
+unsupported combinations.

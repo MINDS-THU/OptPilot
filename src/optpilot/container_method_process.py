@@ -20,7 +20,7 @@ import struct
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Mapping, Optional, Sequence
+from typing import Any, BinaryIO, Mapping, Optional
 
 from .container_launch import LaunchSpec, build_container_command
 
@@ -209,8 +209,20 @@ class ContainerMethodProcess:
                 self._child.kill()
                 code = self._child.wait(timeout=grace_seconds)
         finally:
-            remove_container_if_present(self._engine, self._name)
-            self._selector.close()
+            # Pipe ownership stays here rather than with the selector: closing
+            # a selector only drops registrations and leaves the underlying
+            # descriptor open.  Keep local cleanup unconditional even when the
+            # external container-removal proof fails.
+            try:
+                remove_container_if_present(self._engine, self._name)
+            finally:
+                try:
+                    self._selector.close()
+                finally:
+                    try:
+                        self._stream.reader.close()
+                    except OSError:
+                        pass
         return code
 
     def request_client(

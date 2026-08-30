@@ -15,6 +15,7 @@ and write its results inside it, ready to register in place.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import unittest
@@ -33,6 +34,7 @@ from optpilot_studio.ui.server import (
     _create_ui_workspace,
     _execute_agent_tool,
     _read_agent_approvals,
+    _resource_action_review,
     _resource_action_run_status,
     _update_agent_settings,
 )
@@ -45,6 +47,7 @@ inputs = json.loads(
 out = pathlib.Path(os.environ["OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"])
 (out / "bundle.json").write_text(json.dumps({"inputs": inputs}))
 print("bundle generated")
+print("secret=" + os.environ["ACTION_SECRET"])
 """
 
 
@@ -54,10 +57,11 @@ class AssistantResourceActionTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.package = self.root / "demo_package"
-        resource_dir = self.package / "resources" / "demo-generator"
-        resource_dir.mkdir(parents=True)
-        (resource_dir / "generate.py").write_text(_GENERATOR, encoding="utf-8")
-        (resource_dir / "optpilot.resource.yaml").write_text(
+        self.resource_dir = self.package / "resources" / "demo-generator"
+        self.resource_dir.mkdir(parents=True)
+        (self.resource_dir / "generate.py").write_text(_GENERATOR, encoding="utf-8")
+        self.manifest_path = self.resource_dir / "optpilot.resource.yaml"
+        self.manifest_path.write_text(
             yaml.safe_dump(
                 {
                     "apiVersion": "optpilot.io/v1",
@@ -71,6 +75,10 @@ class AssistantResourceActionTest(unittest.TestCase):
                             "label": "Generate a bundle",
                             "description": "Write a bundle from a description.",
                             "command": ["python", "generate.py"],
+                            "grants": {
+                                "network": "enabled",
+                                "secretsFromHost": ["ACTION_SECRET"],
+                            },
                             "inputs": {"name": {"valueType": "string"}},
                             "timeoutSeconds": 60,
                         }
@@ -94,7 +102,20 @@ class AssistantResourceActionTest(unittest.TestCase):
             setattr(self.state, name, self.root / name)
             getattr(self.state, name).mkdir(parents=True, exist_ok=True)
         self.state.settings_path = self.root / "settings.json"
-        _update_agent_settings(self.state, {"openhands": {"enabled": False}})
+        _update_agent_settings(
+            self.state,
+            {
+                "openhands": {"enabled": False},
+                "environment": {
+                    "set": [
+                        {
+                            "name": "ACTION_SECRET",
+                            "value": "sk-studio-action-audit",
+                        }
+                    ]
+                },
+            },
+        )
         self.session = _create_agent_session(self.state, {"title": "Actions"})
         self.resource_uid = _catalog_payload(self.state)["resources"][0]["uid"]
 
@@ -121,6 +142,8 @@ class AssistantResourceActionTest(unittest.TestCase):
         self.assertEqual([a["action_id"] for a in actions], ["generate"])
         self.assertEqual(actions[0]["label"], "Generate a bundle")
         self.assertIn("name", actions[0]["inputs"])
+        self.assertEqual(actions[0]["command"], ["python", "generate.py"])
+        self.assertEqual(actions[0]["network"], "enabled")
 
     # ---- approval -------------------------------------------------------
     def test_running_an_action_asks_first(self) -> None:
@@ -139,7 +162,42 @@ class AssistantResourceActionTest(unittest.TestCase):
         )
         self.assertFalse(result["ok"], result)
         self.assertTrue(result["data"]["approval_required"])
-        self.assertEqual(len(_read_agent_approvals(self.state, self.session["id"])), 1)
+        approvals = _read_agent_approvals(self.state, self.session["id"])
+        self.assertEqual(len(approvals), 1)
+        self.assertIn("python generate.py", approvals[0]["summary"])
+        self.assertIn("Network: enabled", approvals[0]["summary"])
+
+    def test_setup_commands_are_disclosed_before_approval(self) -> None:
+        manifest = yaml.safe_load(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["actions"][0]["runtime"] = {
+            "sandbox": "process",
+            "setup": {
+                "steps": [
+                    {
+                        "uses": "command",
+                        "command": ["python", "prepare.py", "--mode", "release"],
+                    }
+                ]
+            },
+        }
+        self.manifest_path.write_text(
+            yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+        )
+
+        result = _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+                "inputs": {"name": "demo"},
+            },
+        )
+
+        self.assertFalse(result["ok"])
+        approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        self.assertIn("Setup: 1. command python prepare.py --mode release", approval["summary"])
 
     def test_a_bad_request_is_refused_before_anyone_is_asked(self) -> None:
         # Rejected the same way every other tool rejects a bad argument, and
@@ -176,6 +234,12 @@ class AssistantResourceActionTest(unittest.TestCase):
         )
         self.assertFalse(started["ok"], "it must ask before running")
         approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        self.assertIn(f"workspace={workspace['id']}", approval["targets"])
+        self.assertIn(str(Path(workspace["root"]).resolve()), approval["targets"])
+        self.assertTrue(
+            any(str(target).startswith("output=") for target in approval["targets"]),
+            approval["targets"],
+        )
         approved = _approve_agent_action(
             self.state, self.session["id"], approval["id"]
         )
@@ -184,6 +248,9 @@ class AssistantResourceActionTest(unittest.TestCase):
         request_id = approved["result"]["data"]["request_id"]
         final = self._await(request_id)
         self.assertEqual(final["status"], "succeeded", final)
+        encoded = json.dumps(final, sort_keys=True)
+        self.assertNotIn("sk-studio-action-audit", encoded)
+        self.assertIn("[REDACTED]", final["result"]["stdout_tail"])
 
         workspace_root = Path(workspace["root"]).resolve()
         output_root = Path(final["result"]["output_root"]).resolve()
@@ -205,10 +272,148 @@ class AssistantResourceActionTest(unittest.TestCase):
         self.assertEqual(status["data"]["status"], "succeeded")
         self.assertEqual(status["data"]["workspace_id"], workspace["id"])
 
+    def test_workspace_must_be_attached_and_editable_before_approval(self) -> None:
+        unattached = _create_ui_workspace(
+            self.state,
+            {"title": "Unattached", "root": str(self.root / "unattached")},
+        )
+        with self.assertRaises(PermissionError):
+            _execute_agent_tool(
+                self.state,
+                self.session["id"],
+                "optpilot_resource_action_run",
+                {
+                    "resource_uid": self.resource_uid,
+                    "action_id": "generate",
+                    "inputs": {"name": "demo"},
+                    "workspace_id": unattached["id"],
+                },
+            )
+
+        read_only = _create_ui_workspace(
+            self.state,
+            {
+                "title": "Read only",
+                "root": str(self.root / "read-only"),
+                "mode": "read-only",
+            },
+        )
+        _attach_agent_workspace(
+            self.state, self.session["id"], read_only["id"], select=True
+        )
+        with self.assertRaises(PermissionError):
+            _execute_agent_tool(
+                self.state,
+                self.session["id"],
+                "optpilot_resource_action_run",
+                {
+                    "resource_uid": self.resource_uid,
+                    "action_id": "generate",
+                    "inputs": {"name": "demo"},
+                    "workspace_id": read_only["id"],
+                },
+            )
+        self.assertEqual(_read_agent_approvals(self.state, self.session["id"]), [])
+
+    def test_workspace_output_symlink_is_refused_before_approval(self) -> None:
+        workspace = _create_ui_workspace(
+            self.state,
+            {"title": "Generated", "root": str(self.root / "workspace")},
+        )
+        _attach_agent_workspace(
+            self.state, self.session["id"], workspace["id"], select=True
+        )
+        outside = self.root / "outside"
+        outside.mkdir()
+        (Path(workspace["root"]) / "resource-action-output").symlink_to(
+            outside, target_is_directory=True
+        )
+
+        with self.assertRaisesRegex(PermissionError, "must be a real directory"):
+            _execute_agent_tool(
+                self.state,
+                self.session["id"],
+                "optpilot_resource_action_run",
+                {
+                    "resource_uid": self.resource_uid,
+                    "action_id": "generate",
+                    "inputs": {"name": "demo"},
+                    "workspace_id": workspace["id"],
+                },
+            )
+        self.assertEqual(_read_agent_approvals(self.state, self.session["id"]), [])
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_changed_resource_contract_invalidates_approval(self) -> None:
+        requested = _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+                "inputs": {"name": "demo"},
+            },
+        )
+        self.assertFalse(requested["ok"])
+        approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        (self.resource_dir / "generate.py").write_text(
+            _GENERATOR + "\nprint('changed after approval')\n",
+            encoding="utf-8",
+        )
+
+        approved = _approve_agent_action(
+            self.state, self.session["id"], approval["id"]
+        )
+
+        self.assertFalse(approved["result"]["ok"], approved)
+        self.assertIn("changed after approval", approved["result"]["summary"])
+        self.assertEqual(self.state._resource_action_runs, {})
+
+    def test_workspace_root_change_invalidates_approval(self) -> None:
+        workspace = _create_ui_workspace(
+            self.state,
+            {"id": "stable-workspace", "title": "A", "root": str(self.root / "a")},
+        )
+        _attach_agent_workspace(
+            self.state, self.session["id"], workspace["id"], select=True
+        )
+        requested = _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+                "inputs": {"name": "demo"},
+                "workspace_id": workspace["id"],
+            },
+        )
+        self.assertFalse(requested["ok"])
+        approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        replacement = self.root / "b"
+        _create_ui_workspace(
+            self.state,
+            {"id": workspace["id"], "title": "B", "root": str(replacement)},
+        )
+
+        approved = _approve_agent_action(
+            self.state, self.session["id"], approval["id"]
+        )
+
+        self.assertFalse(approved["result"]["ok"], approved)
+        self.assertIn("Workspace root changed after approval", approved["result"]["summary"])
+        self.assertFalse((replacement / "resource-action-output").exists())
+
     def test_without_a_workspace_output_stays_in_studios_own_folder(self) -> None:
         # The browser path passes no Workspace and must keep working.
         request_id = str(uuid.uuid4())
         from optpilot_studio.ui.server import _start_resource_action_run
+        review = _resource_action_review(
+            self.state,
+            resource_uid=self.resource_uid,
+            action_id="generate",
+        )
 
         payload, _status = _start_resource_action_run(
             self.state,
@@ -217,6 +422,9 @@ class AssistantResourceActionTest(unittest.TestCase):
                 "resource_uid": self.resource_uid,
                 "action_id": "generate",
                 "inputs": {"name": "demo"},
+                "_approved_action_contract_digest": review[
+                    "action_contract_digest"
+                ],
             },
         )
         final = self._await(payload["request_id"])
@@ -307,6 +515,11 @@ class AssistantResourceActionTest(unittest.TestCase):
 
     def test_an_unknown_workspace_is_refused(self) -> None:
         from optpilot_studio.ui.server import _start_resource_action_run
+        review = _resource_action_review(
+            self.state,
+            resource_uid=self.resource_uid,
+            action_id="generate",
+        )
 
         with self.assertRaises(ValueError):
             _start_resource_action_run(
@@ -317,6 +530,9 @@ class AssistantResourceActionTest(unittest.TestCase):
                     "action_id": "generate",
                     "workspace_id": "no-such-workspace",
                     "inputs": {"name": "demo"},
+                    "_approved_action_contract_digest": review[
+                        "action_contract_digest"
+                    ],
                 },
             )
 

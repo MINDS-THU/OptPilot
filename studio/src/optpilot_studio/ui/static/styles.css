@@ -7928,7 +7928,10 @@ body.assistant-open .agent-panel {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  /* Managed dialogs must stay above the mobile navigation rail (z-index 100).
+     Opening Settings also closes the rail, but this keeps every modal safe if
+     another trigger is added inside the rail later. */
+  z-index: 130;
   display: grid;
   place-items: center;
   padding: 28px;
@@ -7950,8 +7953,8 @@ body.assistant-open .agent-panel {
   display: flex;
   flex-direction: column;
   width: min(760px, 100%);
-  height: min(760px, calc(100vh - 56px));
-  max-height: calc(100vh - 56px);
+  height: min(760px, calc(100dvh - 56px));
+  max-height: calc(100dvh - 56px);
   overflow: hidden;
   border: 1px solid #d9e0e5;
   border-radius: 10px;
@@ -7985,6 +7988,16 @@ body.assistant-open .agent-panel {
   background: #fff6f6;
 }
 
+.settings-load-status.warning {
+  border-color: #eadbb7;
+  background: #fff9ea;
+}
+
+.settings-load-status.success {
+  border-color: #cce4d5;
+  background: #f2faf5;
+}
+
 .modal-header,
 .modal-actions {
   display: flex;
@@ -8014,14 +8027,17 @@ body.assistant-open .agent-panel {
 .settings-tabs {
   display: flex;
   gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
   padding: 12px 18px 0;
   border-bottom: 1px solid var(--line);
   background: #fbfcfd;
 }
 
 .settings-tab {
-  min-height: 34px;
-  padding: 7px 12px 9px;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 9px 14px 10px;
   border: 1px solid transparent;
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
@@ -8090,6 +8106,20 @@ body.assistant-open .agent-panel {
   background: #fbf8fc;
 }
 
+.settings-status.ready {
+  border-color: #cce4d5;
+  background: #f2faf5;
+}
+
+.settings-status.attention {
+  border-color: #eadbb7;
+  background: #fff9ea;
+}
+
+.settings-status.off {
+  background: #f7f8fa;
+}
+
 .settings-status > div:first-child {
   display: grid;
   gap: 3px;
@@ -8114,25 +8144,101 @@ body.assistant-open .agent-panel {
   white-space: nowrap;
 }
 
-.capability-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.capability-list > div {
-  display: grid;
-  gap: 3px;
-  min-height: 54px;
-  padding: 10px;
+.settings-disclosure {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: #fbfcfd;
 }
 
-.capability-list span {
+.settings-disclosure > summary {
+  min-height: 42px;
+  padding: 11px 12px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.settings-disclosure > p {
+  margin: -2px 12px 12px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-disclosure > .settings-grid {
+  padding: 0 12px 12px;
+}
+
+.settings-info-card,
+.settings-storage-note {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #dce5eb;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.settings-info-card p,
+.settings-storage-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-storage-note code {
+  overflow-wrap: anywhere;
+}
+
+.permission-group {
+  display: grid;
+  gap: 7px;
+}
+
+.permission-group h4 {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.permission-list {
+  display: grid;
+  gap: 8px;
+}
+
+.permission-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.42fr);
+  align-items: center;
+  gap: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.permission-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.permission-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.permission-row select {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid #cfd9df;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
 }
 
 .env-secret-list {
@@ -8149,6 +8255,11 @@ body.assistant-open .agent-panel {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfcfd;
+}
+
+.env-secret-row.pending-removal {
+  border-color: #eadbb7;
+  background: #fffaf0;
 }
 
 .env-secret-row > span:first-child,
@@ -8184,10 +8295,17 @@ body.assistant-open .agent-panel {
   margin: 0;
 }
 
-.env-draft-remove {
+.env-row-action {
   min-height: 28px;
   padding: 5px 9px;
   font-size: 12px;
+}
+
+.field-error {
+  margin: -4px 0 0;
+  color: #a42f2f;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-note {
@@ -8216,6 +8334,103 @@ body.assistant-open .agent-panel {
 .modal-actions {
   border-top: 1px solid var(--line);
   background: #f8fafb;
+}
+
+.modal-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-dirty-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-dirty-status.dirty {
+  color: #865d15;
+}
+
+@media (max-width: 620px) {
+  #settingsModal {
+    place-items: stretch;
+    padding: 0;
+  }
+
+  .settings-modal {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .settings-modal > .modal-header {
+    align-items: flex-start;
+    padding: max(14px, env(safe-area-inset-top)) 14px 13px;
+  }
+
+  .settings-modal > .modal-header p {
+    max-width: 34rem;
+  }
+
+  .settings-tabs {
+    gap: 4px;
+    padding: 8px 10px 0;
+  }
+
+  .settings-tab {
+    min-height: 44px;
+    padding: 10px 12px 11px;
+  }
+
+  .settings-body {
+    padding: 14px;
+  }
+
+  .settings-section-heading,
+  .env-secret-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-section-heading > button,
+  .settings-section-heading > .switch-row {
+    align-self: flex-start;
+  }
+
+  .permission-row {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+
+  .env-secret-row-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .env-row-action,
+  .settings-section-heading > button,
+  .env-secret-compose-actions > button {
+    min-height: 44px;
+  }
+
+  .modal-actions {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 10px 14px max(10px, env(safe-area-inset-bottom));
+  }
+
+  .modal-action-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    width: 100%;
+  }
+
+  .modal-action-buttons > button {
+    min-height: 44px;
+  }
 }
 
 .cleanup-modal {

@@ -31,7 +31,8 @@ flowchart LR
 
 ## What Is A Candidate?
 
-A candidate is the object the method proposes and the environment evaluates. OptPilot supports three formats.
+A candidate is the object the Method proposes and the Environment evaluates.
+The public schema admits three formats:
 
 | Format | Candidate contains | Typical methods |
 | --- | --- | --- |
@@ -41,10 +42,10 @@ A candidate is the object the method proposes and the environment evaluates. Opt
 
 The environment owns the accepted candidate contract. The method owns how candidates are produced.
 
-The current retained local-process runner executes `parameters` and bounded
-`files` candidates with source-backed Python batch methods and evaluators. It
-also supports package-owned `trialWorkspace` seed layers. `opaque` remains a
-valid authoring contract but is not yet executable through this retained slice.
+The retained runner executes `parameters` and bounded `files` Candidates.
+`opaque` remains a valid authoring contract but is not executable in this
+release. Runtime and Method/Evaluator combinations have additional constraints;
+see [Executable Capabilities](capabilities.md).
 
 ## Parameter Candidates
 

@@ -132,9 +132,10 @@ optpilot resource run \
   --output-dir ./generated-bundle
 ```
 
-The action needs the same model ids and `OPENROUTER_API_KEY` as the interface,
-declared in its own `grants` block, and the same network access — generation
-calls the provider, and its setup installs from PyPI. Setting `thorough=true`
+The action requires `OPENROUTER_API_KEY`; its two generation model ids have
+package defaults and may be overridden through its own `grants` block.
+`DEVS_DISPLAY_MODEL_ID` is interface-only. The action also needs network access
+because generation calls the provider and setup installs from PyPI. Setting `thorough=true`
 additionally runs the verification and simulation-check stages, whose
 generated-code execution may need a container runtime.
 
@@ -191,10 +192,11 @@ inputs have not changed. Later launch processes only validate its content
 fingerprints and never update it. Generated simulators, output control, and logs
 stay in launch-scoped managed storage. Catalog source remains read-only.
 
-Studio must provide `OPENROUTER_API_KEY` and the three model selections below.
-Configure all four values in Studio Settings under **Local environment
-variables**, or export them before starting Studio. Model ids use
-LiteLLM/OpenRouter notation, for example `openrouter/openai/gpt-5.4`.
+Studio must provide `OPENROUTER_API_KEY`. The three model selections below have
+package defaults, so configure them in Studio Settings under **Local
+environment variables** only when you want an override (or export overrides
+before starting Studio). Model ids use LiteLLM/OpenRouter notation, for example
+`openrouter/openai/gpt-5.4`.
 
 The resource declares model ids as ordinary host environment and the provider
 credential separately as a secret:
@@ -204,9 +206,12 @@ interface:
   grants:
     network: enabled
     envFromHost:
-      - DEVS_INTERFACE_MODEL_ID
-      - DEVS_INTERFACE_STRONG_MODEL_ID
-      - DEVS_DISPLAY_MODEL_ID
+      - name: DEVS_INTERFACE_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+      - name: DEVS_INTERFACE_STRONG_MODEL_ID
+        default: openrouter/openai/gpt-5.4
+      - name: DEVS_DISPLAY_MODEL_ID
+        default: openrouter/openai/gpt-5.4
     secretsFromHost:
       - OPENROUTER_API_KEY
 ```
@@ -332,7 +337,7 @@ exposes; the platform does not search arbitrary attributes or invent a score.
 Only finite `bool`, `int`, and `float` values are accepted. If no trustworthy
 domain KPI is available, the summary contains an empty `metrics` object and a
 plain explanation of the missing model state. Students can still inspect that
-run, while Workspace Setup correctly leaves optimization-metric selection as
+run, while the Workspace **Publish** flow correctly leaves optimization-metric selection as
 an explicit repair step. Older or independently authored runners remain valid:
 their manifests do not declare `summary.json` unless the complete writer
 contract is present.

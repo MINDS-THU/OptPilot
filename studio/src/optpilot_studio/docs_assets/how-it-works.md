@@ -277,19 +277,19 @@ presets remain future work.
 
 ## Current executable boundary
 
-The retained runner currently supports parameter and bounded file candidates,
-source-backed Python batch methods and evaluators, package-owned
-`methodContext`, optional `trialWorkspace` seeds, bounded vendored and
-hash-locked pure-Python dependencies, and local process runtime. It rejects
-opaque candidates, command/session methods, arbitrary setup/build execution,
-Environment/backend host-derived values, containers, and other unsupported
-combinations rather than falling back to the removed execution path. A process
-Method may receive only its declared `runtime.envFromHost` values as
+The retained runner supports parameter and bounded-file Candidates, Python
+evaluators, Python or Python-headed command batch Methods, supported process or
+digest-pinned container declarations, retained package input layers, and
+narrow hash-locked pure-Python dependency preparation. Unsupported combinations
+fail closed. See [Executable Capabilities](capabilities.md) for the authoritative
+matrix.
+
+A Method may receive only its declared `runtime.envFromHost` values as
 launch-scoped operational input. A Studio Run retains the declared names and
 opaque local Settings revisions, never the values. The values travel to a new
 Method worker through a transient provider channel and are excluded from the
 durable process request and semantic Run records. Changing a saved value creates
 a revision for later Runs; an older Run waits rather than silently rebinding if
-its original revision is no longer available. The file slice currently relies
-on trusted native code and a locally available common content store for the
-environment, seeds, and candidate layers.
+its original revision is no longer available. Native package code remains
+trusted code, and the content store supplies exact Environment, seed, and
+Candidate layers.

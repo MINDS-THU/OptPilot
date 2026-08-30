@@ -17,7 +17,11 @@ Execution contract (what the authored command sees):
   as a single argv token.  Placeholder references are checked at validation
   time against the action's declared inputs.
 - ``grants.envFromHost`` / ``grants.secretsFromHost`` name host environment
-  values passed through verbatim; a missing name fails before execution.
+  values passed to the command; a missing name fails before execution and
+  secret values are redacted from the returned summary/log tails.
+- The current direct-process executor can run only actions that explicitly
+  grant ``network: enabled``.  It fails closed for ``network: disabled``
+  because a host subprocess cannot truthfully enforce network isolation.
 - When the action declares ``runtime.setup``, the steps run in the resource
   root before the command (Studio's prepared-runtime cache is not used by
   this local path; setup scripts should be idempotent).
@@ -330,6 +334,14 @@ def run_resource_action(
         raise ValueError(f"{resource_path} declares no actions.")
     action = find_resource_action(actions, action_id)
 
+    if action.network != "enabled":
+        raise ValueError(
+            f"Action {action.action_id!r} declares network: disabled, but the "
+            "local process executor cannot enforce network isolation. Run it "
+            "through an isolated runtime that enforces the declaration, or "
+            "explicitly declare network: enabled after reviewing the command."
+        )
+
     errors = validate_parameter_values(
         input_values, action.inputs, location="inputs"
     )
@@ -464,6 +476,11 @@ def run_resource_action(
             "action_id": action.action_id,
             "label": action.label,
             "command": argv,
+            "network": action.network,
+            "grants": {
+                "envFromHost": list(action.env_from_host),
+                "secretsFromHost": list(action.secrets_from_host),
+            },
             "cwd": str(cwd),
             "returncode": returncode,
             "timed_out": timed_out,
@@ -480,7 +497,12 @@ def run_resource_action(
             )
         if setup_summary is not None:
             result["setup"] = {"ran": bool(setup_summary.get("ran"))}
-        return result
+        secret_values = [
+            environment[name]
+            for name in action.secrets_from_host
+            if isinstance(environment.get(name), str) and environment[name]
+        ]
+        return _redact_sensitive_values(result, secret_values)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -544,6 +566,34 @@ def _expired_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value or ""
+
+
+def _redact_sensitive_values(value: Any, secrets: List[str]) -> Any:
+    """Return a JSON-shaped value with every injected secret replaced.
+
+    Resource action summaries are shown in the browser and can also be sent
+    back to the Assistant.  Redaction therefore happens at the execution
+    boundary before either consumer receives the result.
+    """
+
+    ordered = sorted({secret for secret in secrets if secret}, key=len, reverse=True)
+    if not ordered:
+        return value
+    if isinstance(value, str):
+        result = value
+        for secret in ordered:
+            result = result.replace(secret, "[REDACTED]")
+        return result
+    if isinstance(value, list):
+        return [_redact_sensitive_values(item, ordered) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_values(item, ordered) for item in value)
+    if isinstance(value, Mapping):
+        return {
+            key: _redact_sensitive_values(item, ordered)
+            for key, item in value.items()
+        }
+    return value
 
 
 def _list_output_files(output_root: Path) -> List[Dict[str, Any]]:

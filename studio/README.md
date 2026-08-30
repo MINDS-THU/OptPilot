@@ -17,3 +17,8 @@ and the containerized workspace Code Server—use:
 ```bash
 ./scripts/start_services.sh
 ```
+
+The launcher uses the repository's `.venv` by default. It also honors
+`OPTPILOT_DEV_VENV` (preferred) or `UV_PROJECT_ENVIRONMENT` when the prepared
+Python 3.12 environment lives elsewhere. That environment must contain
+`openhands-agent-server`; no editor-specific launch configuration is required.

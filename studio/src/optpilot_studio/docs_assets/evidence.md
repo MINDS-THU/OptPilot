@@ -53,18 +53,13 @@ uv run optpilot run path/to/package/studies/my_study.yaml \
   --package-root path/to/package
 ```
 
-The current retained compiler supports the bounded parameter-or-file Python
-process/batch slice, including package-owned `trialWorkspace` seed layers,
-immutable file-candidate layers, and bounded vendored, hash-locked pure-Python
-dependency preparation. It rejects unsupported configs instead of falling back
-to an older runner. In particular, command/session methods, opaque candidates,
-command evaluators, containers, arbitrary setup/build execution, host-derived
-environment/secrets, and legacy path-backed output declarations are not yet
-executable through this path.
-
-The bundled catalog still contains broader teaching and authoring fixtures, so
-validation success does not imply that every example is in the current retained
-execution slice.
+The retained compiler supports parameter and bounded-file Candidates, Python
+evaluators, Python or Python-headed command batch Methods, supported process or
+digest-pinned container declarations, retained package input layers, and
+narrow hash-locked pure-Python dependency preparation. Unsupported combinations
+fail closed instead of falling back to an older runner. See
+[Executable Capabilities](capabilities.md) for the authoritative matrix; schema
+validation alone is not proof that a study can execute.
 
 ## Where the Realm lives
 

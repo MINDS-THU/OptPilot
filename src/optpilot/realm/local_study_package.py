@@ -28,6 +28,7 @@ import yaml
 
 from ..config import compile_authoring_config
 from ..config_errors import CodedConfigError
+from ..package_settings import load_package_settings
 from ..spec import StudySpec, study_spec_from_raw
 from ..runtime_limits import MAX_ATTEMPT_INPUT_LAYERS
 from .errors import ContentRejected
@@ -771,8 +772,17 @@ def plan_local_study_package(
         )
 
     try:
+        try:
+            package_settings = load_package_settings(canonical_root)
+        except (OSError, TypeError, ValueError) as error:
+            _fail(
+                "package_settings_invalid",
+                f"Package settings are invalid: {error}",
+            )
         compiled = compile_authoring_config(
-            study_path, launch_inputs=launch_inputs
+            study_path,
+            launch_inputs=launch_inputs,
+            package_settings=package_settings,
         )
         _cross_check_compiled_config_paths(
             compiled,

@@ -13,9 +13,10 @@ generated code, and the numeric solution — is retained with the Run.
 
 COOPA is **bundled** with this package under
 `methods/coopa_solver/coopa_home/` (Apache-2.0, see its `LICENSE`). You do not
-need to obtain it separately. Set `COOPA_HOME` only if you want to point the
-method at a different checkout — the shim prefers `COOPA_HOME` when set and
-falls back to the bundled copy otherwise.
+need to obtain it separately, and a retained Run always uses that captured
+copy. The optional `COOPA_HOME` grant belongs only to the interactive console;
+interface developers can use it to point the console at another checkout
+without changing the retained Method.
 
 Two things are still yours to provide, because neither can be locked into an
 OptPilot process runtime (which accepts pure `py3-none-any` wheels only):
@@ -27,8 +28,8 @@ OptPilot process runtime (which accepts pure `py3-none-any` wheels only):
    Without them, keep `agentMode: mathematical-only` availability in mind —
    the paper reports the mathematical agent alone covers ~91% of benchmark
    dispatches.
-2. Set `OPENROUTER_API_KEY` (or configure the model id in
-   `settingsSchema.model` for a provider litellm can route with your keys).
+2. Set `OPENROUTER_API_KEY` and choose a model id that OpenRouter can route.
+   The retained Method declares only this provider credential.
 
 ## Run setups
 
@@ -39,7 +40,6 @@ OptPilot process runtime (which accepts pure `py3-none-any` wheels only):
   ```bash
   uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
     --package-root catalog/or_solving \
-    --method-request-timeout 900 \
     --input problem="A factory makes two products. Product A yields \$40 profit and takes 2 hours of labor; product B yields \$30 and takes 1 hour. With 100 labor hours available, maximize profit."
   ```
 

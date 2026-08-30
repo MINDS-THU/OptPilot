@@ -15,6 +15,10 @@ from optpilot_studio import agent
 
 
 class AssistantToolDriftTest(unittest.TestCase):
+    def test_native_openhands_tools_never_bypass_workspace_file_policy(self) -> None:
+        self.assertEqual(agent.DEFAULT_OPENHANDS_NATIVE_TOOLS, ("task_tracker",))
+        self.assertEqual(agent.ALLOWED_OPENHANDS_NATIVE_TOOLS, {"task_tracker"})
+
     def test_every_advertised_tool_is_executable_and_vice_versa(self) -> None:
         source = Path(agent.__file__).read_text(encoding="utf-8")
         advertised = set(re.findall(r'"name":\s*"(optpilot_[a-z_]+)"', source))
@@ -29,6 +33,21 @@ class AssistantToolDriftTest(unittest.TestCase):
             set(),
             "executable but never advertised: dead dispatch code",
         )
+
+    def test_execution_tool_descriptions_match_the_approval_policy(self) -> None:
+        descriptions = {
+            str(spec.get("name")): str(spec.get("description") or "")
+            for spec in agent.OPTPILOT_AGENT_TOOL_SPECS
+        }
+        for name in ("optpilot_shell_run", "optpilot_terminal"):
+            with self.subTest(tool=name):
+                self.assertIn(
+                    "every command requires explicit studio approval",
+                    descriptions[name].lower(),
+                )
+                self.assertNotIn("Risky", descriptions[name])
+                self.assertNotIn("risky", descriptions[name])
+        self.assertIn("explicit approval", descriptions["optpilot_smoke_test_study"])
 
     def _prompt_paths(self) -> list[Path]:
         """Both copies of the guidance file.
@@ -61,6 +80,15 @@ class AssistantToolDriftTest(unittest.TestCase):
 
     def _assert_prompt_is_honest(self, path: Path) -> None:
         prompt = path.read_text(encoding="utf-8")
+        self.assertIn(
+            "Use native OpenHands planning or task-tracking tools only",
+            prompt,
+        )
+        self.assertIn("Do not bypass Studio's", prompt)
+        self.assertIn("every shell command", prompt)
+        self.assertIn("every smoke-test execution", prompt)
+        self.assertNotIn("risky shell", prompt)
+        self.assertNotIn("Smoke tests do not", prompt)
         taught = set(re.findall(r"`(optpilot_[a-z_]+)`", prompt))
         # The prompt also names the optpilot_configs/ directory in backticks;
         # it shares the prefix but is a folder, not a tool.

@@ -47,8 +47,8 @@ flowchart LR
 
 OptPilot has two installation modes:
 
-- **Core CLI/SDK**: install from PyPI when you want to validate packages and run
-  studies in your own project without the GUI.
+- **Core CLI and Python package**: install from PyPI when you want to validate
+  packages and run studies in your own project without the GUI.
 - **Source checkout for tutorial and Studio**: clone the repository when you
   want the local Studio UI, workspace management, assistant integration, and
   bundled tutorial package.
@@ -58,7 +58,7 @@ Start with [Installation](installation.md) to choose the right mode.
 ```mermaid
 flowchart TB
   Configs["public configs\nenvironment + method + study"]
-  Core["Core CLI/SDK\nPyPI package"]
+  Core["Core CLI + package\nPyPI distribution"]
   Studio["Full Studio\nsource checkout"]
   Runs["OptPilot Realm\ncanonical Run evidence"]
   Workspaces["Workspaces\ndurable editable projects"]
@@ -77,12 +77,11 @@ OptPilot currently provides:
 - JSON Schema validation for public environment, method, and study configs,
   plus optional catalog resource manifests
 - package validation for folders containing OptPilot configs
-- parameter, file, and opaque candidate contracts
-- Python and command evaluators
-- Python and command methods, including batch-style and session-style method
-  protocols
-- local process and Docker/Podman-compatible runtime execution where configs
-  declare it
+- retained execution for parameter and bounded-file Candidates, Python
+  evaluators, and Python or Python-headed command batch Methods
+- local process and digest-pinned Docker/Podman-compatible container runtimes
+  for supported declarations
+- narrow, hash-locked pure-Python dependency preparation
 - local evidence stores with summaries, observations, candidates, trial records,
   method calls, scheduler events, and retained output files
 - a full source-checkout Studio for browsing packages, launching studies,
@@ -91,13 +90,16 @@ OptPilot currently provides:
 
 OptPilot intentionally does not provide a production optimizer, remote cluster
 backend, hosted multi-user service, automatic dependency inference, or a generic
-replacement for domain-specific solvers and simulators.
+replacement for domain-specific solvers and simulators. The schemas also admit
+some future-facing fields that the retained runner rejects. Check
+[Executable Capabilities](capabilities.md) for the authoritative distinction
+between schema-valid and runnable configurations.
 
 ## Documentation Map
 
 Read the docs in this order if you are new:
 
-1. [Installation](installation.md): choose Core CLI/SDK or full Studio.
+1. [Installation](installation.md): choose the Core CLI/package or full Studio.
 2. [Your First Run](getting-started.md): complete one small run and inspect
    its evidence.
 3. [OptPilot Core](concepts.md): learn environments, methods, studies,
@@ -133,8 +135,10 @@ declares.
 
 ## What Ships Where?
 
-The PyPI core package contains the CLI, SDK, schemas, runner, runtime helpers,
-evidence store, and package validation command.
+The PyPI core package contains the CLI, schemas, runner, runtime helpers,
+evidence store, package validation command, and the Python modules that
+implement them. It does not promise a separately versioned stable public SDK;
+prefer the public YAML and CLI boundaries for integrations.
 
 The source checkout also contains the four catalog packages above:
 

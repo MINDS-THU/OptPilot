@@ -29,9 +29,12 @@ runtime_health_file="$service_state_dir/runtime-health.json"
 agent_status_file="$service_state_dir/agent-status.json"
 agent_ready_file="$service_state_dir/agent-ready.json"
 studio_health_file="$service_state_dir/studio-health.json"
+studio_security_context_file="$service_state_dir/studio-security-context.json"
 workspace_connect_file="$service_state_dir/workspace-connect.json"
 code_server_start_file="$service_state_dir/code-server-start.json"
 code_server_status_file="$service_state_dir/code-server-status.json"
+studio_mutation_header="X-OptPilot-CSRF-Token"
+studio_mutation_token=""
 
 say() {
   printf '%s\n' "$*"
@@ -255,6 +258,33 @@ start_studio() {
   say "Studio is ready."
 }
 
+load_studio_mutation_token() {
+  if ! curl --noproxy '*' -fsS --max-time 5 \
+    "$studio_url/api/security-context" >"$studio_security_context_file"; then
+    tail_service_log "Studio" "$studio_log"
+    die "Studio did not provide its local mutation credential."
+  fi
+  if ! studio_mutation_token="$("$python_bin" -c '
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    payload = json.load(stream)
+token = str(payload.get("csrf_token") or "")
+valid = (
+    payload.get("schema") == "optpilot.studio-security-context.v1"
+    and payload.get("csrf_header") == "X-OptPilot-CSRF-Token"
+    and re.fullmatch(r"[A-Za-z0-9_-]{32,}", token)
+)
+if not valid:
+    raise SystemExit(1)
+print(token)
+' "$studio_security_context_file")"; then
+    die "Studio returned an invalid local mutation credential."
+  fi
+}
+
 verify_studio_dependencies() {
   curl --noproxy '*' -fsS --max-time 15 \
     "$studio_url/api/runtime/health" >"$runtime_health_file"
@@ -365,6 +395,7 @@ start_code_server() {
     -w '%{http_code}' \
     -X POST \
     -H 'Content-Type: application/json' \
+    -H "$studio_mutation_header: $studio_mutation_token" \
     --data "$request_json" \
     "$studio_url/api/workspaces/connect-local-folder")"; then
     tail_service_log "Studio" "$studio_log"
@@ -412,6 +443,7 @@ print(workspace_id)
       -w '%{http_code}' \
       -X POST \
       -H 'Content-Type: application/json' \
+      -H "$studio_mutation_header: $studio_mutation_token" \
       --data '{}' \
       "$studio_url/api/workspaces/$workspace_id/open-code")"; then
       tail_service_log "Studio" "$studio_log"
@@ -504,22 +536,17 @@ main() {
   fi
   [ -n "$docker_bin" ] && [ -x "$docker_bin" ] || die "Docker is required. Set OPTPILOT_DOCKER_BIN if its CLI is not on PATH."
 
-  launch_venvs="$(
-    sed -n 's/.*"UV_PROJECT_ENVIRONMENT=\([^"]*\)".*/\1/p' \
-      "$repo_root/.claude/launch.json"
-  )"
-  launch_venv="$(printf '%s\n' "$launch_venvs" | sed -n '1p')"
-  launch_venv_count="$(printf '%s\n' "$launch_venvs" | sort -u | sed '/^$/d' | wc -l | tr -d ' ')"
-  [ "$launch_venv_count" = "1" ] || die "The launch configurations must use one shared UV_PROJECT_ENVIRONMENT."
-  optpilot_venv="${OPTPILOT_DEV_VENV:-$launch_venv}"
-  [ -n "$optpilot_venv" ] || die "No development environment is configured in .claude/launch.json."
-  optpilot_venv="$(cd -P "$optpilot_venv" 2>/dev/null && pwd -P)" || die "Development environment not found: $optpilot_venv"
-  case "$optpilot_venv/" in
-    "$repo_root/"*) die "Use the external Python 3.12 environment from .claude/launch.json; a synced-checkout .venv is unsafe on macOS." ;;
+  requested_venv="${OPTPILOT_DEV_VENV:-${UV_PROJECT_ENVIRONMENT:-$repo_root/.venv}}"
+  case "$requested_venv" in
+    /*) ;;
+    *) requested_venv="$repo_root/$requested_venv" ;;
   esac
+  optpilot_venv="$(cd -P "$requested_venv" 2>/dev/null && pwd -P)" || die \
+    "Development environment not found: $requested_venv. Run the documented uv setup, or set OPTPILOT_DEV_VENV to a prepared Python 3.12 environment."
   python_bin="$optpilot_venv/bin/python"
   [ -x "$python_bin" ] || die "Python is missing from $optpilot_venv. Set OPTPILOT_DEV_VENV to the prepared Python 3.12 environment."
-  [ -x "$optpilot_venv/bin/agent-server" ] || die "OpenHands agent-server is missing from $optpilot_venv."
+  [ -x "$optpilot_venv/bin/agent-server" ] || die \
+    "OpenHands agent-server is missing from $optpilot_venv. Install the documented OpenHands packages into that environment."
 
   python_version="$($python_bin -c 'import platform; print(platform.python_version())')"
   case "$python_version" in
@@ -537,6 +564,7 @@ main() {
   ensure_docker
   start_agent_server
   start_studio
+  load_studio_mutation_token
   verify_studio_dependencies
   start_code_server
 

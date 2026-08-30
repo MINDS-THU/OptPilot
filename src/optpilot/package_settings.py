@@ -139,8 +139,14 @@ def find_package_settings_path(package_root: str | Path) -> Optional[Path]:
     """Return the package's settings file, or ``None`` when it has none."""
 
     root = Path(package_root)
+    if root.is_symlink():
+        raise ValueError(f"Package root must not be a symbolic link: {root}")
     for name in PACKAGE_SETTINGS_FILENAMES:
         candidate = root / name
+        if candidate.is_symlink():
+            raise ValueError(
+                f"Package settings must not be a symbolic link: {candidate}"
+            )
         if candidate.is_file():
             return candidate
     return None
@@ -154,9 +160,24 @@ def load_package_settings(package_root: str | Path) -> Optional[PackageSettings]
     exists to prevent, at the moment someone is least likely to notice.
     """
 
-    path = find_package_settings_path(package_root)
+    root = Path(package_root)
+    if root.is_symlink():
+        raise ValueError(f"Package root must not be a symbolic link: {root}")
+    path = find_package_settings_path(root)
     if path is None:
         return None
+    if path.is_symlink():
+        raise ValueError(f"Package settings must not be a symbolic link: {path}")
+    try:
+        canonical_root = root.resolve(strict=True)
+        canonical_path = path.resolve(strict=True)
+        canonical_path.relative_to(canonical_root)
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"Package settings must be a regular file inside {root}: {path}"
+        ) from error
+    if not canonical_path.is_file():
+        raise ValueError(f"Package settings must be a regular file: {path}")
 
     import yaml  # Imported here so this module stays usable without PyYAML.
 
@@ -172,6 +193,21 @@ def load_package_settings(package_root: str | Path) -> Optional[PackageSettings]
         )
     if raw.get("config") != PACKAGE_CONFIG_KIND:
         raise ValueError(f"{path} must declare config: {PACKAGE_CONFIG_KIND}.")
+    allowed = {
+        "apiVersion",
+        "category",
+        "config",
+        "description",
+        "identity",
+        "paper",
+        "runtime",
+        "title",
+    }
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(
+            f"{path} has unknown keys: " + ", ".join(sorted(unknown))
+        )
 
     description = raw.get("description")
     if description is not None and not isinstance(description, str):
@@ -226,6 +262,12 @@ def _parse_container(
         return None
     if not isinstance(runtime, Mapping):
         raise ValueError(f"{subject} runtime must be a mapping.")
+    unknown_runtime = set(runtime) - {"container"}
+    if unknown_runtime:
+        raise ValueError(
+            f"{subject} runtime has unknown keys: "
+            + ", ".join(sorted(unknown_runtime))
+        )
     container = runtime.get("container")
     if container is None:
         return None

@@ -35,6 +35,13 @@ class MethodInterfaceTest(unittest.TestCase):
         self.assertEqual(profile.runtime.sandbox, "process")
         self.assertIn("COOPA_HOME", profile.grants.env_from_host)
         self.assertIn("OPENROUTER_API_KEY", profile.grants.secrets_from_host)
+        declaration = next(
+            item
+            for item in profile.grants.env_from_host_declarations
+            if item.name == "COOPA_HOME"
+        )
+        self.assertEqual(declaration.default, "")
+        self.assertEqual(raw["runtime"]["envFromHost"], ["OPENROUTER_API_KEY"])
 
     def test_method_interface_rejects_container_only_fields_kindly(self) -> None:
         bad = {

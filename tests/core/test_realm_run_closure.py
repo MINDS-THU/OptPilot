@@ -194,6 +194,57 @@ class RunClosureValueObjectTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ports must be unique"):
             WebPresentationSpec(port=5173, extra_ports=(5173,))
 
+    def test_interface_public_host_defaults_survive_retention(self) -> None:
+        payload = _interface_profile().to_dict()
+        payload["grants"]["envFromHost"] = [
+            {
+                "name": "FACTORY_VIEW_MODEL",
+                "default": "provider/default-model",
+                "description": "Model used by the viewer.",
+            }
+        ]
+
+        authored = InterfaceLaunchProfile.from_authoring_dict(payload)
+        restored = InterfaceLaunchProfile.from_dict(authored.to_dict())
+
+        self.assertEqual(restored, authored)
+        self.assertEqual(
+            restored.grants.env_from_host_declarations[0].default,
+            "provider/default-model",
+        )
+        self.assertEqual(
+            restored.to_dict()["grants"]["envFromHost"],
+            payload["grants"]["envFromHost"],
+        )
+
+    def test_interface_host_defaults_participate_in_equality(self) -> None:
+        base = {
+            "network": "disabled",
+            "secretsFromHost": [],
+        }
+        required = InterfaceGrantSpec.from_authoring_dict(
+            {**base, "envFromHost": ["VIEW_MODEL"]}
+        )
+        defaulted = InterfaceGrantSpec.from_authoring_dict(
+            {
+                **base,
+                "envFromHost": [{"name": "VIEW_MODEL", "default": "model-a"}],
+            }
+        )
+        other_default = InterfaceGrantSpec.from_authoring_dict(
+            {
+                **base,
+                "envFromHost": [{"name": "VIEW_MODEL", "default": "model-b"}],
+            }
+        )
+
+        self.assertNotEqual(required, defaulted)
+        self.assertNotEqual(defaulted, other_default)
+        self.assertEqual(
+            defaulted,
+            InterfaceGrantSpec.from_dict(defaulted.to_dict()),
+        )
+
     def test_interface_output_actions_are_registered_and_canonical(self) -> None:
         payload = _interface_profile().to_dict()
         payload["outputs"] = {

@@ -16,7 +16,7 @@ from typing import Any, Dict, NoReturn, Tuple
 
 from .realm._validation import required_text, thaw_json
 from .realm.errors import RealmIntegrityError
-from .realm.manifests import TreeEntry, TreeManifest, validate_portable_path
+from .realm.manifests import TreeManifest, validate_portable_path
 from .realm.owner_derivation import Binding, OwnerDerivationManifest, SourceAnchor
 from .realm.process_provider import ProcessProviderIdentity
 from .realm.refs import PhysicalContentRef, SnapshotRef, canonical_json_bytes

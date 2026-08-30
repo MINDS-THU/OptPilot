@@ -29,7 +29,7 @@
         line-height: 1.5;
       }
     </style>
-    <link rel="stylesheet" href="/static/styles.css?v=studio-20260823e" />
+    <link rel="stylesheet" href="/static/styles.css?v=studio-20260830-settings1" />
   </head>
   <body>
     <div id="fileModeNotice" class="file-mode-notice">
@@ -452,13 +452,13 @@
       </main>
     </div>
 
-	    <div id="settingsModal" class="modal-backdrop" hidden>
-	      <section id="settingsDialog" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
-	        <header class="modal-header">
-	          <div>
-		            <h2 id="settingsTitle">Studio Settings</h2>
-		            <p>Configure assistant runtime, local environment variables, capabilities, and approval defaults.</p>
-	          </div>
+    <div id="settingsModal" class="modal-backdrop" hidden>
+      <section id="settingsDialog" class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-describedby="settingsIntro" tabindex="-1">
+        <header class="modal-header">
+          <div>
+            <h2 id="settingsTitle">Studio Settings</h2>
+            <p id="settingsIntro">Connect the Assistant, choose approval defaults, and manage values used by local Runs and interfaces.</p>
+          </div>
           <button id="settingsCloseButton" class="ghost-button" type="button" aria-label="Close settings">Close</button>
         </header>
         <div id="settingsLoadStatus" class="settings-load-status" aria-live="polite" hidden>
@@ -469,16 +469,17 @@
           <button id="settingsRetryButton" class="ghost-button" type="button" hidden>Try again</button>
         </div>
         <div class="settings-tabs" role="tablist" aria-label="Studio settings sections">
-          <button class="settings-tab active" data-settings-tab="assistant" type="button" role="tab" aria-selected="true" aria-controls="settingsAssistantPanel">OptPilot</button>
-          <button class="settings-tab" data-settings-tab="environment" type="button" role="tab" aria-selected="false" aria-controls="settingsEnvironmentPanel">Local environment variables</button>
+          <button id="settingsAssistantTab" class="settings-tab active" data-settings-tab="assistant" type="button" role="tab" aria-selected="true" aria-controls="settingsAssistantPanel" tabindex="0">Assistant</button>
+          <button id="settingsPermissionsTab" class="settings-tab" data-settings-tab="permissions" type="button" role="tab" aria-selected="false" aria-controls="settingsPermissionsPanel" tabindex="-1">Permissions</button>
+          <button id="settingsEnvironmentTab" class="settings-tab" data-settings-tab="environment" type="button" role="tab" aria-selected="false" aria-controls="settingsEnvironmentPanel" tabindex="-1">Local values</button>
         </div>
         <div class="settings-body">
-          <div id="settingsAssistantPanel" class="settings-tab-panel" data-settings-panel="assistant" role="tabpanel">
+          <div id="settingsAssistantPanel" class="settings-tab-panel" data-settings-panel="assistant" role="tabpanel" aria-labelledby="settingsAssistantTab">
             <section class="settings-section">
               <div class="settings-section-heading">
                 <div>
-                  <h3>OpenHands runtime</h3>
-                  <p>Connect OptPilot to an OpenHands runtime and choose the model used in Conversations.</p>
+                  <h3>Assistant runtime</h3>
+                  <p>Choose the model used in Conversations and connect it to the OpenHands service that provides OptPilot tools.</p>
                 </div>
                 <label class="switch-row">
                   <input id="openHandsEnabled" type="checkbox" />
@@ -488,162 +489,121 @@
               <div id="openHandsStatus" class="settings-status"></div>
               <div class="settings-grid">
                 <label class="control-field">
-                  <span>OpenHands server URL</span>
-                  <input id="openHandsBaseUrl" type="url" placeholder="http://127.0.0.1:8781" autocomplete="off" />
+                  <span>Conversation model</span>
+                  <input id="openHandsModel" type="text" placeholder="provider/model-id" autocomplete="off" />
                 </label>
                 <label class="control-field">
-                  <span>Conversation endpoint</span>
-                  <input id="openHandsSessionEndpoint" type="text" placeholder="/api/conversations" autocomplete="off" />
-                </label>
-                <label class="control-field">
-                  <span>Conversation model id</span>
-                  <input id="openHandsModel" type="text" placeholder="gpt-4.1 or provider/model-id" autocomplete="off" />
-                </label>
-                <label class="control-field">
-                  <span>API key</span>
-                  <input id="openHandsApiKey" type="password" placeholder="Paste API key" autocomplete="new-password" />
+                  <span>Replace API key</span>
+                  <input id="openHandsApiKey" type="password" placeholder="Paste a new key" autocomplete="new-password" />
                 </label>
               </div>
               <label class="checkbox-row">
                 <input id="openHandsClearApiKey" type="checkbox" />
-                <span>Clear stored API key on save</span>
+                <span>Remove the saved API key when changes are saved</span>
               </label>
+              <details class="settings-disclosure">
+                <summary>Server connection</summary>
+                <p>Leave the URL empty to use OptPilot's local OpenHands service. Enter <code>none</code> only for direct model chat without OptPilot tools.</p>
+                <div class="settings-grid">
+                  <label class="control-field">
+                    <span>OpenHands server URL</span>
+                    <input id="openHandsBaseUrl" type="text" inputmode="url" placeholder="http://127.0.0.1:8781" autocomplete="off" />
+                  </label>
+                  <label class="control-field">
+                    <span>Conversation endpoint</span>
+                    <input id="openHandsSessionEndpoint" type="text" placeholder="/api/conversations" autocomplete="off" />
+                  </label>
+                </div>
+              </details>
+              <div class="settings-info-card">
+                <strong>Core OptPilot tools are built in</strong>
+                <p>Skill, MCP, and custom-tool records are preview-only in this release, so they are intentionally not editable here.</p>
+              </div>
             </section>
-            <section class="settings-section">
-	            <div class="settings-section-heading">
-	              <div>
-	                <h3>Capabilities</h3>
-	                <p>Core OptPilot tools are always available. Configure OpenHands AgentSkills, MCP servers, and SDK custom tools here.</p>
-	              </div>
-	            </div>
-	            <div class="settings-grid">
-	              <label class="control-field settings-field-wide">
-	                <span>AgentSkills (JSON array)</span>
-	                <textarea id="assistantSkillsInput" rows="5" spellcheck="false" placeholder='[{"name":"connect-github-integration","source":".agents/skills/connect-github-integration","enabled":true}]'></textarea>
-	              </label>
-	              <label class="control-field settings-field-wide">
-	                <span>MCP servers (OpenHands mcpServers JSON)</span>
-	                <textarea id="assistantMcpServersInput" rows="5" spellcheck="false" placeholder='{"Notion":{"url":"https://mcp.notion.com/mcp","auth":"oauth"}}'></textarea>
-	              </label>
-	              <label class="control-field">
-	                <span>MCP tool filter regex</span>
-	                <input id="assistantMcpFilterRegex" type="text" placeholder="Optional OpenHands filter_tools_regex" autocomplete="off" />
-	              </label>
-	              <label class="control-field settings-field-wide">
-	                <span>Custom tools (JSON array)</span>
-	                <textarea id="assistantCustomToolsInput" rows="5" spellcheck="false" placeholder='[{"name":"grep","module":"optpilot.tools.grep","factory":"GrepTool","enabled":true}]'></textarea>
-	              </label>
-	            </div>
-	            <div class="capability-list">
-	              <div><strong>Core OptPilot tools</strong><span>Always on</span></div>
-	              <div><strong>Skills</strong><span>SKILL.md progressive disclosure</span></div>
-	              <div><strong>MCP servers</strong><span>OpenHands mcp_config</span></div>
-	              <div><strong>Custom tools</strong><span>SDK ToolDefinition records</span></div>
-	            </div>
-	          </section>
-	          <section class="settings-section">
-	            <div class="settings-section-heading">
-	              <div>
-	                <h3>Permissions</h3>
-	                <p>Potentially destructive actions remain approval-gated. A smoke test is the exception: it runs a throwaway copy for a few trials, so it may run without asking.</p>
-	              </div>
-	            </div>
-	            <div class="settings-grid">
-	              <label class="control-field">
-	                <span>File writes</span>
-	                <select id="assistantPermissionFileWrite">
-	                  <option value="attached_editable">Workspaces available to this conversation</option>
-	                  <option value="approval_required">Always request approval</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Shell commands</span>
-	                <select id="assistantPermissionShellRun">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="safe_without_approval">Safe commands may run directly</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Catalog publishing</span>
-	                <select id="assistantPermissionCatalogRegistration">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Study launch</span>
-	                <select id="assistantPermissionStudyLaunch">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Stop Runs and Candidate tries</span>
-	                <select id="assistantPermissionJobStop">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Smoke tests</span>
-	                <select id="assistantPermissionSmokeTest">
-	                  <option value="safe_without_approval">May run directly, on a copy</option>
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Resource actions</span>
-	                <select id="assistantPermissionResourceAction">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	              <label class="control-field">
-	                <span>Opening interfaces</span>
-	                <select id="assistantPermissionInterfaceLaunch">
-	                  <option value="approval_required">Approval required</option>
-	                  <option value="disabled">Disabled</option>
-	                </select>
-	              </label>
-	            </div>
-	          </section>
           </div>
-          <div id="settingsEnvironmentPanel" class="settings-tab-panel" data-settings-panel="environment" role="tabpanel" hidden>
+
+          <div id="settingsPermissionsPanel" class="settings-tab-panel" data-settings-panel="permissions" role="tabpanel" aria-labelledby="settingsPermissionsTab" hidden>
             <section class="settings-section">
               <div class="settings-section-heading">
                 <div>
-                  <h3>Local environment variables</h3>
-                  <p>Store local values that configs may request by name. A new Run binds the current saved revision; changing it later affects new Runs, not that Run.</p>
+                  <h3>Assistant permissions</h3>
+                  <p>These defaults apply when the Assistant proposes an action. Higher-impact work remains approval-gated unless you disable it entirely.</p>
+                </div>
+                <button id="settingsResetPermissionsButton" class="ghost-button" type="button">Use recommended defaults</button>
+              </div>
+              <div class="permission-group">
+                <h4>Workspace changes</h4>
+                <div class="permission-list">
+                  <label class="permission-row">
+                    <span><strong>File writes</strong><small>Limit edits to writable Workspaces attached to the current Conversation, ask every time, or turn writes off.</small></span>
+                    <select id="assistantPermissionFileWrite">
+                      <option value="attached_editable">Attached editable Workspaces</option>
+                      <option value="approval_required">Always request approval</option>
+                      <option value="disabled">Disabled</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="permission-group">
+                <h4>Code and package execution</h4>
+                <div class="permission-list">
+                  <label class="permission-row"><span><strong>Shell commands</strong><small>Run commands proposed by the Assistant.</small></span><select id="assistantPermissionShellRun"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                  <label class="permission-row"><span><strong>Smoke tests</strong><small>Execute package-authored code in a bounded throwaway copy.</small></span><select id="assistantPermissionSmokeTest"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                  <label class="permission-row"><span><strong>Resource actions</strong><small>Run commands declared by a Resource, including actions with external effects.</small></span><select id="assistantPermissionResourceAction"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                  <label class="permission-row"><span><strong>Opening interfaces</strong><small>Start a package-provided web interface in its declared runtime.</small></span><select id="assistantPermissionInterfaceLaunch"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                </div>
+              </div>
+              <div class="permission-group">
+                <h4>Publishing and Run lifecycle</h4>
+                <div class="permission-list">
+                  <label class="permission-row"><span><strong>Catalog publishing</strong><small>Publish or update packages in the Catalog.</small></span><select id="assistantPermissionCatalogRegistration"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                  <label class="permission-row"><span><strong>Study launch</strong><small>Start a new recorded Run.</small></span><select id="assistantPermissionStudyLaunch"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                  <label class="permission-row"><span><strong>Stop Runs and Candidate tries</strong><small>Interrupt work that is already running.</small></span><select id="assistantPermissionJobStop"><option value="approval_required">Approval required</option><option value="disabled">Disabled</option></select></label>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div id="settingsEnvironmentPanel" class="settings-tab-panel" data-settings-panel="environment" role="tabpanel" aria-labelledby="settingsEnvironmentTab" hidden>
+            <section class="settings-section">
+              <div class="settings-section-heading">
+                <div>
+                  <h3>Local values</h3>
+                  <p>Store environment values that packages request by name. New Runs bind the current saved revision; changing a value later does not rewrite an existing Run.</p>
                 </div>
               </div>
               <div id="environmentVariablesList" class="env-secret-list"></div>
               <div class="settings-grid">
                 <label class="control-field">
                   <span>Variable name</span>
-                  <input id="environmentVariableName" type="text" placeholder="OPENROUTER_API_KEY" autocomplete="off" />
+                  <input id="environmentVariableName" type="text" placeholder="OPENROUTER_API_KEY" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="environmentVariableError" />
                 </label>
                 <label class="control-field">
                   <span>Value</span>
-                  <input id="environmentVariableValue" type="password" placeholder="Paste value" autocomplete="new-password" />
+                  <input id="environmentVariableValue" type="password" placeholder="Paste value" autocomplete="new-password" aria-describedby="environmentVariableError" />
                 </label>
+                <p id="environmentVariableError" class="field-error settings-field-wide" role="alert" hidden></p>
                 <div class="settings-field-wide env-secret-compose-actions">
-                  <button id="environmentVariableAddButton" class="ghost-button" type="button">Add Variable</button>
-                  <span class="settings-note">Add each variable here, then save settings to persist the changes.</span>
+                  <button id="environmentVariableAddButton" class="ghost-button" type="button">Stage value</button>
+                  <span class="settings-note">Stage each value here, review the list, then save all changes together.</span>
                 </div>
               </div>
-              <p class="settings-note">Values are write-only in the browser, but OptPilot stores them as plaintext in its local settings file. Run records contain only the variable name and an opaque local revision—not the value. This is not a secret vault. Use remove to clear a stored value.</p>
+              <div class="settings-storage-note">
+                <strong>Plaintext, project-scoped storage</strong>
+                <p>Values are write-only in the browser, but Studio stores them as plaintext at <code id="settingsStoragePath">this project's settings file</code>. If the project folder is synchronized, that file may be synchronized too. Run records retain only the variable name and an opaque revision—not the value. This is not a secret vault.</p>
+              </div>
             </section>
           </div>
-	        </div>
+        </div>
         <footer class="modal-actions">
-          <button id="settingsCancelButton" class="ghost-button" type="button">Cancel</button>
-          <button id="settingsSaveButton" class="primary-button" type="button">Save Settings</button>
+          <span id="settingsDirtyStatus" class="settings-dirty-status" aria-live="polite">All changes saved</span>
+          <div class="modal-action-buttons">
+            <button id="settingsCancelButton" class="ghost-button" type="button">Cancel</button>
+            <button id="settingsSaveButton" class="primary-button" type="button" disabled>Save changes</button>
+          </div>
         </footer>
       </section>
-	    </div>
+    </div>
 
 	    <div id="workspaceCleanupModal" class="modal-backdrop" hidden>
 	      <section id="workspaceCleanupDialog" class="cleanup-modal" role="dialog" aria-modal="true" aria-labelledby="workspaceCleanupTitle" aria-describedby="workspaceCleanupBody" tabindex="-1">
@@ -797,6 +757,6 @@
       </div>
 
     <div id="selectionContentDrawerHost"></div>
-    <script src="/static/app.js?v=studio-20260823e"></script>
+    <script src="/static/app.js?v=studio-20260830-settings1"></script>
   </body>
 </html>

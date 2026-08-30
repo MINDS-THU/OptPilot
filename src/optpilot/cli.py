@@ -83,7 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.set_defaults(handler=_run_command)
 
     validate_parser = subparsers.add_parser("validate", help="Validate an OptPilot public config")
-    validate_parser.add_argument("spec", help="Path to an environment, method, or study YAML file")
+    validate_parser.add_argument(
+        "spec", help="Path to an environment, method, study, or resource YAML file"
+    )
     validate_parser.add_argument("--json", action="store_true", help="Print machine-readable validation output")
     validate_parser.set_defaults(handler=_validate_command)
 
@@ -93,7 +95,14 @@ def build_parser() -> argparse.ArgumentParser:
     package_validate_parser.add_argument("package", help="Path to a package folder")
     package_validate_parser.add_argument("--json", action="store_true", help="Print machine-readable validation output")
     package_validate_parser.add_argument("--check-source", action="store_true", help="Check public source paths referenced by package configs")
-    package_validate_parser.add_argument("--check-imports", action="store_true", help="Import Python callables in isolated subprocesses")
+    package_validate_parser.add_argument(
+        "--check-imports",
+        action="store_true",
+        help=(
+            "Import Python callables in a host child process "
+            "(executes package code; not a sandbox)"
+        ),
+    )
     package_validate_parser.add_argument("--check-setup-files", action="store_true", help="Check files needed by runtime and interface setup declarations")
     package_validate_parser.add_argument("--no-dependency-check", action="store_true", help="Skip the static scan for run-time imports no declared runtime provides")
     package_validate_parser.set_defaults(handler=_package_validate_command)
@@ -352,6 +361,86 @@ def _run_command(args) -> int:
     return 0 if summary.run_status == "succeeded" else 1
 
 
+def _resource_action_setup_contract(action) -> dict | None:
+    """Return a complete, environment-value-free runtime setup projection."""
+
+    runtime = action.runtime
+    setup = runtime.get("setup") if isinstance(runtime, dict) else None
+    if not isinstance(setup, dict):
+        return None
+    steps = []
+    for raw_step in setup.get("steps", []) or []:
+        if not isinstance(raw_step, dict):
+            continue
+        step = {
+            key: value
+            for key, value in raw_step.items()
+            if key not in {"command", "env", "uses"}
+        }
+        step["uses"] = str(raw_step.get("uses", ""))
+        if raw_step.get("uses") == "command":
+            # Preserve argv boundaries: a joined shell-like string would hide
+            # which text is one argument and which text is executable syntax.
+            step["command"] = list(raw_step.get("command", []) or [])
+        step_env = raw_step.get("env")
+        step["environment_names"] = (
+            sorted(str(name) for name in step_env)
+            if isinstance(step_env, dict)
+            else []
+        )
+        steps.append(step)
+    setup_env = setup.get("env")
+    contract = {
+        # run_process_setup uses 600 seconds when the declaration omits the
+        # field, so show the effective limit rather than an ambiguous null.
+        "timeout_seconds": int(setup.get("timeoutSeconds", 600) or 600),
+        "environment_names": (
+            sorted(str(name) for name in setup_env)
+            if isinstance(setup_env, dict)
+            else []
+        ),
+        "steps": steps,
+    }
+    if "cache" in setup:
+        contract["cache"] = setup["cache"]
+    return contract
+
+
+def _print_resource_action_setup(contract: dict | None) -> None:
+    if contract is None:
+        print("    runtime setup: none")
+        return
+    cache = f"; cache={contract['cache']}" if contract.get("cache") else ""
+    print(f"    runtime setup: timeout={contract['timeout_seconds']}s{cache}")
+    print(
+        "    setup environment names: "
+        f"{', '.join(contract['environment_names']) or 'none'}"
+    )
+    for index, step in enumerate(contract["steps"], start=1):
+        uses = step["uses"]
+        environment_names = step.get("environment_names", [])
+        if uses == "command":
+            operation = "command argv=" + json.dumps(step.get("command", []))
+            options = {
+                key: value
+                for key, value in step.items()
+                if key not in {"command", "environment_names", "uses"}
+            }
+        else:
+            operation = uses
+            options = {
+                key: value
+                for key, value in step.items()
+                if key not in {"environment_names", "uses"}
+            }
+        if options:
+            operation += " options=" + json.dumps(options, sort_keys=True)
+        print(f"    setup step {index}: {operation}")
+        print(
+            f"      environment names: {', '.join(environment_names) or 'none'}"
+        )
+
+
 def _resource_list_command(args) -> int:
     import yaml
 
@@ -377,7 +466,21 @@ def _resource_list_command(args) -> int:
                 "id": action.action_id,
                 "label": action.label,
                 "description": action.description,
+                "command": list(action.command),
+                "runtime_setup": _resource_action_setup_contract(action),
                 "inputs": dict(action.inputs),
+                "network": action.network,
+                "timeout_seconds": action.timeout_seconds,
+                "requires_env_from_host": [
+                    name
+                    for name in action.env_from_host
+                    if name not in action.env_from_host_defaults
+                ],
+                "defaulted_env_from_host": dict(action.env_from_host_defaults),
+                "requires_secrets_from_host": list(action.secrets_from_host),
+                # Keep the authored-name projections for callers of the
+                # pre-0.2 CLI.  The explicit fields above distinguish values
+                # that are actually required from values with public defaults.
                 "envFromHost": list(action.env_from_host),
                 "secretsFromHost": list(action.secrets_from_host),
                 "timeoutSeconds": action.timeout_seconds,
@@ -396,6 +499,28 @@ def _resource_list_command(args) -> int:
         print(f"- {action.action_id}: {action.label}")
         if action.description:
             print(f"    {action.description}")
+        print(f"    command: {json.dumps(list(action.command))}")
+        print(f"    network: {action.network}")
+        print(f"    timeout: {action.timeout_seconds}s")
+        _print_resource_action_setup(_resource_action_setup_contract(action))
+        required_env = [
+            name
+            for name in action.env_from_host
+            if name not in action.env_from_host_defaults
+        ]
+        print(f"    required host env: {', '.join(required_env) or 'none'}")
+        print(
+            "    defaulted host env: "
+            + (
+                json.dumps(dict(action.env_from_host_defaults), sort_keys=True)
+                if action.env_from_host_defaults
+                else "none"
+            )
+        )
+        print(
+            "    required host secrets: "
+            f"{', '.join(action.secrets_from_host) or 'none'}"
+        )
         for name, declaration in action.inputs.items():
             required = "" if "default" in declaration else " (required)"
             value_type = declaration.get("valueType", "?")
@@ -468,6 +593,11 @@ def _package_validate_command(args) -> int:
             print(f"- {entry['path']}")
             for error in entry.get("errors", []):
                 print(f"  - {error}")
+    ignored = result.get("ignored_yaml", []) or []
+    if ignored:
+        print("Ignored YAML (not recognized as an OptPilot config):")
+        for path in ignored:
+            print(f"- {path}")
     _print_package_warnings(result)
     return 0 if result["valid"] else 1
 

@@ -9,7 +9,7 @@ uv sync --all-packages --group examples --group docs
 ## Monorepo boundaries
 
 - `src/optpilot/` — core `optpilot` package (CLI, runner, realm, schemas)
-- `studio/src/optpilot_studio/` — `optpilot-studio` package (Studio UI, depends on `optpilot==0.1.0`)
+- `studio/src/optpilot_studio/` — `optpilot-studio` package (Studio UI, depends on `optpilot==0.2.0`)
 - `catalog/` — example authoring packages (not in distributions, pruned by MANIFEST.in)
 - `tests/` — test suite for both packages
 
@@ -43,13 +43,17 @@ python scripts/check_release_artifacts.py dist --studio-dist-dir dist/studio
 
 ## Version synchronization
 
-All four version strings must match: `pyproject.toml`, `studio/pyproject.toml`, `src/optpilot/__init__.py`, and `studio/src/optpilot_studio/__init__.py`. The `studio/pyproject.toml` dependency pin (`optpilot==X.Y.Z`) must also match. These are checked by `scripts/check_release_artifacts.py`.
+All five version occurrences must match: the package versions in
+`pyproject.toml`, `studio/pyproject.toml`, `src/optpilot/__init__.py`, and
+`studio/src/optpilot_studio/__init__.py`, plus the Studio dependency pin
+(`optpilot==X.Y.Z`) in `studio/pyproject.toml`. These are checked by
+`scripts/check_release_artifacts.py`.
 
 ## Architecture
 
 The core flow: **Method** proposes candidates → **Realm** validates, admits, launches → **Environment** evaluates → Realm commits evidence.
 
-- Config kinds: `environment`, `method`, `study` (all validated against JSON schemas in `src/optpilot/schemas/`)
+- Config kinds: `environment`, `method`, `study`, and `resource` (all validated against JSON schemas in `src/optpilot/schemas/`)
 - Realm: SQLite-backed ledger with migrations in `src/optpilot/realm/migrations/`
 - Default realm root is the OS user-data location; `--realm-root` overrides it
 - Retained Realm evidence is sealed read-only (must `chmod -R u+w` before deleting)

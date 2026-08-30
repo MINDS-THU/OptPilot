@@ -21,19 +21,13 @@ optpilot validate path/to/study.yaml
 
 !!! warning "Schema surface is broader than the current runner"
 
-    The Realm runner currently executes parameter and bounded file candidates
-    with Python batch methods/evaluators and package-owned `trialWorkspace`
-    seeds on the local process runtime, without setup/build, containers, host
-    values for Environments/backends, or ambient inheritance. A process Method
-    may explicitly declare `runtime.envFromHost`; only those named values are
-    supplied to its worker. Studio Runs retain only opaque local value
-    revisions; raw values are excluded from the durable process request and Run
-    evidence.
-    Command batch methods also execute on this slice: the command head must be
-    the logical interpreter name `python`/`python3`, mapped to the prepared
-    method runtime. Session methods, command evaluators, containers, and legacy
-    path-backed output declarations may validate as authored schema but are not
-    executable by this retained slice. Unsupported studies fail closed.
+    Validation proves that a config matches its public schema; it does not
+    prove that the retained runner implements every declared combination. The
+    runner supports parameter and bounded-file Candidates, Python evaluators,
+    Python or Python-headed command batch Methods, supported process/container
+    declarations, and narrow locked dependency setup. It rejects unsupported
+    combinations rather than falling back. See
+    [Executable Capabilities](capabilities.md) for the authoritative matrix.
 
 To validate a whole package folder, use:
 
@@ -41,20 +35,23 @@ To validate a whole package folder, use:
 optpilot package validate path/to/package
 ```
 
-For package source paths, setup files, and Python import targets, run the
-explicit deeper checks:
+For package source paths and setup files, run the explicit static checks:
 
 ```bash
 optpilot package validate path/to/package \
   --check-source \
-  --check-setup-files \
-  --check-imports
+  --check-setup-files
 ```
 
 These checks are intentionally stricter than normal runtime path resolution:
 package source paths must stay inside the package being validated. This is what
 lets a package keep working after it is moved from an attached external project
-into `catalog/my_package/` or published as an immutable Realm package revision.
+into another package root or published as an immutable Realm package revision.
+
+After reviewing and trusting the authored code, add `--check-imports` to import
+declared Python callables. That opt-in check executes module top-level code in
+a normal child process with host authority; it is not a sandbox. See
+[Packages and Catalogs](catalog.md) for the trust boundary.
 
 To check or execute setup declarations:
 
@@ -203,21 +200,21 @@ and evaluates for each candidate.
 
 Example:
 
-- `catalog/my_package/studies/my_study.yaml` resolves `environmentConfig`
+- `path/to/my_package/studies/my_study.yaml` resolves `environmentConfig`
   relative to the study file
-- `catalog/my_package/environments/my_environment/environment.yaml` resolves
+- `path/to/my_package/environments/my_environment/environment.yaml` resolves
   evaluator `pythonPath`, `trialWorkspace`, and `methodContext` paths relative
   to the environment file
-- `catalog/my_package/methods/my_method/method.yaml` resolves any `pythonPath`
+- `path/to/my_package/methods/my_method/method.yaml` resolves any `pythonPath`
   entries relative to the method file
 
 ## Environment Config
 
 An environment config describes what can be evaluated and how the evaluation happens.
 
-The block below is an annotated schema template, not a runnable retained-study
-example. It intentionally shows alternatives; the current runner accepts only
-the Python/parameters/process subset described above.
+The block below is an annotated schema template, not one runnable retained-study
+example. It intentionally shows alternatives; consult
+[Executable Capabilities](capabilities.md) before selecting among them.
 
 ```yaml
 apiVersion: optpilot.io/v1
@@ -226,8 +223,10 @@ config: environment
 # Free string. Stable id shown in the UI and run evidence.
 id: my-environment
 
-# Optional free text and tags.
+# Human-facing Catalog metadata.
+name: My evaluator
 description: My simulator or evaluator.
+tasks: [evaluate-design]
 tags: [tutorial]
 
 # Required. Exactly one of python, command, or adapter.
@@ -266,9 +265,10 @@ evaluator:
 # Optional runtime for the environment evaluator.
 runtime:
   sandbox: process       # enum: process | container
+  # To use a container, set sandbox: container and declare:
   # container:
-  #   image: python:3.11-slim
-  #   executable: docker
+  #   image: registry.example.com/optpilot/evaluator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  #   platform: linux/amd64
   #   network: disabled  # enum: enabled | disabled
 
 # Optional package files/directories mapped into each fresh trial workspace.
@@ -371,9 +371,11 @@ package. Shared directories and identical files may overlap; conflicting or
 case-colliding destinations fail closed. The config does not select copying,
 overlay, reflink, or another provider realization strategy.
 
-For a current runnable environment, use a Python evaluator, a parameter or
-bounded file candidate contract, process runtime, and no legacy
-`records`/`outputFiles`.
+For a currently runnable Environment, use a Python evaluator, a parameter or
+bounded file Candidate contract, and no legacy `records`/`outputFiles`. The
+runtime may be the local process default or a container with an exact
+digest-pinned image and platform. The compiler selects that execution mode from
+the Environment runtime; a Study does not declare a backend.
 
 ### Evaluator Return
 
@@ -614,6 +616,9 @@ candidate:
     family: my-custom-payload
 ```
 
+This is a schema example only. `opaque` Candidates are not executable in the
+current retained runner; see [Executable Capabilities](capabilities.md).
+
 ## Method Config
 
 A method config describes candidate proposal code and declares which environment contracts it accepts.
@@ -625,7 +630,10 @@ apiVersion: optpilot.io/v1
 config: method
 
 id: my-method
+name: My optimizer
 description: My optimizer.
+tasks: [optimize-policy]
+tags: [search]
 
 entrypoint:
   # Python import. Class constructed as MyMethod(definition, study_spec, rng).
@@ -674,8 +682,9 @@ runtime:
   sandbox: process       # enum: process | container
 ```
 
-For a current runnable method, use a Python `batch` entrypoint accepting
-`parameters` with process runtime. The environment owns the candidate contract;
+For a current runnable Method, use a `batch` entrypoint and one of the
+implementation/runtime combinations in [Executable Capabilities](capabilities.md).
+The Environment owns the Candidate contract;
 OptPilot validates every submitted candidate against that environment contract
 during the run.
 
@@ -709,8 +718,8 @@ vendor/example_dependency-1.2.3-py3-none-any.whl --hash=sha256:<64 lowercase hex
 This first retained dependency slice intentionally accepts only vendored,
 hash-locked `py3-none-any` (or `py2.py3-none-any`) wheels. It does not run shell
 commands, contact a package index, install the project itself, inherit host
-secrets, or accept native extensions. During Workspace Setup, **Check** validates
-the declaration and paths; **Test** verifies the hashes, prepares the exact
+secrets, or accept native extensions. In the Workspace's **Publish** tab,
+**Check files** validates the declaration and paths; **Test** verifies the hashes, prepares the exact
 read-only dependency layers, and executes the Study through the ordinary Run
 path. A successful preparation is cached locally for speed, while every Run
 retains the exact dependency trees it used.
@@ -768,7 +777,9 @@ apiVersion: optpilot.io/v1
 config: study
 
 name: my-study
+title: My integration run
 description: Compare one method against one environment.
+tasks: [benchmark-method]
 tags: [local]
 
 # Paths resolved from this study file.
@@ -921,7 +932,7 @@ For example, these are separate environment configs rather than different
 OptPilot study concepts:
 
 ```text
-catalog/my_package/environments/my_benchmark/
+path/to/my_package/environments/my_benchmark/
   environment_small.yaml
   environment_large.yaml
   evaluator.py
@@ -1006,7 +1017,7 @@ so Studio can proxy it. `cwd` is a portable path relative to the component
 source. Fixed nonsecret values belong in `env`; required user- or machine-selected
 values such as model ids belong in `grants.envFromHost`; secret names belong in
 `grants.secretsFromHost`; and network authority belongs in `grants.network`.
-Studio resolves both host-variable lists only from **Local environment variables** and
+Studio resolves both host-variable lists only from **Local values** in Settings and
 never exposes their values in catalog summaries. Capacity and duration belong
 in `resources` and `timeoutSeconds`. `presentation.extraPorts` exposes
 additional local service ports, while its readiness fields define the bounded
@@ -1138,6 +1149,8 @@ apiVersion: optpilot.io/v1
 config: resource
 id: case-browser
 name: Case Browser
+description: Browse one retained case without modifying it.
+tasks: [evaluate-design]
 purpose: viewer
 tags: [frontend]
 

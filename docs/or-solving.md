@@ -41,10 +41,12 @@ of its run-definition digest — same problem, same digest.
 !!! note "COOPA is bundled; its solver backends are not"
     COOPA (Apache-2.0) ships inside this package at
     `methods/coopa_solver/coopa_home/`, so no separate checkout is needed.
-    Set `COOPA_HOME` only to point at a different one. What you must still
-    install yourself are the native solver backends (GLPK/IPOPT binaries,
-    `ortools`, `pymoo`) — an OptPilot process runtime accepts pure
-    `py3-none-any` wheels only, so those cannot be locked into the package.
+    A retained Run always uses that captured copy. The interactive console
+    alone accepts an optional `COOPA_HOME` grant for interface development.
+    What you must still install yourself are the native solver backends
+    (GLPK/IPOPT binaries, `ortools`, `pymoo`) — an OptPilot process runtime
+    accepts pure `py3-none-any` wheels only, so those cannot be locked into the
+    package.
 
 ## The pipeline
 
@@ -59,7 +61,7 @@ provide:
 | --- | --- |
 | Pruned runtime deps | `uv pip install -r catalog/or_solving/methods/coopa_solver/requirements-pruned.txt` into the **same** Python environment that runs `optpilot`. |
 | Solver backends | `ortools` and `pymoo` come with the requirements file; GLPK/IPOPT binaries come from your system package manager (e.g. `brew install glpk ipopt`). |
-| Model access | `OPENROUTER_API_KEY`, or a `model` setting litellm can route with your own keys. |
+| Model access | `OPENROUTER_API_KEY` and a `model` setting OpenRouter can route; this retained Method declares no other provider credential. |
 
 ```bash
 uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
@@ -112,12 +114,8 @@ Well-formed means: `report_json` parses, its schema is
 and a `predicted` field. So `solved = 1.0` asserts *"an auditable answer
 exists"*, never *"the answer is optimal"*. Judging the number is your call over
 the retained formulation, confidence and generated code — which is precisely
-why all of it is kept. The release plan
-(`designs/initial-release-plan.md` §5.3) records two real runs: an LP problem
-through the retained runner at `predicted = 36.0` (the exact optimum, 8.9 KB
-artifact, manager routing, deepseek-v4-pro via OpenRouter), and a product-mix
-LP through the console at 2160 (also exact). Single recorded runs, not a
-benchmark.
+why all of it is kept. A successful example is a single recorded solve, not a
+benchmark or an optimality guarantee.
 
 ## The COOPA Solve Console
 
@@ -139,12 +137,12 @@ the console as a web presentation on port 8000 with `COOPA_HOME` and
   solver code and result, so the console can be demonstrated with no COOPA, no
   network and no key. Mock runs are labelled in the UI.
 
-!!! note "Inside the launch runtime, host paths do not exist"
-    A container-launched interface cannot see a host `COOPA_HOME`. That is why
-    the bundled copy at `catalog/or_solving/methods/coopa_solver/coopa_home/`
-    matters: the shim falls back to it, so a containerized launch works with no
-    host path at all. A non-mock start still refuses with an explicit message
-    when `OPENROUTER_API_KEY` is not granted.
+!!! note "The bundled copy is the portable default"
+    Studio launches the interface from retained package source. The shim falls
+    back to `methods/coopa_solver/coopa_home/`, so a normal launch needs no host
+    checkout or `COOPA_HOME`. The optional setting is only for deliberately
+    selecting another checkout. A non-mock start still refuses with an explicit
+    message when `OPENROUTER_API_KEY` is not granted.
 
 ## Validating without running
 
@@ -154,6 +152,7 @@ Everything except an actual solve is checkable offline, which is what CI does:
 uv run optpilot package validate catalog/or_solving --check-source
 ```
 
-It reports the package's one environment, two methods and two Run setups. The
-mock study is the executable half of this story; the real pipeline stays
-validate-only until you provision COOPA yourself.
+It reports one Environment, one Method, and one Run setup. Validation does not
+execute the pipeline. The no-key **Mock** path belongs to the interactive Solve
+Console; the Run setup uses the real pipeline and needs its documented model
+access and solver dependencies.

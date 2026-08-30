@@ -51,8 +51,8 @@ Start with this path:
 2. Review the Environment, Method, or Resource cards recommended by the
    Assistant. Open **Catalog** whenever you want to inspect the available
    components yourself.
-3. Ask to evaluate one of the ready-made run setups, or find
-   `job_shop_rule_parameters_baseline.yaml` in Catalog.
+3. Ask to evaluate one of the ready-made Run setups, or find
+   **Tutorial · Find better factory settings** in Catalog.
 4. Review the **Run setup**: Environment, Method, objective, direction, and
    budget. Expand its detailed configuration only when needed.
 5. Choose **Launch run** explicitly. Starting work is never implied by ordinary
@@ -74,8 +74,10 @@ Start with this path:
    to become durable editable work. For a configured mutable source, use
    **Link local folder**.
 10. Use **Settings** to configure the assistant runtime and declared local
-    environment values. Values are stored on this machine and are not copied
-    into Run evidence; Studio Settings is not a secret vault.
+    values. They are stored as plaintext in the project-scoped
+    `.optpilot-ui/settings.json` and are not copied into Run evidence; a
+    synchronized project directory may synchronize that file. Studio Settings
+    is not a secret vault.
 
 ![Studio catalog workflow](assets/studio-catalog.png)
 
@@ -94,7 +96,7 @@ Run, or Workspace in order to find it again.
 | Run setups (Studies) | Configure or reopen a Run setup, then launch a Run. |
 | Runs | Monitor active Runs and inspect retained results. |
 | Conversations | Return to earlier discussions and their associated work. |
-| Settings | Configure Studio, Assistant, runtime, and local environment values. |
+| Settings | Configure the Assistant, approval defaults, and project-scoped local values. |
 
 A **Conversation** is the durable discussion thread. **OptPilot Assistant** is
 the participant that responds and acts inside that thread; it is not a second
@@ -229,11 +231,12 @@ Catalog entries may expose these actions:
 | View source | Opens the published version read-only without creating a Workspace. |
 | Edit in Workspace | Creates or reopens one editable Workspace for intentional changes. |
 | Open interface | Starts the declared interface over read-only source and temporary launch storage. Prepared dependencies may be reused. |
+| Run Resource action | Shows the registered command, network grant, timeout, and environment/secret names, then asks for confirmation. The current host executor runs only reviewed actions that declare `network: enabled`; secret values stay hidden and are redacted from results. |
 | Configure Run setup | Choose a compatible Environment or Method and open a Run setup while preserving the exact Catalog reference. |
 
 A configured source card is labeled **Local source · Mutable**. **Link local
 folder** connects that existing folder as one editable Workspace without
-copying it and opens the normal Workspace Setup flow.
+copying it and opens the normal **Publish** flow.
 
 Selecting a Run opens its recorded evidence directly; there is no public
 “Open as Workspace” step. Candidate values and evaluation details load directly,

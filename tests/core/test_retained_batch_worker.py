@@ -1518,18 +1518,36 @@ class StdioBatchWorkerServerTest(unittest.TestCase):
 
         request_read, request_write = os.pipe()
         response_read, response_write = os.pipe()
+        server_input = os.fdopen(request_read, "rb", buffering=0)
+        server_output = os.fdopen(response_write, "wb", buffering=0)
         server = StdioBatchWorkerServer(
             engine,
-            os.fdopen(request_read, "rb", buffering=0),
-            os.fdopen(response_write, "wb", buffering=0),
+            server_input,
+            server_output,
         )
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+
+        def serve() -> None:
+            # StdioBatchWorkerServer borrows these streams.  This fixture owns
+            # them and must close the response endpoint as soon as the server
+            # stops so the test-side reader observes EOF.
+            with server_input, server_output:
+                server.serve_forever()
+
+        thread = threading.Thread(target=serve, daemon=True)
         thread.start()
-        self.addCleanup(thread.join, 5)
         sender = os.fdopen(request_write, "wb", buffering=0)
         receiver = os.fdopen(response_read, "rb", buffering=0)
-        self.addCleanup(sender.close)
-        self.addCleanup(receiver.close)
+
+        def close_transport() -> None:
+            # The server borrows its streams, so this test fixture owns all
+            # four pipe wrappers.  Close the request writer first to wake a
+            # server still blocked on input, then wait for it to release its
+            # borrowed endpoints in ``serve`` above.
+            sender.close()
+            thread.join(5)
+            receiver.close()
+
+        self.addCleanup(close_transport)
         return sender, receiver
 
     @staticmethod

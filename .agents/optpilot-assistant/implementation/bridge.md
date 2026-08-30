@@ -22,8 +22,8 @@ its Python 3.10/3.11 runtime:
   `GET /api/conversations/{id}/events/search`. Studio treats the OpenHands
   `finish` action as the user-facing final answer; plain assistant
   `MessageEvent` text is retained as event history, not as task completion.
-- OptPilot sends safe native OpenHands tools in `agent.tools` for codebase
-  inspection and planning, and sends Studio-specific actions plus
+- OptPilot sends only native `task_tracker` in `agent.tools` for planning, and
+  sends Studio-specific actions plus
   OpenHands-compatible `optpilot_terminal` and `optpilot_file_editor` entries
   in the `client_tools` manifest. OpenHands `ActionEvent` client-tool requests
   are executed by the OptPilot UI server, then returned as a follow-up
@@ -36,19 +36,19 @@ its Python 3.10/3.11 runtime:
 The bridge stores returned OpenHands conversation ids on the OptPilot assistant
 session so later turns can resume the same runtime conversation.
 
-The verified OpenHands 1.29.0 payload uses:
+The verified OpenHands 1.40.1 payload uses:
 
 - `agent.kind: Agent`
 - `agent.llm.model: openrouter/<provider>/<model>` for OpenRouter-backed
   models
-- `agent.tools` for native OpenHands tools such as `grep`, `glob`, and
-  `task_tracker`
+- `agent.tools` with only the native `task_tracker`; filesystem inspection,
+  search, editing, and commands stay behind Studio client tools
 - `client_tools` for OptPilot actions and Studio-backed OpenHands-compatible
   `optpilot_terminal` / `optpilot_file_editor`
 - `agent.agent_context.system_message_suffix` for the OptPilot prompt
 - `workspace.kind: LocalWorkspace`
 - `confirmation_policy.kind: NeverConfirm`; Studio-owned client tools still
-  enforce OptPilot approval gates for risky shell commands, registration, study
+  enforce OptPilot approval gates for every shell command, registration, study
   launch, smoke tests, and job stops.
 - `SendMessageRequest.content` as text content with `run: true`
 
@@ -56,6 +56,6 @@ OptPilot, not OpenHands, enforces:
 
 - attached-workspace file path confinement
 - read-only and analysis workspace write rejection
-- bounded shell execution and approval for risky commands
+- bounded shell execution and approval for every command
 - approval for registration, study launch, job stop, and study smoke tests
 - API key redaction before results are returned to the GUI

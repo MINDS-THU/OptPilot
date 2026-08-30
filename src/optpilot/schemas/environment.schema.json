@@ -95,7 +95,7 @@
       ]
     },
     "runtime": {
-      "$ref": "defs/runtime.schema.json#/definitions/runtime"
+      "$ref": "defs/runtime.schema.json#/definitions/environmentRuntime"
     },
     "trialWorkspace": {
       "type": "array",

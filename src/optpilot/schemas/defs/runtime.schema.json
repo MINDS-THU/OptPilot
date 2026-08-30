@@ -68,7 +68,7 @@
           "$ref": "common.schema.json#/definitions/envObject"
         },
         "envFromHost": {
-          "$ref": "common.schema.json#/definitions/hostEnvList"
+          "$ref": "common.schema.json#/definitions/stringList"
         }
       },
       "allOf": [
@@ -97,6 +97,72 @@
             "not": {
               "required": [
                 "container"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "methodRuntime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/runtime"
+        },
+        {
+          "if": {
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "workdir"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "environmentRuntime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/runtime"
+        },
+        {
+          "if": {
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "workdir"
+                  ]
+                },
+                {
+                  "required": [
+                    "env"
+                  ]
+                },
+                {
+                  "required": [
+                    "envFromHost"
+                  ]
+                }
               ]
             }
           }

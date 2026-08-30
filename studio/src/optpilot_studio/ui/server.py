@@ -9,6 +9,7 @@ import calendar
 import difflib
 import fnmatch
 import hashlib
+import ipaddress
 import importlib.util
 import json
 import math
@@ -16,6 +17,7 @@ import mimetypes
 import os
 import posixpath
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -45,6 +47,7 @@ from optpilot.attempts import EvaluationSpec
 from optpilot.container_utils import network_args
 from optpilot.package_settings import (
     PACKAGE_SETTINGS_FILENAMES,
+    PackageSettings,
     ensure_package_identity,
     load_package_settings,
     new_package_identity,
@@ -67,6 +70,7 @@ from optpilot.method_launch_environment import (
     MethodLaunchEnvironmentDescriptor,
     MethodLaunchEnvironmentError,
     method_environment_names,
+    normalize_method_environment_names,
 )
 from optpilot.config import (
     AUTHORING_API_VERSION,
@@ -79,8 +83,9 @@ from optpilot.config import (
 )
 from optpilot.config_errors import CodedConfigError, StudyLaunchInputsError
 from optpilot.host_env import compile_host_env_declarations
-from optpilot.parameter_values import missing_required_parameters
+from optpilot.parameter_values import missing_required_parameters, validate_parameter_values
 from optpilot.resource_actions import (
+    ResourceActionSpec,
     compile_resource_actions,
     find_resource_action,
     run_resource_action,
@@ -200,6 +205,7 @@ from ..agent import (
     OpenHandsAdapter,
     OpenHandsConversationNotFound,
     OpenHandsRuntimeConfig,
+    OPENHANDS_NO_SERVER_VALUES,
     STUDIO_UI_CARD_SCHEMA,
     explain_runtime_error,
     sanitize_openhands_native_tools,
@@ -274,6 +280,9 @@ _MAX_INTERFACE_OUTPUT_ACTION_REQUEST_FILE_BYTES = (
 _MAX_CONCURRENT_INTERFACE_OUTPUT_ACTIONS = 2
 _MAX_PUBLIC_INTERFACE_OUTPUT_ACTION_RESULT_FILES = 32
 _MAX_BROWSER_INTERFACE_OUTPUT_ACTION_RESULT_FILE_BYTES = 16 * 1024 * 1024
+_STUDIO_MUTATION_TOKEN_HEADER = "X-OptPilot-CSRF-Token"
+_STUDIO_SECURITY_CONTEXT_SCHEMA = "optpilot.studio-security-context.v1"
+_RESOURCE_ACTION_REVIEW_SCHEMA = "optpilot.studio-resource-action-review.v1"
 
 
 def _public_studio_payload(value: Any) -> Any:
@@ -579,6 +588,13 @@ EXCLUDED_SCAN_DIRS = {
     "resource",
     "runs",
 }
+
+# Studio's project-local authority namespace contains credentials, approval
+# records, Assistant transcripts, runtime metadata, and other control state.
+# It may sit below an otherwise valid project Workspace, so filesystem tools
+# deny it explicitly and workspace containers cover it with an empty tmpfs.
+STUDIO_CONTROL_DIRECTORY_NAME = ".optpilot-ui"
+ASSISTANT_CONTROL_MASK_SCHEMA = "optpilot.assistant-control-mask.v1"
 
 DERIVED_WORKSPACE_FIELDS = {
     "delete_action",
@@ -1642,6 +1658,7 @@ class WorkspaceRuntimeManager:
         runtime_dir = self._ensure_workspace_runtime_dir(workspace_id)
         record = self._read_record(workspace_id)
         running = self._container_running(container_name)
+        control_mask_digest = self._workspace_control_mask_digest(workspace)
         removal_before_fresh_start: Optional[JsonDict] = None
         record_binds_container = bool(record) and (
             str(record.get("container_name") or "") == container_name
@@ -1682,6 +1699,22 @@ class WorkspaceRuntimeManager:
                 raise RuntimeError(
                     "Could not prove that the stale workspace container was "
                     "removed before a fresh start."
+                )
+            running = False
+        if running and str(record.get("control_mask_digest") or "") != (
+            control_mask_digest
+        ):
+            # Containers created before this policy mounted the Studio project
+            # root without hiding its control namespace.  Recreate them before
+            # any Assistant shell command can reuse that stale mount.
+            removal_before_fresh_start = self._remove_container(container_name)
+            if not (
+                removal_before_fresh_start.get("terminal_confirmed")
+                and removal_before_fresh_start.get("state") == "absent"
+            ):
+                raise RuntimeError(
+                    "Could not prove that the workspace container without the "
+                    "current Studio control-path mask was removed."
                 )
             running = False
         if not running:
@@ -1735,6 +1768,7 @@ class WorkspaceRuntimeManager:
                     "image": resolved_image,
                     "image_source": record_image_source,
                     "workspace_root": str(root),
+                    "control_mask_digest": control_mask_digest,
                     # This is intentionally set before ``docker run``. A
                     # timeout or interrupted subprocess may still have created
                     # the container and therefore requires engine proof.
@@ -1783,6 +1817,7 @@ class WorkspaceRuntimeManager:
                     "pids_limit": self.options.pids_limit,
                     "no_new_privileges": self.options.no_new_privileges,
                     "workspace_root": str(root),
+                    "control_mask_digest": control_mask_digest,
                     "container_may_exist": True,
                 }
             )
@@ -2452,7 +2487,6 @@ class WorkspaceRuntimeManager:
     ) -> List[str]:
         workspace_id = str(workspace["id"])
         root = Path(str(workspace["root"])).resolve()
-        runtime_dir = self._workspace_runtime_dir(workspace_id)
         self._ensure_runtime_dirs(workspace_id)
         command = [
             executable,
@@ -2488,10 +2522,23 @@ class WorkspaceRuntimeManager:
             [
                 "-v",
                 f"{root}:{root}:{self._mount_mode(workspace)}",
-                "-v",
-                f"{runtime_dir}:{runtime_dir}:rw",
             ]
         )
+        # Mount only the runtime's workspace-facing content directories. The
+        # parent also holds Studio's claim and runtime records; mounting that
+        # authority root let a shell inspect or corrupt the manager's proof.
+        for runtime_content in self._workspace_runtime_content_mounts(workspace_id):
+            command.extend(["-v", f"{runtime_content}:{runtime_content}:rw"])
+        for control_path in self._workspace_control_mask_paths(workspace):
+            # A more-specific empty tmpfs hides the host directory beneath the
+            # project bind mount. Even container root can only reveal or alter
+            # the empty tmpfs; Studio's host files never enter the container.
+            command.extend(
+                [
+                    "--tmpfs",
+                    f"{control_path}:rw,noexec,nosuid,nodev,mode=700",
+                ]
+            )
         command.extend(self._prepared_runtime_mount_args(workspace))
         command.extend(
             [
@@ -2501,6 +2548,74 @@ class WorkspaceRuntimeManager:
             ]
         )
         return command
+
+    def _workspace_control_mask_paths(self, workspace: JsonDict) -> tuple[Path, ...]:
+        """Control directories hidden beneath a mounted project Workspace."""
+
+        root = Path(str(workspace.get("root") or "")).resolve()
+        control_root = (
+            self.studio_root / STUDIO_CONTROL_DIRECTORY_NAME
+        ).resolve()
+        if control_root != root and _is_relative_to(control_root, root):
+            return (control_root,)
+        return ()
+
+    def _workspace_control_mask_digest(self, workspace: JsonDict) -> str:
+        return request_digest(
+            {
+                "schema": ASSISTANT_CONTROL_MASK_SCHEMA,
+                "paths": [
+                    str(path)
+                    for path in self._workspace_control_mask_paths(workspace)
+                ],
+            }
+        )
+
+    def _workspace_runtime_content_mounts(
+        self, workspace_id: str
+    ) -> tuple[Path, ...]:
+        """Non-authority runtime folders intentionally visible in a container."""
+
+        runtime_dir = self._workspace_runtime_dir(workspace_id)
+        mounts = [
+            runtime_dir / "home",
+            runtime_dir / "cache" / "pip",
+            runtime_dir / "cache" / "uv",
+            runtime_dir / "cache" / "npm",
+            runtime_dir / "code-server" / "user-data",
+            runtime_dir / "code-server" / "extensions",
+            runtime_dir / "logs",
+            runtime_dir / "workspace-data",
+        ]
+        # Transient interface launches create these narrow, launch-owned
+        # directories before the container starts.  They must remain visible
+        # to the interface without remounting the parent runtime directory,
+        # which also contains Studio's claim and lifecycle records.
+        for name in (
+            "interface-runtime",
+            "interface-outputs",
+            "control",
+            "interface-output-actions",
+        ):
+            path = runtime_dir / name
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            mounts.append(path)
+        for path in mounts:
+            try:
+                linked = path.lstat()
+            except FileNotFoundError as error:
+                raise RuntimeError(
+                    "Workspace runtime content mount disappeared: " + path.name
+                ) from error
+            if stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+                raise RuntimeError(
+                    "Workspace runtime content mount must be a directory: "
+                    + path.name
+                )
+        return tuple(mounts)
 
     def _prepared_runtime_mount_args(self, workspace: JsonDict) -> List[str]:
         raw_entry = str(workspace.get("_prepared_runtime_entry") or "")
@@ -2690,16 +2805,58 @@ class WorkspaceRuntimeManager:
 
     def _ensure_runtime_dirs(self, workspace_id: str) -> None:
         runtime_dir = self._ensure_workspace_runtime_dir(workspace_id)
-        for child in (
-            runtime_dir / "home",
-            runtime_dir / "cache" / "pip",
-            runtime_dir / "cache" / "uv",
-            runtime_dir / "cache" / "npm",
-            runtime_dir / "code-server" / "user-data",
-            runtime_dir / "code-server" / "extensions",
-            runtime_dir / "logs",
+        for parts in (
+            ("home",),
+            ("cache", "pip"),
+            ("cache", "uv"),
+            ("cache", "npm"),
+            ("code-server", "user-data"),
+            ("code-server", "extensions"),
+            ("logs",),
+            ("workspace-data",),
         ):
-            child.mkdir(parents=True, exist_ok=True)
+            self._ensure_runtime_content_directory(runtime_dir, *parts)
+
+    @staticmethod
+    def _ensure_runtime_content_directory(
+        runtime_dir: Path, *parts: str
+    ) -> Path:
+        """Create one mountable child without following a legacy symlink."""
+
+        label = "/".join(parts)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        descriptors: List[int] = []
+        try:
+            parent_fd = os.open(runtime_dir, flags)
+            descriptors.append(parent_fd)
+            for part in parts:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=parent_fd)
+                except FileExistsError:
+                    pass
+                linked = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+                if stat.S_ISLNK(linked.st_mode) or not stat.S_ISDIR(linked.st_mode):
+                    raise RuntimeError(
+                        "Workspace runtime content path must be a directory: "
+                        + label
+                    )
+                child_fd = os.open(part, flags, dir_fd=parent_fd)
+                descriptors.append(child_fd)
+                parent_fd = child_fd
+                os.fchmod(parent_fd, 0o700)
+        except OSError as error:
+            raise RuntimeError(
+                "Workspace runtime content path must be a directory: " + label
+            ) from error
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+        return runtime_dir.joinpath(*parts)
 
     def _runtime_env(self, workspace: JsonDict) -> Dict[str, str]:
         workspace_id = str(workspace.get("id") or "")
@@ -2714,7 +2871,10 @@ class WorkspaceRuntimeManager:
             "OPTPILOT_WORKSPACE_ROOT": str(
                 Path(str(workspace.get("root") or self.studio_root)).resolve()
             ),
-            "OPTPILOT_WORKSPACE_RUNTIME_DIR": str(runtime_dir),
+            # The runtime parent contains Studio's claim and lifecycle record
+            # and is intentionally not mounted. Packages that need durable
+            # scratch space receive this dedicated mounted child instead.
+            "OPTPILOT_WORKSPACE_RUNTIME_DIR": str(runtime_dir / "workspace-data"),
         }
 
     def _mount_mode(self, workspace: JsonDict) -> str:
@@ -3256,6 +3416,11 @@ class UiState:
         agent_tick_interval_seconds: float = 0.0,
     ):
         self.cwd = cwd.resolve()
+        # Browser mutations carry this process-local capability in addition to
+        # an Origin check. A hostile page can submit a cross-origin form/fetch
+        # to a loopback listener, but it cannot read the no-CORS bootstrap that
+        # discloses this value to Studio's own JavaScript.
+        self.http_mutation_token = secrets.token_urlsafe(32)
         # Off unless asked for: hundreds of tests build a UiState directly and
         # must not each leak a polling thread. run_ui opts in.
         self.agent_tick_interval_seconds = max(0.0, float(agent_tick_interval_seconds))
@@ -3625,7 +3790,11 @@ class UiState:
                 )
             else:
                 assert study_path is not None
-                validation = _validate_study(study_path, state=self)
+                validation = _validate_study(
+                    study_path,
+                    state=self,
+                    package_root=package_root,
+                )
                 _require_study_launchable(validation, launch_inputs=launch_inputs)
                 method_environment_binding = _studio_method_environment_binding(
                     self,
@@ -4825,6 +4994,65 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _trusted_studio_host_header(value: Any) -> bool:
+    """Allow local names and literal addresses, never DNS-rebindable names."""
+
+    host = str(value or "").strip()
+    if not host or any(
+        character.isspace() or ord(character) < 32 for character in host
+    ):
+        return False
+    try:
+        parsed = urlparse("//" + host)
+        # Accessing ``port`` also rejects malformed/out-of-range port text.
+        parsed.port
+    except ValueError:
+        return False
+    if (
+        not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    hostname = str(parsed.hostname or "").casefold()
+    if hostname == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return True
+
+
+def _studio_origin_matches_host(origin: Any, host: str) -> bool:
+    """Return whether a browser Origin is exactly this request's origin host."""
+
+    value = str(origin or "").strip()
+    if not value or value.casefold() == "null":
+        return False
+    try:
+        parsed = urlparse(value)
+        parsed.port
+    except ValueError:
+        return False
+    return bool(
+        # ThreadingHTTPServer serves plain HTTP; a different scheme is a
+        # different browser origin even when its host and port text match.
+        parsed.scheme.casefold() == "http"
+        and parsed.netloc.casefold() == host.casefold()
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path in {"", "/"}
+        and not parsed.params
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def _handler_factory(state: UiState):
     static_dir = (Path(__file__).parent / "static").resolve()
 
@@ -4866,6 +5094,24 @@ def _handler_factory(state: UiState):
             path = parsed.path
             query = parse_qs(parsed.query)
             try:
+                if path == "/api/security-context":
+                    if not _trusted_studio_host_header(self.headers.get("Host", "")):
+                        self._send_json(
+                            {
+                                "error": "Studio security context requires a localhost or literal-IP Host.",
+                                "code": "studio_untrusted_host",
+                            },
+                            status=HTTPStatus.FORBIDDEN,
+                        )
+                        return
+                    self._send_json(
+                        {
+                            "schema": _STUDIO_SECURITY_CONTEXT_SCHEMA,
+                            "csrf_token": state.http_mutation_token,
+                            "csrf_header": _STUDIO_MUTATION_TOKEN_HEADER,
+                        }
+                    )
+                    return
                 if path == "/" or path == "/index.html":
                     self._send_file(static_dir / "index.html")
                     return
@@ -5035,6 +5281,22 @@ def _handler_factory(state: UiState):
                 if path.startswith("/api/operator-jobs/"):
                     self._handle_operator_job_get(path)
                     return
+                if path == "/api/resource-actions/review":
+                    _require_allowed_query_keys(
+                        query,
+                        allowed={"resource_uid", "action_id"},
+                        label="Resource action review",
+                    )
+                    self._send_json(
+                        _resource_action_review(
+                            state,
+                            resource_uid=str(
+                                _query_value(query, "resource_uid") or ""
+                            ),
+                            action_id=str(_query_value(query, "action_id") or ""),
+                        )
+                    )
+                    return
                 if path.startswith("/api/resource-actions/"):
                     parts = path.split("/")
                     if len(parts) != 4 or not parts[3]:
@@ -5145,13 +5407,23 @@ def _handler_factory(state: UiState):
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._authorize_mutation_request():
+                return
             try:
                 if parsed.path == "/api/studies/validate":
                     payload = self._read_json_body()
                     study_path = _resolve_user_path(
                         payload.get("study_path"), state.cwd
                     )
-                    self._send_json(_validate_study(study_path, state=state))
+                    self._send_json(
+                        _validate_study(
+                            study_path,
+                            state=state,
+                            package_root=_configured_study_package_root_if_known(
+                                state, study_path
+                            ),
+                        )
+                    )
                     return
                 if parsed.path == "/api/studies/draft":
                     payload = self._read_json_body()
@@ -5442,6 +5714,8 @@ def _handler_factory(state: UiState):
 
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._authorize_mutation_request():
+                return
             try:
                 if parsed.path.startswith("/api/workspaces/"):
                     parts = parsed.path.split("/")
@@ -6322,6 +6596,68 @@ def _handler_factory(state: UiState):
             if length <= 0:
                 return {}
             return json.loads(self.rfile.read(length).decode("utf-8"))
+
+        def _authorize_mutation_request(self) -> bool:
+            """Enforce the real HTTP boundary before any mutation dispatch.
+
+            A few focused unit tests instantiate the handler with
+            ``object.__new__`` and invoke a routing method directly. Such an
+            object has no parsed HTTP request line and cannot occur on the
+            network, so those routing-only tests intentionally bypass this
+            transport check. Integration tests use ThreadingHTTPServer.
+            """
+
+            if not hasattr(self, "requestline"):
+                return True
+            host = str(self.headers.get("Host") or "").strip()
+            if not _trusted_studio_host_header(host):
+                self._send_json(
+                    {
+                        "error": "Studio mutations require a localhost or literal-IP Host.",
+                        "code": "studio_untrusted_host",
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            origin = self.headers.get("Origin")
+            fetch_site = str(self.headers.get("Sec-Fetch-Site") or "").casefold()
+            if fetch_site == "cross-site" or (
+                origin is not None and not _studio_origin_matches_host(origin, host)
+            ):
+                self._send_json(
+                    {
+                        "error": "Studio mutations must come from this Studio origin.",
+                        "code": "studio_cross_origin_mutation",
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            supplied_token = str(
+                self.headers.get(_STUDIO_MUTATION_TOKEN_HEADER) or ""
+            )
+            if not secrets.compare_digest(
+                supplied_token, state.http_mutation_token
+            ):
+                self._send_json(
+                    {
+                        "error": "Studio mutation token is missing or invalid. Reload Studio and try again.",
+                        "code": "studio_mutation_token_invalid",
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            content_type = str(self.headers.get("Content-Type") or "")
+            media_type = content_type.partition(";")[0].strip().casefold()
+            if media_type != "application/json":
+                self._send_json(
+                    {
+                        "error": "Studio mutations require Content-Type: application/json.",
+                        "code": "studio_json_content_type_required",
+                    },
+                    status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                )
+                return False
+            return True
 
         def _send_file(self, path: Path) -> None:
             if not path.exists() or not path.is_file():
@@ -7920,7 +8256,11 @@ def _scan_catalog(
             )
             entry["package_metadata"] = deepcopy(package_metadata)
             if config == "study":
-                entry["validation"] = _validate_study(path, state=state)
+                entry["validation"] = _validate_study(
+                    path,
+                    state=state,
+                    package_root=root,
+                )
                 entry["validation"]["path"] = entry["path"]
             entries.append(entry)
     return sorted(
@@ -7937,6 +8277,15 @@ def _catalog_entry(
     source_record: Optional[JsonDict] = None,
 ) -> JsonDict:
     config = raw["config"]
+    package_settings = None
+    if package_root is not None:
+        try:
+            package_settings = load_package_settings(package_root)
+        except (OSError, ValueError):
+            # Package validation reports malformed package settings. Keep the
+            # Catalog readable in the meantime, but do not invent an inherited
+            # runtime from settings that could not be validated.
+            package_settings = None
     # `title` first: a study's `name` is its identifier, so it is the only
     # kind whose displayed label would otherwise always be a slug.
     label = raw.get("title") or raw.get("name") or raw.get("id") or path.stem
@@ -8009,7 +8358,10 @@ def _catalog_entry(
         entry["summary"] = {
             "evaluate_type": _evaluator_mode(raw.get("evaluator", {})),
             "candidate_format": candidate_format,
-            "runtime": _environment_runtime_summary(raw),
+            "runtime": _environment_runtime_summary(
+                raw,
+                package_settings=package_settings,
+            ),
             "editable_files": editable,
             "capabilities": [
                 capability.get("id")
@@ -8036,7 +8388,10 @@ def _catalog_entry(
             "implementation_type": _entrypoint_mode(entrypoint),
             "implementation": entrypoint.get("python") or entrypoint.get("command"),
             "protocol": entrypoint.get("protocol", "batch"),
-            "runtime": _method_runtime_summary(raw),
+            "runtime": _method_runtime_summary(
+                raw,
+                package_settings=package_settings,
+            ),
             "batch_size": settings.get("batchSize"),
             "candidate_formats": list(accepts.get("formats", []) or []),
             "required_context": list(requires.get("context", []) or []),
@@ -8334,6 +8689,14 @@ def _catalog_package_metadata(root: Path, package_id: str) -> JsonDict:
         metadata["description"] = declared["description"]
     if isinstance(declared.get("paper"), Mapping):
         metadata["paper"] = deepcopy(declared["paper"])
+    if settings.container is not None:
+        metadata["runtime"] = {
+            "sandbox": "container",
+            "container": {
+                "image": settings.container.image.raw,
+                "platform": settings.container.platform,
+            },
+        }
     return metadata
 
 
@@ -8750,23 +9113,20 @@ DEFAULT_ASSISTANT_PERMISSIONS = {
     # machine, with whatever credentials the action declares. That is worth
     # asking about every time, however routine the action looks.
     "resource_action": "approval_required",
-    # A smoke test is the only execution the Assistant may start without
-    # asking, because it is the only one that cannot outlive the question it
-    # answers: it runs a throwaway copy of the package, for a handful of
-    # trials, under a wall-clock cap, against a Realm that is deleted when it
-    # finishes. Nothing it does is visible afterwards except the answer.
-    # Writing, validating, smoke-testing and fixing is one loop, and asking
-    # permission on every turn of it is where the interruptions land.
-    "smoke_test": "safe_without_approval",
+    # A smoke test is bounded and runs from a throwaway package copy, but a
+    # process-runtime evaluator or Method is still authored code executing on
+    # the host. Copy/Realm cleanup does not confine its filesystem or network
+    # side effects, so every smoke execution requires explicit approval.
+    "smoke_test": "approval_required",
 }
 
 ASSISTANT_PERMISSION_VALUES = {
     "file_write": {"attached_editable", "approval_required", "disabled"},
-    "shell_run": {"approval_required", "safe_without_approval", "disabled"},
+    "shell_run": {"approval_required", "disabled"},
     "catalog_registration": {"approval_required", "disabled"},
     "study_launch": {"approval_required", "disabled"},
     "job_stop": {"approval_required", "disabled"},
-    "smoke_test": {"approval_required", "safe_without_approval", "disabled"},
+    "smoke_test": {"approval_required", "disabled"},
     "resource_action": {"approval_required", "disabled"},
     "interface_launch": {"approval_required", "disabled"},
 }
@@ -9078,44 +9438,84 @@ def _dedupe_strings(values: Iterable[Any]) -> List[str]:
     return result
 
 
-def _declared_env_from_host(payload: Any) -> List[str]:
-    names: List[str] = []
-    if isinstance(payload, dict):
-        env_from_host = payload.get("envFromHost")
-        if isinstance(env_from_host, list):
-            names.extend(str(item) for item in env_from_host if str(item).strip())
-        for value in payload.values():
-            names.extend(_declared_env_from_host(value))
-    elif isinstance(payload, list):
-        for item in payload:
-            names.extend(_declared_env_from_host(item))
-    return _dedupe_strings(names)
-
-
 def _study_env_requirements(study_path: Path) -> List[str]:
-    compiled = compile_authoring_config(study_path)
-    names: List[str] = []
-    for key in ("environment", "method", "execution"):
-        names.extend(_declared_env_from_host(compiled.get(key)))
-    return _dedupe_strings(names)
+    """Return only values injected into the retained Method process.
 
+    Interface grants belong to a separate, user-triggered launch. Recursively
+    scraping every ``envFromHost`` in the compiled Study made smoke tests ask
+    for interface-only values and stringified richer default declarations into
+    invalid environment names.
+    """
 
-def _study_method_env_requirements(study_path: Path) -> List[str]:
-    """Return only launch-time values declared by the Study's Method."""
-
-    compiled = compile_authoring_config(study_path)
+    compiled = compile_authoring_config(study_path, bind_launch_inputs=False)
     method = compiled.get("method")
     runtime = method.get("runtime") if isinstance(method, Mapping) else None
     names = runtime.get("envFromHost") if isinstance(runtime, Mapping) else None
-    return _dedupe_strings(names if isinstance(names, list) else [])
+    return list(normalize_method_environment_names(names))
 
 
 def _interface_launch_env_requirements(
     profile: InterfaceLaunchProfile,
-) -> List[str]:
-    return _dedupe_strings(
-        [*profile.grants.env_from_host, *profile.grants.secrets_from_host]
-    )
+) -> List[Any]:
+    # Keep authored public defaults until the launch value is resolved.  The
+    # retained grant remains names-only, but a Catalog/Workspace launch is
+    # compiled from authored YAML and therefore has this richer sidecar.
+    return [
+        *profile.grants.authoring_env_from_host,
+        *profile.grants.secrets_from_host,
+    ]
+
+
+def _resource_action_env_requirements(action: ResourceActionSpec) -> List[Any]:
+    """Return action declarations in the resolver's name-or-default shape."""
+
+    declared: List[Any] = []
+    for name in action.env_from_host:
+        if name in action.env_from_host_defaults:
+            declared.append(
+                {"name": name, "default": action.env_from_host_defaults[name]}
+            )
+        else:
+            declared.append(name)
+    declared.extend(action.secrets_from_host)
+    return declared
+
+
+def _resource_action_setup_descriptions(action: ResourceActionSpec) -> List[str]:
+    """Human-readable, secret-safe descriptions of every setup operation."""
+
+    setup = action.runtime.get("setup") if isinstance(action.runtime, Mapping) else None
+    steps = setup.get("steps") if isinstance(setup, Mapping) else None
+    if not isinstance(steps, list):
+        return []
+    descriptions: List[str] = []
+    if setup.get("timeoutSeconds"):
+        descriptions.append(f"timeout={setup['timeoutSeconds']} seconds")
+    setup_env = setup.get("env")
+    if isinstance(setup_env, Mapping):
+        descriptions.append(
+            "environment names="
+            + (", ".join(sorted(str(name) for name in setup_env)) or "none")
+        )
+    for index, raw_step in enumerate(steps, start=1):
+        if not isinstance(raw_step, Mapping):
+            continue
+        step = dict(raw_step)
+        uses = str(step.pop("uses", "unknown"))
+        env = step.pop("env", {})
+        env_names = sorted(str(name) for name in env) if isinstance(env, Mapping) else []
+        if uses == "command":
+            command = step.pop("command", [])
+            argv = [str(token) for token in command] if isinstance(command, list) else []
+            detail = "command " + " ".join(shlex.quote(token) for token in argv)
+        else:
+            detail = uses
+        options = [f"{name}={value!r}" for name, value in sorted(step.items())]
+        if env_names:
+            options.append("env names=" + ", ".join(env_names))
+        suffix = f" ({'; '.join(options)})" if options else ""
+        descriptions.append(f"{index}. {detail}{suffix}")
+    return descriptions
 
 
 def _study_subprocess_env(state: UiState, study_path: Path) -> Dict[str, str]:
@@ -9209,7 +9609,16 @@ def _normalize_capability_record(raw: Any, *, kind: str, index: int) -> JsonDict
             else []
         )
         record["url"] = str(item.get("url") or "").strip()
-        record["auth"] = str(item.get("auth") or "").strip()
+        # These records are inactive previews. Retaining a reusable MCP token
+        # would create a secret with no runtime consumer, and returning it in
+        # Settings or capability detail would expose it to the browser/model.
+        # Keep only the fact that auth was supplied so the UI can explain what
+        # happened without preserving the material itself.
+        record["auth_configured"] = bool(
+            str(item.get("auth") or "").strip()
+            or item.get("auth_configured")
+            or item.get("authConfigured")
+        )
         record["transport"] = str(item.get("transport") or "stdio").strip() or "stdio"
     elif kind == "custom_tool":
         record["module"] = str(item.get("module") or "").strip()
@@ -9296,6 +9705,7 @@ def _capability_summary(record: JsonDict) -> JsonDict:
         "kind": record.get("kind"),
         "description": record.get("description"),
         "enabled": bool(record.get("enabled")),
+        "runtime_status": "stored_preview_not_active",
     }
     if record.get("kind") == "custom_tool":
         summary["approval_required"] = bool(record.get("approval_required", True))
@@ -9312,6 +9722,11 @@ def _assistant_capability_summary(state: UiState) -> JsonDict:
         "custom_tools": capabilities["custom_tools"],
     }
     return {
+        "runtime_status": "stored_preview_not_active",
+        "runtime_note": (
+            "Skills, MCP servers, and custom tools are stored previews only; "
+            "this release does not load or invoke them."
+        ),
         "counts": {
             key: {
                 "total": len(records),
@@ -9356,6 +9771,7 @@ def _assistant_capability_list(state: UiState, kind: str = "") -> JsonDict:
     if bucket:
         records = capabilities.get(bucket, [])
         return {
+            "runtime_status": "stored_preview_not_active",
             "capabilities": {
                 bucket: [_capability_summary(record) for record in records]
             },
@@ -9367,6 +9783,7 @@ def _assistant_capability_list(state: UiState, kind: str = "") -> JsonDict:
         "custom_tools": capabilities.get("custom_tools", []),
     }
     return {
+        "runtime_status": "stored_preview_not_active",
         "capabilities": {
             key: [_capability_summary(record) for record in records]
             for key, records in capability_buckets.items()
@@ -9386,8 +9803,20 @@ def _assistant_capability_detail(
     capabilities = _assistant_capabilities_from_settings(settings)
     for record in capabilities.get(bucket, []):
         if record.get("id") == capability_id:
+            public_record = deepcopy(record)
+            if public_record.get("kind") == "mcp_server":
+                # Authentication may be a bearer token or another reusable
+                # secret. The browser can retain its Settings form, but this
+                # Assistant-facing detail result must never send it to the
+                # configured model provider.
+                public_record["auth_configured"] = bool(
+                    public_record.pop("auth", "")
+                    or public_record.get("auth_configured")
+                )
+            public_record["runtime_status"] = "stored_preview_not_active"
             return {
-                "capability": record,
+                "runtime_status": "stored_preview_not_active",
+                "capability": public_record,
                 "permissions": _assistant_permissions_from_settings(settings),
             }
     raise KeyError(capability_id)
@@ -9455,11 +9884,21 @@ def _agent_settings_payload(state: UiState) -> JsonDict:
     )
     capabilities = _assistant_capabilities_from_settings(settings)
     permissions = _assistant_permissions_from_settings(settings)
+    configured_base_url = str(openhands.get("base_url") or "").strip()
+    configured_no_server_value = configured_base_url.rstrip("/").lower()
+    # Keep an explicit no-server choice visible in the editable projection.
+    # Projecting it as an empty string made a GET followed by a full-form POST
+    # silently turn model-only chat back into the default local-helper mode.
+    projected_base_url = (
+        configured_no_server_value
+        if configured_no_server_value in OPENHANDS_NO_SERVER_VALUES
+        else resolve_openhands_base_url(configured_base_url)
+    )
     safe_openhands = {
         "enabled": bool(openhands.get("enabled")),
-        # Report the URL actually in use, not the empty box behind it. Showing
-        # blank sent people looking for a value the product already knew.
-        "base_url": resolve_openhands_base_url(openhands.get("base_url")),
+        # Resolve an empty default for clarity, while leaving an explicit
+        # no-server value editable so saving the form does not change modes.
+        "base_url": projected_base_url,
         "session_endpoint": str(openhands.get("session_endpoint") or ""),
         "model": str(openhands.get("model") or ""),
         "native_tools": list(_openhands_config_from_settings(settings).native_tools),
@@ -9486,10 +9925,11 @@ def _native_tools_not_enabled(raw: Any) -> List[str]:
     """Which requested tools OptPilot will not switch on.
 
     Not an error: a caller may legitimately send OpenHands' whole tool list,
-    and OptPilot narrows it deliberately -- it ships its own terminal and file
-    editor, so enabling OpenHands' would give the Assistant two of each. What
-    was wrong was doing that in silence, leaving a person to believe they had
-    switched something on.
+    and OptPilot narrows it deliberately. Native filesystem and shell tools
+    run in the agent-server process, outside Studio's Workspace and secret
+    checks; only process-local task tracking is allowed. What was wrong was
+    doing that in silence, leaving a person to believe they had switched
+    something on.
     """
 
     if not isinstance(raw, list):
@@ -9548,6 +9988,50 @@ def _require_supported_assistant_permissions(raw: Any) -> None:
             )
 
 
+def _normalize_openhands_base_url_setting(raw: Any) -> str:
+    """Validate and normalize a server address before persisting it.
+
+    Empty means the local helper OptPilot starts.  The named no-server values
+    deliberately select model-only chat.  Every other value crosses an HTTP
+    boundary, so reject malformed addresses and credentials hidden inside the
+    URL instead of saving a connection that will fail later or be echoed back
+    by the Settings API.
+    """
+
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError("OpenHands server URL must be text.")
+    text = str(raw or "").strip().rstrip("/")
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in OPENHANDS_NO_SERVER_VALUES:
+        return lowered
+    if any(character.isspace() or ord(character) < 32 for character in text):
+        raise ValueError("OpenHands server URL must not contain whitespace.")
+    try:
+        parsed = urlparse(text)
+        host = parsed.hostname
+        # Accessing ``port`` also validates its syntax and range.
+        parsed.port
+    except (TypeError, ValueError):
+        parsed = None
+        host = None
+    if parsed is None or parsed.scheme.lower() not in {"http", "https"} or not host:
+        sentinels = ", ".join(sorted(OPENHANDS_NO_SERVER_VALUES))
+        raise ValueError(
+            "OpenHands server URL must be empty for OptPilot's local helper, "
+            f"one of {sentinels} for no server, or an http/https URL with a host."
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            "OpenHands server URL must not contain a username or password. "
+            "Configure credentials in their dedicated Settings fields."
+        )
+    if "#" in text:
+        raise ValueError("OpenHands server URL must not contain a #fragment.")
+    return text
+
+
 def _update_agent_settings(state: UiState, payload: JsonDict) -> JsonDict:
     with state._settings_lock:
         return _update_agent_settings_unlocked(state, payload)
@@ -9570,8 +10054,8 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
     if "enabled" in incoming:
         openhands["enabled"] = bool(incoming.get("enabled"))
     if "base_url" in incoming:
-        openhands["base_url"] = (
-            str(incoming.get("base_url") or "").strip().rstrip("/")
+        openhands["base_url"] = _normalize_openhands_base_url_setting(
+            incoming.get("base_url")
         )
     if "session_endpoint" in incoming:
         openhands["session_endpoint"] = str(
@@ -9585,7 +10069,8 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
             notices.append(
                 "Not switched on: "
                 + ", ".join(skipped)
-                + ". OptPilot provides its own for these."
+                + ". Native filesystem and shell tools bypass Studio's "
+                "Workspace boundary; use the Studio-backed workspace tools."
             )
         openhands["native_tools"] = list(
             sanitize_openhands_native_tools(incoming.get("native_tools"))
@@ -9596,6 +10081,15 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
         openhands["api_key"] = str(incoming.get("api_key") or "").strip()
     if isinstance(payload.get("capabilities"), dict):
         _require_usable_capability_entries(payload.get("capabilities"))
+        if any(
+            isinstance(item, Mapping)
+            and bool(str(item.get("auth") or "").strip())
+            for item in payload["capabilities"].get("mcp_servers", []) or []
+        ):
+            notices.append(
+                "MCP auth was not stored because MCP records are inactive "
+                "previews in this release."
+            )
         assistant["capabilities"] = _normalize_assistant_capabilities(
             payload.get("capabilities")
         )
@@ -10104,6 +10598,7 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
         uid,
         consumer_kind="catalog-detail",
     )
+    package_root: Optional[Path] = None
     try:
         if source_projection is not None:
             entry_ref = _catalog_entry_ref_from_value(
@@ -10111,6 +10606,7 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             )
             assert entry_ref is not None
             path = source_projection.source_path
+            package_root = source_projection.root_path
             source_record = {
                 "source_kind": entry_ref.source_kind,
                 "source_id": entry_ref.source_id,
@@ -10138,6 +10634,10 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             indexed_entry = _catalog_index_entry_for_source(
                 state, expected_config, path
             )
+            package_probe = Path(
+                str(indexed_entry.get("_config_source_path") or path)
+            )
+            package_root = _configured_study_package_root(state, package_probe)
 
         entry = _public_catalog_entry_with_workspace(state, indexed_entry)
         if expected_config == "resource":
@@ -10183,7 +10683,11 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
                 "config": raw,
                 "yaml": entry.get("yaml") or yaml.safe_dump(raw, sort_keys=False),
                 "validation": _public_catalog_validation(
-                    _validate_study(path, state=state),
+                    _validate_study(
+                        path,
+                        state=state,
+                        package_root=package_root,
+                    ),
                     str(entry.get("path") or ""),
                 ),
                 "compatibility": {"compatible": [], "incompatible": []},
@@ -10194,12 +10698,28 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             for item in compatibility["pairs"]
             if item[expected_config]["uid"] == entry["uid"]
         ]
+        try:
+            package_settings = (
+                load_package_settings(package_root)
+                if package_root is not None
+                else None
+            )
+            component_validation = validate_authoring_config(
+                path,
+                package_settings=package_settings,
+            )
+        except (OSError, TypeError, ValueError) as error:
+            component_validation = {
+                "valid": False,
+                "path": str(path),
+                "errors": [f"Package settings are invalid: {error}"],
+            }
         return {
             "entry": entry,
             "config": raw,
             "yaml": entry.get("yaml") or yaml.safe_dump(raw, sort_keys=False),
             "validation": _public_catalog_validation(
-                validate_authoring_config(path), str(entry.get("path") or "")
+                component_validation, str(entry.get("path") or "")
             ),
             "compatibility": {
                 "compatible": [item for item in related if item["compatible"]],
@@ -10232,6 +10752,46 @@ def _resolve_resource_action_source(state: UiState, resource_uid: str) -> Path:
             "This Resource has no runnable optpilot.resource.yaml manifest."
         )
     return manifest_path
+
+
+def _resource_action_review(
+    state: UiState, *, resource_uid: str, action_id: str
+) -> JsonDict:
+    """Describe and bind exactly what the browser is about to authorize."""
+
+    resource_uid = str(resource_uid or "").strip()
+    action_id = str(action_id or "").strip()
+    if not resource_uid or not action_id:
+        raise ValueError("resource_uid and action_id are required.")
+    manifest_path = _resolve_resource_action_source(state, resource_uid)
+    resource_raw = _read_yaml(manifest_path)
+    actions = compile_resource_actions(resource_raw, location=str(manifest_path))
+    action = find_resource_action(actions, action_id)
+    raw_actions = resource_raw.get("actions")
+    raw_action = None
+    if isinstance(raw_actions, list):
+        raw_action = next(
+            (
+                item
+                for item in raw_actions
+                if isinstance(item, Mapping)
+                and str(item.get("id") or "").strip() == action.action_id
+            ),
+            None,
+        )
+    if raw_action is None:
+        raise ValueError("Resource action declaration is unavailable for review.")
+    return {
+        "schema": _RESOURCE_ACTION_REVIEW_SCHEMA,
+        "resource_uid": resource_uid,
+        "resource_id": str(resource_raw.get("id") or ""),
+        # Preserve the YAML/camelCase authoring shape shown in the Catalog so
+        # the browser can detect a stale card before asking for confirmation.
+        "action": deepcopy(dict(raw_action)),
+        "action_contract_digest": _resource_action_contract_digest(
+            manifest_path.parent, resource_raw, action
+        ),
+    }
 
 
 def _public_resource_action_run(record: JsonDict) -> JsonDict:
@@ -10268,6 +10828,7 @@ def _resource_action_output_root(
     *,
     workspace_id: str,
     request_id: str,
+    approved_workspace_root: str = "",
 ) -> tuple[Path, str]:
     """Where one action's results go, and which Workspace that is (if any).
 
@@ -10291,11 +10852,37 @@ def _resource_action_output_root(
     if not workspace:
         raise ValueError(f"Unknown workspace {workspace_id!r}.")
     root = _safe_workspace_root(state, Path(str(workspace.get("root") or "")))
+    approved_root = str(approved_workspace_root or "").strip()
+    if approved_root and root.resolve() != Path(approved_root).expanduser().resolve():
+        raise RealmConflict(
+            "The Workspace root changed after approval. Review the current "
+            "Workspace target and approve the action again."
+        )
     if not root.is_dir():
         raise ValueError(
             f"Workspace {workspace_id!r} has no folder on this machine yet."
         )
-    return root / "resource-action-output" / stamp, str(workspace.get("id") or "")
+    output_parent = root / "resource-action-output"
+    # The action executor resolves its output path before creating it.  A
+    # symlink here would otherwise turn the approval's promise ("inside this
+    # Workspace") into a write anywhere the link points.  Reject links even
+    # when their target happens to remain inside the Workspace: the visible
+    # path itself is the authority the person approved.
+    if output_parent.is_symlink():
+        raise PermissionError(
+            "Workspace resource-action-output must be a real directory, not a symlink."
+        )
+    output_root = output_parent / stamp
+    if output_root.is_symlink():
+        raise PermissionError(
+            "Resource action output path must not be a symlink."
+        )
+    resolved_output = output_root.resolve()
+    if not _is_relative_to(resolved_output, root.resolve()):
+        raise PermissionError(
+            "Resource action output path escapes the attached Workspace."
+        )
+    return resolved_output, str(workspace.get("id") or "")
 
 
 def _notify_agent_session_resource_action_done(
@@ -10399,6 +10986,74 @@ def _copy_resource_tree_writable(source: Path, destination: Path) -> None:
             os.chmod(target, 0o700 if child.stat().st_mode & 0o111 else 0o600)
 
 
+def _resource_action_tree_digest(resource_root: Path) -> str:
+    """Digest every executable input in a Resource tree, rejecting links.
+
+    An approval covers the package-authored command, not merely the YAML row
+    that names it.  Binding every regular file also binds scripts, setup
+    files, and local data that command may consume.  Modes are intentionally
+    excluded because the per-run snapshot normalizes them while preserving
+    whether a file was executable.
+    """
+
+    root = resource_root.resolve()
+    digest = hashlib.sha256(b"optpilot/resource-action-tree/v1\0")
+    for directory, directory_names, file_names in os.walk(
+        root, topdown=True, followlinks=False
+    ):
+        directory_path = Path(directory)
+        directory_names.sort()
+        file_names.sort()
+        for name in directory_names:
+            if (directory_path / name).is_symlink():
+                raise PermissionError("Resource tree must not contain symlinks.")
+        for name in file_names:
+            path = directory_path / name
+            if path.is_symlink() or not path.is_file():
+                raise PermissionError(
+                    "Resource tree must contain only regular files and directories."
+                )
+            relative = path.relative_to(root).as_posix().encode("utf-8")
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(b"\1" if path.stat().st_mode & 0o111 else b"\0")
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resource_action_contract_digest(
+    resource_root: Path,
+    resource_raw: Mapping[str, Any],
+    action: Any,
+) -> str:
+    """Bind the exact approved declaration and all files it can execute."""
+
+    return request_digest(
+        {
+            "schema": "optpilot.resource-action-approval.v1",
+            "resource_id": str(resource_raw.get("id") or ""),
+            "action": {
+                "id": action.action_id,
+                "label": action.label,
+                "description": action.description,
+                "command": list(action.command),
+                "cwd": action.cwd,
+                "env": dict(action.env),
+                "inputs": dict(action.inputs),
+                "env_from_host": list(action.env_from_host),
+                "env_from_host_defaults": dict(action.env_from_host_defaults),
+                "secrets_from_host": list(action.secrets_from_host),
+                "network": action.network,
+                "runtime": dict(action.runtime),
+                "timeout_seconds": action.timeout_seconds,
+            },
+            "tree_digest": _resource_action_tree_digest(resource_root),
+        }
+    )
+
+
 def _delete_resource_action_runtime(state: UiState, runtime_id: str) -> bool:
     """Delete a per-run action runtime that never submitted a container.
 
@@ -10443,14 +11098,11 @@ def _prepare_resource_action_execution(
 ) -> tuple[Path, Callable[[], None], Callable[[str], str]]:
     """A runnable manifest, the cleanup for what backs it, a text sanitizer.
 
-    A configured filesystem import is the author's own writable folder and
-    runs in place. Anything else resolves inside a sealed read-only realm
-    projection (0o500 throughout, by contract), where core's setup step --
-    "runs in the editable copy" -- cannot hold: the venv build's first mkdir
-    is refused. So the exact revision is borrowed just long enough to copy
-    the resource into a per-run writable runtime directory, the action runs
-    against the copy, and the copy is deleted when the run settles. Output
-    already goes to output_root; nothing from the copy needs to survive.
+    Both configured imports and sealed Realm projections are copied into a
+    per-run writable runtime directory.  Besides allowing setup to write,
+    this snapshots the files whose digest was approved so an edit after the
+    approval cannot change the command that actually runs.  Output already
+    goes to output_root; nothing from the copy needs to survive.
     """
 
     # Readable ids are allowed here: the assistant's tool schema tells the
@@ -10462,24 +11114,14 @@ def _prepare_resource_action_execution(
     entry_ref = _catalog_entry_ref_from_value(
         state, "resource", resource_uid, allow_readable_id=True
     )
-    if entry_ref is None or entry_ref.source_kind == "configured-filesystem-import":
-        return (
-            _resolve_resource_action_source(state, resource_uid),
-            (lambda: None),
-            (lambda text: text),
-        )
-    source_projection = _borrow_catalog_entry_ref_projection(
-        state,
-        "resource",
-        entry_ref,
-        consumer_kind="resource-action-run",
-        consumer_metadata={"request_id": request_id},
-    )
-    if source_projection is None:
-        return (
-            _resolve_resource_action_source(state, resource_uid),
-            (lambda: None),
-            (lambda text: text),
+    source_projection = None
+    if entry_ref is not None and entry_ref.source_kind == "realm-catalog":
+        source_projection = _borrow_catalog_entry_ref_projection(
+            state,
+            "resource",
+            entry_ref,
+            consumer_kind="resource-action-run",
+            consumer_metadata={"request_id": request_id},
         )
     # "copy" in the prefix keeps these distinct from the sibling
     # resource-action-runs outputs directory under the same runtime root.
@@ -10492,7 +11134,12 @@ def _prepare_resource_action_execution(
     )
     runtime_created = False
     try:
-        source_dir = source_projection.source_path
+        if source_projection is not None:
+            source_dir = source_projection.source_path
+        else:
+            source_dir = _resolve_resource_action_source(
+                state, resource_uid
+            ).parent
         manifest_path, raw = _resource_manifest(source_dir)
         if manifest_path is None or raw.get("config") != "resource":
             raise FileNotFoundError(
@@ -10519,18 +11166,20 @@ def _prepare_resource_action_execution(
         _copy_resource_tree_writable(source_dir, working_copy)
         runnable_manifest = working_copy / manifest_path.relative_to(source_dir)
     except Exception:
-        source_projection.close()
+        if source_projection is not None:
+            source_projection.close()
         if runtime_created:
             _delete_resource_action_runtime(state, runtime_id)
         raise
     # The copy is self-contained; the borrowed revision is no longer needed.
     # A close failure (ledger I/O, lease bookkeeping) must not leak the
     # finished copy with no cleanup handle attached to anything.
-    try:
-        source_projection.close()
-    except Exception:
-        _delete_resource_action_runtime(state, runtime_id)
-        raise
+    if source_projection is not None:
+        try:
+            source_projection.close()
+        except Exception:
+            _delete_resource_action_runtime(state, runtime_id)
+            raise
 
     def cleanup() -> None:
         _delete_resource_action_runtime(state, runtime_id)
@@ -10556,14 +11205,46 @@ def _start_resource_action_run(
     resource_uid = str(payload.get("resource_uid") or "").strip()
     action_id = str(payload.get("action_id") or "").strip()
     inputs = payload.get("inputs")
+    requested_workspace_id = str(payload.get("workspace_id") or "").strip()
+    approved_workspace_root = str(
+        payload.get("_approved_workspace_root") or ""
+    ).strip()
+    expected_contract_digest = str(
+        payload.get("_approved_action_contract_digest") or ""
+    ).strip()
     if not resource_uid or not action_id:
         raise ValueError("resource_uid and action_id are required.")
     if inputs is not None and not isinstance(inputs, Mapping):
         raise ValueError("Resource action inputs must be a JSON object.")
+    if re.fullmatch(r"[0-9a-f]{64}", expected_contract_digest) is None:
+        raise ValueError(
+            "Review the current Resource action before running it; "
+            "_approved_action_contract_digest is required."
+        )
+    normalized_inputs = dict(inputs or {})
+    execution_request_digest = request_digest(
+        {
+            "schema": "optpilot.studio-resource-action-execution-request.v1",
+            "resource_uid": resource_uid,
+            "action_id": action_id,
+            "inputs": normalized_inputs,
+            "workspace_id": requested_workspace_id,
+            "approved_workspace_root": approved_workspace_root,
+            "action_contract_digest": expected_contract_digest,
+        }
+    )
 
     with state._lock:
         existing = state._resource_action_runs.get(request_id)
         if existing is not None:
+            if not secrets.compare_digest(
+                str(existing.get("execution_request_digest") or ""),
+                execution_request_digest,
+            ):
+                raise RealmConflict(
+                    "Resource action request_id was already used for a "
+                    "different execution request."
+                )
             return _public_resource_action_run(existing), HTTPStatus.OK
         if (
             len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS
@@ -10584,20 +11265,31 @@ def _start_resource_action_run(
             resource_raw, location=str(manifest_path)
         )
         action = find_resource_action(actions, action_id)
+        actual_contract_digest = _resource_action_contract_digest(
+            manifest_path.parent, resource_raw, action
+        )
+        if not secrets.compare_digest(
+            actual_contract_digest, expected_contract_digest
+        ):
+            raise RealmConflict(
+                "The Resource action declaration or executable files changed "
+                "after approval. Review the current action and approve it again."
+            )
         # Resolve declared env/secret grants through Studio Settings (falling
         # back to the process environment) so actions work when values like
         # API keys are configured in Settings rather than exported to the
         # Studio process.
         granted_env = _require_declared_env_from_host(
             state,
-            (*action.env_from_host, *action.secrets_from_host),
+            _resource_action_env_requirements(action),
             action=f"resource action {action.action_id!r}",
         )
         action_host_env = {**os.environ, **granted_env}
         output_root, workspace_id = _resource_action_output_root(
             state,
-            workspace_id=str(payload.get("workspace_id") or ""),
+            workspace_id=requested_workspace_id,
             request_id=request_id,
+            approved_workspace_root=approved_workspace_root,
         )
     except Exception:
         cleanup_execution()
@@ -10607,6 +11299,8 @@ def _start_resource_action_run(
         "resource_uid": resource_uid,
         "resource_id": str(resource_raw.get("id") or ""),
         "action_id": action.action_id,
+        "action_contract_digest": expected_contract_digest,
+        "execution_request_digest": execution_request_digest,
         "workspace_id": workspace_id,
         "status": "running",
         "started_at": time.time(),
@@ -10616,28 +11310,36 @@ def _start_resource_action_run(
     }
 
     def execute() -> None:
+        terminal_status = "failed"
+        terminal_summary: Optional[JsonDict] = None
+        terminal_error: Optional[str] = None
         try:
             summary = run_resource_action(
                 manifest_path,
                 action.action_id,
-                input_values=dict(inputs or {}),
+                input_values=normalized_inputs,
                 output_root=output_root,
                 host_env=action_host_env,
             )
             for key in ("error", "stdout_tail", "stderr_tail"):
                 if isinstance(summary.get(key), str):
                     summary[key] = sanitize_run_text(summary[key])
-            record["summary"] = summary
-            record["status"] = "succeeded" if summary.get("ok") else "failed"
+            terminal_summary = summary
+            terminal_status = "succeeded" if summary.get("ok") else "failed"
             if not summary.get("ok") and summary.get("error"):
-                record["error"] = str(summary["error"])
+                terminal_error = str(summary["error"])
         except Exception as error:  # surfaced verbatim: local authored action
-            record["status"] = "failed"
-            record["error"] = sanitize_run_text(str(error))
+            terminal_error = sanitize_run_text(str(error))
         finally:
-            record["finished_at"] = time.time()
+            # A terminal status promises that the per-run executable snapshot
+            # is no longer in use. Publish it only after cleanup has returned,
+            # so status polling and test/project teardown cannot race deletion.
             cleanup_execution()
             with state._lock:
+                record["summary"] = terminal_summary
+                record["error"] = terminal_error
+                record["finished_at"] = time.time()
+                record["status"] = terminal_status
                 if (
                     state._resource_action_threads.get(request_id)
                     is threading.current_thread()
@@ -10649,6 +11351,7 @@ def _start_resource_action_run(
             _notify_agent_session_resource_action_done(state, record)
 
     start_failed = False
+    capacity_exhausted = False
     with state._lock:
         existing_record = state._resource_action_runs.get(request_id)
         if existing_record is None:
@@ -10659,23 +11362,33 @@ def _start_resource_action_run(
                     if value.get("status") in {"succeeded", "failed"}
                 ][: max(1, len(state._resource_action_runs) - _MAX_RESOURCE_ACTION_RUNS + 1)]:
                     state._resource_action_runs.pop(stale_id, None)
-            state._resource_action_runs[request_id] = record
-            thread = threading.Thread(
-                target=execute,
-                name=f"optpilot-resource-action-{request_id[:18]}",
-                daemon=True,
-            )
-            state._resource_action_threads[request_id] = thread
-            try:
-                thread.start()
-            except Exception:
-                # A thread that never started would hold its registrations
-                # forever: the record stuck "running", the copy exempt from
-                # the sweep. Unwind both, release the copy, surface the
-                # failure.
-                state._resource_action_threads.pop(request_id, None)
-                state._resource_action_runs.pop(request_id, None)
-                start_failed = True
+            # Several callers may all have passed the cheap preflight while a
+            # single terminal record was available to evict. Recheck under the
+            # insertion lock after eviction; only the first may consume that
+            # slot, and later callers must clean up their prepared copies.
+            if len(state._resource_action_runs) >= _MAX_RESOURCE_ACTION_RUNS:
+                capacity_exhausted = True
+            else:
+                state._resource_action_runs[request_id] = record
+                thread = threading.Thread(
+                    target=execute,
+                    name=f"optpilot-resource-action-{request_id[:18]}",
+                    daemon=True,
+                )
+                state._resource_action_threads[request_id] = thread
+                try:
+                    thread.start()
+                except Exception:
+                    # A thread that never started would hold its registrations
+                    # forever: the record stuck "running", the copy exempt from
+                    # the sweep. Unwind both, release the copy, surface the
+                    # failure.
+                    state._resource_action_threads.pop(request_id, None)
+                    state._resource_action_runs.pop(request_id, None)
+                    start_failed = True
+    if capacity_exhausted:
+        cleanup_execution()
+        raise ValueError("Too many concurrent resource action runs.")
     if start_failed:
         cleanup_execution()
         raise RuntimeError("Could not start the resource action worker thread.")
@@ -10685,6 +11398,14 @@ def _start_resource_action_run(
         # return the winner's record. Deleting a directory tree stays off
         # the lock.
         cleanup_execution()
+        if not secrets.compare_digest(
+            str(existing_record.get("execution_request_digest") or ""),
+            execution_request_digest,
+        ):
+            raise RealmConflict(
+                "Resource action request_id was already used for a different "
+                "execution request."
+            )
         return _public_resource_action_run(existing_record), HTTPStatus.OK
     return _public_resource_action_run(record), HTTPStatus.ACCEPTED
 
@@ -11937,7 +12658,11 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
         draft_yaml = yaml.safe_dump(draft, sort_keys=False)
         study_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_text(study_path, draft_yaml)
-        raw_validation = _validate_study(study_path, state=state)
+        raw_validation = _validate_study(
+            study_path,
+            state=state,
+            package_root=root,
+        )
         validation = _public_workspace_value(
             raw_validation, workspace_id=workspace_id, root=root
         )
@@ -12128,7 +12853,11 @@ def _saved_study_draft_payload(
         and path is not None
     ):
         validation = _public_workspace_value(
-            _validate_study(path, state=state),
+            _validate_study(
+                path,
+                state=state,
+                package_root=root,
+            ),
             workspace_id=record.workspace_id,
             root=root,
         )
@@ -12319,7 +13048,13 @@ def _open_study_workspace(state: UiState, payload: JsonDict) -> JsonDict:
     if payload.get("study_path"):
         source_path = _resolve_user_path(payload.get("study_path"), state.cwd)
         study_yaml = source_path.read_text(encoding="utf-8")
-        validation = _validate_study(source_path, state=state)
+        validation = _validate_study(
+            source_path,
+            state=state,
+            package_root=_configured_study_package_root_if_known(
+                state, source_path
+            ),
+        )
         raw = _read_yaml(source_path)
         title = str(raw.get("name") or raw.get("id") or source_path.stem)
     else:
@@ -12390,33 +13125,101 @@ def _entrypoint_mode(entrypoint: JsonDict) -> Optional[str]:
     return None
 
 
-def _environment_runtime_summary(raw: JsonDict) -> JsonDict:
+def _effective_catalog_component_runtime(
+    raw: JsonDict,
+    *,
+    package_settings: Optional[PackageSettings] = None,
+) -> tuple[JsonDict, str]:
+    """Return the runtime users will actually get and where it came from.
+
+    Catalog summaries used to inspect only the component YAML. That made a
+    package-wide container fallback look like a process runtime even though
+    launch compilation correctly selected the package image. Keep this small
+    projection aligned with the compiler's precedence rule: a component-local
+    container declaration wins in full, otherwise the package image is the
+    fallback, otherwise the authored/default process runtime remains.
+    """
+
+    authored = raw.get("runtime", {})
+    runtime = deepcopy(authored) if isinstance(authored, dict) else {}
+    if runtime.get("sandbox") == "container":
+        return runtime, "component"
+
+    package_container = getattr(package_settings, "container", None)
+    if package_container is not None:
+        return (
+            {
+                "sandbox": "container",
+                "container": {
+                    "image": package_container.image.raw,
+                    "platform": package_container.platform,
+                    "network": "disabled",
+                },
+            },
+            "package",
+        )
+    return runtime, "component" if isinstance(authored, dict) and authored else "default"
+
+
+def _environment_runtime_summary(
+    raw: JsonDict,
+    *,
+    package_settings: Optional[PackageSettings] = None,
+) -> JsonDict:
     evaluator = (
         raw.get("evaluator", {}) if isinstance(raw.get("evaluator"), dict) else {}
     )
-    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+    runtime, source = _effective_catalog_component_runtime(
+        raw,
+        package_settings=package_settings,
+    )
+    container = (
+        runtime.get("container", {})
+        if isinstance(runtime.get("container"), dict)
+        else {}
+    )
+    sandbox = runtime.get("sandbox", "process")
     return {
         "evaluate_type": _evaluator_mode(evaluator),
         "timeoutSeconds": evaluator.get("timeoutSeconds"),
         "has_python_path": bool(evaluator.get("pythonPath")),
-        "sandbox": runtime.get("sandbox", "process"),
+        "sandbox": sandbox,
+        "image": container.get("image"),
+        "platform": container.get("platform"),
+        "has_build": bool(container.get("build")),
+        "networkPolicy": (
+            container.get("network", "disabled")
+            if sandbox == "container"
+            else "disabled"
+        ),
+        "source": source,
     }
 
 
-def _method_runtime_summary(raw: JsonDict) -> JsonDict:
-    runtime = raw.get("runtime", {}) if isinstance(raw.get("runtime"), dict) else {}
+def _method_runtime_summary(
+    raw: JsonDict,
+    *,
+    package_settings: Optional[PackageSettings] = None,
+) -> JsonDict:
+    runtime, source = _effective_catalog_component_runtime(
+        raw,
+        package_settings=package_settings,
+    )
     container = (
         runtime.get("container", {})
         if isinstance(runtime.get("container", {}), dict)
         else {}
     )
+    sandbox = runtime.get("sandbox", "process")
     return {
-        "type": runtime.get("sandbox", "process"),
+        "type": sandbox,
         "image": container.get("image"),
+        "platform": container.get("platform"),
         "has_build": bool(container.get("build")),
         "networkPolicy": container.get("network", "disabled")
-        if runtime.get("sandbox") == "container"
+        if sandbox == "container"
         else "disabled",
+        "source": source,
     }
 
 
@@ -12427,6 +13230,11 @@ def _require_realm_runtime(state: UiState) -> LocalRealmRuntime:
     if getattr(runtime, "closed", False):
         raise RuntimeError("Studio Realm runtime is closed.")
     return runtime
+
+
+CONFIGURED_STUDY_PACKAGE_MISSING_MESSAGE = (
+    "Study must be inside one of Studio's configured catalog package roots."
+)
 
 
 def _configured_study_package_root(state: UiState, study_path: Path) -> Path:
@@ -12440,10 +13248,21 @@ def _configured_study_package_root(state: UiState, study_path: Path) -> Path:
     return _most_specific_study_package_root(
         study_path,
         [*realm_roots, *state.catalog_roots],
-        missing_message=(
-            "Study must be inside one of Studio's configured catalog package roots."
-        ),
+        missing_message=CONFIGURED_STUDY_PACKAGE_MISSING_MESSAGE,
     )
+
+
+def _configured_study_package_root_if_known(
+    state: UiState, study_path: Path
+) -> Optional[Path]:
+    """Return an explicit configured package root without weakening errors."""
+
+    try:
+        return _configured_study_package_root(state, study_path)
+    except ValueError as error:
+        if str(error) == CONFIGURED_STUDY_PACKAGE_MISSING_MESSAGE:
+            return None
+        raise
 
 
 def _assistant_study_package_root(
@@ -17961,9 +18780,13 @@ def _execute_study_launch_request(
     configured_validation: Optional[JsonDict] = None
     if "study_path" in request:
         configured_study_path = _resolve_user_path(request["study_path"], state.cwd)
-        _configured_study_package_root(state, configured_study_path)
+        configured_package_root = _configured_study_package_root(
+            state, configured_study_path
+        )
         configured_validation = _validate_study(
-            configured_study_path, state=state
+            configured_study_path,
+            state=state,
+            package_root=configured_package_root,
         )
         blocked = _study_launch_block(
             configured_validation, launch_inputs=requested_launch_inputs
@@ -18054,10 +18877,21 @@ def _execute_study_launch_request(
 
 
 def _validate_study(
-    study_path: Path, *, state: Optional[UiState] = None
+    study_path: Path,
+    *,
+    state: Optional[UiState] = None,
+    package_root: Optional[Path] = None,
 ) -> JsonDict:
     path = Path(study_path).expanduser().resolve()
     try:
+        package_settings = None
+        if package_root is not None:
+            resolved_package_root = Path(package_root).expanduser().resolve()
+            if not _is_relative_to(path, resolved_package_root):
+                raise ValueError(
+                    "Study validation package root does not contain the study."
+                )
+            package_settings = load_package_settings(resolved_package_root)
         validation = validate_authoring_config(path)
         if not validation["valid"]:
             errors = [str(item) for item in validation.get("errors", []) or []]
@@ -18081,7 +18915,11 @@ def _validate_study(
         # Static validation must not bind launch inputs: a study whose
         # declared inputs have no defaults is valid and launchable — the
         # launch form supplies the values at launch time.
-        compiled = compile_authoring_config(path, bind_launch_inputs=False)
+        compiled = compile_authoring_config(
+            path,
+            bind_launch_inputs=False,
+            package_settings=package_settings,
+        )
         with path.open("r", encoding="utf-8") as handle:
             raw_study = yaml.safe_load(handle) or {}
         declared_inputs = (
@@ -19370,6 +20208,8 @@ def _approval_display_payload(approval: JsonDict) -> JsonDict:
                 "token",
                 "secret",
                 "password",
+                "_approved_action_contract_digest",
+                "_approved_workspace_root",
                 "_openhands_tool_call_id",
                 "approved",
             }
@@ -19861,6 +20701,7 @@ ASSISTANT_PERMISSION_LABELS = {
     "job_stop": "Stop Runs and Candidate tries",
     "smoke_test": "Smoke tests",
     "resource_action": "Resource actions",
+    "interface_launch": "Opening interfaces",
 }
 
 
@@ -19896,6 +20737,26 @@ def _agent_permission_gate(
     require_approval: bool = True,
     execution_context: Optional[ToolExecutionContext] = None,
 ) -> Optional[JsonDict]:
+    bound_arguments = dict(arguments)
+    workspace_id = str(bound_arguments.get("workspace_id") or "").strip()
+    if workspace_id:
+        workspace = _workspace_by_id(state, workspace_id)
+        if workspace and workspace.get("root"):
+            current_root = _safe_workspace_root(
+                state, Path(str(workspace["root"]))
+            ).resolve()
+            approved_root = str(
+                bound_arguments.get("_approved_workspace_root") or ""
+            ).strip()
+            if (
+                approved_root
+                and Path(approved_root).expanduser().resolve() != current_root
+            ):
+                raise RealmConflict(
+                    "The Workspace root changed after approval. Review the "
+                    "current target and approve the action again."
+                )
+            bound_arguments["_approved_workspace_root"] = str(current_root)
     mode = _assistant_permission(state, permission_key)
     if mode == "disabled":
         return _agent_permission_blocked_result(tool, permission_key)
@@ -19903,16 +20764,16 @@ def _agent_permission_gate(
         state,
         session_id,
         tool=tool,
-        arguments=arguments,
+        arguments=bound_arguments,
         execution_context=execution_context,
     )
     if (
         require_approval
-        and mode in {"approval_required", "safe_without_approval"}
+        and mode == "approval_required"
         and not bypass_allowed
     ):
         if any(
-            key in arguments
+            key in bound_arguments
             for key in {"approved", "bypass_approval", "approval_bypass"}
         ):
             return _approval_bypass_field_result(tool)
@@ -19920,7 +20781,7 @@ def _agent_permission_gate(
             state,
             session_id,
             tool=tool,
-            arguments=arguments,
+            arguments=bound_arguments,
             kind=approval_kind,
             title=title,
             summary=summary,
@@ -20464,7 +21325,7 @@ def _execute_agent_tool(
             data={"workspaces": workspaces, "sessions": sessions_slim},
         )
     if tool == "optpilot_workspace_create":
-        workspace = _create_ui_workspace(state, arguments)
+        workspace = _create_ui_workspace(state, arguments, assistant_owned=True)
         _attach_agent_workspace(state, session_id, workspace["id"], select=True)
         return _tool_result(
             tool,
@@ -20500,8 +21361,16 @@ def _execute_agent_tool(
         workspace, root, target = _resolve_agent_workspace_path(
             state, session_id, arguments, default_path="."
         )
+        _refuse_secret_file(target, root)
         max_files = min(max(int(arguments.get("max_files") or 200), 1), 500)
-        files = _workspace_file_tree(root, target, max_files=max_files)
+        files = _workspace_file_tree(
+            root,
+            target,
+            max_files=max_files,
+            path_visible=lambda path: _assistant_tree_path_visible(
+                state, workspace, root, path
+            ),
+        )
         return _tool_result(
             tool,
             True,
@@ -20690,9 +21559,17 @@ def _execute_agent_tool(
                 "action_id": action.action_id,
                 "label": action.label,
                 "description": action.description,
+                "command": list(action.command),
+                "setup_steps": _resource_action_setup_descriptions(action),
                 "inputs": action.inputs,
+                "network": action.network,
                 "timeout_seconds": action.timeout_seconds,
-                "requires_env_from_host": list(action.env_from_host),
+                "requires_env_from_host": [
+                    name
+                    for name in action.env_from_host
+                    if name not in action.env_from_host_defaults
+                ],
+                "defaulted_env_from_host": dict(action.env_from_host_defaults),
                 "requires_secrets_from_host": list(action.secrets_from_host),
             }
             for action in actions
@@ -20710,6 +21587,25 @@ def _execute_agent_tool(
         action_id = str(arguments.get("action_id") or "").strip()
         if not resource_uid or not action_id:
             raise ValueError("resource_uid and action_id are required.")
+        manifest_path = _resolve_resource_action_source(state, resource_uid)
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            resource_raw = yaml.safe_load(handle) or {}
+        action = find_resource_action(
+            compile_resource_actions(resource_raw, location=str(manifest_path)),
+            action_id,
+        )
+        contract_digest = _resource_action_contract_digest(
+            manifest_path.parent, resource_raw, action
+        )
+        approved_contract_digest = str(
+            arguments.get("_approved_action_contract_digest") or ""
+        ).strip()
+        if approved_contract_digest and approved_contract_digest != contract_digest:
+            raise RealmConflict(
+                "The Resource action declaration or executable files changed "
+                "after approval. Review the current action and approve it again."
+            )
+        setup_descriptions = _resource_action_setup_descriptions(action)
         blocked = _resource_action_blocked_reason(state, resource_uid, action_id)
         if blocked:
             return _tool_result(
@@ -20722,12 +21618,33 @@ def _execute_agent_tool(
         inputs = arguments.get("inputs")
         if inputs is not None and not isinstance(inputs, Mapping):
             raise ValueError("inputs must be a JSON object.")
+        workspace_root: Optional[Path] = None
+        if workspace_id:
+            workspace, workspace_root, _target = _resolve_agent_workspace_path(
+                state,
+                session_id,
+                {"workspace_id": workspace_id, "path": "."},
+            )
+            _require_editable_workspace(workspace)
+            workspace_id = str(workspace["id"])
         # Generated here rather than asked of the model, and then carried in
         # the approval's stored arguments -- so approving a request runs the
         # same one, and a repeated call after approval does not run it twice.
         request_id = _canonical_request_uuid(
             str(arguments.get("request_id") or "") or str(uuid.uuid4())
         )
+        workspace_output_root: Optional[Path] = None
+        if workspace_id:
+            workspace_output_root, _canonical_workspace_id = (
+                _resource_action_output_root(
+                    state,
+                    workspace_id=workspace_id,
+                    request_id=request_id,
+                    approved_workspace_root=str(
+                        arguments.get("_approved_workspace_root") or ""
+                    ),
+                )
+            )
         gate = _agent_permission_gate(
             state,
             session_id,
@@ -20738,17 +21655,42 @@ def _execute_agent_tool(
                 "action_id": action_id,
                 "workspace_id": workspace_id,
                 "request_id": request_id,
+                "_approved_action_contract_digest": contract_digest,
             },
             permission_key="resource_action",
             approval_kind="resource_action_run",
             title=f"Run resource action {action_id}",
             summary=(
-                f"Run the {action_id} action and write its output into the "
-                f"attached Workspace."
-                if workspace_id
-                else f"Run the {action_id} action."
+                f"Run {action.label!r} as a host process. Command: "
+                f"{' '.join(action.command)}. Network: {action.network}. "
+                f"Timeout: {action.timeout_seconds} seconds. Environment "
+                f"names: {', '.join(action.env_from_host) or 'none'}. Secret "
+                f"names: {', '.join(action.secrets_from_host) or 'none'}. "
+                f"Setup: {'; '.join(setup_descriptions) if setup_descriptions else 'none'}. "
+                + (
+                    f"Write its output into attached editable Workspace "
+                    f"{workspace_id!r}."
+                    if workspace_id
+                    else "Write its output into a fresh managed folder."
+                )
             ),
-            targets=[resource_uid, action_id],
+            targets=[
+                resource_uid,
+                action_id,
+                f"network={action.network}",
+                f"timeout={action.timeout_seconds}s",
+                *[f"setup={item}" for item in setup_descriptions],
+                *(
+                    [f"workspace={workspace_id}", str(workspace_root)]
+                    if workspace_id and workspace_root is not None
+                    else []
+                ),
+                *(
+                    [f"output={workspace_output_root}"]
+                    if workspace_output_root is not None
+                    else []
+                ),
+            ],
             execution_context=execution_context,
         )
         if gate is not None:
@@ -20761,6 +21703,10 @@ def _execute_agent_tool(
                 "action_id": action_id,
                 "workspace_id": workspace_id,
                 "inputs": dict(inputs or {}),
+                "_approved_action_contract_digest": contract_digest,
+                "_approved_workspace_root": str(
+                    arguments.get("_approved_workspace_root") or ""
+                ),
             },
         )
         # HTTPStatus.OK means the request id matched an existing run: nothing
@@ -21094,7 +22040,11 @@ def _execute_agent_tool(
             data={
                 "workspace": workspace,
                 "path": _relative_path(path, root),
-                "validation": _validate_study(path, state=state),
+                "validation": _validate_study(
+                    path,
+                    state=state,
+                    package_root=root,
+                ),
             },
         )
     if tool == "optpilot_study_launch":
@@ -21176,7 +22126,11 @@ def _execute_agent_tool(
                     "The managed workspace study config is unavailable."
                 )
             validation = _public_workspace_value(
-                _validate_study(study_path, state=state),
+                _validate_study(
+                    study_path,
+                    state=state,
+                    package_root=root,
+                ),
                 workspace_id=workspace_id,
                 root=root,
             )
@@ -21418,7 +22372,7 @@ def _execute_agent_tool(
         return _tool_result(
             tool,
             True,
-            f"Found {total} configured assistant capability record(s).",
+            f"Found {total} stored capability preview record(s); none are loaded into this Assistant runtime.",
             data=data,
         )
     if tool == "optpilot_capability_detail":
@@ -21427,7 +22381,12 @@ def _execute_agent_tool(
             str(arguments.get("capability_kind") or arguments.get("kind") or ""),
             str(arguments.get("id") or ""),
         )
-        return _tool_result(tool, True, "Assistant capability loaded.", data=data)
+        return _tool_result(
+            tool,
+            True,
+            "Stored capability preview loaded; it is not an active Assistant runtime capability.",
+            data=data,
+        )
     return _tool_result(
         tool,
         False,
@@ -21469,6 +22428,13 @@ SECRET_FILE_NAMES = frozenset(
         ".git-credentials",
         ".htpasswd",
         "credentials",
+        "credentials.json",
+        "credentials.yaml",
+        "credentials.yml",
+        "application_default_credentials.json",
+        "client_secret.json",
+        "service-account.json",
+        "service_account.json",
         "id_rsa",
         "id_dsa",
         "id_ecdsa",
@@ -21484,21 +22450,149 @@ SECRET_FILE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
 
 #: Stems whose every variant is a credential file: `.env.local`,
 #: `.env.production`, `id_rsa.bak`, and so on.
-SECRET_FILE_PREFIXES = (".env.", "id_rsa.", "id_ed25519.")
+SECRET_FILE_PREFIXES = (
+    ".env.",
+    "client_secret_",
+    "id_rsa.",
+    "id_ed25519.",
+)
+
+#: Tool-owned metadata trees that are credential-bearing or carry authority
+#: even when an individual file has an innocent name such as ``config``.
+SECRET_DIRECTORY_NAMES = frozenset(
+    {".aws", ".azure", ".docker", ".git", ".kube", ".ssh"}
+)
+SECRET_DIRECTORY_SEQUENCES = (
+    (".config", "gcloud"),
+    (".config", "gh"),
+    (".local", "share", "keyrings"),
+)
+
+
+def _assistant_project_control_root(state: UiState) -> Path:
+    return (state.cwd / STUDIO_CONTROL_DIRECTORY_NAME).resolve()
+
+
+def _assistant_authority_paths(state: UiState) -> tuple[Path, ...]:
+    """Known Studio-owned paths that must never become Assistant content."""
+
+    candidates = [
+        getattr(state, "settings_path", None),
+        getattr(state, "agent_sessions_dir", None),
+        getattr(state, "jobs_dir", None),
+        getattr(state, "sessions_dir", None),
+        getattr(state, "code_server_dir", None),
+        getattr(state, "runtime_dir", None),
+        getattr(state, "prepared_runtime_cache_dir", None),
+        getattr(state, "workspace_index_path", None),
+    ]
+    paths: List[Path] = []
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        path = Path(candidate).resolve()
+        if path not in paths:
+            paths.append(path)
+    return tuple(paths)
+
+
+def _assistant_managed_content_root(
+    state: UiState, workspace: Mapping[str, Any], root: Path
+) -> bool:
+    workspace_id = str(workspace.get("id") or "")
+    return bool(workspace_id) and _is_managed_draft_root(
+        state, workspace_id, root.resolve()
+    )
+
+
+def _assistant_control_path_error(relative: str) -> PermissionError:
+    return _with_remedy(
+        PermissionError(
+            f"{relative} is Studio control state, so the Assistant cannot "
+            "list, read, change, or execute through it."
+        ),
+        _remedy(
+            "Use a project file outside Studio's control namespace. This "
+            "boundary cannot be bypassed through another Workspace tool.",
+            details={"path": relative, "reason": "studio_control_state"},
+        ),
+    )
+
+
+def _assert_assistant_workspace_root(
+    state: UiState, workspace: Mapping[str, Any], root: Path
+) -> None:
+    """Reject a Workspace whose mounted root is itself Studio authority."""
+
+    root = root.resolve()
+    project_control = _assistant_project_control_root(state)
+    if _is_relative_to(root, project_control):
+        # Studio-created draft content lives below `.optpilot-ui/workspaces`,
+        # but its exact `.../<id>/workspace` root contains only user files and
+        # mounts without its authority-owning parents. No other descendant is
+        # safe to attach to an Assistant.
+        if _assistant_managed_content_root(state, workspace, root):
+            return
+        raise _assistant_control_path_error(_relative_path(root, state.cwd))
+
+    # Tests and embedders may relocate individual control paths. If such a
+    # path is inside the proposed Workspace, there is no generic container
+    # mask for it; fail closed instead of relying on filename recognition.
+    for authority_path in _assistant_authority_paths(state):
+        if _is_relative_to(authority_path, project_control):
+            continue
+        if _is_relative_to(root, authority_path) or _is_relative_to(
+            authority_path, root
+        ):
+            raise _assistant_control_path_error(
+                _relative_path(authority_path, state.cwd)
+            )
+
+
+def _refuse_assistant_control_path(
+    state: UiState,
+    workspace: Mapping[str, Any],
+    path: Path,
+    root: Path,
+) -> None:
+    """Deny a resolved target before any Studio authority bytes are touched."""
+
+    path = path.resolve()
+    root = root.resolve()
+    project_control = _assistant_project_control_root(state)
+    if _is_relative_to(path, project_control):
+        if _assistant_managed_content_root(state, workspace, root) and _is_relative_to(
+            path, root
+        ):
+            return
+        raise _assistant_control_path_error(_relative_path(path, state.cwd))
+    for authority_path in _assistant_authority_paths(state):
+        if _is_relative_to(authority_path, project_control):
+            continue
+        if path == authority_path or _is_relative_to(path, authority_path):
+            raise _assistant_control_path_error(_relative_path(path, root))
 
 
 def _is_secret_file(path: Path) -> bool:
     name = path.name.lower()
     if name in SECRET_FILE_NAMES:
         return True
+    # ``prod.env`` and similar names are just as credential-bearing as the
+    # leading-dot variants. Keep ordinary names such as ``env.py`` available.
+    if name.endswith(".env"):
+        return True
     if name.endswith(SECRET_FILE_SUFFIXES):
         return True
     if name.startswith(SECRET_FILE_PREFIXES):
         return True
-    # An SSH private key is the file inside .ssh that has no .pub twin; the
-    # common names are listed above, but the directory itself is never a place
-    # an Assistant needs to read from.
-    return ".ssh" in {part.lower() for part in path.parts}
+    parts = tuple(part.lower() for part in path.parts)
+    if any(part in SECRET_DIRECTORY_NAMES for part in parts):
+        return True
+    return any(
+        parts[index : index + len(sequence)] == sequence
+        for sequence in SECRET_DIRECTORY_SEQUENCES
+        for index in range(len(parts) - len(sequence) + 1)
+    )
 
 
 def _refuse_secret_file(path: Path, root: Path) -> None:
@@ -21540,6 +22634,13 @@ def _resolve_agent_workspace_path(
         raise PermissionError("Workspace is not attached to this assistant session.")
     workspace = _require_ui_workspace(state, workspace_id)
     root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+    approved_root = str(arguments.get("_approved_workspace_root") or "").strip()
+    if approved_root and Path(approved_root).expanduser().resolve() != root:
+        raise RealmConflict(
+            "The Workspace root changed after approval. Review the current "
+            "target and approve the action again."
+        )
+    _assert_assistant_workspace_root(state, workspace, root)
     raw_path = arguments.get("path")
     if raw_path in (None, "") and default_path is not None:
         raw_path = default_path
@@ -21550,6 +22651,7 @@ def _resolve_agent_workspace_path(
     target = target.resolve()
     if not _is_relative_to(target, root):
         raise PermissionError("Path is outside the attached workspace root.")
+    _refuse_assistant_control_path(state, workspace, target, root)
     return workspace, root, target
 
 
@@ -21588,8 +22690,34 @@ def _missing_workspace_path_error(
     )
 
 
-def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[JsonDict]:
+def _assistant_tree_path_visible(
+    state: UiState,
+    workspace: Mapping[str, Any],
+    root: Path,
+    path: Path,
+) -> bool:
+    """Hide control and credential paths during recursive Assistant listing."""
+
+    try:
+        _refuse_assistant_control_path(state, workspace, path, root)
+        _refuse_secret_file(path, root)
+    except PermissionError:
+        return False
+    return True
+
+
+def _workspace_file_tree(
+    root: Path,
+    target: Path,
+    *,
+    max_files: int,
+    path_visible: Optional[Callable[[Path], bool]] = None,
+) -> List[JsonDict]:
+    root = root.resolve()
+    target = target.resolve()
     if target.is_file():
+        if path_visible is not None and not path_visible(target):
+            return []
         stat = target.stat()
         return [
             {"path": _relative_path(target, root), "type": "file", "size": stat.st_size}
@@ -21598,6 +22726,7 @@ def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[Js
         raise _missing_workspace_path_error(target, root, expected="file or folder")
     files: List[JsonDict] = []
     stack = [target]
+    visited_directories = {target}
     while stack and len(files) < max_files:
         current = stack.pop()
         try:
@@ -21610,16 +22739,24 @@ def _workspace_file_tree(root: Path, target: Path, *, max_files: int) -> List[Js
         for child in entries:
             if child.name in EXCLUDED_SCAN_DIRS:
                 continue
-            resolved = child.resolve()
+            try:
+                resolved = child.resolve()
+            except OSError:
+                continue
             if not _is_relative_to(resolved, root):
                 continue
-            if child.is_dir():
+            if path_visible is not None and not path_visible(resolved):
+                continue
+            if resolved.is_dir():
+                if resolved in visited_directories:
+                    continue
+                visited_directories.add(resolved)
                 files.append(
                     {"path": _relative_path(resolved, root), "type": "directory"}
                 )
                 stack.append(resolved)
-            elif child.is_file():
-                stat = child.stat()
+            elif resolved.is_file():
+                stat = resolved.stat()
                 files.append(
                     {
                         "path": _relative_path(resolved, root),
@@ -21645,18 +22782,25 @@ def _resolve_agent_or_allowed_path(
         )[2]
     requested = Path(str(raw_path)).expanduser()
     if not requested.is_absolute():
-        try:
-            selected_workspace_id = _selected_agent_workspace_id(state, session_id)
+        session = _require_agent_session(state, session_id)
+        selected_workspace_id = str(session.get("selected_workspace_id") or "")
+        attached_workspace_ids = {
+            str(item) for item in session.get("attached_workspace_ids", []) or []
+        }
+        if selected_workspace_id and selected_workspace_id in attached_workspace_ids:
             workspace = _require_ui_workspace(state, selected_workspace_id)
             root = _safe_workspace_root(state, Path(str(workspace["root"]))).resolve()
+            _assert_assistant_workspace_root(state, workspace, root)
             workspace_candidate = (root / requested).resolve()
             if (
                 _is_relative_to(workspace_candidate, root)
                 and workspace_candidate.exists()
             ):
+                _refuse_assistant_control_path(
+                    state, workspace, workspace_candidate, root
+                )
+                _refuse_secret_file(workspace_candidate, root)
                 return workspace_candidate
-        except Exception:
-            pass
     candidate = _resolve_user_path(raw_path, state.cwd)
     allowed_roots = [
         state.cwd,
@@ -21665,7 +22809,14 @@ def _resolve_agent_or_allowed_path(
         state.sessions_dir,
         state.workspaces_dir,
     ]
-    if any(_is_relative_to(candidate, root.resolve()) for root in allowed_roots):
+    for allowed_root in allowed_roots:
+        resolved_root = allowed_root.resolve()
+        if not _is_relative_to(candidate, resolved_root):
+            continue
+        _refuse_assistant_control_path(
+            state, {"id": ""}, candidate, resolved_root
+        )
+        _refuse_secret_file(candidate, resolved_root)
         return candidate
     raise PermissionError(f"Path is outside OptPilot-controlled roots: {candidate}")
 
@@ -21737,6 +22888,7 @@ def _agent_tool_openhands_terminal(
                 or f"Run terminal command: {_cap_text(command, 120)}"
             ),
         },
+        approval_arguments=arguments,
         execution_context=execution_context,
     )
 
@@ -21759,7 +22911,9 @@ def _agent_tool_openhands_file_editor(
     # or editing one is not the Assistant's to do either.
     _refuse_secret_file(path, root)
     if command == "view":
-        return _agent_file_editor_view(tool, workspace, root, path, arguments)
+        return _agent_file_editor_view(
+            state, tool, workspace, root, path, arguments
+        )
     _require_editable_workspace(workspace)
     gate = _agent_permission_gate(
         state,
@@ -21787,13 +22941,21 @@ def _agent_tool_openhands_file_editor(
 
 
 def _agent_file_editor_view(
-    tool: str, workspace: JsonDict, root: Path, path: Path, arguments: JsonDict
+    state: UiState,
+    tool: str,
+    workspace: JsonDict,
+    root: Path,
+    path: Path,
+    arguments: JsonDict,
 ) -> JsonDict:
     if path.is_dir():
         files = _workspace_file_tree(
             root,
             path,
             max_files=min(max(int(arguments.get("max_files") or 200), 1), 500),
+            path_visible=lambda candidate: _assistant_tree_path_visible(
+                state, workspace, root, candidate
+            ),
         )
         return _tool_result(
             tool,
@@ -21987,6 +23149,7 @@ def _agent_tool_shell_run(
     tool: str,
     arguments: JsonDict,
     *,
+    approval_arguments: Optional[JsonDict] = None,
     execution_context: Optional[ToolExecutionContext] = None,
 ) -> JsonDict:
     workspace, root, cwd = _resolve_agent_workspace_path(
@@ -22003,26 +23166,27 @@ def _agent_tool_shell_run(
     command = _normalize_shell_command(arguments.get("command"))
     if not command:
         raise ValueError("command is required.")
+    _refuse_assistant_shell_control_reference(state, workspace, root, command)
     timeout_seconds = min(max(int(arguments.get("timeout_seconds") or 30), 1), 120)
-    permission = _assistant_permission(state, "shell_run")
+    gate_arguments = {
+        **(approval_arguments if approval_arguments is not None else arguments),
+        "workspace_id": workspace["id"],
+        "cwd": _relative_path(cwd, root),
+        "timeout_seconds": timeout_seconds,
+    }
+    if approval_arguments is None:
+        gate_arguments["command"] = command
     gate = _agent_permission_gate(
         state,
         session_id,
         tool=tool,
-        arguments={
-            **arguments,
-            "workspace_id": workspace["id"],
-            "command": command,
-            "cwd": _relative_path(cwd, root),
-            "timeout_seconds": timeout_seconds,
-        },
+        arguments=gate_arguments,
         permission_key="shell_run",
         approval_kind="shell_run",
         title="Run workspace command",
         summary=f"Run {' '.join(shlex.quote(part) for part in command)} in {workspace.get('title') or workspace.get('id')}.",
         targets=[str(root), _relative_path(cwd, root)],
-        require_approval=permission == "approval_required"
-        or (permission == "safe_without_approval" and _shell_needs_approval(command)),
+        require_approval=True,
         execution_context=execution_context,
     )
     if gate is not None:
@@ -22065,100 +23229,20 @@ def _normalize_shell_command(raw: Any) -> List[str]:
     raise ValueError("command must be a string or list of strings.")
 
 
-def _shell_needs_approval(command: List[str]) -> bool:
-    return _shell_needs_approval_inner(command, depth=0)
+def _refuse_assistant_shell_control_reference(
+    state: UiState,
+    workspace: Mapping[str, Any],
+    root: Path,
+    command: List[str],
+) -> None:
+    """Reject explicit control-path commands; container masks cover indirection."""
 
-
-def _shell_needs_approval_inner(command: List[str], *, depth: int) -> bool:
-    if not command:
-        return False
-    first = Path(command[0]).name
-    tokens = {item.lower() for item in command[1:]}
-    # The file tools refuse credential files outright. A shell command can
-    # read one in too many ways to block them all, so this does the one thing
-    # that is actually reliable: it makes sure a person sees the command
-    # first, even for someone who allowed unattended shell commands.
-    if any(_is_secret_file(Path(item)) for item in command[1:]):
-        return True
-    shell_payload = _shell_wrapper_payload(command)
-    if shell_payload and depth < 2:
-        if _shell_payload_text_needs_approval(shell_payload):
-            return True
-        try:
-            nested_command = shlex.split(shell_payload)
-        except ValueError:
-            nested_command = []
-        if nested_command and _shell_needs_approval_inner(
-            nested_command, depth=depth + 1
-        ):
-            return True
-    if first in {
-        "curl",
-        "wget",
-        "brew",
-        "docker",
-        "podman",
-        "pip",
-        "pip3",
-        "rm",
-        "mv",
-        "cp",
-        "chmod",
-        "chown",
-    }:
-        return True
-    if first in {"python", "python3", Path(sys.executable).name} and len(command) >= 4:
-        if command[1] == "-m" and command[2] in {"pip", "pip3"}:
-            return True
-    if first in {"npm", "pnpm", "yarn"}:
-        return True
-    if first == "git":
-        return len(command) > 1 and command[1] in {
-            "clone",
-            "push",
-            "pull",
-            "fetch",
-            "reset",
-            "checkout",
-            "clean",
-            "merge",
-            "rebase",
-        }
-    if first == "uv":
-        risky = {"add", "remove", "sync", "lock", "tool", "pip", "build", "publish"}
-        return bool(
-            tokens.intersection(risky) or "install" in tokens or "--with" in tokens
-        )
-    return False
-
-
-def _shell_wrapper_payload(command: List[str]) -> str:
-    if not command:
-        return ""
-    first = Path(command[0]).name
-    if first not in {"sh", "bash", "zsh"}:
-        return ""
-    for index, token in enumerate(command[1:], start=1):
-        if token == "-c" or (token.startswith("-") and "c" in token):
-            if index + 1 < len(command):
-                return str(command[index + 1])
-            return ""
-    return ""
-
-
-def _shell_payload_text_needs_approval(payload: str) -> bool:
-    text = payload.strip().lower()
-    if not text:
-        return False
-    risky_patterns = [
-        r"(^|[;&|()])\s*(?:\.?/[\w./-]+/)?pip3?\s+",
-        r"(^|[;&|()])\s*(?:python3?|python[\w.-]*)\s+-m\s+pip3?\s+",
-        r"(^|[;&|()])\s*uv\s+(?:add|remove|sync|lock|tool|pip|build|publish)\b",
-        r"(^|[;&|()])\s*(?:npm|pnpm|yarn)\s+",
-        r"(^|[;&|()])\s*(?:curl|wget|brew|docker|podman|rm|mv|cp|chmod|chown)\s+",
-        r"(^|[;&|()])\s*git\s+(?:clone|push|pull|fetch|reset|checkout|clean|merge|rebase)\b",
-    ]
-    return any(re.search(pattern, text) for pattern in risky_patterns)
+    command_text = "\n".join(str(part) for part in command)
+    markers = [str(path) for path in _assistant_authority_paths(state)]
+    if not _assistant_managed_content_root(state, workspace, root):
+        markers.append(STUDIO_CONTROL_DIRECTORY_NAME)
+    if any(marker and marker in command_text for marker in markers):
+        raise _assistant_control_path_error(STUDIO_CONTROL_DIRECTORY_NAME)
 
 
 def _agent_tool_smoke_test_study(
@@ -22182,7 +23266,11 @@ def _agent_tool_smoke_test_study(
         session_id,
         study_path,
     )
-    validation = _validate_study(study_path, state=state)
+    validation = _validate_study(
+        study_path,
+        state=state,
+        package_root=package_root,
+    )
     if not validation.get("valid"):
         return _tool_result(
             tool,
@@ -22204,16 +23292,78 @@ def _agent_tool_smoke_test_study(
                 },
             ),
         )
+    launch_inputs = (
+        _canonical_study_launch_inputs(arguments["inputs"])
+        if arguments.get("inputs") is not None
+        else None
+    ) or None
+    blocked = _study_launch_block(validation, launch_inputs=launch_inputs)
+    if blocked is not None:
+        reason = str(blocked.get("reason") or "Smoke-study preflight failed.")
+        missing = [str(name) for name in blocked.get("missing_inputs", []) or []]
+        remedy = (
+            _remedy(
+                "Ask the person for the required smoke-study values, then call "
+                "this tool again with them in `inputs`; never invent them.",
+                tool="optpilot_smoke_test_study",
+                arguments={"inputs": {name: "<ask the person>" for name in missing}},
+                details={
+                    "code": "study_inputs_required",
+                    "missing_inputs": missing,
+                    "input_declarations": deepcopy(
+                        dict(blocked.get("input_declarations") or {})
+                    ),
+                },
+            )
+            if str(blocked.get("code") or "") == "study_inputs_required"
+            else _study_launch_block_remedy(blocked)
+        )
+        return _tool_result(
+            tool,
+            False,
+            f"Smoke test blocked: {reason}",
+            data={"validation": validation, "capability": blocked},
+            remedy=remedy,
+        )
+    input_errors = validate_parameter_values(
+        launch_inputs,
+        _declared_study_inputs(validation),
+        location="inputs",
+    )
+    if input_errors:
+        return _tool_result(
+            tool,
+            False,
+            "Smoke test inputs are invalid.",
+            data={"validation": validation, "input_errors": input_errors},
+            remedy=_remedy(
+                "Correct the values to match the Study's input declarations, "
+                "then request the smoke test again.",
+                tool="optpilot_smoke_test_study",
+                details={"input_errors": input_errors},
+            ),
+        )
+    approval_summary = f"Execute {study_path.name} in a temporary private Realm."
+    approval_targets = [str(study_path)]
+    if launch_inputs:
+        rendered_inputs = _study_launch_input_display(launch_inputs)
+        approval_summary += f" Inputs: {'; '.join(rendered_inputs)}."
+        approval_targets.extend(f"input:{item}" for item in rendered_inputs)
+    gate_arguments = {**arguments, "study_path": str(study_path)}
+    if launch_inputs is None:
+        gate_arguments.pop("inputs", None)
+    else:
+        gate_arguments["inputs"] = launch_inputs
     gate = _agent_permission_gate(
         state,
         session_id,
         tool=tool,
-        arguments={**arguments, "study_path": str(study_path)},
+        arguments=gate_arguments,
         permission_key="smoke_test",
         approval_kind="smoke_test_study",
         title="Run study smoke test",
-        summary=f"Execute {study_path.name} in a temporary private Realm.",
-        targets=[str(study_path)],
+        summary=approval_summary,
+        targets=approval_targets,
         require_approval=_assistant_permission(state, "smoke_test")
         == "approval_required",
         execution_context=execution_context,
@@ -22237,6 +23387,7 @@ def _agent_tool_smoke_test_study(
                 max(int(arguments.get("timeout_seconds") or 120), 10),
                 300,
             ),
+            launch_inputs=launch_inputs,
         )
     return _tool_result(
         tool,
@@ -22320,6 +23471,7 @@ def _run_temporary_realm_smoke(
     study_path: Path,
     temporary_root: Path,
     timeout_seconds: int,
+    launch_inputs: Optional[Mapping[str, Any]] = None,
 ) -> JsonDict:
     operation_id = new_local_study_operation_id()
     run_id = local_study_run_id_for_operation(operation_id)
@@ -22337,6 +23489,13 @@ def _run_temporary_realm_smoke(
         "--operation-id",
         operation_id,
     ]
+    if launch_inputs is not None:
+        inputs_path = temporary_root / "launch-inputs.yaml"
+        inputs_path.write_text(
+            yaml.safe_dump(dict(launch_inputs), sort_keys=True),
+            encoding="utf-8",
+        )
+        command.extend(["--inputs-file", str(inputs_path)])
     try:
         completed = subprocess.run(
             command,
@@ -23109,7 +24268,11 @@ def _attach_agent_workspace(
 ) -> JsonDict:
     if not workspace_id:
         raise ValueError("workspace_id is required.")
-    _require_ui_workspace(state, workspace_id)
+    workspace = _require_ui_workspace(state, workspace_id)
+    workspace_root = _safe_workspace_root(
+        state, Path(str(workspace.get("root") or ""))
+    ).resolve()
+    _assert_assistant_workspace_root(state, workspace, workspace_root)
     session = _require_agent_session(state, session_id)
     attached = list(session.get("attached_workspace_ids", []) or [])
     if workspace_id not in attached:
@@ -23161,8 +24324,13 @@ def _select_agent_workspace(
     state: UiState, session_id: str, workspace_id: str
 ) -> JsonDict:
     session = _require_agent_session(state, session_id)
+    if workspace_id:
+        workspace = _require_ui_workspace(state, workspace_id)
+        workspace_root = _safe_workspace_root(
+            state, Path(str(workspace.get("root") or ""))
+        ).resolve()
+        _assert_assistant_workspace_root(state, workspace, workspace_root)
     if workspace_id and workspace_id not in session.get("attached_workspace_ids", []):
-        _require_ui_workspace(state, workspace_id)
         session = _attach_agent_workspace(state, session_id, workspace_id, select=True)
         return session
     session["selected_workspace_id"] = workspace_id
@@ -25360,7 +26528,9 @@ def _upsert_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
     return _decorate_ui_workspace(state, workspace)
 
 
-def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
+def _create_ui_workspace(
+    state: UiState, payload: JsonDict, *, assistant_owned: bool = False
+) -> JsonDict:
     workspace_id = _safe_artifact_identifier(
         str(payload.get("id") or f"ws_{uuid.uuid4().hex[:10]}"),
         "workspace id",
@@ -25373,6 +26543,8 @@ def _create_ui_workspace(state: UiState, payload: JsonDict) -> JsonDict:
         _safe_workspace_root(state, root)
     else:
         root = state.workspaces_dir / workspace_id / "workspace"
+    if assistant_owned:
+        _assert_assistant_workspace_root(state, {"id": workspace_id}, root)
     root.mkdir(parents=True, exist_ok=True)
     title = str(payload.get("title") or "Untitled workspace")
     if bool(payload.get("initialize_if_empty", True)) and not any(root.iterdir()):
@@ -30428,8 +31600,15 @@ def _resource_action_blocked_reason(
         # A genuine lookup problem is reported by the run itself, in its own
         # words; this check only answers "would the environment stop it?".
         return ""
+    if action.network != "enabled":
+        return (
+            "This action declares network disabled, but Studio's current "
+            "host-process action executor cannot enforce network isolation. "
+            "Use an isolated runtime or revise the package declaration after "
+            "reviewing the command."
+        )
     _resolved, missing = _resolve_declared_env_from_host(
-        state, (*action.env_from_host, *action.secrets_from_host)
+        state, _resource_action_env_requirements(action)
     )
     if not missing:
         return ""
@@ -36051,56 +37230,23 @@ def _package_plan_workspace_registration_entries(
 
 
 def _package_plan_owned_paths(plan: JsonDict) -> List[str]:
-    if True:  # every plan now seals a complete package
-        artifact = plan.get("artifact")
-        paths = (
-            artifact.get("owned_paths")
-            if isinstance(artifact, Mapping)
-            else None
+    """Return exact canonical claims from the complete sealed package."""
+
+    artifact = plan.get("artifact")
+    paths = artifact.get("owned_paths") if isinstance(artifact, Mapping) else None
+    if not isinstance(paths, list) or not paths:
+        raise RealmConflict(
+            "Configured package Check has no exact whole-package path claims."
         )
-        if not isinstance(paths, list) or not paths:
-            raise RealmConflict(
-                "Configured package Check has no exact whole-package path claims."
-            )
-        canonical = [
-            _safe_relative_plan_path(str(path), "configured package owned path").as_posix()
-            for path in paths
-        ]
-        if canonical != sorted(set(canonical), key=lambda item: item.encode("utf-8")):
-            raise RealmConflict("Configured package owned paths are not canonical.")
-        return canonical
-    paths: List[str] = []
-    for item in [
-        *(plan.get("components", []) or []),
-        *(plan.get("resources", []) or []),
-    ]:
-        if not isinstance(item, dict):
-            continue
-        path = _safe_relative_plan_path(
-            str(item.get("component_root") or ""),
-            "package-plan owned component path",
+    canonical = [
+        _safe_relative_plan_path(
+            str(path), "configured package owned path"
         ).as_posix()
-        paths.append(path)
-    for item in plan.get("studies", []) or []:
-        if not isinstance(item, dict):
-            continue
-        path = _safe_relative_plan_path(
-            str(item.get("registered_config_path") or ""),
-            "package-plan owned study path",
-        ).as_posix()
-        paths.append(path)
-    ordered = sorted(set(paths))
-    if not ordered:
-        raise ValueError("Package plan does not contain any owned artifact paths.")
-    if len(ordered) != len(paths):
-        raise ValueError("Package plan contains duplicate owned paths.")
-    for index, path in enumerate(ordered):
-        for other in ordered[index + 1 :]:
-            if _package_plan_paths_overlap(path, other):
-                raise ValueError(
-                    f"Package plan owned paths overlap: {path!r} and {other!r}."
-                )
-    return ordered
+        for path in paths
+    ]
+    if canonical != sorted(set(canonical), key=lambda item: item.encode("utf-8")):
+        raise RealmConflict("Configured package owned paths are not canonical.")
+    return canonical
 
 
 def _workspace_package_image(state: "UiState", workspace: JsonDict) -> Optional[str]:
@@ -39421,7 +40567,9 @@ def _catalog_package_roots(catalog_root: Path) -> List[Path]:
 
 
 def _looks_like_catalog_package(path: Path) -> bool:
-    return any((path / name).exists() for name in CATALOG_PACKAGE_DIRS)
+    return any((path / name).exists() for name in CATALOG_PACKAGE_DIRS) or any(
+        (path / name).is_file() for name in PACKAGE_SETTINGS_FILENAMES
+    )
 
 
 def _newest_run_dir(root: Path, *, exclude: set[Path]) -> Optional[Path]:
@@ -39457,6 +40605,8 @@ def _list_run_files(run_dir: Path) -> List[JsonDict]:
 
 
 def _iter_yaml_files(root: Path) -> Iterable[Path]:
+    if root.is_symlink():
+        return
     root = root.resolve()
     if root.is_file():
         if root.suffix.lower() in {".yaml", ".yml"}:
@@ -39476,6 +40626,8 @@ def _iter_yaml_files(root: Path) -> Iterable[Path]:
             if name in EXCLUDED_SCAN_DIRS:
                 continue
             candidate = directory_path / name
+            if candidate.is_symlink():
+                continue
             try:
                 _require_safe_workspace_match(root, candidate)
             except ValueError:
@@ -39486,6 +40638,8 @@ def _iter_yaml_files(root: Path) -> Iterable[Path]:
         for name in file_names:
             path = directory_path / name
             if path.suffix.lower() not in {".yaml", ".yml"}:
+                continue
+            if path.is_symlink():
                 continue
             try:
                 _require_safe_workspace_match(root, path)

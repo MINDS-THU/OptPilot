@@ -85,6 +85,7 @@ STUDIO_REQUIRED_WHEEL_ENTRIES = {
 }
 
 STUDIO_REQUIRED_SDIST_ENTRIES = {
+    "LICENSE",
     "README.md",
     "pyproject.toml",
     "src/optpilot_studio/__init__.py",
@@ -276,7 +277,11 @@ def _check_studio_artifacts(dist_dir: Path, version: str) -> list[str]:
             _check_sdist(
                 sdist,
                 required=STUDIO_REQUIRED_SDIST_ENTRIES,
-                forbidden_prefixes=("tests/", *RESEARCH_SCRATCH_PREFIXES),
+                forbidden_prefixes=(
+                    "src/optpilot/",
+                    "tests/",
+                    *RESEARCH_SCRATCH_PREFIXES,
+                ),
             )
         )
     return errors
@@ -342,6 +347,9 @@ def _check_wheel(
         dist_info = f"{metadata_name}-{version}.dist-info"
         metadata_path = f"{dist_info}/METADATA"
         entry_points_path = f"{dist_info}/entry_points.txt"
+        license_path = f"{dist_info}/licenses/LICENSE"
+        if license_path not in names:
+            errors.append(f"{path.name} is missing {license_path}")
         if metadata_path not in names:
             errors.append(f"{path.name} is missing {metadata_path}")
         else:

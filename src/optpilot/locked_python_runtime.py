@@ -28,7 +28,6 @@ from .locked_python_runtime_contract import (
     LockedPythonRuntimePlan,
     LockedWheel,
     MAX_LOCK_BYTES,
-    MAX_PREPARATION_SECONDS,
     MAX_WHEELS,
     MAX_WHEEL_BYTES,
     METHOD_PREPARED_PYTHON_SCOPE,

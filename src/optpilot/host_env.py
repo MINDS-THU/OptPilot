@@ -26,7 +26,7 @@ into a settings file, and both are worse than being asked.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 __all__ = [
     "HostEnvDeclaration",

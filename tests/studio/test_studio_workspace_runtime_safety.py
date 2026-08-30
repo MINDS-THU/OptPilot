@@ -1098,6 +1098,9 @@ class StudioWorkspaceRuntimeSafetyTest(unittest.TestCase):
                     "image": manager.options.image,
                     "status": "running",
                     "workspace_root": str(workspace_root.resolve()),
+                    "control_mask_digest": manager._workspace_control_mask_digest(
+                        workspace
+                    ),
                 },
             )
 

@@ -1,90 +1,122 @@
 ---
 name: connect-github-integration
-description: Use this skill when connecting an environment, simulator, evaluator, optimizer, method, solver, heuristic-search repository, RL workflow, or LLM agent found on GitHub to OptPilot. It guides agents through inspecting the upstream project, choosing the right OptPilot boundary, creating environment/method/study configs, avoiding extra OptPilot abstractions such as instances, and validating runnable examples.
+description: Connect an environment, simulator, evaluator, optimizer, method, solver, heuristic-search repository, RL workflow, or LLM agent from GitHub to OptPilot as a portable package with a runnable smoke study when possible.
 ---
 
 # Connect GitHub Integrations To OptPilot
 
-Use this skill when the task is to connect an external GitHub project to OptPilot as either an environment, a method, or both.
+Adapt an external repository at the smallest useful OptPilot boundary. OptPilot
+orchestrates Candidates, evaluations, Studies, and retained evidence; domain
+concepts such as datasets, scenarios, benchmarks, engines, controllers, and
+solvers remain package-owned settings or files rather than new OptPilot config
+kinds.
 
-OptPilot should stay minimal: it orchestrates candidates, evaluators, studies, and evidence. Do not introduce new first-class OptPilot concepts for domain-specific ideas such as instances, scenarios, datasets, tasks, benchmarks, engines, controllers, agents, or solvers. Put domain inputs in `evaluator.settings`, method inputs in `method.settings`, and method-visible read-only files in `methodContext.references`.
+## Read The Current Contract
 
-## First Read
+Before authoring, read:
 
-Before editing code, read the current project docs that define the public contract:
+- `docs/tutorial-package.md` for the supported create/check/run/register loop
+- `docs/capabilities.md` for the executable boundary
+- `docs/candidate-contracts.md` for Candidate formats
+- `docs/configuration.md` for config fields and callable shapes
+- `docs/catalog.md` for package layout and Studio publication
+- `docs/methods.md` when wrapping an optimizer or search loop
 
-- `docs/index.md`
-- `docs/getting-started.md`
-- `docs/candidate-contracts.md`
-- `docs/concepts.md`
-- `docs/configuration.md`
-- The closest example page: job-shop environment, dispatch-rule methods,
-  solver-code methods, reinforcement-learning methods, or Studio docs as
-  relevant.
+Use tracked packages as examples:
 
-Prefer existing examples over inventing patterns:
+- `catalog/optpilot_tutorial/` for the smallest complete package
+- `catalog/devs_gallery/` for generated simulators and reusable Resources
+- `catalog/or_solving/` for a command Method and per-launch inputs
+- `catalog/production_agv_scheduling/` for file Candidates and richer evidence
 
-- Package examples: `catalog/example_package/environments/`,
-  `catalog/example_package/methods/`, and `catalog/example_package/studies/`
-- Draft workspace configs: `optpilot_configs/environments/`,
-  `optpilot_configs/methods/`, and `optpilot_configs/studies/`
+Do not use `test_catalog/` as user-facing guidance. It contains test fixtures
+and broader authoring cases, not release examples.
 
-## Upstream Recon
+## Inspect The Upstream Project
 
-Inspect the GitHub project before designing the OptPilot side:
+1. Identify whether the upstream owns an evaluator, a candidate generator, or
+   both.
+2. Find its smallest native Python API or command and run that path once when
+   feasible.
+3. Record dependencies, credentials, input files, generated outputs, runtime,
+   license constraints, and the expected success signal.
+4. Decide whether the integration can run from retained package source or must
+   be explicitly documented as host-provisioned/template-only.
 
-1. Identify what the upstream project owns: simulator/evaluator, solver/optimizer, LLM search loop, RL trainer, generated code, dataset benchmark, or service wrapper.
-2. Find the smallest native command or Python API that already works outside OptPilot.
-3. Run the upstream project once by its own README when feasible.
-4. Record dependencies, required credentials, generated outputs, input files, and expected runtime.
-5. Decide whether the integration can be fully runnable in this repo, or must be a template that requires local clone/dependencies/credentials.
+Ask for approval before cloning or installing over the network. Never commit
+credentials, generated Runs, local clones, or licensed data that cannot be
+redistributed.
 
-If network access is needed to clone or install dependencies, request approval instead of silently working around it.
+## Choose One Primary Boundary
 
-## Boundary Choice
+Use an **Environment** when the upstream evaluates a Candidate and returns
+metrics. Put scenario, dataset, fidelity, simulator, and benchmark choices in
+`evaluator.settings`; expose Environment-owned files needed by a Method through
+`methodContext.references`.
 
-Choose exactly one primary OptPilot boundary.
+Use a **Method** when the upstream proposes Candidates. Put optimizer, model,
+and hyperparameter choices in `method.settings`. Declare only the host variables
+the Method genuinely consumes in `runtime.envFromHost`.
 
-Use an **environment** when the upstream project evaluates a candidate and returns metrics:
+Use both only when the upstream genuinely provides both reusable roles. Keep
+them decoupled through the Candidate contract.
 
-- simulator, benchmark, dataset evaluator, scoring service, validation script
-- write a thin evaluator wrapper
-- declare the candidate contract and metrics in an environment YAML
-- put scenario, dataset, benchmark, simulator, or run arguments in `evaluator.settings`
+## Choose An Executable Candidate Contract
 
-Use a **method** when the upstream project proposes candidates:
+- `parameters`: JSON-like decisions, schedules, routes, solver answers, or
+  simulator controls.
+- `files`: generated or edited source, policy, or configuration files.
+- `opaque`: a valid authoring contract for private integrations, but not
+  executable by the current retained runner. Do not advertise an opaque Study
+  as runnable.
 
-- optimizer, solver, metaheuristic, RL trainer/rollout, LLM code editor, heuristic-search repository
-- wrap it as a Python or command method
-- put optimizer/model/hyperparameter/credential settings in `method.settings`
-- use `methodContext.references` only for environment-owned files the method must read
+The Environment owns what is valid. A fixed-shape Method may declare
+`produces`; a schema-general Method should request the required context under
+`accepts.requires.context`.
 
-Use **both** only when the GitHub project contains both a reusable evaluator and reusable optimizer. Keep them decoupled through candidate contracts; do not let the environment import method libraries unless the evaluator genuinely needs them.
+## Author A Portable Package
 
-## Candidate Contract
+For a source-controlled package, work outside OptPilot's tracked `catalog/`
+directory—for example in a project repository or the OS-local package root
+described in `docs/tutorial-package.md`. A Studio Workspace may instead keep
+draft configs under `optpilot_configs/`; the Workspace **Publish** flow materializes the final
+portable package layout.
 
-Select the simplest candidate format that matches the upstream handoff:
+A package settings file preserves identity across moves and updates:
 
-- `parameters`: JSON-like decisions, solver outputs, schedules, route plans, policy rollout outputs, simulator knobs.
-- `files`: generated or edited source files, config files, heuristic programs, policy scripts.
-- `opaque`: only when both sides intentionally share a private payload and `parameters` or `files` would be misleading.
+```yaml
+apiVersion: optpilot.io/v1
+config: package
+identity: 0123456789abcdef0123456789abcdef
+title: My Integration
+category: local
+description: Evaluate and optimize the upstream project.
+```
 
-For fixed-shape methods, declare `produces`. For schema-general methods, omit `produces` and request the needed context under `accepts.requires.context`.
+Generate a fresh identity for a new package with:
 
-The environment owns what can be evaluated. The method owns how candidates are produced.
+```bash
+uv run python -c "import secrets; print(secrets.token_hex(16))"
+```
 
-## Environment Pattern
+Keep the identity when moving or renaming the same package. Generate a different
+identity when copying it to create a separate package lineage.
 
-Create or copy an environment directory under the draft workspace's
-`optpilot_configs/environments/...`. Studio registration materializes it into a
-catalog package such as `catalog/local_package/environments/...`.
+Every user-facing component should have a readable `name`, a useful
+`description`, and one or more `tasks` slugs. Prefer the vocabulary already used
+by shipped packages: `generate-simulator`, `optimize-policy`,
+`solve-or-problem`, `tune-parameters`, `evaluate-design`, `benchmark-method`,
+`learn-optpilot`, or `build-package`.
 
-Minimum environment config shape:
+### Environment Pattern
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: environment
 id: my-environment
+name: My evaluator
+description: Scores one Candidate with the upstream project.
+tasks: [evaluate-design]
 
 evaluator:
   python: evaluator:evaluate
@@ -94,18 +126,20 @@ evaluator:
 candidate:
   format: parameters
   parameters:
-    schema: {}
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 1.0
+        default: 0.5
 
 metrics:
   source: return
   keys: [score]
 ```
 
-Python evaluator shape:
-
 ```python
 def evaluate(candidate_runtime, context):
-    settings = context["settings"]
     return {
         "status": "success",
         "metric_values": {"score": 0.0},
@@ -115,19 +149,18 @@ def evaluate(candidate_runtime, context):
     }
 ```
 
-Use `trialWorkspace` only for files that must be copied into each disposable trial workspace before evaluation. Use `outputFiles` and `records` to expose evaluator artifacts and per-case details as evidence.
+Use `trialWorkspace` only for package files copied into each disposable attempt.
+Use `outputFiles` and `records` for evaluator artifacts and per-case evidence.
 
-## Method Pattern
-
-Create or copy a method directory under the draft workspace's
-`optpilot_configs/methods/...`.
-
-For a small Python method:
+### Method Pattern
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: method
 id: my-method
+name: My optimizer
+description: Proposes parameter Candidates through the upstream optimizer.
+tasks: [optimize-policy]
 
 entrypoint:
   python: method:MyMethod
@@ -143,23 +176,20 @@ accepts:
       - candidate.parameters.schema
 ```
 
-For a large upstream GitHub repository with its own loop, prefer a command wrapper or the existing `llm_heuristic_search` adapter pattern. Do not rewrite the upstream algorithm into OptPilot unless the upstream interface is already small.
+For a large upstream loop, prefer a thin command batch wrapper rather than
+rewriting the algorithm. The current retained command Method must use
+`python`/`python3` as its logical command head and exchange JSON through stdin/
+stdout or `{input_file}`/`{output_file}`. See `docs/methods.md`.
 
-Command wrappers should:
-
-- write/read JSON request and response files where possible
-- capture stdout/stderr in evidence
-- use explicit generated-file paths
-- validate that the generated candidate matches the environment contract
-
-## Study Pattern
-
-A study binds one environment config to one method config:
+### Study Pattern
 
 ```yaml
 apiVersion: optpilot.io/v1
 config: study
 name: my-study
+title: My integration smoke run
+description: Exercises one deterministic Candidate end to end.
+tasks: [benchmark-method]
 
 environmentConfig: ../environments/my_environment/environment.yaml
 methodConfig: ../methods/my_method/method.yaml
@@ -172,72 +202,89 @@ budget:
   maxTrials: 1
 
 execution:
-  backend: local
   parallelism: 1
+  timeoutSeconds: 120
 
 evidence:
   level: full
+
+reproducibility:
+  seed: 0
 ```
 
-Do not put environment inputs directly in the study. Create environment config variants when the same evaluator needs different datasets, fidelity levels, simulator arguments, case suites, or metric settings.
+Do not add an `execution.backend` field; it is not part of the public Study
+schema. Put values that change on every launch in declared Study `inputs`, not
+in an ad-hoc Study field.
 
-## Dependency Policy
+## Dependencies And Credentials
 
-Keep core OptPilot dependencies small.
+Prefer package-retained source and the hash-locked pure-Python
+`runtime.setup` form documented in `docs/configuration.md`. If native libraries,
+licensed software, a GPU stack, or a large external repository must come from
+the host, state that clearly in the package README and validation expectations.
 
-- Optional public examples should use extras in `pyproject.toml` when the dependency is reasonably installable.
-- Large external repositories should usually live under local-only `resource/` and be documented as prerequisites.
-- Provider credentials must be read from environment variables and documented as required only for real provider-backed runs.
-- Do not commit generated run directories, local clones, private credentials, or bulky external resources.
+Credentials are launch-time host values, never defaults or committed settings.
+Declare only the names the executable path reads. Distinguish an LLM-backed
+Method from a deterministic seed/baseline by both its source and declarations.
 
-## Verification
+## Verify Before Registration
 
-Run the smallest useful verification set for the integration:
+For a CLI-authored package:
 
-1. Prepare a package plan in Studio when working from an attached external
-   workspace.
-2. Run package-plan validation and repair every reported schema, source,
-   setup-file, import, method-protocol, evaluator-shape, or source-closure
-   error.
-3. If the package contains both an environment and a method, create the
-   smallest smoke study and run package-plan smoke before applying.
-4. Inspect the final smoke summary for `failure_count: 0`, expected metric
-   keys, and expected output files.
-5. For CLI-only work, run `uv run optpilot validate path/to/study.yaml` and
-   `uv run optpilot run path/to/study.yaml --output-root /tmp/optpilot-<name>-check`.
-6. Run focused unit tests if code paths are shared.
-7. Run `uv run --extra docs mkdocs build --strict` if public docs changed.
-8. Run the repo smoke test when changing core behavior or public examples.
+```bash
+uv run optpilot package validate path/to/package \
+  --check-source \
+  --check-setup-files
+uv run optpilot validate path/to/package/studies/smoke.yaml
+uv run optpilot package smoke path/to/package --study studies/smoke.yaml
+```
 
-If an example cannot be run without external clone, API key, license, GPU, or long training, make that explicit in docs and ensure at least its config validates.
+Add `--check-imports` when importing authored callables in isolated subprocesses
+is safe and dependencies are available. A direct Run uses:
+
+```bash
+uv run optpilot run path/to/package/studies/smoke.yaml \
+  --package-root path/to/package
+```
+
+For a Studio Workspace:
+
+1. Discover existing `optpilot_configs` before broad source scans.
+2. Prepare the package plan and repair every schema, source, setup, import,
+   callable-shape, and source-closure error.
+3. For an Environment-plus-Method package, add the smallest deterministic smoke
+   Study and require a completed Run with zero logical failures and the declared
+   objective metric.
+4. Register only the exact artifact that passed Check/Test. Registration and
+   smoke may require user approval; never manufacture approval.
+
+Static schema validation is not proof of run readiness. If credentials,
+licenses, native dependencies, hardware, or long training block the real path,
+validate what is possible and label the remaining path accurately.
 
 ## Documentation Checklist
 
-When adding a public example or template, update the appropriate docs:
+For a public integration, update the package README and the appropriate existing
+docs page or add a focused package page to `mkdocs.yml`. State:
 
-- `docs/examples.md`
-- the specific method/environment page
-- `examples/README.md` if it should appear in quick runs
-- `docs/configuration.md` only if a schema or public contract changed
+- what the upstream project owns and what OptPilot owns
+- Candidate format and required shape
+- dependencies, credentials, licenses, and supported platforms
+- the smallest dependency-free or credential-free check
+- the exact smoke/Run command and expected objective metric
+- where to inspect retained evidence
+- whether the package is runnable, host-provisioned, or template-only
 
-For each integration, state:
+Run `uv run --group docs mkdocs build --strict` when public docs change. Run the
+repository smoke test when changing shared behavior or shipped examples.
 
-- what the upstream project owns
-- what OptPilot owns
-- candidate format and required candidate shape
-- install/setup commands
-- which command is dependency-free, credential-free, or template-only
-- how to inspect evidence after a run
+## Avoid These Mistakes
 
-## Common Mistakes
-
-- Do not reintroduce `instances` as a study field or schema concept.
-- Do not add domain labels as compatibility checks when candidate format and context requirements are enough.
-- Do not make the environment depend on the optimizer just because a tutorial method uses that optimizer.
-- Do not hide method-readable files in evaluator-only settings; expose them through `methodContext.references`.
-- Do not turn one upstream repository into many OptPilot concepts. Usually it is one environment or one method.
-- Do not apply an environment-plus-method package until package-plan smoke
-  passes. Schema validation alone is not run readiness.
-- Do not name a method as LLM/OpenAI/OpenRouter/Anthropic unless it actually
-  uses that provider path and declares the required secret variables in
-  `runtime.envFromHost`.
+- Do not invent new OptPilot config kinds for domain concepts.
+- Do not make the Environment depend on a tutorial optimizer.
+- Do not hide Method-readable Environment files in evaluator-only settings.
+- Do not use an unsupported opaque/session/command-evaluator contract for a
+  Study advertised as runnable.
+- Do not apply an Environment-plus-Method package before its smoke Study passes.
+- Do not overwrite a bundled package; copy it outside the tracked catalog, give
+  the copy a fresh identity, and register the copy.

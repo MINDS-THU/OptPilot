@@ -120,7 +120,6 @@ from optpilot_studio.ui.server import (
     _prepare_package_plan,
     _registered_path_value,
     _run_detail,
-    _shell_needs_approval,
     _smoke_package_plan,
     _smoke_summary_errors,
     _select_plan_study,
@@ -5211,7 +5210,7 @@ class MvpIntegrationTest(unittest.TestCase):
                 state,
                 {
                     "openhands": {"enabled": False},
-                    "permissions": {"shell_run": "safe_without_approval"},
+                    "permissions": {"shell_run": "approval_required"},
                 },
             )
             workspace = _create_ui_workspace(
@@ -5282,12 +5281,32 @@ class MvpIntegrationTest(unittest.TestCase):
                 "optpilot_shell_run",
                 {"command": [sys.executable, "-c", "print('assistant ok')"]},
             )
+            self.assertFalse(shell["ok"], shell)
+            self.assertTrue(shell["data"]["approval_required"])
+            shell_pending = [
+                item
+                for item in _read_agent_approvals(state, session["id"])
+                if item["status"] == "pending"
+            ]
+            shell = _approve_agent_action(
+                state, session["id"], shell_pending[0]["id"]
+            )["result"]
             terminal = _execute_agent_tool(
                 state,
                 session["id"],
                 "optpilot_terminal",
                 {"command": f"{shlex.quote(sys.executable)} -c \"print('terminal ok')\""},
             )
+            self.assertFalse(terminal["ok"], terminal)
+            self.assertTrue(terminal["data"]["approval_required"])
+            terminal_pending = [
+                item
+                for item in _read_agent_approvals(state, session["id"])
+                if item["status"] == "pending"
+            ]
+            terminal = _approve_agent_action(
+                state, session["id"], terminal_pending[0]["id"]
+            )["result"]
             approval = _execute_agent_tool(
                 state,
                 session["id"],
@@ -5537,13 +5556,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(persisted["effective_status"], "waiting_for_agent")
         self.assertTrue(any(event["type"] == "openhands_tool_result_forwarded" for event in events))
 
-    def test_ui_agent_shell_approval_detects_shell_wrapped_install_commands(self) -> None:
-        self.assertTrue(_shell_needs_approval(["sh", "-lc", ".venv/bin/pip install -e ."]))
-        self.assertTrue(_shell_needs_approval(["bash", "-c", "python -m pip install demo-package"]))
-        self.assertTrue(_shell_needs_approval(["zsh", "-lc", "echo setup && uv pip install -r requirements.txt"]))
-        self.assertFalse(_shell_needs_approval(["sh", "-lc", "python -c \"print('ok')\""]))
-        self.assertFalse(_shell_needs_approval(["sh", "-lc", "grep -R \"pip install\" README.md"]))
-
+    def test_ui_agent_shell_always_requires_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             state = UiState(cwd=tmp_path, catalog_roots=[], run_roots=[])
@@ -5556,8 +5569,8 @@ class MvpIntegrationTest(unittest.TestCase):
                 session["id"],
                 "optpilot_terminal",
                 {
-                    "command": ".venv/bin/pip install -e .",
-                    "description": "Install the editable project",
+                    "command": "sh -lc \"python -c 'print(1)'\"",
+                    "description": "Run a shell-wrapped command",
                     "_openhands_tool_call_id": "call-terminal-install",
                 },
             )
@@ -5568,7 +5581,7 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(len(approvals), 1)
         self.assertEqual(approvals[0]["status"], "pending")
         self.assertEqual(approvals[0]["tool"], "optpilot_terminal")
-        self.assertIn("pip install", approvals[0]["summary"])
+        self.assertIn("python -c", approvals[0]["summary"])
         self.assertIn("call-terminal-install", approvals[0]["openhands_tool_call_ids"])
 
     def test_ui_agent_docs_and_smoke_tools_are_available(self) -> None:
@@ -5591,9 +5604,6 @@ class MvpIntegrationTest(unittest.TestCase):
                 state,
                 {
                     "openhands": {"enabled": False},
-                    # Smoke tests run without asking by default; this case is
-                    # about the approval card, so ask for it explicitly.
-                    "permissions": {"smoke_test": "approval_required"},
                 },
             )
             session = _create_agent_session(state, {"title": "Docs and smoke"})
@@ -5742,9 +5752,9 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(start_payload["confirmation_policy"], {"kind": "NeverConfirm"})
         self.assertIn("OptPilot Assistant", start_payload["agent"]["agent_context"]["system_message_suffix"])
         native_tool_names = {tool["name"] for tool in start_payload["agent"]["tools"]}
-        self.assertIn("grep", native_tool_names)
-        self.assertIn("glob", native_tool_names)
         self.assertIn("task_tracker", native_tool_names)
+        self.assertNotIn("grep", native_tool_names)
+        self.assertNotIn("glob", native_tool_names)
         self.assertNotIn("terminal", native_tool_names)
         self.assertNotIn("file_editor", native_tool_names)
         self.assertNotIn("optpilot_terminal", native_tool_names)
@@ -7526,11 +7536,17 @@ class MvpIntegrationTest(unittest.TestCase):
                 "optpilot_capability_detail",
                 {"capability_kind": "custom_tool", "id": "grep"},
             )
+            mcp_detail_result = _execute_agent_tool(
+                state,
+                session["id"],
+                "optpilot_capability_detail",
+                {"capability_kind": "mcp_server", "id": "notion"},
+            )
             context = _agent_context_packet(state, session, {"current_page": "workspace"})
             stored = json.loads((tmp_path / ".optpilot-ui" / "settings.json").read_text(encoding="utf-8"))
 
         assistant = result["settings"]["assistant"]
-        self.assertEqual(assistant["openhands"]["native_tools"], ["grep", "glob", "task_tracker"])
+        self.assertEqual(assistant["openhands"]["native_tools"], ["task_tracker"])
         self.assertEqual(assistant["capabilities"]["skills"][0]["source"], ".agents/skills/connect-github-integration")
         self.assertEqual(assistant["capabilities"]["mcp_servers"][0]["url"], "https://mcp.notion.com/mcp")
         self.assertEqual(assistant["capabilities"]["mcp_filter_regex"], "^(notion|optpilot)_")
@@ -7539,9 +7555,25 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertTrue(list_result["ok"])
         self.assertIn("custom_tools", list_result["data"]["capabilities"])
         self.assertEqual(detail_result["data"]["capability"]["module"], "optpilot.tools.grep")
+        self.assertEqual(
+            mcp_detail_result["data"]["runtime_status"],
+            "stored_preview_not_active",
+        )
+        self.assertTrue(mcp_detail_result["data"]["capability"]["auth_configured"])
+        self.assertNotIn("auth", mcp_detail_result["data"]["capability"])
+        self.assertNotIn("oauth", json.dumps(mcp_detail_result))
         self.assertEqual(context["assistant_capabilities"]["counts"]["skills"]["enabled"], 1)
+        self.assertEqual(
+            context["assistant_capabilities"]["runtime_status"],
+            "stored_preview_not_active",
+        )
         self.assertEqual(context["assistant_capabilities"]["permissions"]["file_write"], "approval_required")
         self.assertEqual(stored["assistant"]["capabilities"]["custom_tools"][0]["tool_name"], "grep")
+        stored_mcp = stored["assistant"]["capabilities"]["mcp_servers"][0]
+        self.assertTrue(stored_mcp["auth_configured"])
+        self.assertNotIn("auth", stored_mcp)
+        self.assertNotIn("oauth", json.dumps(stored))
+        self.assertIn("MCP auth was not stored", " ".join(result.get("notices") or []))
 
     def test_ui_code_server_detects_standalone_install_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

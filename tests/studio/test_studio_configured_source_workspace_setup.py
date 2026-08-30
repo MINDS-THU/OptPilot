@@ -280,6 +280,28 @@ class StudioConfiguredSourceWorkspaceSetupTest(unittest.TestCase):
         self.assertFalse(any(".runtime" in path.split("/") for path in workspace_paths))
         self.assertFalse(any(".uv-cache" in path.split("/") for path in workspace_paths))
 
+    def test_catalog_yaml_scan_does_not_follow_symlinks(self) -> None:
+        outside = self.root / "outside.yaml"
+        outside.write_text(
+            "apiVersion: optpilot.io/v1\nconfig: resource\nid: outside\n",
+            encoding="utf-8",
+        )
+        external_link = self.package / "resources" / "viewer" / "outside.yaml"
+        external_link.symlink_to(outside)
+        real = self.package / "resources" / "viewer" / "real.yaml"
+        real.write_text("domain: data\n", encoding="utf-8")
+        in_tree_link = self.package / "resources" / "viewer" / "alias.yaml"
+        in_tree_link.symlink_to(real)
+
+        paths = {
+            path.relative_to(self.package.resolve()).as_posix()
+            for path in _iter_yaml_files(self.package)
+        }
+
+        self.assertNotIn("resources/viewer/outside.yaml", paths)
+        self.assertNotIn("resources/viewer/alias.yaml", paths)
+        self.assertIn("resources/viewer/real.yaml", paths)
+
     def test_setup_check_rejects_zero_recognized_entries_without_publishing(
         self,
     ) -> None:

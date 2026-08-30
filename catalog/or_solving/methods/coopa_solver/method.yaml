@@ -7,8 +7,8 @@ description: >-
   confidence-scored formulation extraction, routing to a mathematical /
   combinatorial / metaheuristic / general optimizer agent, LLM-generated
   solver code executed locally, and a numeric answer. COOPA ships bundled at
-  methods/coopa_solver/coopa_home (Apache-2.0); COOPA_HOME overrides it. Its
-  native solver backends are still user-provisioned. To solve one
+  methods/coopa_solver/coopa_home (Apache-2.0), and retained Runs always use
+  that captured copy. Its native solver backends are still user-provisioned. To solve one
   problem as a person, launch the solve-or-problem Run setup and enter the
   problem in its launch-inputs form; the answer and full audit artifact
   come back as retained Run evidence.
@@ -44,7 +44,12 @@ interface:
           command: [bash, ./launch_console.sh, --prepare-only]
   grants:
     network: enabled
-    envFromHost: [COOPA_HOME]
+    envFromHost:
+      - name: COOPA_HOME
+        default: ""
+        description: >-
+          Optional alternate COOPA checkout for console development. Leave
+          empty to use the copy bundled beside this method.
     secretsFromHost: [OPENROUTER_API_KEY]
   resources:
     cpu: 2
@@ -59,7 +64,7 @@ interface:
 
 runtime:
   sandbox: process
-  envFromHost: [OPENROUTER_API_KEY, COOPA_HOME]
+  envFromHost: [OPENROUTER_API_KEY]
 
 settingsSchema:
   batchSize:

@@ -107,6 +107,8 @@ class ContainerMethodProcessTest(unittest.TestCase):
         process.request({"op": "status"}, timeout=30.0)
         code = process.stop(grace_seconds=10.0)
         self.assertEqual(code, 0)
+        self.assertTrue(process._stream.reader.closed)
+        self.assertTrue(process._stream.writer.closed)
 
     def test_the_drop_in_client_ignores_the_socket_path(self) -> None:
         process = self._start("echo")

@@ -12,7 +12,7 @@ description: Install OptPilot, and what you get.
 - Docker or Podman **only** for packages or interfaces that declare a
   container image.
 
-## Install the core CLI/SDK
+## Install the core CLI and package
 
 ```bash
 python -m pip install optpilot
@@ -41,8 +41,8 @@ Without `--realm-root`, the command uses OptPilot's private per-user Realm in
 the OS user-data location. Use an explicit Realm root only for deliberate local
 isolation/testing. It is not a Workspace or generated-output directory.
 
-OptPilot supports parameter and bounded file candidates, Python batch methods
-and evaluators, command methods, process and container runtimes, and
+OptPilot supports parameter and bounded file candidates, Python batch Methods,
+Python-headed command batch Methods, Python evaluators, process and container runtimes, and
 package-backed, environment-owned `methodContext.references`. Those references are captured
 with the package and projected read-only into the method worker. Package-owned
 `trialWorkspace` files/directories are also supported as retained seed layers
@@ -57,6 +57,12 @@ sends the values transiently to its Method worker, leaving them out of the
 durable process request and Run evidence. A direct CLI launch instead uses its
 exported process environment as a process-lifetime binding. Unsupported
 authoring configs fail during retained compilation.
+
+See [Executable Capabilities](capabilities.md) for the authoritative matrix of
+schema-valid and currently runnable combinations. The installed Python modules
+implement the CLI and runner, but this release does not promise a separately
+versioned stable public Python SDK. Prefer public YAML and CLI boundaries for
+integrations.
 
 A package normally contains:
 
@@ -107,8 +113,11 @@ Studio scans `catalog/` by default and reads runs from the same default Realm.
 See [Studio UI](ui.md), [Workspace Management](studio-workspaces.md), and
 [OptPilot Assistant](assistant.md).
 
-Packages that declare a container image also need Docker or Podman. Approve
-the exact digest before execution as described in
+Packages that declare a retained Study container runtime also need Docker or
+Podman. Approve the exact Environment or Method image digest with
+`optpilot image approve`; see [Configuration](configuration.md#study-config).
+Candidate **Environment Preview** uses a separate trust decision and command,
+`optpilot environment-preview trust approve`, described in
 [Local Operations and Security](operations.md#environment-preview-image-approvals).
 
 ## Optional test-catalog dependencies

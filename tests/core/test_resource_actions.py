@@ -40,10 +40,55 @@ def _action(**overrides) -> dict:
         "id": "generate",
         "label": "Generate a bundle",
         "command": ["python", "generate.py"],
+        # The direct-process executor cannot enforce network isolation. Tests
+        # that execute a command opt into the host-network contract explicitly;
+        # the dedicated fail-closed test below covers the safer default.
+        "grants": {"network": "enabled"},
         "timeoutSeconds": 60,
     }
     raw.update(overrides)
     return raw
+
+
+def _setup_runtime(*, cache: bool = False) -> dict:
+    setup = {
+        "timeoutSeconds": 321,
+        "env": {"SETUP_MODE": "private-value"},
+        "steps": [
+            {
+                "uses": "command",
+                "cwd": "scripts",
+                "command": ["sh", "-c", "printf done > marker"],
+                "env": {"COMMAND_MODE": "hidden-command"},
+            },
+            {
+                "uses": "uv",
+                "cwd": "python",
+                "extras": ["gpu"],
+                "groups": ["dev"],
+                "frozen": True,
+                "env": {"UV_MODE": "hidden-uv"},
+            },
+            {
+                "uses": "python-venv",
+                "cwd": "worker",
+                "python": "python3",
+                "venv": ".venv-worker",
+                "requirements": ["requirements.lock"],
+                "installProject": True,
+                "env": {"PIP_MODE": "hidden-pip"},
+            },
+            {
+                "uses": "npm",
+                "cwd": "web",
+                "install": "install",
+                "env": {"NPM_MODE": "hidden-npm"},
+            },
+        ],
+    }
+    if cache:
+        setup["cache"] = "prepared"
+    return {"sandbox": "process", "setup": setup}
 
 
 class CompileResourceActionsTest(unittest.TestCase):
@@ -129,6 +174,13 @@ class CompileResourceActionsTest(unittest.TestCase):
 
     def test_resource_without_actions_compiles_to_empty(self) -> None:
         self.assertEqual(compile_resource_actions(_resource()), [])
+
+    def test_network_defaults_to_disabled(self) -> None:
+        action = _action()
+        action.pop("grants")
+        compiled = compile_resource_actions(_resource([action]))
+
+        self.assertEqual(compiled[0].network, "disabled")
 
     def test_find_resource_action_names_known_ids(self) -> None:
         actions = compile_resource_actions(_resource([_action()]))
@@ -240,7 +292,10 @@ print("generated one bundle")
                         "enabled": {"valueType": "bool", "default": True},
                         "count": {"valueType": "int", "default": 3},
                     },
-                    grants={"envFromHost": ["DEMO_MODEL_ID"]},
+                    grants={
+                        "envFromHost": ["DEMO_MODEL_ID"],
+                        "network": "enabled",
+                    },
                 )
             ]
         )
@@ -299,7 +354,14 @@ print("generated one bundle")
     def test_missing_host_environment_fails_before_execution(self) -> None:
         self._write_script("print('never runs')\n")
         resource = self._write_resource(
-            [_action(grants={"secretsFromHost": ["ABSENT_TOKEN"]})]
+            [
+                _action(
+                    grants={
+                        "network": "enabled",
+                        "secretsFromHost": ["ABSENT_TOKEN"],
+                    }
+                )
+            ]
         )
         with self.assertRaisesRegex(ValueError, "ABSENT_TOKEN"):
             run_resource_action(
@@ -309,6 +371,54 @@ print("generated one bundle")
                 host_env={"PATH": __import__("os").environ["PATH"]},
             )
         self.assertFalse(self.output_dir.exists())
+
+    def test_network_disabled_fails_closed_before_execution(self) -> None:
+        self._write_script("print('never runs')\n")
+        action = _action()
+        action["grants"] = {"network": "disabled"}
+        resource = self._write_resource([action])
+
+        with self.assertRaisesRegex(ValueError, "cannot enforce network isolation"):
+            run_resource_action(
+                resource,
+                "generate",
+                output_root=self.output_dir,
+            )
+
+        self.assertFalse(self.output_dir.exists())
+
+    def test_injected_secret_is_redacted_from_returned_logs(self) -> None:
+        self._write_script(
+            "import os, sys\n"
+            "value = os.environ['ACTION_SECRET']\n"
+            "print('stdout=' + value)\n"
+            "print('stderr=' + value, file=sys.stderr)\n"
+        )
+        resource = self._write_resource(
+            [
+                _action(
+                    grants={
+                        "network": "enabled",
+                        "secretsFromHost": ["ACTION_SECRET"],
+                    }
+                )
+            ]
+        )
+
+        summary = run_resource_action(
+            resource,
+            "generate",
+            output_root=self.output_dir,
+            host_env={
+                "PATH": os.environ["PATH"],
+                "ACTION_SECRET": "sk-resource-action-audit",
+            },
+        )
+
+        encoded = json.dumps(summary, sort_keys=True)
+        self.assertNotIn("sk-resource-action-audit", encoded)
+        self.assertIn("[REDACTED]", summary["stdout_tail"])
+        self.assertIn("[REDACTED]", summary["stderr_tail"])
 
     def test_nonzero_exit_and_timeout_are_reported(self) -> None:
         self._write_script(
@@ -516,14 +626,193 @@ out = pathlib.Path(os.environ["OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"])
         return code, stream.getvalue()
 
     def test_resource_list_json(self) -> None:
+        self.resource_path.write_text(
+            yaml.safe_dump(
+                _resource(
+                    [
+                        _action(
+                            command=[
+                                "python",
+                                "generate.py",
+                                "--name",
+                                "{input:name}",
+                            ],
+                            inputs={"name": {"valueType": "string"}},
+                            grants={
+                                "envFromHost": [
+                                    "REQUIRED_MODEL",
+                                    {"name": "OPTIONAL_PROFILE", "default": "local"},
+                                ],
+                                "secretsFromHost": ["PROVIDER_TOKEN"],
+                                "network": "enabled",
+                            },
+                            runtime=_setup_runtime(cache=True),
+                            timeoutSeconds=45,
+                        )
+                    ]
+                ),
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
         code, output = self._run(
             ["resource", "list", str(self.resource_path), "--json"]
         )
         self.assertEqual(code, 0)
         listing = json.loads(output)
         self.assertEqual(listing["resource_id"], "demo-generator")
-        self.assertEqual(listing["actions"][0]["id"], "generate")
-        self.assertIn("name", listing["actions"][0]["inputs"])
+        action = listing["actions"][0]
+        self.assertEqual(action["id"], "generate")
+        self.assertIn("name", action["inputs"])
+        self.assertEqual(
+            action["command"],
+            ["python", "generate.py", "--name", "{input:name}"],
+        )
+        self.assertEqual(action["network"], "enabled")
+        self.assertEqual(action["timeout_seconds"], 45)
+        self.assertEqual(action["requires_env_from_host"], ["REQUIRED_MODEL"])
+        self.assertEqual(
+            action["defaulted_env_from_host"], {"OPTIONAL_PROFILE": "local"}
+        )
+        self.assertEqual(
+            action["requires_secrets_from_host"], ["PROVIDER_TOKEN"]
+        )
+        self.assertEqual(
+            action["runtime_setup"],
+            {
+                "cache": "prepared",
+                "timeout_seconds": 321,
+                "environment_names": ["SETUP_MODE"],
+                "steps": [
+                    {
+                        "uses": "command",
+                        "cwd": "scripts",
+                        "command": ["sh", "-c", "printf done > marker"],
+                        "environment_names": ["COMMAND_MODE"],
+                    },
+                    {
+                        "uses": "uv",
+                        "cwd": "python",
+                        "extras": ["gpu"],
+                        "groups": ["dev"],
+                        "frozen": True,
+                        "environment_names": ["UV_MODE"],
+                    },
+                    {
+                        "uses": "python-venv",
+                        "cwd": "worker",
+                        "python": "python3",
+                        "venv": ".venv-worker",
+                        "requirements": ["requirements.lock"],
+                        "installProject": True,
+                        "environment_names": ["PIP_MODE"],
+                    },
+                    {
+                        "uses": "npm",
+                        "cwd": "web",
+                        "install": "install",
+                        "environment_names": ["NPM_MODE"],
+                    },
+                ],
+            },
+        )
+        self.assertNotIn("private-value", output)
+        self.assertNotIn("hidden-command", output)
+        self.assertNotIn("hidden-uv", output)
+        self.assertNotIn("hidden-pip", output)
+        self.assertNotIn("hidden-npm", output)
+        # Compatibility projections retain the original authored-name fields.
+        self.assertEqual(
+            action["envFromHost"], ["REQUIRED_MODEL", "OPTIONAL_PROFILE"]
+        )
+        self.assertEqual(action["secretsFromHost"], ["PROVIDER_TOKEN"])
+        self.assertEqual(action["timeoutSeconds"], 45)
+
+    def test_resource_list_text_discloses_execution_contract(self) -> None:
+        self.resource_path.write_text(
+            yaml.safe_dump(
+                _resource(
+                    [
+                        _action(
+                            command=["python", "generate.py", "--mode", "dry run"],
+                            grants={
+                                "envFromHost": [
+                                    "REQUIRED_MODEL",
+                                    {"name": "OPTIONAL_PROFILE", "default": "local"},
+                                ],
+                                "secretsFromHost": ["PROVIDER_TOKEN"],
+                                "network": "enabled",
+                            },
+                            runtime=_setup_runtime(),
+                            timeoutSeconds=45,
+                        )
+                    ]
+                ),
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        code, output = self._run(["resource", "list", str(self.resource_path)])
+
+        self.assertEqual(code, 0)
+        self.assertIn(
+            'command: ["python", "generate.py", "--mode", "dry run"]', output
+        )
+        self.assertIn("network: enabled", output)
+        self.assertIn("timeout: 45s", output)
+        self.assertIn("runtime setup: timeout=321s", output)
+        self.assertIn("setup environment names: SETUP_MODE", output)
+        self.assertIn(
+            'setup step 1: command argv=["sh", "-c", '
+            '"printf done > marker"] options={"cwd": "scripts"}',
+            output,
+        )
+        self.assertIn("environment names: COMMAND_MODE", output)
+        self.assertIn(
+            'setup step 2: uv options={"cwd": "python", "extras": ["gpu"], '
+            '"frozen": true, "groups": ["dev"]}',
+            output,
+        )
+        self.assertIn(
+            'setup step 3: python-venv options={"cwd": "worker", '
+            '"installProject": true, "python": "python3", '
+            '"requirements": ["requirements.lock"], "venv": ".venv-worker"}',
+            output,
+        )
+        self.assertIn(
+            'setup step 4: npm options={"cwd": "web", "install": "install"}',
+            output,
+        )
+        self.assertIn("required host env: REQUIRED_MODEL", output)
+        self.assertIn('defaulted host env: {"OPTIONAL_PROFILE": "local"}', output)
+        self.assertIn("required host secrets: PROVIDER_TOKEN", output)
+        self.assertNotIn("private-value", output)
+        self.assertNotIn("hidden-command", output)
+        self.assertNotIn("hidden-uv", output)
+        self.assertNotIn("hidden-pip", output)
+        self.assertNotIn("hidden-npm", output)
+
+    def test_resource_list_reports_effective_default_setup_timeout(self) -> None:
+        runtime = _setup_runtime()
+        runtime["setup"].pop("timeoutSeconds")
+        self.resource_path.write_text(
+            yaml.safe_dump(
+                _resource([_action(runtime=runtime)]),
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        code, output = self._run(
+            ["resource", "list", str(self.resource_path), "--json"]
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(output)["actions"][0]["runtime_setup"]["timeout_seconds"],
+            600,
+        )
 
     def test_resource_run_json_and_failure_exit_code(self) -> None:
         output_dir = self.root / "out"

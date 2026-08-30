@@ -1,5 +1,13 @@
 # How the OptPilot Assistant should work — the target design
 
+> **Historical target-design snapshot (2026-08-17).** This file is not the
+> current implementation contract; several “not built” rows, tool names, and
+> security notes have since changed. Use
+> [Assistant](../docs/assistant.md),
+> [Executable Capabilities](../docs/capabilities.md), and the
+> [release-readiness review](../docs/release-readiness-review.md) for current
+> behavior.
+
 Written to be read without prior knowledge of OptPilot; every product term is
 defined where it first appears.
 

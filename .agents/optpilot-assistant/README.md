@@ -14,24 +14,35 @@ rest of OptPilot Studio.
 
 ## Local OpenHands Runtime
 
-The GUI bridge has been checked against `openhands-agent-server==1.29.0`.
+The GUI bridge has been checked against the OpenHands packages at `1.40.1`.
 OpenHands currently requires Python 3.12, so the local development environment
 uses the project `.venv` with Python 3.12.
 
 Useful commands:
 
 ```bash
-uv pip install -U openhands-sdk openhands-tools openhands-workspace openhands-agent-server
+uv venv --python 3.12 .venv
+uv sync --all-packages --group examples --group docs
+uv pip install --python .venv/bin/python -U \
+  openhands-sdk==1.40.1 openhands-tools==1.40.1 \
+  openhands-workspace==1.40.1 openhands-agent-server==1.40.1
 mkdir -p .optpilot-ui/openhands-agent-server
 (
   cd .optpilot-ui/openhands-agent-server
-  OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server --host 127.0.0.1 --port 8781
+  OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server \
+    --host 127.0.0.1 \
+    --port 8781 \
+    --import-modules optpilot_studio.openhands_client_tools
 )
 ```
 
 Run OpenHands from the `.optpilot-ui/openhands-agent-server` directory so its
 conversation/tool-schema cache stays local to Studio and can be refreshed
 without touching project source files.
+
+`--import-modules optpilot_studio.openhands_client_tools` is required. It makes
+the client-tool acknowledgement accurately tell the model to read Studio's
+result and continue in the same turn.
 
 OptPilot Studio settings should point to `http://127.0.0.1:8781` with session
 endpoint `/api/conversations`.
@@ -46,7 +57,10 @@ For an assistant-enabled GUI session, keep these services running:
    mkdir -p .optpilot-ui/openhands-agent-server
    (
      cd .optpilot-ui/openhands-agent-server
-     OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server --host 127.0.0.1 --port 8781
+     OPENHANDS_SUPPRESS_BANNER=1 uv run --project ../.. --no-sync agent-server \
+       --host 127.0.0.1 \
+       --port 8781 \
+       --import-modules optpilot_studio.openhands_client_tools
    )
    ```
 
@@ -58,13 +72,14 @@ For an assistant-enabled GUI session, keep these services running:
 
 3. The embedded Code Server for the selected workspace. OptPilot Studio manages
    this service inside the per-workspace container; ports start at `18766`.
-   Start it from the Editor page or trigger it after the GUI is up:
+   Start it from the Editor page. Studio rejects raw mutation requests that do
+   not carry its process-local anti-CSRF credential.
 
-   ```bash
-   curl -s -X POST http://127.0.0.1:8866/api/code-server/start \
-     -H "Content-Type: application/json" \
-     -d "{\"folder\":\"$PWD\"}" | uv run python -m json.tool
-   ```
+Alternatively, `./scripts/start_services.sh` starts and checks the complete
+stack, securely obtains that process-local credential, attaches this checkout,
+and starts Code Server. It uses `.venv` by default and honors
+`OPTPILOT_DEV_VENV` or `UV_PROJECT_ENVIRONMENT`; it does not read editor launch
+configuration.
 
 Quick checks:
 

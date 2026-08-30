@@ -82,6 +82,22 @@ reproducibility:
   seed: 7
 """
 
+_PACKAGE_IMAGE = "ghcr.io/example/package@sha256:" + "a" * 64
+_METHOD_IMAGE = "ghcr.io/example/method@sha256:" + "b" * 64
+
+
+def _write_package_settings(root: Path, *, image: str = _PACKAGE_IMAGE) -> None:
+    (root / "optpilot.package.yaml").write_text(
+        "apiVersion: optpilot.io/v1\n"
+        "config: package\n"
+        f"identity: \"{'1' * 32}\"\n"
+        "runtime:\n"
+        "  container:\n"
+        f"    image: {image}\n"
+        "    platform: linux/amd64\n",
+        encoding="utf-8",
+    )
+
 
 def _write_package(root: Path) -> Path:
     study = root / "configs" / "studies" / "study.yaml"
@@ -116,6 +132,113 @@ def _tree_bytes(root: Path) -> dict[str, bytes | None]:
 
 
 class LocalStudyPackagePlanTest(unittest.TestCase):
+    def test_package_container_is_inherited_by_environment_method_and_backend(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "package"
+            root.mkdir()
+            study = _write_package(root)
+            _write_package_settings(root)
+
+            plan = plan_local_study_package(study, root)
+
+        for runtime in (
+            plan.study_spec.environment["runtime"],
+            plan.study_spec.method["runtime"],
+        ):
+            self.assertEqual(runtime["type"], "container")
+            self.assertEqual(
+                runtime["container"],
+                {
+                    "image": _PACKAGE_IMAGE,
+                    "network": "disabled",
+                    "platform": "linux/amd64",
+                },
+            )
+        self.assertEqual(plan.study_spec.execution["backend"]["type"], "container")
+        self.assertEqual(
+            plan.study_spec.execution["defaults"]["sandboxSpec"]["runtimeType"],
+            "container",
+        )
+
+    def test_component_container_override_wins_without_package_field_merging(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "package"
+            root.mkdir()
+            study = _write_package(root)
+            _write_package_settings(root)
+            method = root / "configs" / "methods" / "method.yaml"
+            method.write_text(
+                _METHOD
+                + "runtime:\n"
+                + "  sandbox: container\n"
+                + "  container:\n"
+                + f"    image: {_METHOD_IMAGE}\n"
+                + "    platform: linux/arm64\n"
+                + "    network: enabled\n",
+                encoding="utf-8",
+            )
+
+            plan = plan_local_study_package(study, root)
+
+        self.assertEqual(
+            plan.study_spec.environment["runtime"]["container"]["image"],
+            _PACKAGE_IMAGE,
+        )
+        self.assertEqual(
+            plan.study_spec.method["runtime"]["container"],
+            {
+                "image": _METHOD_IMAGE,
+                "network": "enabled",
+                "platform": "linux/arm64",
+            },
+        )
+
+    def test_package_container_rejects_process_only_component_runtime_fields(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "package"
+            root.mkdir()
+            study = _write_package(root)
+            _write_package_settings(root)
+            method = root / "configs" / "methods" / "method.yaml"
+            method.write_text(
+                _METHOD
+                + "runtime:\n"
+                + "  sandbox: process\n"
+                + "  workdir: .\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(LocalStudyPackagePlanError) as raised:
+                plan_local_study_package(study, root)
+
+        self.assertEqual(raised.exception.code, "config_compile_failed")
+        self.assertIn("process-only", str(raised.exception))
+
+    def test_malformed_package_settings_fail_before_authoring_compilation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "package"
+            root.mkdir()
+            study = _write_package(root)
+            (root / "optpilot.package.yaml").write_text(
+                "apiVersion: optpilot.io/v1\nconfig: package\nidentity: invalid\n",
+                encoding="utf-8",
+            )
+
+            with patch(
+                "optpilot.realm.local_study_package.compile_authoring_config"
+            ) as compiler:
+                with self.assertRaises(LocalStudyPackagePlanError) as raised:
+                    plan_local_study_package(study, root)
+
+        self.assertEqual(raised.exception.code, "package_settings_invalid")
+        self.assertEqual(compiler.call_count, 0)
+
     def test_trial_workspace_sources_cross_as_portable_package_mappings(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw) / "package"

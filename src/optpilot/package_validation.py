@@ -7,10 +7,10 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
-from .config import validate_authoring_config
+from .config import compile_authoring_config, validate_authoring_config
 from .dependency_closure import (
     DEPENDENCY_DECLARED_CODE,
     DEPENDENCY_HOST_PROVISIONED_CODE,
@@ -23,12 +23,13 @@ from .locked_python_runtime_contract import (
 )
 from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 from .package_index import PackageEntry, index_package
+from .package_settings import PackageSettings, load_package_settings
 from .retained_study_compiler import (
     RetainedStudyCompileError,
     preflight_retained_process_study,
 )
 from .schema_validation import validate_public_config_schema
-from .spec import load_study_spec
+from .spec import study_spec_from_raw
 
 
 JsonDict = Dict[str, Any]
@@ -87,12 +88,22 @@ def validate_package(
     """Validate all recognized public OptPilot configs in a package folder."""
 
     index = index_package(package_root)
+    package_settings: PackageSettings | None = None
+    if index.entries:
+        try:
+            package_settings = load_package_settings(index.package_root)
+        except (OSError, TypeError, ValueError):
+            # index_package already records the malformed settings error. Keep
+            # validating the remaining entries without inventing a fallback
+            # from settings that could not be trusted.
+            pass
     entries: List[PackageValidationEntry] = []
     for entry in index.entries:
         entries.append(
             _validate_entry(
                 entry,
                 package_root=index.package_root,
+                package_settings=package_settings,
                 check_imports=check_imports,
                 check_source=check_source,
                 check_setup_files=check_setup_files,
@@ -113,6 +124,7 @@ def validate_package(
             **_package_capabilities(
                 index.entries,
                 entries,
+                package_settings=package_settings,
             ),
             **_package_dependency_closure(entries),
         },
@@ -123,6 +135,7 @@ def _validate_entry(
     entry: PackageEntry,
     *,
     package_root: Path,
+    package_settings: PackageSettings | None,
     check_imports: bool,
     check_source: bool,
     check_setup_files: bool,
@@ -130,13 +143,35 @@ def _validate_entry(
 ) -> PackageValidationEntry:
     errors: List[str] = []
     warnings: List[str] = []
-    if entry.synthesized and entry.config == "resource":
-        schema_result = validate_public_config_schema(entry.raw, config_path=entry.path)
-        if not schema_result.valid:
-            errors.extend(f"{issue.path}: {issue.message}" for issue in schema_result.errors)
+    reference_errors = _package_study_reference_errors(entry, package_root)
+    errors.extend(reference_errors)
+    if not reference_errors:
+        # A package boundary error must be reported before the general Study
+        # compiler gets a chance to open either referenced config.
+        if entry.synthesized and entry.config == "resource":
+            schema_result = validate_public_config_schema(
+                entry.raw, config_path=entry.path
+            )
+            if not schema_result.valid:
+                errors.extend(
+                    f"{issue.path}: {issue.message}"
+                    for issue in schema_result.errors
+                )
+        else:
+            result = validate_authoring_config(
+                entry.path,
+                package_settings=package_settings,
+            )
+            errors.extend(result.get("errors", []) or [])
     else:
-        result = validate_authoring_config(entry.path)
-        errors.extend(result.get("errors", []) or [])
+        # Still report errors in the Study document itself without invoking
+        # the compiler that dereferences environmentConfig/methodConfig.
+        schema_result = validate_public_config_schema(
+            entry.raw, config_path=entry.path
+        )
+        errors.extend(
+            f"{issue.path}: {issue.message}" for issue in schema_result.errors
+        )
 
     if check_source:
         errors.extend(_check_source_paths(entry, package_root))
@@ -176,6 +211,47 @@ def _validate_entry(
         capabilities=capabilities,
         synthesized=entry.synthesized,
     )
+
+
+def _package_study_reference_errors(
+    entry: PackageEntry, package_root: Path
+) -> List[str]:
+    """Validate a package Study's config references before compiling it."""
+
+    if entry.config != "study":
+        return []
+    errors: List[str] = []
+    for field in ("environmentConfig", "methodConfig"):
+        value = entry.raw.get(field)
+        # The public schema reports missing and non-string values.  Boundary
+        # validation only handles strings that could otherwise be opened.
+        if not isinstance(value, str):
+            continue
+        path = Path(value)
+        if (
+            not value
+            or value != value.strip()
+            or "\x00" in value
+            or "\\" in value
+            or path.is_absolute()
+            or bool(PureWindowsPath(value).drive)
+        ):
+            errors.append(
+                f"{field} must be a portable relative path inside the package: "
+                f"{value!r}"
+            )
+            continue
+        try:
+            _resolve_package_path(
+                value,
+                entry.path.parent,
+                package_root,
+                field,
+                errors,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            errors.append(f"{field} could not be resolved safely: {value!r}: {error}")
+    return errors
 
 
 def _entry_capabilities(
@@ -420,6 +496,8 @@ def _execution_capability(
 def _package_capabilities(
     indexed_entries: List[PackageEntry],
     entries: List[PackageValidationEntry],
+    *,
+    package_settings: PackageSettings | None,
 ) -> JsonDict:
     """Summarize retained execution for exact studies when they exist.
 
@@ -451,6 +529,7 @@ def _package_capabilities(
             entry,
             validation=validations_by_path.get(entry.path.resolve()),
             methods_by_path=methods_by_path,
+            package_settings=package_settings,
         )
         for entry in indexed_entries
         if entry.config == "study"
@@ -584,6 +663,7 @@ def _retained_study_execution_capability(
     *,
     validation: PackageValidationEntry | None,
     methods_by_path: Dict[Path, JsonDict],
+    package_settings: PackageSettings | None,
 ) -> JsonDict:
     base = {
         "path": str(entry.path),
@@ -635,7 +715,12 @@ def _retained_study_execution_capability(
         }
 
     try:
-        study_spec = load_study_spec(str(entry.path))
+        compiled = compile_authoring_config(
+            entry.path,
+            bind_launch_inputs=False,
+            package_settings=package_settings,
+        )
+        study_spec = study_spec_from_raw(entry.path, compiled)
         preflight_retained_process_study(study_spec)
     except RetainedStudyCompileError as error:
         return {

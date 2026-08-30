@@ -16,6 +16,7 @@ import re
 import yaml
 
 from .image_reference import parse_image_reference
+from .package_settings import PackageSettings, resolve_component_image
 
 from .config_errors import StudyLaunchInputsError
 from .host_env import compile_host_env_declarations
@@ -56,6 +57,7 @@ def compile_authoring_config(
     *,
     launch_inputs: Mapping[str, Any] | None = None,
     bind_launch_inputs: bool = True,
+    package_settings: PackageSettings | None = None,
 ) -> Dict[str, Any]:
     """Compile a public study config into the internal StudySpec dictionary.
 
@@ -64,7 +66,18 @@ def compile_authoring_config(
     valid only when the study declares no ``inputs`` or every declared input
     has a ``default``. ``bind_launch_inputs=False`` validates the declaration
     without requiring launch values (used by static config validation).
+
+    ``package_settings`` is supplied only by a caller that owns an explicit
+    package boundary.  Its container image is inherited by an Environment or
+    Method that does not declare its own image.  A plain config-file compile
+    deliberately keeps the historical process fallback because it cannot
+    safely guess which package, if any, owns the file.
     """
+
+    if package_settings is not None and not isinstance(
+        package_settings, PackageSettings
+    ):
+        raise TypeError("package_settings must be PackageSettings or None.")
 
     config_path = Path(path).resolve()
     study = _load_and_validate_public_config(config_path, CONFIG_STUDY)
@@ -85,6 +98,22 @@ def compile_authoring_config(
     _validate_environment_semantics(environment, environment_path)
     _validate_method_semantics(method, method_path)
     _validate_study_semantics(study, config_path)
+
+    environment = _inherit_package_container(
+        environment,
+        package_settings=package_settings,
+        component_kind="environment",
+    )
+    method = _inherit_package_container(
+        method,
+        package_settings=package_settings,
+        component_kind="method",
+    )
+    # Re-run the semantic checks over the effective declarations.  In
+    # particular, process-only runtime declarations must not disappear merely
+    # because a package image supplies the component's software.
+    _validate_environment_semantics(environment, environment_path)
+    _validate_method_semantics(method, method_path)
 
     candidate = _normalize_candidate(environment["candidate"])
     _validate_method_environment_compatibility(method, environment, candidate, method_path, environment_path)
@@ -160,11 +189,64 @@ def compile_authoring_config(
     }
 
 
-def validate_authoring_config(path: str | Path) -> Dict[str, Any]:
-    """Validate one public config file and return a structured result."""
+def _inherit_package_container(
+    component: Dict[str, Any],
+    *,
+    package_settings: PackageSettings | None,
+    component_kind: str,
+) -> Dict[str, Any]:
+    """Return one component with package-image fallback applied exactly once."""
+
+    result = deepcopy(component)
+    runtime = deepcopy(result.get("runtime", {}) or {})
+    if runtime.get("sandbox") == "container":
+        # A component-local declaration always wins in full; package settings
+        # are a fallback, never a source of fields to merge into an override.
+        return result
+
+    inherited = resolve_component_image(None, package_settings)
+    if inherited is None:
+        return result
+
+    incompatible = _container_process_only_runtime_fields(
+        runtime,
+        component_kind=component_kind,
+    )
+    if incompatible:
+        raise ValueError(
+            f"{component_kind}.runtime fields {sorted(incompatible)!r} are "
+            "process-only and cannot be combined with the package container image."
+        )
+
+    runtime["sandbox"] = "container"
+    runtime["container"] = {
+        "image": inherited.image.raw,
+        "platform": inherited.platform,
+        "network": "disabled",
+    }
+    result["runtime"] = runtime
+    return result
+
+
+def validate_authoring_config(
+    path: str | Path,
+    *,
+    package_settings: PackageSettings | None = None,
+) -> Dict[str, Any]:
+    """Validate one public config file and return a structured result.
+
+    Package-aware callers may pass the settings loaded from an explicit,
+    already-validated package root. This applies the same container fallback
+    and conflicts as retained launch planning; standalone config validation
+    deliberately does not guess package ownership.
+    """
 
     config_path = Path(path).resolve()
     try:
+        if package_settings is not None and not isinstance(
+            package_settings, PackageSettings
+        ):
+            raise TypeError("package_settings must be PackageSettings or None.")
         raw = _load_yaml(config_path)
         schema_result = validate_public_config_schema(raw, config_path=config_path)
         if not schema_result.valid:
@@ -175,11 +257,25 @@ def validate_authoring_config(path: str | Path) -> Dict[str, Any]:
             }
         config = raw.get("config")
         if config == CONFIG_STUDY:
-            compile_authoring_config(config_path, bind_launch_inputs=False)
+            compile_authoring_config(
+                config_path,
+                bind_launch_inputs=False,
+                package_settings=package_settings,
+            )
         elif config == CONFIG_ENVIRONMENT:
-            _validate_environment_semantics(raw, config_path)
+            effective = _inherit_package_container(
+                raw,
+                package_settings=package_settings,
+                component_kind="environment",
+            )
+            _validate_environment_semantics(effective, config_path)
         elif config == CONFIG_METHOD:
-            _validate_method_semantics(raw, config_path)
+            effective = _inherit_package_container(
+                raw,
+                package_settings=package_settings,
+                component_kind="method",
+            )
+            _validate_method_semantics(effective, config_path)
         elif config == CONFIG_RESOURCE:
             _validate_resource_semantics(raw, config_path)
         else:
@@ -253,7 +349,11 @@ def _validate_environment_semantics(environment: Dict[str, Any], path: Path | No
     )
 
     runtime = environment.get("runtime", {}) or {}
-    _validate_runtime(runtime, f"{location} runtime")
+    _validate_runtime(
+        runtime,
+        f"{location} runtime",
+        component_kind="environment",
+    )
     if environment.get("interface") is not None:
         _validate_interface(
             environment["interface"],
@@ -382,7 +482,11 @@ def _validate_method_semantics(method: Dict[str, Any], path: Path | None) -> Non
         values_key="settings",
         location=location,
     )
-    _validate_runtime(method.get("runtime", {}) or {}, f"{location} runtime")
+    _validate_runtime(
+        method.get("runtime", {}) or {},
+        f"{location} runtime",
+        component_kind="method",
+    )
 
 
 def _validate_resource_semantics(resource: Dict[str, Any], path: Path | None) -> None:
@@ -889,7 +993,29 @@ def _validate_container_limits(limits: Any, location: str) -> None:
         raise ValueError(f"{location}.pids must be an integer from 1 to 65536.")
 
 
-def _validate_runtime(runtime: Any, location: str) -> None:
+def _container_process_only_runtime_fields(
+    runtime: Mapping[str, Any],
+    *,
+    component_kind: str,
+) -> list[str]:
+    """Return authored process-only fields that a container would discard."""
+
+    if component_kind not in {"environment", "method"}:
+        raise ValueError("runtime component_kind must be environment or method.")
+    fields = ["setup", "workdir"]
+    if component_kind == "environment":
+        # Container Environment attempts are hermetic: unlike a long-lived
+        # Method worker, an evaluator receives no values from this host.
+        fields.extend(("env", "envFromHost"))
+    return sorted(field for field in fields if field in runtime)
+
+
+def _validate_runtime(
+    runtime: Any,
+    location: str,
+    *,
+    component_kind: str,
+) -> None:
     if runtime in (None, {}):
         return
     if not isinstance(runtime, dict):
@@ -897,9 +1023,17 @@ def _validate_runtime(runtime: Any, location: str) -> None:
     sandbox = runtime.get("sandbox", "process")
     if sandbox not in RUNTIME_SANDBOXES:
         raise ValueError(f"{location}.sandbox must be one of {sorted(RUNTIME_SANDBOXES)}.")
+    if sandbox == "container":
+        incompatible = _container_process_only_runtime_fields(
+            runtime,
+            component_kind=component_kind,
+        )
+        if incompatible:
+            raise ValueError(
+                f"{location} fields {incompatible!r} are process-only and cannot "
+                "be combined with sandbox container."
+            )
     if runtime.get("setup") is not None:
-        if sandbox == "container":
-            raise ValueError(f"{location}.setup is supported only for sandbox process.")
         _validate_setup(runtime["setup"], f"{location}.setup")
     if sandbox == "container":
         container = runtime.get("container", {}) or {}

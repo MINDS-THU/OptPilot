@@ -21,7 +21,7 @@ from .errors import RealmIntegrityError
 from .filesystem_quota import FilesystemQuota
 from .manifests import validate_portable_path
 from .projection import _remove_tree_contents
-from .refs import canonical_json_bytes, request_digest
+from .refs import request_digest
 
 
 _DIRECTORY_FLAGS = (

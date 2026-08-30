@@ -433,7 +433,7 @@ class StudioAccessibilityStaticTest(unittest.TestCase):
         self.assertIn('setAttribute("aria-live", "polite")', render)
 
     def test_local_environment_settings_do_not_imply_a_secret_vault(self) -> None:
-        self.assertIn("Local environment variables", self.html)
+        self.assertIn("Local values", self.html)
         self.assertIn("stores them as plaintext", self.html)
         self.assertIn("This is not a secret vault", self.html)
         self.assertNotIn("Environment &amp; Secrets", self.html)

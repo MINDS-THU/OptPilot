@@ -18,10 +18,10 @@ Studio and Code Server bind to `127.0.0.1` by default. Keep those defaults for
 normal use. In particular:
 
 - the main Studio HTTP server has no login or session authentication
-- the main server does not validate `Origin`, `Referer`, or `Host` headers and
-  does not issue or require a CSRF token
-- not returning cross-origin-readable responses is not a CSRF defense; another
-  browser origin may still be able to send a state-changing request
+- state-changing requests require JSON, a process-local anti-CSRF token, a
+  localhost or literal-IP `Host`, and a matching `Origin` whenever one is sent
+- the token prevents an unrelated browser origin from turning a no-CORS form
+  or fetch into a local mutation; it is not user authentication
 - Code Server also defaults to `auth: none`; enabling its password mode does
   not add authentication to the main Studio server
 - Preview URLs use launch-scoped routing controls, but those controls are not a
@@ -30,11 +30,12 @@ normal use. In particular:
 Use Studio only from a browser profile and local machine you trust. Do not bind
 Studio or Code Server to `0.0.0.0`, publish their ports, or place them behind a
 shared reverse proxy. A multi-user or remote deployment needs authentication,
-request-origin/CSRF enforcement, TLS, and a separate authorization review; the
-current server does not provide those controls.
+TLS, proxy-aware origin policy, and a separate authorization review; the
+current server's local anti-CSRF boundary does not provide those controls.
 
-The local settings file may contain Assistant credentials and values entered
-under **Local environment variables**. Values are plaintext in that file.
+The project-scoped `.optpilot-ui/settings.json` file may contain Assistant
+credentials and values entered under **Local values**. Values are plaintext
+in that file, and a synchronized project directory may synchronize the file.
 Studio attempts to store it with mode `0600`, but it is not a secret vault.
 Other processes running as the same OS user remain inside the trust boundary.
 For retained Runs, the durable launch records only a variable name and opaque

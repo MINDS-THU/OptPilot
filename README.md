@@ -35,7 +35,7 @@ when adding an integration.
 
 ## Public configs
 
-Users author three YAML config kinds:
+Experiment packages use three core YAML config roles:
 
 - `config: environment`: candidate contract, evaluator, metrics, context, and
   runtime requirements
@@ -44,17 +44,24 @@ Users author three YAML config kinds:
 - `config: study`: environment/method binding, objective, budget, execution,
   evidence, and reproducibility policy
 
+Packages may additionally expose `config: resource` manifests for helper
+assets, interfaces, and reviewed headless actions that sit outside the
+Method-to-Environment Run loop.
+
 OptPilot validates the YAML, captures one explicit package root, and compiles an
 exact retained study definition. A run is a canonical namespace in a local
 Realm, not a mutable output directory.
 
 ## Current executable surface
 
-The Realm runner supports parameter, bounded-file, and opaque candidate
-contracts; Python and command evaluators; Python batch/session and command
-methods; and declared process or container runtimes. It retains immutable
-inputs, isolated attempt workspaces, method exchanges, observations, artifacts,
-events, and recovery state.
+The retained Realm runner supports parameter and bounded-file Candidates,
+Python evaluators, Python batch Methods, and Python-headed command batch
+Methods. It can run declared process or digest-pinned container runtimes and
+prepare narrow, hash-locked pure-Python dependency layers. Opaque Candidates,
+session Methods, command evaluators, arbitrary build/setup execution, and other
+unsupported combinations fail closed. See the authoritative
+[Executable Capabilities](https://MINDS-THU.github.io/OptPilot/capabilities/)
+matrix before designing an integration.
 
 Packages may explicitly select host environment values for a launch. Studio
 binds the current saved revisions while keeping secret values out of process
@@ -71,7 +78,7 @@ before running packages from an untrusted source.
 
 OptPilot supports Python 3.10 and newer.
 
-Install the core CLI/SDK from PyPI:
+Install the core CLI and Python package from PyPI:
 
 ```bash
 python -m pip install optpilot
@@ -175,6 +182,7 @@ catalog/
 
 - [Getting Started](https://MINDS-THU.github.io/OptPilot/getting-started/)
 - [How a Run Works](https://MINDS-THU.github.io/OptPilot/how-it-works/)
+- [Executable Capabilities](https://MINDS-THU.github.io/OptPilot/capabilities/)
 - [Runs and Evidence](https://MINDS-THU.github.io/OptPilot/evidence/)
 - [Configuration](https://MINDS-THU.github.io/OptPilot/configuration/)
 - [Studio UI](https://MINDS-THU.github.io/OptPilot/ui/)

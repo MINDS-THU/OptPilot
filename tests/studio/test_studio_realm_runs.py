@@ -6083,8 +6083,8 @@ class StudioRealmRunsTest(unittest.TestCase):
         original = self.study_path.read_text(encoding="utf-8")
         # An unstated trial count used to mean "no limit", which also meant
         # running against the person's own folder. It now means the default
-        # limit, applied to a copy -- a smoke test runs without asking, so it
-        # must not be possible to ask for an unbounded one.
+        # limit, applied to a copy. Approval is not a substitute for execution
+        # bounds, so it must not be possible to ask for an unbounded smoke.
         bounded_package, bounded_study = _prepare_assistant_smoke_package(
             package_root=self.package,
             study_path=self.study_path,

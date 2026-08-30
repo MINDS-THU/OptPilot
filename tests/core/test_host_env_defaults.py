@@ -27,6 +27,7 @@ from optpilot.host_env import (
     host_env_names,
     host_env_required_names,
 )
+from optpilot.schema_validation import validate_public_config_schema
 from optpilot.setup import setup_env
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -113,6 +114,66 @@ class SecretsTakeNoDefaultsTest(unittest.TestCase):
             grants["secretsFromHost"]["$ref"], "#/definitions/stringList"
         )
         self.assertEqual(grants["envFromHost"]["$ref"], "#/definitions/hostEnvList")
+
+
+class PublicSchemaBoundaryTest(unittest.TestCase):
+    @staticmethod
+    def _method(*, env_from_host: list[object]) -> dict:
+        return {
+            "apiVersion": "optpilot.io/v1",
+            "config": "method",
+            "id": "schema-method",
+            "entrypoint": {"python": "method:propose"},
+            "accepts": {"formats": ["parameters"]},
+            "runtime": {"envFromHost": env_from_host},
+        }
+
+    def test_method_runtime_accepts_plain_host_environment_names(self) -> None:
+        result = validate_public_config_schema(
+            self._method(env_from_host=["OPENROUTER_API_KEY"])
+        )
+
+        self.assertTrue(result.valid, result.to_dict())
+
+    def test_method_runtime_rejects_a_default_bearing_declaration(self) -> None:
+        result = validate_public_config_schema(
+            self._method(
+                env_from_host=[{"name": "MODEL", "default": "provider/model"}]
+            )
+        )
+
+        self.assertFalse(result.valid)
+        self.assertIn(
+            "$.runtime.envFromHost[0]", {error.path for error in result.errors}
+        )
+
+    def test_interface_and_resource_action_grants_still_accept_defaults(self) -> None:
+        defaulted = [{"name": "MODEL", "default": "provider/model"}]
+        method = self._method(env_from_host=["OPENROUTER_API_KEY"])
+        method["interface"] = {
+            "command": ["python", "interface.py"],
+            "presentation": {"kind": "web", "port": 8000},
+            "grants": {"envFromHost": defaulted},
+        }
+        resource = {
+            "apiVersion": "optpilot.io/v1",
+            "config": "resource",
+            "id": "schema-resource",
+            "actions": [
+                {
+                    "id": "generate",
+                    "label": "Generate",
+                    "command": ["python", "generate.py"],
+                    "grants": {"envFromHost": defaulted},
+                    "timeoutSeconds": 60,
+                }
+            ],
+        }
+
+        for label, raw in (("interface", method), ("resource action", resource)):
+            with self.subTest(label=label):
+                result = validate_public_config_schema(raw)
+                self.assertTrue(result.valid, result.to_dict())
 
 
 class ShippedGeneratorTest(unittest.TestCase):

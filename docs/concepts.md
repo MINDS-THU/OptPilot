@@ -266,7 +266,7 @@ The split is intentional:
 
 | Surface | What it should be used for |
 | --- | --- |
-| Core CLI/SDK | Validate configs, run studies, and integrate packages in your own project or CI. |
+| Core CLI/package | Validate configs and run studies in your own project or CI. |
 | Studio | Browse packages, create and manage editable Workspaces, launch studies through forms, inspect Runs, and use the optional Assistant. |
 
 ## What To Read Next

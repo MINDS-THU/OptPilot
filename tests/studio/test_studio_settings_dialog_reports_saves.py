@@ -28,8 +28,8 @@ class SettingsDialogReportsSavesTest(unittest.TestCase):
         cls.app = _APP.read_text(encoding="utf-8", errors="replace")
 
     def _save_body(self) -> str:
-        i = self.app.index('const result = await postJson("/api/agent/settings"')
-        return self.app[i : i + 1100]
+        i = self.app.index('await postJson("/api/agent/settings"')
+        return self.app[i : i + 1800]
 
     def test_a_refused_save_does_not_report_the_assistant_as_broken(self) -> None:
         body = self._save_body()

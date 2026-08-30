@@ -11,10 +11,8 @@ Reading is refused rather than redacted, because redaction has to be right
 every time and a refusal has to be right once. Writing is refused too -- not a
 leak, but overwriting someone's credentials is not the Assistant's to do.
 
-Shell commands are handled differently and deliberately so: a command can read
-a file in more ways than any list can enumerate, so instead of pretending to
-block them, naming a credential file forces the approval prompt even for
-someone who allowed unattended commands.
+Shell commands always require explicit approval: a command can read a file in
+more ways than any filename classifier can enumerate.
 """
 
 from __future__ import annotations
@@ -31,7 +29,6 @@ from optpilot_studio.ui.server import (
     _create_ui_workspace,
     _execute_agent_tool,
     _is_secret_file,
-    _shell_needs_approval,
     _update_agent_settings,
 )
 
@@ -45,12 +42,16 @@ class SecretFileRecognitionTest(unittest.TestCase):
             ".ENV",
             ".env.local",
             ".env.production",
+            "prod.env",
             ".envrc",
             ".netrc",
             ".npmrc",
             ".pypirc",
             ".git-credentials",
             "credentials",
+            "credentials.json",
+            "application_default_credentials.json",
+            "client_secret_web.json",
             "id_rsa",
             "id_rsa.bak",
             "id_ed25519",
@@ -67,6 +68,20 @@ class SecretFileRecognitionTest(unittest.TestCase):
         self.assertTrue(_is_secret_file(Path("/w/.ssh/config")))
         self.assertTrue(_is_secret_file(Path("/w/nested/.ssh/known_hosts")))
 
+    def test_common_tool_authority_directories_are_recognised(self) -> None:
+        for relative in (
+            ".git/config",
+            ".docker/config.json",
+            ".kube/config",
+            ".aws/credentials",
+            ".azure/accessTokens.json",
+            ".config/gh/hosts.yml",
+            ".config/gcloud/application_default_credentials.json",
+            ".local/share/keyrings/login.keyring",
+        ):
+            with self.subTest(relative=relative):
+                self.assertTrue(_is_secret_file(Path("/w") / relative), relative)
+
     def test_ordinary_project_files_are_not_caught(self) -> None:
         for name in (
             "README.md",
@@ -76,6 +91,10 @@ class SecretFileRecognitionTest(unittest.TestCase):
             "keys.md",
             "env.py",
             "public.pem.md",
+            ".gitignore",
+            ".github/workflows/test.yml",
+            "Dockerfile",
+            "config.json",
         ):
             with self.subTest(name=name):
                 self.assertFalse(_is_secret_file(Path("/w") / name), name)
@@ -95,6 +114,17 @@ class SecretFileRefusalTest(unittest.TestCase):
         (workspace_root / ".ssh" / "config").write_text(
             f"IdentityFile {_SECRET}\n", encoding="utf-8"
         )
+        for relative in (
+            "prod.env",
+            "credentials.json",
+            ".git/config",
+            ".docker/config.json",
+            ".kube/config",
+            ".config/gh/hosts.yml",
+        ):
+            path = workspace_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_SECRET, encoding="utf-8")
         (workspace_root / "study.yaml").write_text("kind: study\n", encoding="utf-8")
 
         self.state = UiState(cwd=self.root, catalog_roots=[], run_roots=[])
@@ -123,7 +153,18 @@ class SecretFileRefusalTest(unittest.TestCase):
         return _execute_agent_tool(self.state, self.session["id"], tool, arguments)
 
     def test_no_tool_returns_a_credential_files_contents(self) -> None:
-        for target in (".env", "id_rsa", "server.pem", ".ssh/config"):
+        for target in (
+            ".env",
+            "prod.env",
+            "credentials.json",
+            "id_rsa",
+            "server.pem",
+            ".ssh/config",
+            ".git/config",
+            ".docker/config.json",
+            ".kube/config",
+            ".config/gh/hosts.yml",
+        ):
             for tool, arguments in (
                 ("optpilot_file_read", {"path": target}),
                 ("optpilot_file_diff", {"path": target, "content": "x"}),
@@ -132,6 +173,16 @@ class SecretFileRefusalTest(unittest.TestCase):
                 with self.subTest(target=target, tool=tool):
                     with self.assertRaises(PermissionError):
                         self._call(tool, arguments)
+
+    def test_recursive_listing_hides_credential_authority_trees(self) -> None:
+        result = self._call("optpilot_file_tree", {"path": ".", "max_files": 500})
+        paths = [str(item.get("path") or "") for item in result["data"]["files"]]
+        for prefix in (".git", ".docker", ".kube", ".config/gh"):
+            with self.subTest(prefix=prefix):
+                self.assertFalse(
+                    any(path == prefix or path.startswith(prefix + "/") for path in paths),
+                    paths,
+                )
 
     def test_the_refusal_says_why_and_what_to_do_instead(self) -> None:
         with self.assertRaises(PermissionError) as caught:
@@ -165,27 +216,6 @@ class SecretFileRefusalTest(unittest.TestCase):
                     self.assertNotIn(_SECRET, str(error))
                 else:
                     self.assertNotIn(_SECRET, json.dumps(result))
-
-
-class SecretShellCommandTest(unittest.TestCase):
-    def test_naming_a_credential_file_forces_the_prompt(self) -> None:
-        for command in (
-            ["cat", ".env"],
-            ["grep", "KEY", ".env.production"],
-            ["cp", "id_rsa", "/tmp/x"],
-            ["sh", "-c", "cat .env"],
-        ):
-            with self.subTest(command=command):
-                self.assertTrue(_shell_needs_approval(command), command)
-
-    def test_ordinary_commands_are_still_unattended(self) -> None:
-        for command in (
-            ["cat", "README.md"],
-            ["ls", "-la"],
-            ["python", "-c", "print(1)"],
-        ):
-            with self.subTest(command=command):
-                self.assertFalse(_shell_needs_approval(command), command)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,8 @@ reproducibility:
   seed: 7
 """
 
+_PACKAGE_IMAGE = "ghcr.io/example/retained@sha256:" + "c" * 64
+
 
 def _write_package(root: Path, *, method_protocol: str = "batch") -> Path:
     study = root / "configs" / "studies" / "study.yaml"
@@ -425,6 +427,46 @@ class RetainedStudyServiceTest(unittest.TestCase):
         self.assertEqual(
             {(item.role, item.content_ref) for item in run_memberships},
             {(item.role, item.content_ref) for item in definition_memberships},
+        )
+
+    def test_package_image_is_resolved_from_retained_bytes_into_both_runtimes(
+        self,
+    ) -> None:
+        (self.package_root / "optpilot.package.yaml").write_text(
+            "apiVersion: optpilot.io/v1\n"
+            "config: package\n"
+            f"identity: \"{'2' * 32}\"\n"
+            "runtime:\n"
+            "  container:\n"
+            f"    image: {_PACKAGE_IMAGE}\n"
+            "    platform: linux/amd64\n",
+            encoding="utf-8",
+        )
+
+        receipt = self.prepare(operation_id="retained-service/package-image")
+
+        definition = receipt.study_definition.manifest.run_definition
+        runtimes = (
+            definition.evaluation_closure.prepared_runtime,
+            definition.prepared_method_runtime,
+        )
+        for runtime in runtimes:
+            self.assertEqual(runtime.runtime_kind, "container")
+            self.assertEqual(runtime.portability, "portable")
+            self.assertEqual(runtime.platform, "linux/amd64")
+            self.assertEqual(runtime.oci_image_digest, "sha256:" + "c" * 64)
+            self.assertEqual(
+                runtime.runtime_settings["container_image_reference"],
+                _PACKAGE_IMAGE,
+            )
+            self.assertEqual(
+                runtime.runtime_settings["container_network"], "disabled"
+            )
+        self.assertEqual(
+            definition.to_dict()["execution_policy"]["defaults"]["sandboxSpec"][
+                "runtimeType"
+            ],
+            "container",
         )
 
     def test_selected_package_adopts_without_capture_and_projects_once(self) -> None:

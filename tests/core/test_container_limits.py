@@ -37,6 +37,7 @@ class AuthoringValidationTest(unittest.TestCase):
         _validate_runtime(
             _container_runtime({"cpus": "8", "memory": "16g", "pids": 2048}),
             "environment.runtime",
+            component_kind="environment",
         )
 
     def test_each_malformed_shape_is_refused(self) -> None:

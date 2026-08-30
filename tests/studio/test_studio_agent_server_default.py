@@ -14,6 +14,7 @@ toolless mode still exists, but has to be asked for by name.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from optpilot_studio.agent import (
     DEFAULT_OPENHANDS_BASE_URL,
@@ -96,6 +97,34 @@ class UnreachableHelperTest(unittest.TestCase):
         for error in (ValueError("bad model id"), KeyError("missing")):
             with self.subTest(error=type(error).__name__):
                 self.assertFalse(adapter._is_agent_server_unreachable(error))
+
+    def test_reachability_treats_unexpected_responses_as_disconnected(self) -> None:
+        class UnexpectedResponse:
+            status = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        adapter = OpenHandsAdapter(
+            config=OpenHandsRuntimeConfig(base_url=DEFAULT_OPENHANDS_BASE_URL)
+        )
+        with mock.patch(
+            "optpilot_studio.agent.urlopen", return_value=UnexpectedResponse()
+        ):
+            self.assertFalse(adapter._server_reachable())
+
+    def test_reachability_contains_unexpected_probe_errors(self) -> None:
+        adapter = OpenHandsAdapter(
+            config=OpenHandsRuntimeConfig(base_url=DEFAULT_OPENHANDS_BASE_URL)
+        )
+        with mock.patch(
+            "optpilot_studio.agent.urlopen",
+            side_effect=RuntimeError("not an HTTP response"),
+        ):
+            self.assertFalse(adapter._server_reachable())
 
 
 if __name__ == "__main__":

@@ -376,7 +376,6 @@ generated solver code, and the numeric answer:
 ```bash
 uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
   --package-root catalog/or_solving \
-  --method-request-timeout 900 \
   --input problem="A factory makes two products. Product A yields 40 profit and takes 2 hours of labor; product B yields 30 and takes 1 hour. With 100 labor hours available, maximize profit."
 ```
 
@@ -399,14 +398,13 @@ With those prerequisites in place the real study is launched the same way:
 ```bash
 uv run optpilot run catalog/or_solving/studies/solve_or_problem.yaml \
   --package-root catalog/or_solving \
-  --method-request-timeout 900 \
   --input problem="<your problem in plain language>"
 ```
 
 In Studio the `problem` input appears as a **Launch inputs** field on the
 `solve-or-problem` Run setup. The `coopa-solver` method also declares an
 interface, the **COOPA Solve Console**, opened from its Catalog page; it needs
-the same user-provisioned checkout.
+the same model access and solver dependencies. COOPA itself is already bundled.
 
 ### Where the keys go
 

@@ -17,11 +17,11 @@ from typing import Any, Dict, List
 from .host_env import compile_host_env_declarations
 
 from .attempt_semantics import (
+    # Kept as an execution-module re-export for existing callers and tests.
     PUBLIC_OBSERVATION_STATUSES,
     error_payload as _error_payload,
     exception_evaluation_result as _exception_evaluation_result,
     status_for_exception as _status_for_exception,
-    unsupported_observation_status_result as _unsupported_observation_status_result,
     validate_environment_result as _validate_environment_result,
     validation_exception_report as _validation_exception_report,
 )

@@ -1550,6 +1550,9 @@ class _BoundedArchiveReader:
         while self.read(64 * 1024):
             pass
 
+    def close(self) -> None:
+        self.stream.close()
+
 
 def _archive_relative_path(
     member: tarfile.TarInfo,
@@ -1942,6 +1945,16 @@ class LocalContainerInterfaceOutputExecutor:
                 process.wait(timeout=5)
             for thread in drain_threads:
                 thread.join(timeout=1)
+            if process is not None:
+                # Drain threads normally close their owned pipes at EOF.  The
+                # fallback covers startup errors and a bounded join that ended
+                # before a daemon thread observed process termination.
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
             if cleanup_error is not None:
                 status = "infrastructure_failed"
                 failure_code = "container_cleanup_unconfirmed"
@@ -2151,11 +2164,17 @@ class LocalContainerInterfaceOutputExecutor:
 
     @staticmethod
     def _drain(stream: Any, capture: _BoundedCapture) -> None:
-        while True:
-            chunk = stream.read(64 * 1024)
-            if not chunk:
-                return
-            capture.add(chunk)
+        try:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    return
+                capture.add(chunk)
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
 
     def _force_remove(self, container_name: str) -> None:
         completed = subprocess.run(
@@ -2280,6 +2299,14 @@ class LocalContainerInterfaceOutputExecutor:
         finally:
             timer.cancel()
             stderr_thread.join(timeout=5)
+            try:
+                reader.close()
+            except OSError:
+                pass
+            try:
+                process.stderr.close()
+            except OSError:
+                pass
 
     def _inspect_results(
         self, root: Path

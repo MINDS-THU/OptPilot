@@ -1,5 +1,13 @@
 # How the Assistant works — the target design
 
+> **Historical design snapshot (2026-08-16).** This file is not the current
+> implementation contract; its status labels, tool inventory, and security
+> claims may be obsolete. Use
+> [Assistant](../docs/assistant.md),
+> [Executable Capabilities](../docs/capabilities.md), and the
+> [release-readiness review](../docs/release-readiness-review.md) for the
+> release surface.
+
 Written to be read without prior knowledge of OptPilot; every term is defined
 where it first appears.
 

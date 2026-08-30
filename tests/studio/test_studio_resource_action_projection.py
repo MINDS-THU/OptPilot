@@ -36,6 +36,7 @@ from optpilot_studio.ui.server import (
     _catalog_payload,
     _prepare_resource_action_execution,
     _resolve_catalog_identifier,
+    _resource_action_review,
     _resource_action_run_status,
     _start_resource_action_run,
 )
@@ -176,6 +177,7 @@ class RealmResourceActionExecutionTest(unittest.TestCase):
                         "id": "generate",
                         "label": "Generate a bundle",
                         "command": ["python", "generate.py"],
+                        "grants": {"network": "enabled"},
                         "runtime": {
                             "sandbox": "process",
                             "setup": {
@@ -238,12 +240,18 @@ class RealmResourceActionExecutionTest(unittest.TestCase):
 
     def test_action_runs_in_a_writable_copy_and_leaves_no_trace(self) -> None:
         entry = self._resource_entry()
+        review = _resource_action_review(
+            self.state, resource_uid=entry["uid"], action_id="generate"
+        )
         response, _status = _start_resource_action_run(
             self.state,
             {
                 "request_id": str(uuid.uuid4()),
                 "resource_uid": entry["uid"],
                 "action_id": "generate",
+                "_approved_action_contract_digest": review[
+                    "action_contract_digest"
+                ],
             },
         )
         status = self._await_run(str(response["request_id"]))
