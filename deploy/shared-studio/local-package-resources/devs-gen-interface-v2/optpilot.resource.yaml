@@ -152,11 +152,9 @@ interface:
           model ID. OpenRouter models need the "openrouter/" prefix, e.g.
           "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
           the OpenRouter key is the granted credential).
-      - name: DEVS_COLLECTOR_URL
-        description: >-
-          Required endpoint for durable v2 session collection and the host
-          Codex finalizer. Use the collector URL reachable from the Workspace
-          runtime.
+      # Required host value: durable session collection and the remote Codex
+      # finalizer share this host service endpoint.
+      - DEVS_COLLECTOR_URL
     secretsFromHost:
       - OPENROUTER_API_KEY
       - DEVS_COLLECTOR_INGEST_TOKEN

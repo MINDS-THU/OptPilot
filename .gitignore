@@ -25,6 +25,7 @@ catalog/*/resources/**/.venv/
 catalog/*/resources/**/.runtime/
 catalog/*/resources/**/.uv-cache/
 catalog/*/resources/**/node_modules/
+deploy/shared-studio/local-package-resources/**/node_modules/
 catalog/*/resources/**/.storage/
 catalog/*/resources/**/.devs_display_sessions/
 catalog/*/resources/**/working_dirs/
