@@ -2585,6 +2585,11 @@ class WorkspaceRuntimeManager:
         return self.status(workspace)
 
     def delete(self, workspace_id: str) -> bool:
+        # Deletion is rare and terminal. Drop every brief positive ownership
+        # result before inspecting/removing the record so nginx cannot admit a
+        # request to a port whose backing container has already disappeared.
+        with self._owned_code_ports_lock:
+            self._owned_code_ports_cache.clear()
         runtime_dir = self._workspace_runtime_dir(workspace_id)
         container_name = self._container_name(workspace_id)
         if not runtime_dir.exists():

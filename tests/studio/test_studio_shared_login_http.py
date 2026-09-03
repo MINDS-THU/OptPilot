@@ -181,6 +181,20 @@ class StudioSharedLoginHttpTests(unittest.TestCase):
 
 
 class WorkspaceRuntimePublicPortTests(unittest.TestCase):
+    def test_delete_immediately_invalidates_cached_port_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = WorkspaceRuntimeManager(
+                studio_root=root,
+                runtime_root=root / "runtime",
+                options=WorkspaceRuntimeOptions(port_start=31000, port_count=2),
+            )
+            manager._mark_code_server_port_owned(31000)
+            self.assertTrue(manager.owns_code_server_port(31000))
+
+            self.assertFalse(manager.delete("already-absent"))
+            self.assertFalse(manager.owns_code_server_port(31000))
+
     def test_allocator_never_escapes_the_published_port_range(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
