@@ -1010,8 +1010,10 @@ def snapshot_interface_output_tree(
                 "Interface output changed during snapshot."
             )
         manifest = TreeManifest.build(entries, limits=limits.as_seal_limits())
-        # Files are already read-only.  Make nested directories and then the
-        # root read/execute-only after every write and stability check.
+        # Files are already read-only. Make nested directories read/execute-
+        # only after every write and stability check. macOS requires write
+        # permission on a directory while renaming that directory, so the
+        # staging root itself becomes read-only immediately after the rename.
         directories = sorted(
             (path for path in staging.rglob("*") if path.is_dir()),
             key=lambda path: len(path.parts),
@@ -1019,7 +1021,6 @@ def snapshot_interface_output_tree(
         )
         for directory in directories:
             os.chmod(directory, 0o500, follow_symlinks=False)
-        os.chmod(staging, 0o500, follow_symlinks=False)
         final_name = (
             f"snapshot-{request}-{manifest.snapshot_ref.digest[:16]}-"
             f"{uuid.uuid4().hex[:12]}"
@@ -1033,6 +1034,7 @@ def snapshot_interface_output_tree(
             dst_dir_fd=parent_fd,
         )
         cleanup_name = final_name
+        os.chmod(final, 0o500, follow_symlinks=False)
         os.fsync(parent_fd)
         _require_directory_binding(parent_real, parent_identity)
         result = ImmutableInterfaceOutputTree(
@@ -2427,12 +2429,17 @@ def export_execution_result_tree_at(
                 "Result publication target already exists."
             )
         try:
+            # macOS also requires write permission on the directory being
+            # renamed. This projection is private and still unreferenced;
+            # restore the immutable root mode immediately at its final name.
+            os.chmod(projection.root_path, 0o700, follow_symlinks=False)
             os.rename(
                 projection.root_path.name,
                 target_name,
                 src_dir_fd=parent_fd,
                 dst_dir_fd=parent_fd,
             )
+            os.chmod(parent / target_name, 0o500, follow_symlinks=False)
             os.fsync(parent_fd)
             _require_directory_fd(parent_fd, parent_identity)
             _require_directory_binding(parent, parent_identity)
