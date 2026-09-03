@@ -1,6 +1,6 @@
 # Shared OptPilot Studio deployment
 
-Status: implementation design for the `deployment/classroom` branch.
+Status: implemented on the `deployment/classroom` branch.
 
 This document defines the smallest shared deployment that preserves the new
 upstream Studio's local-runtime isolation while giving students one browser
@@ -56,11 +56,19 @@ provider ownership checks in the Workspace runtime or presentation broker.
 
 Create the new resource from the upstream `devs-gen-interface` at OptPilot
 commit `5094231`, then selectively merge the committed changes from
-`/Users/minds/MINDS/devs-gen-interface-persistence-dev` commit `a2a3cd8` into:
+`/Users/minds/MINDS/devs-gen-interface-persistence-dev` commit `a2a3cd8` into
+the tracked deployment template:
 
 ```text
-catalog/devs_gallery/resources/devs-gen-interface-v2/
+deploy/shared-studio/local-package-resources/devs-gen-interface-v2/
 ```
+
+Deployment copies that template to
+`<state-root>/catalog/local_package/resources/devs-gen-interface-v2/` and
+creates the private `local_package` metadata when absent. Studio opens the
+state root and indexes this editable local package, so the interface receives
+the Workspace runtime needed to execute generated simulations. The template
+path is never indexed alongside the installed copy.
 
 Its public identifiers are:
 
@@ -84,13 +92,20 @@ remain authoritative. The v2 merge adds the persistence, participant identity,
 collector, rating, telemetry, output repair, and remote-finalizer behavior
 without regressing those contracts.
 
-Collector configuration remains genuinely optional. A host variable declared
-as a Resource grant is required by OptPilot, so optional collector variables
-must not be added to the default launch grants unless the package contract
-provides a separately selected managed launch profile. The first shared
-deployment may deliberately make the collector required for v2, but that must
-be stated in the resource description and preflight rather than presented as
-optional.
+This managed v2 resource deliberately requires `DEVS_COLLECTOR_URL` and
+`DEVS_COLLECTOR_INGEST_TOKEN`. That makes durable classroom records and the
+remote Codex finalizer part of this deployment contract rather than silently
+optional behavior. Preflight rejects their absence. The unchanged upstream
+gallery resource does not inherit this requirement.
+
+The collector remains a separate host-loopback service and is not published by
+this Nginx configuration. Its administrator token is never granted to Studio or
+a Workspace. The interface receives only the lower-privilege ingest/finalizer
+token; the host finalizer runs Codex in its existing temporary, network-disabled,
+environment-cleared filesystem sandbox. Because students with terminal access
+must be assumed able to recover a Workspace process environment, that ingest
+token is a bounded class capability rather than a per-student secret and should
+be rotated after the class.
 
 ### Authentication division of responsibility
 
@@ -136,11 +151,10 @@ settings, session storage, or command-line arguments.
 
 ### Code Server authentication
 
-During implementation and proxy testing, Code Server remains in password mode.
-That produces a second login and is therefore not the intended classroom
-experience.
-
-It may be changed to `auth none` only after all of these gates pass:
+This deployment uses Code Server `auth none`; retaining its per-instance
+password would reintroduce a second login on every dynamic port and defeat the
+shared-login experience. `auth none` is allowed only while all of these gates
+pass:
 
 1. every Code Server container publishes only to `127.0.0.1`;
 2. every presentation broker listener is loopback-only;
@@ -150,13 +164,36 @@ It may be changed to `auth none` only after all of these gates pass:
 5. an invalid, expired, logged-out, or missing session is rejected on every
    port;
 6. stopping Studio makes Nginx authorization fail rather than bypass;
-7. deployment preflight verifies actual listener addresses and rendered Nginx
-   coverage;
+7. deployment preflight verifies configured bind addresses and rendered Nginx
+   coverage, while startup verifies the main listeners it actually created;
 8. TLS and the approved campus/VPN source-address policy are active.
 
 After those gates, the outer session is the Code Server authentication layer.
 Leaving `auth none` reachable on any non-loopback socket is a release-blocking
 error.
+
+### Review findings and accepted limitations
+
+The independent reviews rejected several attractive but unrealistic claims:
+
+- This is access control, not student identity or Workspace privacy. With one
+  shared account, any authenticated student who obtains another active
+  Workspace URL can open it.
+- The configured port count is routing capacity and a coarse upper bound, not
+  proof that the Mac can sustain that many simultaneous model generations.
+  Per-container CPU, memory, and PID limits contain one Workspace; measured
+  classroom load and host monitoring are still required before raising the
+  range.
+- One public port with path routing would reduce firewall surface, but safely
+  adapting Code Server base paths, redirects, WebSockets, and fresh preview
+  origins is a larger change. This version keeps bounded TLS ports and applies
+  the same login plus active-port ownership check to every one.
+- An established WebSocket outlives the HTTP authorization decision. Logout
+  blocks all new requests immediately; an operator must stop the Workspace or
+  reload Nginx to terminate an existing Code Server WebSocket immediately.
+- The collector ingest token is visible to authorized Workspace code by design.
+  It cannot administer or publish records, and the finalizer is sandboxed, but
+  it must be treated as a class-scoped capability and rotated accordingly.
 
 ## Public and private addressing
 
@@ -165,19 +202,19 @@ Bind addresses and browser addresses are separate concepts.
 Private listeners:
 
 ```text
-Studio:       http://127.0.0.1:8866
-OpenHands:    http://127.0.0.1:8781
-Code Server:  http://127.0.0.1:18766+
-Presentation: http://127.0.0.1:19766+
+Studio:       http://127.0.0.1:28666
+OpenHands:    http://127.0.0.1:28681
+Code Server:  http://127.0.0.1:28766+
+Presentation: http://127.0.0.1:29766+
 ```
 
 Browser-facing URLs use one configured HTTPS host while retaining the allocated
 port for this iteration:
 
 ```text
-https://studio.example.edu:8866/
-https://studio.example.edu:18766/
-https://studio.example.edu:19766/
+https://studio.example.edu:28666/
+https://studio.example.edu:28766/
+https://studio.example.edu:29766/
 ```
 
 Studio and the presentation broker therefore need separate bind and public URL
@@ -199,9 +236,9 @@ When enabled, Studio adds:
 | Endpoint | Method | Authentication | Purpose |
 | --- | --- | --- | --- |
 | `/login` | `GET` | public | Serve the login page. |
-| `/api/auth/login` | `POST` JSON | public, same-origin | Verify the shared credential and create a session. |
+| `/api/auth/login` | `POST` form or JSON | public, same-origin | Verify the shared credential and create a session. |
 | `/api/auth/session` | `GET` | optional | Report whether the current session is valid. |
-| `/api/auth/logout` | `POST` JSON | required, same-origin | Revoke the current session and expire the cookie. |
+| `/api/auth/logout` | `POST` | required, same-origin | Revoke the current session and expire the cookie. |
 | `/api/auth/verify` | `GET` | session cookie | Return `204` for Nginx `auth_request`, otherwise `401`. |
 
 Login failures return one generic message. Passwords and Cookie values must be
@@ -223,8 +260,8 @@ For every public listener:
 4. the internal location calls Studio `/api/auth/verify` over loopback and
    forwards only the browser Cookie, normalized request metadata, target kind,
    and public listener port;
-5. `204` permits proxying; `401` redirects a browser navigation to the main
-   login page or returns an API unauthorized response;
+5. `204` permits proxying; the main Studio page redirects an unauthenticated
+   navigation to login, while APIs and dynamic ports return denial responses;
 6. any timeout, connection refusal, or malformed verifier response denies the
    request.
 
@@ -265,28 +302,32 @@ Login does not replace the existing mutation token.
 The configured public origin is exact: scheme, host, and explicit port must
 match. Nginx overwrites rather than appends trusted proxy headers. Studio trusts
 them only from a loopback peer while trusted-proxy mode is enabled. Login and
-logout use the same exact-origin rule and JSON-only bodies.
+logout use the same exact-origin rule; login accepts only a bounded HTML form
+or JSON body.
 
 ## Port allocation and coverage
 
-The current upstream Workspace allocator searches 200 ports and the presentation
-broker searches 1,000 ports. A static Nginx deployment must not silently expose
-only part of either allocator's possible range.
+The original upstream Workspace allocator and presentation broker searched
+different-sized ranges. A static Nginx deployment must not silently expose only
+part of either allocator's possible range.
 
 The shared deployment introduces one explicit bounded port count used by both
 allocation and Nginx rendering. Preflight checks that:
 
-- the count can serve the intended class capacity;
+- the configured count is positive, bounded by TCP limits, and does not cause
+  range overlap (the operator still chooses it for expected class capacity);
 - Code Server and presentation ranges do not overlap each other or Studio;
 - every rendered public listener has `auth_request`;
 - authorization accepts a dynamic listener only while Studio's process-local
-  ownership registry identifies that exact active port;
+  ownership registry identifies that exact active port (live ownership may be
+  cached for no more than two seconds to collapse bursts of asset requests,
+  while managed runtime record changes invalidate it immediately);
 - no backend listener uses a wildcard or non-loopback address;
 - Nginx is not configured to forward OpenHands.
 
 Only one active listener per Workspace or presentation is expected; opening a
 large static range has operating-system and Nginx costs. The initial default is
-200 ports in each range, subject to a measured class concurrency test before
+110 ports in each range, subject to a measured class concurrency test before
 deployment.
 
 A single public `443` router with paths or per-Workspace subdomains would avoid
@@ -303,25 +344,25 @@ example contains names and safe defaults only. Required shared-deployment values
 include:
 
 ```text
-PUBLIC_ORIGIN=https://studio.example.edu:8866
+PUBLIC_HOST=studio.example.edu
 PUBLIC_BIND_IP=<approved interface address>
-ALLOW_REMOTE_ACCESS=1
+PUBLIC_SERVER_NAME=studio.example.edu
+STUDIO_PORT=28666
 STUDIO_HOST=127.0.0.1
 OPENHANDS_HOST=127.0.0.1
 WORKSPACE_RUNTIME_HOST=127.0.0.1
-WORKSPACE_RUNTIME_PORT_START=18766
-PRESENTATION_PORT_START=19766
-PUBLIC_RUNTIME_PORT_COUNT=200
-SHARED_AUTH_USERNAME=optpilot
-SHARED_AUTH_PASSWORD_HASH=<scrypt verifier>
+WORKSPACE_RUNTIME_PORT_START=28766
+WORKSPACE_RUNTIME_PORT_COUNT=110
+PREVIEW_PORT_OFFSET=1000
+SHARED_AUTH_CREDENTIALS_FILE=<private scrypt-verifier file>
 SHARED_AUTH_SESSION_TTL_SECONDS=43200
-SHARED_AUTH_SESSION_DB=<private path outside checkout>
+OPTPILOT_STATE_ROOT=<private mode-700 path outside checkout>
 ```
 
 Preflight refuses remote startup unless the public origin is HTTPS, backend
 addresses are loopback, the password verifier is valid, the session database
-parent is private, Nginx configuration tests successfully, and an explicit
-remote-access flag is set.
+parent is private, the public bind is one specific non-backend address, and
+Nginx configuration tests successfully.
 
 ## Failure behavior
 
@@ -372,7 +413,8 @@ event-trace conformance, and the headless `generate` action.
 
 ## Rollout and rollback
 
-1. Import and validate `devs-gen-interface-v2` without changing deployment.
+1. Install and validate `devs-gen-interface-v2` in the deployment's private
+   `catalog/local_package` without changing the existing gallery resource.
 2. Implement shared auth disabled by default and run upstream tests.
 3. Start Studio, Code Server, and presentations on loopback only.
 4. test Nginx on a separate local/public port set with Code Server password
