@@ -56,27 +56,28 @@ class or suspected disclosure.
    bash deploy/shared-studio/deploy.sh init-credentials students
    ```
 
-   When using an IP-derived `nip.io` hostname, install Certbot and issue the
-   certificate before preflight. The helper verifies DNS first and exposes
-   only Certbot's bounded HTTP-01 responder on privileged port 80. When this
-   account cannot bind port 80 directly, it uses a short-lived official
-   Certbot container and removes it immediately afterward. Daily Studio
-   operation remains on unprivileged HTTPS ports.
+   Install Certbot and issue the certificate before preflight. HTTP-01 uses a
+   bounded standalone responder on privileged port 80. When inbound port 80 is
+   unavailable, a direct `duckdns.org` hostname can instead use DNS-01 with a
+   DuckDNS token stored under the private root at mode 600. The token is mounted
+   read-only into the short-lived official Certbot container and is never put
+   in a Workspace, command argument, or deployment log.
 
    ```bash
    brew install certbot
    bash deploy/shared-studio/issue_certificate.sh
    ```
 
-   Certificate issuance must be repeated before expiry. A stable institutional
-   hostname and centrally managed certificate remain preferable for long-term
-   service; `nip.io` is the short-term classroom deployment option.
+   Set `CERTIFICATE_AUTO_RENEW_ENABLED=1` to install a daily user-level launchd
+   check. It retains an unexpired certificate and reloads nginx only after the
+   deployed certificate changes. A stable institutional hostname and centrally
+   managed certificate remain preferable for long-term service; DuckDNS is the
+   short-term classroom deployment option when DNS-01 is required.
 
    If the campus edge blocks inbound port 80, HTTP-01 cannot succeed merely by
-   changing dynamic-DNS providers. A locally generated certificate preserves
-   encryption for a bounded test, but browsers will warn until its issuing CA
-   is trusted. Do not weaken the shared-session Cookie or publish the service
-   over plaintext HTTP as a workaround.
+   changing dynamic-DNS providers. DuckDNS works here because its TXT API
+   enables DNS-01, which needs outbound HTTPS only. Do not weaken the shared
+   session Cookie or publish the service over plaintext HTTP as a workaround.
 
 4. Run the complete preflight, then start:
 

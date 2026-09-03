@@ -59,6 +59,8 @@ case "${command}" in
   studio) exec bash "${DEPLOY_DIR}/studio.sh" ;;
   openhands) exec bash "${DEPLOY_DIR}/openhands.sh" ;;
   nginx) exec bash "${DEPLOY_DIR}/nginx.sh" start ;;
+  certificate) exec bash "${DEPLOY_DIR}/issue_certificate.sh" ;;
+  renew-certificate) exec bash "${DEPLOY_DIR}/renew_certificate.sh" ;;
   stop)
     require_value OPTPILOT_STATE_ROOT
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
@@ -159,7 +161,9 @@ case "${command}" in
       '  status                       Show listener status' \
       '  logs [LINES]                 Show bounded service logs' \
       '  studio | openhands           Run one private service in this terminal' \
-      '  nginx                        Start or reload the isolated TLS gateway'
+      '  nginx                        Start or reload the isolated TLS gateway' \
+      '  certificate                  Issue or retain the configured certificate' \
+      '  renew-certificate            Renew if due and reload nginx if changed'
     ;;
   *) printf 'Unknown command: %s\n' "${command}" >&2; exit 2 ;;
 esac

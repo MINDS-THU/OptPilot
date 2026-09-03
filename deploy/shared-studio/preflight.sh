@@ -77,16 +77,57 @@ if [ -f "${DEPLOY_CONFIG}" ]; then
   config_mode="$(stat -f '%Lp' "${DEPLOY_CONFIG}" 2>/dev/null || stat -c '%a' "${DEPLOY_CONFIG}" 2>/dev/null || true)"
   [ "${config_mode}" = "600" ] || { printf 'deploy.env must have mode 600.\n' >&2; failed=1; }
 fi
+if [ "${CERTBOT_CHALLENGE_MODE}" = "dns-duckdns" ]; then
+  case "${PUBLIC_HOST}" in
+    *.duckdns.org) duckdns_subdomain="${PUBLIC_HOST%.duckdns.org}" ;;
+    *) duckdns_subdomain="" ;;
+  esac
+  if [ -z "${duckdns_subdomain}" ] || [[ "${duckdns_subdomain}" == *.* ]]; then
+    printf 'dns-duckdns requires PUBLIC_HOST to be one direct DuckDNS subdomain.\n' >&2
+    failed=1
+  fi
+  [ -r "${DUCKDNS_TOKEN_FILE:-/missing}" ] || { printf 'DuckDNS token is not readable.\n' >&2; failed=1; }
+  if [ -f "${DUCKDNS_TOKEN_FILE:-/missing}" ]; then
+    duckdns_mode="$(stat -f '%Lp' "${DUCKDNS_TOKEN_FILE}" 2>/dev/null || stat -c '%a' "${DUCKDNS_TOKEN_FILE}" 2>/dev/null || true)"
+    [ "${duckdns_mode}" = "600" ] || { printf 'DuckDNS token file must have mode 600.\n' >&2; failed=1; }
+    python3 - "${OPTPILOT_PRIVATE_ROOT}" "${DUCKDNS_TOKEN_FILE}" <<'PY' || failed=1
+from pathlib import Path
+import sys
+
+private, token = [Path(value).resolve() for value in sys.argv[1:]]
+if not token.is_relative_to(private):
+    raise SystemExit("DUCKDNS_TOKEN_FILE must stay under OPTPILOT_PRIVATE_ROOT.")
+PY
+  fi
+fi
 [ "${PUBLIC_SERVER_NAME}" = "${PUBLIC_HOST}" ] || { printf 'PUBLIC_SERVER_NAME must exactly equal PUBLIC_HOST.\n' >&2; failed=1; }
 if command -v openssl >/dev/null 2>&1 && [ -r "${TLS_CERTIFICATE:-/missing}" ] && [ -r "${TLS_CERTIFICATE_KEY:-/missing}" ]; then
   openssl x509 -in "${TLS_CERTIFICATE}" -noout -checkend 86400 >/dev/null || {
     printf 'TLS certificate is invalid or expires within 24 hours.\n' >&2
     failed=1
   }
-  openssl verify -CAfile "${TLS_CERTIFICATE}" -verify_hostname "${PUBLIC_HOST}" "${TLS_CERTIFICATE}" >/dev/null 2>&1 || {
+  openssl x509 -in "${TLS_CERTIFICATE}" -noout -checkhost "${PUBLIC_HOST}" >/dev/null 2>&1 || {
     printf 'TLS certificate is not valid for PUBLIC_HOST.\n' >&2
     failed=1
   }
+  if [ "$(uname -s)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
+    security verify-cert -c "${TLS_CERTIFICATE}" -p ssl -s "${PUBLIC_HOST}" >/dev/null 2>&1 || {
+      printf 'TLS certificate chain is not trusted by macOS.\n' >&2
+      failed=1
+    }
+  else
+    ca_bundle=""
+    for candidate in /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem /etc/pki/tls/certs/ca-bundle.crt; do
+      if [ -r "${candidate}" ]; then
+        ca_bundle="${candidate}"
+        break
+      fi
+    done
+    if [ -z "${ca_bundle}" ] || ! openssl verify -CAfile "${ca_bundle}" -untrusted "${TLS_CERTIFICATE}" -verify_hostname "${PUBLIC_HOST}" "${TLS_CERTIFICATE}" >/dev/null 2>&1; then
+      printf 'TLS certificate chain could not be verified against a system CA bundle.\n' >&2
+      failed=1
+    fi
+  fi
   certificate_public_key="$(openssl x509 -in "${TLS_CERTIFICATE}" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null || true)"
   private_public_key="$(openssl pkey -in "${TLS_CERTIFICATE_KEY}" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null || true)"
   if [ -z "${certificate_public_key}" ] || [ "${certificate_public_key}" != "${private_public_key}" ]; then
