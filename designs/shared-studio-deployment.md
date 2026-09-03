@@ -52,6 +52,16 @@ provider ownership checks in the Workspace runtime or presentation broker.
 
 ## Decisions
 
+### Disjoint working and private roots
+
+The mountable Studio working root and provider-private deployment root are
+disjoint directories outside the source checkout. Credentials, session
+storage, TLS keys, installed Catalog templates, runtime ownership records,
+OpenHands state, logs, and gateway configuration remain under the private
+root. Preflight rejects either root containing the other and requires both to
+have mode `700`. This prevents the generic Code Server workspace path from
+mounting deployment authority.
+
 ### Versioned DEVS generator
 
 Create the new resource from the upstream `devs-gen-interface` at OptPilot
@@ -64,11 +74,16 @@ deploy/shared-studio/local-package-resources/devs-gen-interface-v2/
 ```
 
 Deployment copies that template to
-`<state-root>/catalog/local_package/resources/devs-gen-interface-v2/` and
-creates the private `local_package` metadata when absent. Studio opens the
-state root and indexes this editable local package, so the interface receives
-the Workspace runtime needed to execute generated simulations. The template
-path is never indexed alongside the installed copy.
+`<private-root>/catalog/devs_generator_v2/resources/devs-gen-interface-v2/` and
+creates the private package metadata when absent. The launcher exports that
+Catalog directory as `OPTPILOT_PACKAGES_ROOT`, so Studio publishes the first
+immutable revision at startup and enables editable Workspace creation. The
+interface then receives the Workspace runtime needed to execute generated
+simulations. The template path is never indexed alongside the installed copy.
+
+The version-specific source name avoids aliasing an older globally retained
+Realm source called `local_package`; the package still declares category
+`local`, preserving editable Workspace and runtime behavior.
 
 Its public identifiers are:
 
@@ -117,6 +132,8 @@ Nginx or Studio:
 - Nginx terminates TLS, applies the approved source-IP policy, and uses
   `auth_request` to require the same Studio session before forwarding every
   public Studio, Code Server, or presentation request.
+- Nginx logs request methods and normalized paths but omits query strings and
+  Cookies, so launch tokens and shared sessions are not persisted in logs.
 - Nginx Basic Auth is not used. It has per-origin browser behavior and causes
   repeated prompts across ports.
 - Workspace applications do not implement or receive the outer login secret.
@@ -414,7 +431,7 @@ event-trace conformance, and the headless `generate` action.
 ## Rollout and rollback
 
 1. Install and validate `devs-gen-interface-v2` in the deployment's private
-   `catalog/local_package` without changing the existing gallery resource.
+   `catalog/devs_generator_v2` without changing the existing gallery resource.
 2. Implement shared auth disabled by default and run upstream tests.
 3. Start Studio, Code Server, and presentations on loopback only.
 4. test Nginx on a separate local/public port set with Code Server password

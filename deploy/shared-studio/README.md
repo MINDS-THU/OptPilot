@@ -38,7 +38,12 @@ class or suspected disclosure.
 ## First setup
 
 1. Copy `deploy.env.example` to `deploy.env`, fill every placeholder, and run
-   `chmod 600 deploy.env`. Use a certificate valid for `PUBLIC_HOST`.
+   `chmod 600 deploy.env`. Use a certificate valid for `PUBLIC_HOST`. Keep
+   `OPTPILOT_STATE_ROOT` (the mountable Studio working tree) disjoint from
+   `OPTPILOT_PRIVATE_ROOT` (credentials, TLS keys, Catalog templates, runtime
+   ownership records, logs, and nginx configuration). Preflight rejects nested
+   or overlapping roots so opening the Studio root in Code Server cannot expose
+   deployment authority.
    `PUBLIC_BIND_IP` must be one specific address assigned to this Mac; it must
    not be `0.0.0.0` or the `127.0.0.1` address used by private backends.
    Keep the certificate and state paths free of whitespace because they are
@@ -51,6 +56,28 @@ class or suspected disclosure.
    bash deploy/shared-studio/deploy.sh init-credentials students
    ```
 
+   When using an IP-derived `nip.io` hostname, install Certbot and issue the
+   certificate before preflight. The helper verifies DNS first and exposes
+   only Certbot's bounded HTTP-01 responder on privileged port 80. When this
+   account cannot bind port 80 directly, it uses a short-lived official
+   Certbot container and removes it immediately afterward. Daily Studio
+   operation remains on unprivileged HTTPS ports.
+
+   ```bash
+   brew install certbot
+   bash deploy/shared-studio/issue_certificate.sh
+   ```
+
+   Certificate issuance must be repeated before expiry. A stable institutional
+   hostname and centrally managed certificate remain preferable for long-term
+   service; `nip.io` is the short-term classroom deployment option.
+
+   If the campus edge blocks inbound port 80, HTTP-01 cannot succeed merely by
+   changing dynamic-DNS providers. A locally generated certificate preserves
+   encryption for a bounded test, but browsers will warn until its issuing CA
+   is trusted. Do not weaken the shared-session Cookie or publish the service
+   over plaintext HTTP as a workaround.
+
 4. Run the complete preflight, then start:
 
    ```bash
@@ -59,9 +86,15 @@ class or suspected disclosure.
    ```
 
 The preflight installs the tracked DEVS Generator v2 template into
-`$OPTPILOT_STATE_ROOT/catalog/local_package`. It does not replace the upstream
-gallery version. Runtime state, login sessions, logs, and the editable local
-package remain outside the Git checkout.
+`$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. The default source name
+is the stable, version-specific `devs_generator_v2`, avoiding collision with a
+previously registered global Realm source named `local_package`. Its category
+remains `local`, so it can create the executable Workspace runtime required by
+the generator. The launcher also treats this private Catalog as its packages
+root, so Studio publishes an immutable first revision instead of leaving a
+non-editable filesystem import. It does not replace the upstream gallery
+version. Runtime state, login sessions, logs, and the editable package remain
+outside the Git checkout.
 
 ## Routine operations
 
@@ -73,9 +106,15 @@ bash deploy/shared-studio/deploy.sh stop
 ```
 
 `stop` only uses PID files under the configured state root and the isolated
-nginx PID. It does not kill an unrelated process merely because a port is in
-use. If preflight finds an occupied managed port, resolve that conflict before
-starting.
+nginx PID. On macOS, Studio and OpenHands run as private user-level launchd
+jobs so they survive the launching terminal and restart after an unexpected
+exit; `stop` unloads those jobs before checking their PID files. It does not
+kill an unrelated process merely because a port is in use. If preflight finds
+an occupied managed port, resolve that conflict before starting.
+
+The nginx access log records the request method and normalized path, but omits
+query strings and Cookies. This keeps launch-scoped Preview tokens and the
+shared session Cookie out of gateway logs.
 
 Rotate the shared password by writing a new credentials file and restarting
 Studio. Existing browser sessions are stored in a separate SQLite database; to

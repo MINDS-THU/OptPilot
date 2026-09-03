@@ -15,6 +15,10 @@ fi
 
 : "${PUBLIC_HOST:=}"
 : "${PUBLIC_BIND_IP:=}"
+: "${OPTPILOT_PRIVATE_ROOT:=}"
+: "${OPTPILOT_CATALOG_ROOT:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/catalog}}"
+: "${OPTPILOT_LOCAL_PACKAGE_NAME:=devs_generator_v2}"
+: "${SHARED_AUTH_SESSION_DB:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/shared-auth-sessions.sqlite3}}"
 : "${PUBLIC_SERVER_NAME:=${PUBLIC_HOST:-}}"
 : "${STUDIO_HOST:=127.0.0.1}"
 : "${STUDIO_PORT:=28666}"
@@ -33,8 +37,8 @@ fi
 : "${START_TIMEOUT_SECONDS:=180}"
 : "${NGINX_BIN:=/opt/homebrew/opt/nginx/bin/nginx}"
 
-if [ -n "${OPTPILOT_STATE_ROOT:-}" ]; then
-  RUNTIME_ROOT="${OPTPILOT_STATE_ROOT}/deployment"
+if [ -n "${OPTPILOT_PRIVATE_ROOT:-}" ]; then
+  RUNTIME_ROOT="${OPTPILOT_PRIVATE_ROOT}/deployment"
   NGINX_ROOT="${RUNTIME_ROOT}/nginx"
   NGINX_CONF="${NGINX_ROOT}/nginx.conf"
   NGINX_PID_FILE="${NGINX_ROOT}/nginx.pid"
@@ -56,6 +60,7 @@ loopback_value() {
   esac
 }
 
-port_pid() {
-  lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -n 1
+listener_pid() {
+  local address="$1" port="$2"
+  lsof -tiTCP@"${address}":"${port}" -sTCP:LISTEN 2>/dev/null | head -n 1
 }

@@ -3,10 +3,13 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 
 require_value OPTPILOT_STATE_ROOT
+require_value OPTPILOT_PRIVATE_ROOT
 require_value OPENHANDS_AGENT_SERVER_BIN
 require_value OH_SECRET_KEY
-mkdir -p "${OPTPILOT_STATE_ROOT}/openhands"
-cd "${OPTPILOT_STATE_ROOT}/openhands"
+mkdir -p "${OPTPILOT_PRIVATE_ROOT}/openhands"
+mkdir -p "${RUNTIME_ROOT}"
+printf '%s\n' "$$" > "${RUNTIME_ROOT}/openhands.pid"
+cd "${OPTPILOT_PRIVATE_ROOT}/openhands"
 export OH_ENABLE_VSCODE=0
 export OPENHANDS_SUPPRESS_BANNER=1
 export OH_SECRET_KEY

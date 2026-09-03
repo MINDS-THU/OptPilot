@@ -8,6 +8,16 @@ from pathlib import Path
 
 
 class SharedStudioNginxRenderTests(unittest.TestCase):
+    def test_gateway_access_log_omits_query_strings_and_cookies(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        launcher = (root / "deploy" / "shared-studio" / "nginx.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(r"\$request_method \$uri \$server_protocol", launcher)
+        self.assertNotIn(r"\$request_uri", launcher)
+        self.assertNotIn(r"\$http_cookie", launcher)
+        self.assertIn("access.log optpilot_safe", launcher)
+
     def test_every_listener_is_tls_allowlisted_and_fail_closed(self) -> None:
         root = Path(__file__).resolve().parents[2]
         renderer = root / "deploy" / "shared-studio" / "render_nginx.py"
@@ -34,6 +44,10 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         rendered = completed.stdout
         self.assertEqual(rendered.count("server {"), 7)
         self.assertEqual(rendered.count(" ssl;"), 7)
+        self.assertEqual(
+            rendered.count("if ($host != studio.example.edu) { return 444; }"),
+            7,
+        )
         self.assertIn("X-OptPilot-Target-Kind studio", rendered)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)

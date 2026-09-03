@@ -130,6 +130,7 @@ def render() -> str:
     listen {bind_ip}:{studio_port} ssl;
     server_name {server_name};
 {_tls()}
+    if ($host != {server_name}) {{ return 444; }}
 {_auth_location('studio', studio_port)}
     location = /login {{
 {allowed}
@@ -176,6 +177,7 @@ def render() -> str:
     listen {bind_ip}:{port} ssl;
     server_name {server_name};
 {_tls()}
+    if ($host != {server_name}) {{ return 444; }}
 {_auth_location(kind, studio_port)}
     location / {{
 {allowed}

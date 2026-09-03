@@ -4,10 +4,10 @@ source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 failed=0
 
 [ -f "${DEPLOY_CONFIG}" ] || { printf 'Missing %s; copy deploy.env.example first.\n' "${DEPLOY_CONFIG}" >&2; failed=1; }
-for name in OPTPILOT_STATE_ROOT PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS SHARED_AUTH_CREDENTIALS_FILE OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS SHARED_AUTH_CREDENTIALS_FILE SHARED_AUTH_SESSION_DB OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
   require_value "${name}" || failed=1
 done
-for command in uv python3 rsync lsof "${WORKSPACE_RUNTIME_BIN}"; do
+for command in uv python3 rsync lsof openssl "${WORKSPACE_RUNTIME_BIN}"; do
   command -v "${command}" >/dev/null 2>&1 || { printf 'Missing command: %s\n' "${command}" >&2; failed=1; }
 done
 [ -x "${NGINX_BIN}" ] || { printf 'nginx is not executable: %s\n' "${NGINX_BIN}" >&2; failed=1; }
@@ -22,30 +22,77 @@ fi
 [ -r "${TLS_CERTIFICATE:-/missing}" ] || { printf 'TLS certificate is not readable.\n' >&2; failed=1; }
 [ -r "${TLS_CERTIFICATE_KEY:-/missing}" ] || { printf 'TLS private key is not readable.\n' >&2; failed=1; }
 [ -r "${SHARED_AUTH_CREDENTIALS_FILE:-/missing}" ] || { printf 'Shared-login credentials are not readable.\n' >&2; failed=1; }
-case "${OPTPILOT_STATE_ROOT}" in
-  /*) ;;
-  *) printf 'OPTPILOT_STATE_ROOT must be an absolute path.\n' >&2; failed=1 ;;
-esac
-if [ -L "${OPTPILOT_STATE_ROOT}" ]; then
-  printf 'OPTPILOT_STATE_ROOT must not be a symlink.\n' >&2
-  failed=1
-elif ! mkdir -p -m 700 "${OPTPILOT_STATE_ROOT}"; then
-  printf 'OPTPILOT_STATE_ROOT could not be created.\n' >&2
-  failed=1
-elif [ ! -d "${OPTPILOT_STATE_ROOT}" ]; then
-  printf 'OPTPILOT_STATE_ROOT must be a directory.\n' >&2
-  failed=1
-else
-  state_mode="$(stat -f '%Lp' "${OPTPILOT_STATE_ROOT}" 2>/dev/null || stat -c '%a' "${OPTPILOT_STATE_ROOT}" 2>/dev/null || true)"
-  [ "${state_mode}" = "700" ] || { printf 'OPTPILOT_STATE_ROOT must have mode 700.\n' >&2; failed=1; }
-fi
+for root_name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT; do
+  root_path="${!root_name}"
+  case "${root_path}" in
+    /*) ;;
+    *) printf '%s must be an absolute path.\n' "${root_name}" >&2; failed=1; continue ;;
+  esac
+  if [ -L "${root_path}" ]; then
+    printf '%s must not be a symlink.\n' "${root_name}" >&2
+    failed=1
+  elif ! mkdir -p -m 700 "${root_path}"; then
+    printf '%s could not be created.\n' "${root_name}" >&2
+    failed=1
+  elif [ ! -d "${root_path}" ]; then
+    printf '%s must be a directory.\n' "${root_name}" >&2
+    failed=1
+  else
+    root_mode="$(stat -f '%Lp' "${root_path}" 2>/dev/null || stat -c '%a' "${root_path}" 2>/dev/null || true)"
+    [ "${root_mode}" = "700" ] || { printf '%s must have mode 700.\n' "${root_name}" >&2; failed=1; }
+  fi
+done
+python3 - "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}" "${OPTPILOT_CATALOG_ROOT}" "${SHARED_AUTH_CREDENTIALS_FILE}" "${SHARED_AUTH_SESSION_DB}" "${TLS_CERTIFICATE}" "${TLS_CERTIFICATE_KEY}" <<'PY' || failed=1
+from pathlib import Path
+import sys
+
+state, private, catalog, credentials, sessions, certificate, key = [
+    Path(value).resolve() for value in sys.argv[1:]
+]
+if private == state or private.is_relative_to(state) or state.is_relative_to(private):
+    raise SystemExit("OPTPILOT_STATE_ROOT and OPTPILOT_PRIVATE_ROOT must be disjoint.")
+for label, path in (
+    ("OPTPILOT_CATALOG_ROOT", catalog),
+    ("SHARED_AUTH_CREDENTIALS_FILE", credentials),
+    ("SHARED_AUTH_SESSION_DB", sessions),
+    ("TLS_CERTIFICATE", certificate),
+    ("TLS_CERTIFICATE_KEY", key),
+):
+    if not path.is_relative_to(private):
+        raise SystemExit(f"{label} must stay under OPTPILOT_PRIVATE_ROOT.")
+PY
 if [ -f "${SHARED_AUTH_CREDENTIALS_FILE:-/missing}" ]; then
   credential_mode="$(stat -f '%Lp' "${SHARED_AUTH_CREDENTIALS_FILE}" 2>/dev/null || stat -c '%a' "${SHARED_AUTH_CREDENTIALS_FILE}" 2>/dev/null || true)"
   [ "${credential_mode}" = "600" ] || { printf 'Shared-login credentials must have mode 600.\n' >&2; failed=1; }
 fi
+if [ -f "${SHARED_AUTH_SESSION_DB:-/missing}" ]; then
+  session_mode="$(stat -f '%Lp' "${SHARED_AUTH_SESSION_DB}" 2>/dev/null || stat -c '%a' "${SHARED_AUTH_SESSION_DB}" 2>/dev/null || true)"
+  [ "${session_mode}" = "600" ] || { printf 'Shared-login session database must have mode 600.\n' >&2; failed=1; }
+fi
+if [ -f "${TLS_CERTIFICATE_KEY:-/missing}" ]; then
+  key_mode="$(stat -f '%Lp' "${TLS_CERTIFICATE_KEY}" 2>/dev/null || stat -c '%a' "${TLS_CERTIFICATE_KEY}" 2>/dev/null || true)"
+  [ "${key_mode}" = "600" ] || { printf 'TLS private key must have mode 600.\n' >&2; failed=1; }
+fi
 if [ -f "${DEPLOY_CONFIG}" ]; then
   config_mode="$(stat -f '%Lp' "${DEPLOY_CONFIG}" 2>/dev/null || stat -c '%a' "${DEPLOY_CONFIG}" 2>/dev/null || true)"
   [ "${config_mode}" = "600" ] || { printf 'deploy.env must have mode 600.\n' >&2; failed=1; }
+fi
+[ "${PUBLIC_SERVER_NAME}" = "${PUBLIC_HOST}" ] || { printf 'PUBLIC_SERVER_NAME must exactly equal PUBLIC_HOST.\n' >&2; failed=1; }
+if command -v openssl >/dev/null 2>&1 && [ -r "${TLS_CERTIFICATE:-/missing}" ] && [ -r "${TLS_CERTIFICATE_KEY:-/missing}" ]; then
+  openssl x509 -in "${TLS_CERTIFICATE}" -noout -checkend 86400 >/dev/null || {
+    printf 'TLS certificate is invalid or expires within 24 hours.\n' >&2
+    failed=1
+  }
+  openssl verify -CAfile "${TLS_CERTIFICATE}" -verify_hostname "${PUBLIC_HOST}" "${TLS_CERTIFICATE}" >/dev/null 2>&1 || {
+    printf 'TLS certificate is not valid for PUBLIC_HOST.\n' >&2
+    failed=1
+  }
+  certificate_public_key="$(openssl x509 -in "${TLS_CERTIFICATE}" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null || true)"
+  private_public_key="$(openssl pkey -in "${TLS_CERTIFICATE_KEY}" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null || true)"
+  if [ -z "${certificate_public_key}" ] || [ "${certificate_public_key}" != "${private_public_key}" ]; then
+    printf 'TLS certificate and private key do not match.\n' >&2
+    failed=1
+  fi
 fi
 [ "${failed}" -eq 0 ] || exit 1
 
@@ -62,7 +109,7 @@ python3 -c \
   'import json, sys, urllib.request; payload=json.load(urllib.request.urlopen(sys.argv[1], timeout=5)); assert payload.get("status") == "ok"' \
   "${DEVS_COLLECTOR_HEALTHCHECK_URL}"
 validation_output="$(uv run --project "${SOURCE_ROOT}" --frozen optpilot package validate \
-  "${OPTPILOT_STATE_ROOT}/catalog/local_package" --check-source 2>&1)"
+  "${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}" --check-source 2>&1)"
 printf '%s\n' "${validation_output}"
 printf '%s\n' "${validation_output}" | grep -q '^Valid package:' || {
   printf 'Local package validation did not report success.\n' >&2

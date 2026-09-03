@@ -3,11 +3,11 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 command="${1:-help}"
 
-wait_for_port() {
-  local label="$1" port="$2" log_file="$3" pid_file="$4"
+wait_for_listener() {
+  local label="$1" address="$2" port="$3" log_file="$4" pid_file="$5"
   local second
   for ((second = 0; second < START_TIMEOUT_SECONDS; second++)); do
-    port_pid "${port}" >/dev/null && return 0
+    listener_pid "${address}" "${port}" >/dev/null && return 0
     if [ -f "${pid_file}" ] && ! kill -0 "$(<"${pid_file}")" 2>/dev/null; then
       printf '%s exited before listening on %s.\n' "${label}" "${port}" >&2
       tail -n 80 "${log_file}" >&2 || true
@@ -49,8 +49,8 @@ require_listener() {
 
 case "${command}" in
   init-credentials)
-    require_value OPTPILOT_STATE_ROOT
-    credentials_path="${SHARED_AUTH_CREDENTIALS_FILE:-${OPTPILOT_STATE_ROOT}/shared-login-credentials.json}"
+    require_value OPTPILOT_PRIVATE_ROOT
+    credentials_path="${SHARED_AUTH_CREDENTIALS_FILE:-${OPTPILOT_PRIVATE_ROOT}/shared-login-credentials.json}"
     uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen \
       python -m optpilot_studio.ui.shared_auth "${credentials_path}" --username "${2:-students}"
     ;;
@@ -61,6 +61,9 @@ case "${command}" in
   nginx) exec bash "${DEPLOY_DIR}/nginx.sh" start ;;
   stop)
     require_value OPTPILOT_STATE_ROOT
+    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+      bash "${DEPLOY_DIR}/launchd.sh" stop
+    fi
     stop_pid_file Studio "${RUNTIME_ROOT}/studio.pid"
     stop_pid_file OpenHands "${RUNTIME_ROOT}/openhands.pid"
     bash "${DEPLOY_DIR}/nginx.sh" stop
@@ -72,6 +75,9 @@ case "${command}" in
     cleanup_failed_start() {
       exit_code=$?
       if [ "${start_complete}" -ne 1 ]; then
+        if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+          bash "${DEPLOY_DIR}/launchd.sh" stop || true
+        fi
         stop_pid_file Studio "${RUNTIME_ROOT}/studio.pid"
         stop_pid_file OpenHands "${RUNTIME_ROOT}/openhands.pid"
         bash "${DEPLOY_DIR}/nginx.sh" stop || true
@@ -84,20 +90,33 @@ case "${command}" in
     [ "${OPTPILOT_OPENHANDS_ENABLED}" = "1" ] && managed_ports+=("OpenHands:${OPENHANDS_PORT}")
     for item in "${managed_ports[@]}"; do
       label="${item%%:*}"; port="${item##*:}"
-      existing_pid="$(port_pid "${port}" || true)"
+      if [ "${label}" = "Studio" ]; then
+        address="${STUDIO_HOST}"
+      else
+        address="${OPENHANDS_HOST}"
+      fi
+      existing_pid="$(listener_pid "${address}" "${port}" || true)"
       if [ -n "${existing_pid}" ]; then
-        printf '%s port %s belongs to unmanaged pid %s; refusing to stop it.\n' "${label}" "${port}" "${existing_pid}" >&2
+        printf '%s address %s:%s belongs to unmanaged pid %s; refusing to stop it.\n' "${label}" "${address}" "${port}" "${existing_pid}" >&2
         exit 1
       fi
     done
-    if [ "${OPTPILOT_OPENHANDS_ENABLED}" = "1" ]; then
-      nohup bash "${DEPLOY_DIR}/openhands.sh" > "${RUNTIME_ROOT}/openhands.log" 2>&1 &
-      printf '%s\n' "$!" > "${RUNTIME_ROOT}/openhands.pid"
-      wait_for_port OpenHands "${OPENHANDS_PORT}" "${RUNTIME_ROOT}/openhands.log" "${RUNTIME_ROOT}/openhands.pid"
+    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+      bash "${DEPLOY_DIR}/launchd.sh" start
+      if [ "${OPTPILOT_OPENHANDS_ENABLED}" = "1" ]; then
+        wait_for_listener OpenHands "${OPENHANDS_HOST}" "${OPENHANDS_PORT}" "${RUNTIME_ROOT}/openhands.log" "${RUNTIME_ROOT}/openhands.pid"
+      fi
+      wait_for_listener Studio "${STUDIO_HOST}" "${STUDIO_PORT}" "${RUNTIME_ROOT}/studio.log" "${RUNTIME_ROOT}/studio.pid"
+    else
+      if [ "${OPTPILOT_OPENHANDS_ENABLED}" = "1" ]; then
+        nohup bash "${DEPLOY_DIR}/openhands.sh" > "${RUNTIME_ROOT}/openhands.log" 2>&1 &
+        printf '%s\n' "$!" > "${RUNTIME_ROOT}/openhands.pid"
+        wait_for_listener OpenHands "${OPENHANDS_HOST}" "${OPENHANDS_PORT}" "${RUNTIME_ROOT}/openhands.log" "${RUNTIME_ROOT}/openhands.pid"
+      fi
+      nohup bash "${DEPLOY_DIR}/studio.sh" > "${RUNTIME_ROOT}/studio.log" 2>&1 &
+      printf '%s\n' "$!" > "${RUNTIME_ROOT}/studio.pid"
+      wait_for_listener Studio "${STUDIO_HOST}" "${STUDIO_PORT}" "${RUNTIME_ROOT}/studio.log" "${RUNTIME_ROOT}/studio.pid"
     fi
-    nohup bash "${DEPLOY_DIR}/studio.sh" > "${RUNTIME_ROOT}/studio.log" 2>&1 &
-    printf '%s\n' "$!" > "${RUNTIME_ROOT}/studio.pid"
-    wait_for_port Studio "${STUDIO_PORT}" "${RUNTIME_ROOT}/studio.log" "${RUNTIME_ROOT}/studio.pid"
     python3 -c \
       'import json, sys, urllib.request; payload=json.load(urllib.request.urlopen(sys.argv[1], timeout=5)); assert payload.get("ok") is True' \
       "http://${STUDIO_HOST}:${STUDIO_PORT}/api/health"
@@ -112,10 +131,16 @@ case "${command}" in
     ;;
   status)
     require_value OPTPILOT_STATE_ROOT
-    for item in "Studio:${STUDIO_PORT}" "OpenHands:${OPENHANDS_PORT}"; do
-      label="${item%%:*}"; port="${item##*:}"
-      pid="$(port_pid "${port}" || true)"
-      [ -n "${pid}" ] && printf '%-10s running (port %s, pid %s)\n' "${label}" "${port}" "${pid}" || printf '%-10s stopped\n' "${label}"
+    for item in "Studio:${STUDIO_HOST}:${STUDIO_PORT}:${RUNTIME_ROOT}/studio.pid" "OpenHands:${OPENHANDS_HOST}:${OPENHANDS_PORT}:${RUNTIME_ROOT}/openhands.pid"; do
+      IFS=: read -r label address port pid_file <<<"${item}"
+      pid=""
+      [ -f "${pid_file}" ] && pid="$(<"${pid_file}")"
+      listener="$(listener_pid "${address}" "${port}" || true)"
+      if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null && [ -n "${listener}" ]; then
+        printf '%-10s running (%s:%s, pid %s)\n' "${label}" "${address}" "${port}" "${pid}"
+      else
+        printf '%-10s stopped\n' "${label}"
+      fi
     done
     [ -f "${NGINX_PID_FILE}" ] && kill -0 "$(<"${NGINX_PID_FILE}")" 2>/dev/null && printf '%-10s running\n' nginx || printf '%-10s stopped\n' nginx
     ;;
