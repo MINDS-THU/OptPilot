@@ -17,6 +17,7 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertNotIn(r"\$request_uri", launcher)
         self.assertNotIn(r"\$http_cookie", launcher)
         self.assertIn("access.log optpilot_safe", launcher)
+        self.assertIn("limit_req_zone $binary_remote_addr", launcher)
 
     def test_every_listener_is_tls_allowlisted_and_fail_closed(self) -> None:
         root = Path(__file__).resolve().parents[2]
@@ -49,6 +50,9 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
             7,
         )
         self.assertIn("X-OptPilot-Target-Kind studio", rendered)
+        self.assertEqual(
+            rendered.count("limit_req zone=optpilot_login_per_ip"), 1
+        )
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)
         self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 8)

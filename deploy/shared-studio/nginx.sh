@@ -31,6 +31,8 @@ python3 "${DEPLOY_DIR}/render_nginx.py" > "${NGINX_ROOT}/servers.conf"
     'events { worker_connections 4096; }' \
     'http {' \
     '    map $http_upgrade $connection_upgrade { default upgrade; "" close; }' \
+    '    limit_req_zone $binary_remote_addr zone=optpilot_login_per_ip:10m rate=20r/m;' \
+    '    limit_req_status 429;' \
     "    log_format optpilot_safe '\$remote_addr [\$time_local] \"\$request_method \$uri \$server_protocol\" \$status \$body_bytes_sent rt=\$request_time urt=\$upstream_response_time';" \
     "    access_log ${NGINX_ROOT}/access.log optpilot_safe;" \
     '    client_max_body_size 256m;' \

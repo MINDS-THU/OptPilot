@@ -114,7 +114,9 @@ an occupied managed port, resolve that conflict before starting.
 
 The nginx access log records the request method and normalized path, but omits
 query strings and Cookies. This keeps launch-scoped Preview tokens and the
-shared session Cookie out of gateway logs.
+shared session Cookie out of gateway logs. Login POSTs are additionally
+rate-limited per source address by nginx; Studio applies its own per-address
+and global failed-login limits.
 
 Rotate the shared password by writing a new credentials file and restarting
 Studio. Existing browser sessions are stored in a separate SQLite database; to

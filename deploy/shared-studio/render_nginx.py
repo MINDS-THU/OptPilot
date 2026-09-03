@@ -139,6 +139,7 @@ def render() -> str:
     }}
     location = /api/auth/login {{
 {allowed}
+        limit_req zone=optpilot_login_per_ip burst=10 nodelay;
 {common_headers}
         proxy_pass http://127.0.0.1:{studio_port};
     }}
