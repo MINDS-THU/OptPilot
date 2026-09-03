@@ -26,6 +26,7 @@ def _mock_ui_state() -> mock.Mock:
     state._runs_response_cache_lock = threading.Lock()
     state._runs_response_cache = None
     state._runs_mutation_generation = 0
+    state.shared_auth = None
     return state
 
 

@@ -39,6 +39,13 @@ def _run_ui_command(args) -> int:
             environment_preview_trust_source=(
                 args.environment_preview_trust_source
             ),
+            public_url=args.public_url,
+            trust_loopback_proxy=args.trust_loopback_proxy,
+            shared_auth_credentials_file=args.shared_auth_credentials_file,
+            shared_auth_session_db=args.shared_auth_session_db,
+            shared_auth_session_ttl_seconds=(
+                args.shared_auth_session_ttl_seconds
+            ),
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:

@@ -9,6 +9,7 @@ import calendar
 import difflib
 import fnmatch
 import hashlib
+import html
 import ipaddress
 import importlib.util
 import json
@@ -257,6 +258,7 @@ from .runtime_supervisor import (
     StudioRuntimeSupervisorBusy,
     StudioRuntimeSupervisorClaim,
 )
+from .shared_auth import SharedAuth
 
 
 JsonDict = Dict[str, Any]
@@ -989,6 +991,75 @@ class CodeServerState:
         return self.process is not None and self.process.poll() is None
 
 
+@dataclass(frozen=True)
+class PublicAccessOptions:
+    """Exact browser origin exposed by one trusted loopback reverse proxy."""
+
+    scheme: str = ""
+    hostname: str = ""
+    studio_port: Optional[int] = None
+    trust_loopback_proxy: bool = False
+
+    @classmethod
+    def from_url(
+        cls, value: Optional[str], *, trust_loopback_proxy: bool = False
+    ) -> "PublicAccessOptions":
+        raw = str(value or "").strip()
+        if not raw:
+            if trust_loopback_proxy:
+                raise ValueError("--trust-loopback-proxy requires --public-url.")
+            return cls()
+        parsed = urlparse(raw)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("Public Studio URL has an invalid port.") from error
+        if (
+            parsed.scheme.casefold() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "Public Studio URL must be an HTTPS origin without a path, query, or credentials."
+            )
+        return cls(
+            scheme="https",
+            hostname=str(parsed.hostname).casefold(),
+            studio_port=port or 443,
+            trust_loopback_proxy=bool(trust_loopback_proxy),
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.scheme and self.hostname and self.studio_port)
+
+    @staticmethod
+    def _display_hostname(hostname: str) -> str:
+        return f"[{hostname}]" if ":" in hostname else hostname
+
+    def netloc(self, port: Optional[int] = None) -> str:
+        selected_port = int(port or self.studio_port or 443)
+        host = self._display_hostname(self.hostname)
+        return host if selected_port == 443 else f"{host}:{selected_port}"
+
+    @property
+    def studio_origin(self) -> str:
+        if not self.enabled:
+            return ""
+        return f"{self.scheme}://{self.netloc()}"
+
+    def browser_url(self, port: int, path: str = "/") -> str:
+        if not self.enabled:
+            return ""
+        suffix = path if path.startswith("/") else f"/{path}"
+        return f"{self.scheme}://{self.netloc(port)}{suffix}"
+
+
 def _probe_command_text(command: Any) -> str:
     """Render a probe command for operators without echoing its full path."""
 
@@ -1010,6 +1081,8 @@ class WorkspaceRuntimeOptions:
     dockerfile: Optional[str] = None
     host: str = "127.0.0.1"
     port_start: int = 18766
+    port_count: int = 200
+    presentation_port_offset: int = 1000
     container_port: int = 8766
     auth: str = "none"
     password: Optional[str] = None
@@ -1024,6 +1097,7 @@ class WorkspaceRuntimeOptions:
     memory_limit: str = "4g"
     pids_limit: int = 1024
     no_new_privileges: bool = True
+    public_access: Optional[PublicAccessOptions] = None
 
     @classmethod
     def from_env(cls) -> "WorkspaceRuntimeOptions":
@@ -1042,6 +1116,13 @@ class WorkspaceRuntimeOptions:
             host=os.environ.get("OPTPILOT_WORKSPACE_RUNTIME_HOST") or cls.host,
             port_start=_int_env(
                 "OPTPILOT_WORKSPACE_RUNTIME_PORT_START", cls.port_start
+            ),
+            port_count=_int_env(
+                "OPTPILOT_WORKSPACE_RUNTIME_PORT_COUNT", cls.port_count
+            ),
+            presentation_port_offset=_int_env(
+                "OPTPILOT_PRESENTATION_PORT_OFFSET",
+                cls.presentation_port_offset,
             ),
             container_port=_int_env(
                 "OPTPILOT_WORKSPACE_RUNTIME_CONTAINER_PORT", cls.container_port
@@ -1082,6 +1163,7 @@ class WorkspaceRuntimeOptions:
             no_new_privileges=_ui_env_flag(
                 "OPTPILOT_WORKSPACE_RUNTIME_NO_NEW_PRIVILEGES", cls.no_new_privileges
             ),
+            public_access=None,
         )
 
 
@@ -1292,6 +1374,8 @@ class WorkspaceRuntimeManager:
                 )
         self.options = options
         self._health_cache: tuple[float, JsonDict] = (0.0, {})
+        self._owned_code_ports_cache: dict[int, tuple[float, bool]] = {}
+        self._owned_code_ports_lock = threading.RLock()
         # Device/inode values are live attachment fences, not persisted
         # identities.  Filesystems may assign another device number after a
         # normal remount.  A manager instance remembers the first observation
@@ -1301,6 +1385,65 @@ class WorkspaceRuntimeManager:
         self.runtime_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         if self.runtime_root.is_symlink() or not self.runtime_root.is_dir():
             raise ValueError("Workspace runtime storage must be a real directory.")
+
+    def owns_code_server_port(self, port: int) -> bool:
+        """Return whether a live managed container owns this public code port."""
+
+        try:
+            requested = int(port)
+        except (TypeError, ValueError):
+            return False
+        range_start = int(self.options.port_start)
+        range_end = range_start + max(1, int(self.options.port_count))
+        if requested not in range(range_start, range_end):
+            return False
+        now = time.monotonic()
+        with self._owned_code_ports_lock:
+            cached = self._owned_code_ports_cache.get(requested)
+            # A Code Server page issues many concurrent asset requests. Cache
+            # only this exact port briefly; explicit runtime record updates
+            # invalidate it immediately.
+            if cached is not None and now - cached[0] < 2.0:
+                return cached[1]
+            allowed = False
+            if self.runtime_root.exists():
+                for path in self.runtime_root.glob("*/runtime.json"):
+                    try:
+                        payload = json.loads(path.read_text(encoding="utf-8"))
+                        workspace_id = str(payload.get("workspace_id") or "")
+                        host_port = int(payload.get("host_port") or 0)
+                        if (
+                            not workspace_id
+                            or host_port != requested
+                            or self._workspace_runtime_dir(workspace_id) != path.parent
+                        ):
+                            continue
+                        record = self._read_record(workspace_id)
+                        container_name = str(record.get("container_name") or "")
+                        allowed = bool(
+                            int(record.get("host_port") or 0) == requested
+                            and container_name
+                            and self._container_running(container_name)
+                            and _code_server_reachable(
+                                self._code_server_base_url(requested)
+                            )
+                        )
+                        break
+                    except (
+                        OSError,
+                        RuntimeError,
+                        subprocess.SubprocessError,
+                        TypeError,
+                        ValueError,
+                        json.JSONDecodeError,
+                    ):
+                        continue
+            self._owned_code_ports_cache[requested] = (now, allowed)
+            return allowed
+
+    def _mark_code_server_port_owned(self, port: int) -> None:
+        with self._owned_code_ports_lock:
+            self._owned_code_ports_cache[int(port)] = (time.monotonic(), True)
 
     def prepared_runtime_provider_identity(self) -> JsonDict:
         """Return the exact local builder identity used in cache keys."""
@@ -2011,10 +2154,14 @@ class WorkspaceRuntimeManager:
                 }
             )
             self._write_record(workspace_id, record)
+            self._mark_code_server_port_owned(host_port)
             status = self.status(workspace)
             return {
                 **self.global_status(active_workspace=workspace, port=host_port),
-                "open_url": f"{url}?folder={quote(str(root), safe='')}",
+                "open_url": (
+                    f"{self._code_server_browser_url(host_port)}"
+                    f"?folder={quote(str(root), safe='')}"
+                ),
                 "folder": str(root),
                 "workspace_id": workspace_id,
                 "workspace_root": str(root),
@@ -2083,8 +2230,12 @@ class WorkspaceRuntimeManager:
             }
         )
         self._write_record(workspace_id, record)
+        self._mark_code_server_port_owned(host_port)
         status = self.status(workspace)
-        open_url = f"{url}?folder={quote(str(root), safe='')}"
+        open_url = (
+            f"{self._code_server_browser_url(host_port)}"
+            f"?folder={quote(str(root), safe='')}"
+        )
         return {
             **self.global_status(active_workspace=workspace, port=host_port),
             "open_url": open_url,
@@ -2649,19 +2800,23 @@ class WorkspaceRuntimeManager:
         record = self._read_record(workspace_id)
         existing = int(record.get("host_port") or 0)
         reserved = self._reserved_host_ports(exclude_workspace_id=workspace_id)
+        range_start = int(self.options.port_start)
+        range_end = range_start + max(1, int(self.options.port_count))
         if (
-            existing
+            existing in range(range_start, range_end)
             and existing not in reserved
             and not _port_listening(self.options.host, existing)
         ):
             return existing
-        start = max(int(self.options.port_start), int(existing or 0) + 1)
-        for port in range(start, start + 200):
+        for port in range(range_start, range_end):
             if port in reserved:
                 continue
             if not _port_listening(self.options.host, port):
                 return port
-        raise OSError(f"No available workspace runtime port found near {start}.")
+        raise OSError(
+            "No available workspace runtime port found in "
+            f"{range_start}-{range_end - 1}."
+        )
 
     def _reserved_host_ports(self, *, exclude_workspace_id: str = "") -> set[int]:
         reserved: set[int] = set()
@@ -2889,6 +3044,13 @@ class WorkspaceRuntimeManager:
     def _code_server_base_url(self, port: Optional[int]) -> str:
         return f"http://{self.options.host}:{int(port or self.options.port_start)}/"
 
+    def _code_server_browser_url(self, port: Optional[int]) -> str:
+        selected_port = int(port or self.options.port_start)
+        public_access = self.options.public_access
+        if public_access is not None and public_access.enabled:
+            return public_access.browser_url(selected_port)
+        return self._code_server_base_url(selected_port)
+
     def _workspace_runtime_candidates(
         self, workspace_id: str
     ) -> tuple[Path, ...]:
@@ -3057,6 +3219,13 @@ class WorkspaceRuntimeManager:
             }
         )
         _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        try:
+            host_port = int(payload.get("host_port") or 0)
+        except (TypeError, ValueError):
+            host_port = 0
+        if host_port:
+            with self._owned_code_ports_lock:
+                self._owned_code_ports_cache.pop(host_port, None)
 
     def _create_runtime_claim(self, workspace_id: str, runtime_path: Path) -> None:
         claim = {
@@ -3411,11 +3580,15 @@ class UiState:
         realm_runtime: Optional[LocalRealmRuntime] = None,
         code_server: Optional[CodeServerOptions] = None,
         workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
+        public_access: Optional[PublicAccessOptions] = None,
+        shared_auth: Optional[SharedAuth] = None,
         runtime_supervisor_claim: Optional[StudioRuntimeSupervisorClaim] = None,
         catalog_refresh_ttl_seconds: float = 0.0,
         agent_tick_interval_seconds: float = 0.0,
     ):
         self.cwd = cwd.resolve()
+        self.public_access = public_access or PublicAccessOptions()
+        self.shared_auth = shared_auth
         # Browser mutations carry this process-local capability in addition to
         # an Origin check. A hostile page can submit a cross-origin form/fetch
         # to a loopback listener, but it cannot read the no-CORS bootstrap that
@@ -3563,6 +3736,7 @@ class UiState:
         self._code_workspace_start_counts: Dict[str, int] = {}
         self._code_workspace_start_guard = threading.Lock()
         runtime_options = workspace_runtime or WorkspaceRuntimeOptions.from_env()
+        runtime_options.public_access = self.public_access
         runtime_options.host = runtime_options.host or code_server_options.host
         if (
             runtime_options.port_start == WorkspaceRuntimeOptions.port_start
@@ -3583,16 +3757,16 @@ class UiState:
         if self._runtime_supervisor_claim is not None:
             self._cleanup_orphaned_interface_runtimes()
             self._cleanup_orphaned_resource_action_runtimes()
-        presentation_port_start = max(
-            19000, int(runtime_options.port_start) + 1000
+        presentation_port_start = (
+            int(runtime_options.port_start)
+            + int(runtime_options.presentation_port_offset)
         )
-        if presentation_port_start > 64536:
-            # Keep a full 1,000-port allocation window when the workspace
-            # runtime starts near the end of the TCP port range.
-            presentation_port_start = 19000
         self.presentation_broker = WebPresentationBroker(
             host=runtime_options.host or "127.0.0.1",
             port_start=presentation_port_start,
+            port_count=max(1, int(runtime_options.port_count)),
+            public_scheme=self.public_access.scheme or "http",
+            public_host=self.public_access.hostname,
         )
         self.active_code_workspace_id = ""
         self.agent_session_locks: Dict[str, threading.Lock] = {}
@@ -4602,9 +4776,35 @@ def run_ui(
     environment_preview_container_executable: Optional[str] = None,
     environment_preview_trusted_images: Optional[List[str]] = None,
     environment_preview_trust_source: str = "auto",
+    public_url: Optional[str] = None,
+    trust_loopback_proxy: bool = False,
+    shared_auth_credentials_file: Optional[str] = None,
+    shared_auth_session_db: Optional[str] = None,
+    shared_auth_session_ttl_seconds: int = 12 * 60 * 60,
     open_browser: bool = False,
 ) -> None:
     cwd = Path.cwd().resolve()
+    public_access = PublicAccessOptions.from_url(
+        public_url, trust_loopback_proxy=trust_loopback_proxy
+    )
+    if public_access.enabled:
+        if not public_access.trust_loopback_proxy:
+            raise ValueError("Public Studio access requires --trust-loopback-proxy.")
+        if not shared_auth_credentials_file:
+            raise ValueError(
+                "Public Studio access requires --shared-auth-credentials-file."
+            )
+        for label, value in (("Studio", host), ("Code Server", code_server_host)):
+            try:
+                loopback = ipaddress.ip_address(value).is_loopback
+            except ValueError:
+                loopback = value.casefold() == "localhost"
+            if not loopback:
+                raise ValueError(
+                    f"{label} must bind to loopback when public access is enabled."
+                )
+    elif shared_auth_credentials_file:
+        raise ValueError("Shared login requires --public-url.")
     # Validate and pin the Realm root before deriving or creating any
     # project-local control path beneath it.  This prevents an unsafe terminal
     # symlink from receiving even the supervisor lock before Realm startup.
@@ -4612,6 +4812,19 @@ def run_ui(
     project_state_root = studio_project_state_directory(
         cwd,
         authority_root=realm_root,
+    )
+    shared_auth = (
+        SharedAuth.from_files(
+            credentials_path=Path(shared_auth_credentials_file),
+            database_path=(
+                Path(shared_auth_session_db)
+                if shared_auth_session_db
+                else project_state_root / "shared-auth-sessions.sqlite3"
+            ),
+            session_ttl_seconds=shared_auth_session_ttl_seconds,
+        )
+        if shared_auth_credentials_file
+        else None
     )
     runtime_supervisor_claim = StudioRuntimeSupervisorClaim.acquire(
         cwd,
@@ -4631,6 +4844,7 @@ def run_ui(
         if workspace_runtime_port_start:
             runtime_options.port_start = workspace_runtime_port_start
         runtime_options.host = code_server_host
+        runtime_options.public_access = public_access
         runtime_options.auth = code_server_auth
         runtime_options.password = code_server_password or runtime_options.password
         preview_executable, preview_trust = _environment_preview_runtime_options(
@@ -4662,6 +4876,8 @@ def run_ui(
                 password=code_server_password,
             ),
             workspace_runtime=runtime_options,
+            public_access=public_access,
+            shared_auth=shared_auth,
             runtime_supervisor_claim=runtime_supervisor_claim,
             catalog_refresh_ttl_seconds=CATALOG_REFRESH_TTL_SECONDS,
         agent_tick_interval_seconds=STUDIO_AGENT_TICK_INTERVAL_SECONDS,
@@ -4672,7 +4888,7 @@ def run_ui(
         # Realm descriptors. ThreadingHTTPServer defaults to daemon handlers,
         # which server_close() deliberately does not join.
         server.daemon_threads = False
-        url = f"http://{host}:{server.server_port}/"
+        url = public_access.studio_origin + "/" if public_access.enabled else f"http://{host}:{server.server_port}/"
         print(f"OptPilot UI running at {url}", flush=True)
         if open_browser:
             webbrowser.open(url)
@@ -4950,6 +5166,32 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
         ),
     )
     parser.add_argument(
+        "--public-url",
+        default=None,
+        help="Exact public HTTPS Studio origin served by the reverse proxy.",
+    )
+    parser.add_argument(
+        "--trust-loopback-proxy",
+        action="store_true",
+        help="Trust forwarded origin headers only from the loopback reverse proxy.",
+    )
+    parser.add_argument(
+        "--shared-auth-credentials-file",
+        default=None,
+        help="Private scrypt credential verifier enabling the shared login.",
+    )
+    parser.add_argument(
+        "--shared-auth-session-db",
+        default=None,
+        help="Optional private SQLite path for restart-persistent login sessions.",
+    )
+    parser.add_argument(
+        "--shared-auth-session-ttl-seconds",
+        type=int,
+        default=12 * 60 * 60,
+        help="Shared login session lifetime (default: 12 hours).",
+    )
+    parser.add_argument(
         "--open-browser", action="store_true", help="Open the UI in a browser"
     )
     return parser
@@ -4986,6 +5228,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             environment_preview_trust_source=(
                 args.environment_preview_trust_source
             ),
+            public_url=args.public_url,
+            trust_loopback_proxy=args.trust_loopback_proxy,
+            shared_auth_credentials_file=args.shared_auth_credentials_file,
+            shared_auth_session_db=args.shared_auth_session_db,
+            shared_auth_session_ttl_seconds=args.shared_auth_session_ttl_seconds,
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:
@@ -4994,7 +5241,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
-def _trusted_studio_host_header(value: Any) -> bool:
+def _trusted_studio_host_header(value: Any, public_host: str = "") -> bool:
     """Allow local names and literal addresses, never DNS-rebindable names."""
 
     host = str(value or "").strip()
@@ -5019,6 +5266,8 @@ def _trusted_studio_host_header(value: Any) -> bool:
     ):
         return False
     hostname = str(parsed.hostname or "").casefold()
+    if public_host and host.casefold() == public_host.casefold():
+        return True
     if hostname == "localhost":
         return True
     try:
@@ -5028,7 +5277,9 @@ def _trusted_studio_host_header(value: Any) -> bool:
     return True
 
 
-def _studio_origin_matches_host(origin: Any, host: str) -> bool:
+def _studio_origin_matches_host(
+    origin: Any, host: str, scheme: str = "http"
+) -> bool:
     """Return whether a browser Origin is exactly this request's origin host."""
 
     value = str(origin or "").strip()
@@ -5040,9 +5291,7 @@ def _studio_origin_matches_host(origin: Any, host: str) -> bool:
     except ValueError:
         return False
     return bool(
-        # ThreadingHTTPServer serves plain HTTP; a different scheme is a
-        # different browser origin even when its host and port text match.
-        parsed.scheme.casefold() == "http"
+        parsed.scheme.casefold() == scheme.casefold()
         and parsed.netloc.casefold() == host.casefold()
         and parsed.username is None
         and parsed.password is None
@@ -5051,6 +5300,61 @@ def _studio_origin_matches_host(origin: Any, host: str) -> bool:
         and not parsed.query
         and not parsed.fragment
     )
+
+
+def _effective_studio_request_origin(
+    *,
+    headers: Any,
+    client_address: Any,
+    public_access: PublicAccessOptions,
+) -> tuple[str, str]:
+    """Resolve the browser scheme/host without trusting Internet headers."""
+
+    direct_host = str(headers.get("Host") or "").strip()
+    if not public_access.enabled or not public_access.trust_loopback_proxy:
+        return "http", direct_host
+    try:
+        peer = ipaddress.ip_address(str(client_address[0]))
+    except (IndexError, TypeError, ValueError):
+        return "http", direct_host
+    forwarded_host = str(headers.get("X-Forwarded-Host") or "").strip()
+    forwarded_proto = str(headers.get("X-Forwarded-Proto") or "").strip().casefold()
+    if peer.is_loopback and forwarded_host and forwarded_proto:
+        if "," in forwarded_host or "," in forwarded_proto:
+            return "", ""
+        return forwarded_proto, forwarded_host
+    return "http", direct_host
+
+
+def _safe_login_next(value: Any) -> str:
+    candidate = str(value or "/").strip()
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return "/"
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    return candidate
+
+
+def _shared_login_page(*, next_path: str = "/", error: str = "") -> bytes:
+    safe_next = html.escape(_safe_login_next(next_path), quote=True)
+    error_markup = (
+        f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · OptPilot</title><style>
+html,body{{height:100%;margin:0}}body{{display:grid;place-items:center;background:#f4f7fb;color:#172033;font:15px system-ui,sans-serif}}
+main{{width:min(360px,calc(100% - 40px));padding:30px;border:1px solid #d9e0ea;border-radius:14px;background:#fff;box-shadow:0 12px 35px #18243b14}}
+h1{{font-size:22px;margin:0 0 8px}}p{{color:#5b6474;margin:0 0 22px}}label{{display:block;font-weight:600;margin:14px 0 6px}}
+input{{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bcc6d5;border-radius:8px;font:inherit}}
+button{{width:100%;margin-top:22px;padding:11px;border:0;border-radius:8px;background:#2458d3;color:#fff;font:600 15px system-ui;cursor:pointer}}
+.error{{padding:10px;border-radius:8px;background:#fff0f0;color:#a22626;margin:14px 0}}
+</style></head><body><main><h1>Sign in to OptPilot</h1><p>Use the shared access account provided for this session.</p>{error_markup}
+<form method="post" action="/api/auth/login"><input type="hidden" name="next" value="{safe_next}">
+<label for="username">Username</label><input id="username" name="username" autocomplete="username" required autofocus>
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+<button type="submit">Sign in</button></form></main></body></html>""".encode("utf-8")
 
 
 def _handler_factory(state: UiState):
@@ -5094,11 +5398,39 @@ def _handler_factory(state: UiState):
             path = parsed.path
             query = parse_qs(parsed.query)
             try:
+                if path == "/login":
+                    next_path = _safe_login_next((query.get("next") or ["/"])[0])
+                    if state.shared_auth is None or self._shared_authenticated():
+                        self._redirect(next_path)
+                    else:
+                        self._send_login_page(next_path=next_path)
+                    return
+                if path == "/api/auth/session":
+                    self._send_json(
+                        {
+                            "authenticated": self._shared_authenticated(),
+                            "shared_login_enabled": state.shared_auth is not None,
+                        }
+                    )
+                    return
+                if path == "/api/auth/verify":
+                    self._handle_auth_verify()
+                    return
+                if (
+                    state.shared_auth is not None
+                    and path == "/api/health"
+                    and self._direct_loopback_request()
+                ):
+                    self._send_json({"ok": True, "cwd": str(state.cwd)})
+                    return
+                if not self._require_shared_auth(path):
+                    return
                 if path == "/api/security-context":
-                    if not _trusted_studio_host_header(self.headers.get("Host", "")):
+                    scheme, host = self._request_origin()
+                    if not self._trusted_request_origin(scheme, host):
                         self._send_json(
                             {
-                                "error": "Studio security context requires a localhost or literal-IP Host.",
+                                "error": "Studio security context requires its configured origin.",
                                 "code": "studio_untrusted_host",
                             },
                             status=HTTPStatus.FORBIDDEN,
@@ -5407,6 +5739,14 @@ def _handler_factory(state: UiState):
 
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/api/auth/login":
+                self._handle_auth_login()
+                return
+            if parsed.path == "/api/auth/logout":
+                self._handle_auth_logout()
+                return
+            if not self._require_shared_auth(parsed.path):
+                return
             if not self._authorize_mutation_request():
                 return
             try:
@@ -5714,6 +6054,8 @@ def _handler_factory(state: UiState):
 
         def do_DELETE(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if not self._require_shared_auth(parsed.path):
+                return
             if not self._authorize_mutation_request():
                 return
             try:
@@ -6591,6 +6933,244 @@ def _handler_factory(state: UiState):
                 )
             )
 
+        def _request_origin(self) -> tuple[str, str]:
+            return _effective_studio_request_origin(
+                headers=self.headers,
+                client_address=getattr(self, "client_address", ("", 0)),
+                public_access=state.public_access,
+            )
+
+        def _trusted_request_origin(self, scheme: str, host: str) -> bool:
+            if state.public_access.enabled:
+                return bool(
+                    scheme == state.public_access.scheme
+                    and host.casefold() == state.public_access.netloc().casefold()
+                )
+            return _trusted_studio_host_header(host)
+
+        def _direct_loopback_request(self) -> bool:
+            if self.headers.get("X-Forwarded-Host") or self.headers.get(
+                "X-Forwarded-Proto"
+            ):
+                return False
+            try:
+                peer = ipaddress.ip_address(str(self.client_address[0]))
+            except (AttributeError, IndexError, TypeError, ValueError):
+                return False
+            return peer.is_loopback and _trusted_studio_host_header(
+                self.headers.get("Host", "")
+            )
+
+        def _shared_authenticated(self) -> bool:
+            return bool(
+                state.shared_auth is None
+                or state.shared_auth.verify_cookie(self.headers.get("Cookie", ""))
+            )
+
+        def _require_shared_auth(self, path: str) -> bool:
+            if self._shared_authenticated():
+                return True
+            if path.startswith("/api/"):
+                self._send_json(
+                    {
+                        "error": "Authentication required.",
+                        "code": "studio_auth_required",
+                    },
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
+            else:
+                target = quote(_safe_login_next(self.path), safe="")
+                self._redirect(f"/login?next={target}")
+            return False
+
+        def _authorize_login_origin(self) -> bool:
+            scheme, host = self._request_origin()
+            if not self._trusted_request_origin(scheme, host):
+                self._send_json(
+                    {
+                        "error": "Login must use the configured Studio origin.",
+                        "code": "studio_login_untrusted_origin",
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            origin = self.headers.get("Origin")
+            fetch_site = str(self.headers.get("Sec-Fetch-Site") or "").casefold()
+            if fetch_site == "cross-site" or (
+                origin is not None
+                and not _studio_origin_matches_host(origin, host, scheme)
+            ):
+                self._send_json(
+                    {
+                        "error": "Login must come from this Studio origin.",
+                        "code": "studio_login_cross_origin",
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return False
+            return True
+
+        def _read_login_payload(self) -> JsonDict:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if length < 1 or length > 16 * 1024:
+                raise ValueError("Login request size is invalid.")
+            raw = self.rfile.read(length)
+            media_type = str(self.headers.get("Content-Type") or "").partition(";")[
+                0
+            ].strip().casefold()
+            if media_type == "application/json":
+                payload = json.loads(raw.decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("Login JSON must be an object.")
+                return payload
+            if media_type == "application/x-www-form-urlencoded":
+                parsed = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+                return {key: values[-1] if values else "" for key, values in parsed.items()}
+            raise ValueError("Login requires a form or JSON body.")
+
+        def _login_client_key(self) -> str:
+            if state.public_access.enabled and state.public_access.trust_loopback_proxy:
+                forwarded = str(self.headers.get("X-Forwarded-For") or "").split(",", 1)[
+                    0
+                ].strip()
+                if forwarded:
+                    try:
+                        return str(ipaddress.ip_address(forwarded))
+                    except ValueError:
+                        return "invalid-forwarded-address"
+            try:
+                return str(self.client_address[0])
+            except (AttributeError, IndexError, TypeError):
+                return "unknown"
+
+        def _handle_auth_login(self) -> None:
+            if state.shared_auth is None:
+                self._send_json(
+                    {"error": "Shared login is not enabled."},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if not self._authorize_login_origin():
+                return
+            try:
+                payload = self._read_login_payload()
+                next_path = _safe_login_next(payload.get("next"))
+                token = state.shared_auth.login(
+                    username=str(payload.get("username") or ""),
+                    password=str(payload.get("password") or ""),
+                    client_key=self._login_client_key(),
+                )
+            except RuntimeError as error:
+                self._send_json(
+                    {"error": str(error), "code": "studio_login_rate_limited"},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                )
+                return
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+                self._send_json(
+                    {"error": str(error), "code": "studio_login_invalid_request"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            if token is None:
+                if str(self.headers.get("Content-Type") or "").startswith(
+                    "application/x-www-form-urlencoded"
+                ):
+                    self._send_login_page(
+                        next_path=next_path,
+                        error="The username or password is incorrect.",
+                        status=HTTPStatus.UNAUTHORIZED,
+                    )
+                else:
+                    self._send_json(
+                        {
+                            "error": "The username or password is incorrect.",
+                            "code": "studio_login_invalid_credentials",
+                        },
+                        status=HTTPStatus.UNAUTHORIZED,
+                    )
+                return
+            cookie = state.shared_auth.session_cookie(token)
+            if str(self.headers.get("Content-Type") or "").startswith(
+                "application/x-www-form-urlencoded"
+            ):
+                self._redirect(next_path, set_cookie=cookie)
+            else:
+                self._send_json(
+                    {"authenticated": True},
+                    headers={"Set-Cookie": cookie},
+                )
+
+        def _handle_auth_logout(self) -> None:
+            if state.shared_auth is None or not self._shared_authenticated():
+                self._send_json(
+                    {"authenticated": False}, status=HTTPStatus.UNAUTHORIZED
+                )
+                return
+            if not self._authorize_login_origin():
+                return
+            state.shared_auth.logout_cookie(self.headers.get("Cookie", ""))
+            self._send_json(
+                {"authenticated": False},
+                headers={"Set-Cookie": state.shared_auth.expired_cookie()},
+            )
+
+        def _handle_auth_verify(self) -> None:
+            if state.shared_auth is None or not self._shared_authenticated():
+                self._send_empty(HTTPStatus.UNAUTHORIZED)
+                return
+            try:
+                peer = ipaddress.ip_address(str(self.client_address[0]))
+            except (AttributeError, IndexError, TypeError, ValueError):
+                self._send_empty(HTTPStatus.FORBIDDEN)
+                return
+            if not peer.is_loopback:
+                self._send_empty(HTTPStatus.FORBIDDEN)
+                return
+            kind = str(self.headers.get("X-OptPilot-Target-Kind") or "").casefold()
+            try:
+                port = int(self.headers.get("X-OptPilot-Target-Port") or 0)
+            except ValueError:
+                port = 0
+            allowed = kind == "studio" or (
+                kind == "code" and state.workspace_runtime.owns_code_server_port(port)
+            ) or (
+                kind == "presentation" and state.presentation_broker.owns_port(port)
+            )
+            self._send_empty(HTTPStatus.NO_CONTENT if allowed else HTTPStatus.FORBIDDEN)
+
+        def _redirect(self, location: str, *, set_cookie: str = "") -> None:
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", location)
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            if set_cookie:
+                self.send_header("Set-Cookie", set_cookie)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _send_empty(self, status: HTTPStatus) -> None:
+            self.send_response(status)
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _send_login_page(
+            self,
+            *,
+            next_path: str,
+            error: str = "",
+            status: HTTPStatus = HTTPStatus.OK,
+        ) -> None:
+            data = _shared_login_page(next_path=next_path, error=error)
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def _read_json_body(self) -> JsonDict:
             length = int(self.headers.get("Content-Length", "0") or 0)
             if length <= 0:
@@ -6609,11 +7189,11 @@ def _handler_factory(state: UiState):
 
             if not hasattr(self, "requestline"):
                 return True
-            host = str(self.headers.get("Host") or "").strip()
-            if not _trusted_studio_host_header(host):
+            scheme, host = self._request_origin()
+            if not self._trusted_request_origin(scheme, host):
                 self._send_json(
                     {
-                        "error": "Studio mutations require a localhost or literal-IP Host.",
+                        "error": "Studio mutations require the configured Studio origin.",
                         "code": "studio_untrusted_host",
                     },
                     status=HTTPStatus.FORBIDDEN,
@@ -6622,7 +7202,8 @@ def _handler_factory(state: UiState):
             origin = self.headers.get("Origin")
             fetch_site = str(self.headers.get("Sec-Fetch-Site") or "").casefold()
             if fetch_site == "cross-site" or (
-                origin is not None and not _studio_origin_matches_host(origin, host)
+                origin is not None
+                and not _studio_origin_matches_host(origin, host, scheme)
             ):
                 self._send_json(
                     {
@@ -6720,12 +7301,16 @@ def _handler_factory(state: UiState):
             self._send_file(requested)
 
         def _send_json(
-            self, payload: JsonDict, status: HTTPStatus = HTTPStatus.OK
+            self,
+            payload: JsonDict,
+            status: HTTPStatus = HTTPStatus.OK,
+            *,
+            headers: Optional[Mapping[str, str]] = None,
         ) -> None:
             data = json.dumps(
                 _public_studio_payload(payload), indent=2, sort_keys=True
             ).encode("utf-8")
-            self._send_json_bytes(data, status=status)
+            self._send_json_bytes(data, status=status, headers=headers)
 
         def _send_json_bytes(
             self,
@@ -6733,6 +7318,7 @@ def _handler_factory(state: UiState):
             status: HTTPStatus = HTTPStatus.OK,
             *,
             etag: Optional[str] = None,
+            headers: Optional[Mapping[str, str]] = None,
         ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -6743,6 +7329,8 @@ def _handler_factory(state: UiState):
             self.send_header("Cache-Control", "no-store, max-age=0")
             if etag is not None:
                 self.send_header("ETag", etag)
+            for key, value in (headers or {}).items():
+                self.send_header(str(key), str(value))
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

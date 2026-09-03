@@ -38,7 +38,11 @@ from urllib.request import Request, urlopen
 
 _TOKEN_QUERY = "__optpilot_presentation_token"
 _TOKEN_COOKIE = "optpilot_presentation_token"
-_PRIVATE_COOKIE_NAMES = {_TOKEN_COOKIE, "optpilot_preview_token"}
+_PRIVATE_COOKIE_NAMES = {
+    _TOKEN_COOKIE,
+    "optpilot_preview_token",
+    "__Host-optpilot_session",
+}
 _EXTRA_PORT_PREFIX = "/__optpilot_port/"
 _MAX_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
@@ -425,6 +429,8 @@ class WebPresentationLease:
     token: str = field(repr=False)
     server: ThreadingHTTPServer = field(repr=False)
     thread: threading.Thread = field(repr=False)
+    public_scheme: str = "http"
+    public_host: str = ""
     stop_event: threading.Event = field(
         default_factory=threading.Event, repr=False
     )
@@ -436,7 +442,9 @@ class WebPresentationLease:
 
     @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}/"
+        hostname = self.public_host or self.host
+        display_host = f"[{hostname}]" if ":" in hostname else hostname
+        return f"{self.public_scheme}://{display_host}:{self.port}/"
 
     @property
     def open_url(self) -> str:
@@ -469,16 +477,46 @@ class WebPresentationLease:
 class WebPresentationBroker:
     """Own fresh browser origins for verified provider endpoints."""
 
-    def __init__(self, *, host: str = "127.0.0.1", port_start: int = 19766) -> None:
+    def __init__(
+        self,
+        *,
+        host: str = "127.0.0.1",
+        port_start: int = 19766,
+        port_count: int = 1000,
+        public_scheme: str = "http",
+        public_host: str = "",
+    ) -> None:
         address = ipaddress.ip_address(host)
         if not address.is_loopback:
             raise ValueError("presentation broker host must be loopback.")
         if port_start < 1 or port_start > 65535:
             raise ValueError("presentation broker port_start is invalid.")
+        if port_count < 1 or port_start + port_count - 1 > 65535:
+            raise ValueError("presentation broker port_count is invalid.")
         self._host = host
         self._port_start = port_start
+        self._port_count = int(port_count)
+        self._public_scheme = str(public_scheme or "http").casefold()
+        if self._public_scheme not in {"http", "https"}:
+            raise ValueError("presentation public scheme must be http or https.")
+        self._public_host = str(public_host or "").strip().casefold()
         self._leases: dict[str, WebPresentationLease] = {}
         self._lock = threading.RLock()
+
+    def owns_port(self, port: int) -> bool:
+        """Return whether an active broker lease owns this listener port."""
+
+        try:
+            requested = int(port)
+        except (TypeError, ValueError):
+            return False
+        with self._lock:
+            return any(
+                lease.port == requested
+                and lease.running
+                and not lease.stop_event.is_set()
+                for lease in self._leases.values()
+            )
 
     def open(self, *, key: str, endpoint: OwnedWebEndpoint) -> WebPresentationLease:
         key = _required_text(key, "presentation key")
@@ -519,7 +557,8 @@ class WebPresentationBroker:
             )
             server = None
             for port in range(
-                self._port_start, min(65536, self._port_start + 1000)
+                self._port_start,
+                min(65536, self._port_start + self._port_count),
             ):
                 try:
                     server = _PresentationHTTPServer((self._host, port), handler)
@@ -541,6 +580,8 @@ class WebPresentationBroker:
                 key=key,
                 host=self._host,
                 port=server.server_port,
+                public_scheme=self._public_scheme,
+                public_host=self._public_host,
                 endpoint=endpoint,
                 token=token,
                 server=server,

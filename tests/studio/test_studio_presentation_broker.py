@@ -278,7 +278,11 @@ class StudioPresentationBrokerTests(unittest.TestCase):
             lease.open_url + "&query=value",
             headers={
                 "Authorization": "Bearer studio-secret",
-                "Cookie": "application_session=user; optpilot_presentation_token=ignored",
+                "Cookie": (
+                    "application_session=user; "
+                    "optpilot_presentation_token=ignored; "
+                    "__Host-optpilot_session=outer-secret"
+                ),
                 "X-OptPilot-Secret": "private",
             },
         )
@@ -300,6 +304,28 @@ class StudioPresentationBrokerTests(unittest.TestCase):
         self.assertTrue(public["supports_websocket"])
         self.assertNotIn(str(self.upstream.server_port), json.dumps(public))
         self.assertNotIn("target", public)
+
+    def test_public_url_and_active_port_ownership_are_separate_from_loopback(self) -> None:
+        self._require_loopback_servers()
+        assert self.upstream is not None
+        broker = WebPresentationBroker(
+            host="127.0.0.1",
+            port_start=30766,
+            public_scheme="https",
+            public_host="studio.example.edu",
+        )
+        try:
+            lease = broker.open(key="public-job", endpoint=self._endpoint())
+            self.assertEqual(
+                urlparse(lease.open_url).hostname, "studio.example.edu"
+            )
+            self.assertEqual(urlparse(lease.open_url).scheme, "https")
+            self.assertTrue(broker.owns_port(lease.port))
+            self.assertFalse(broker.owns_port(lease.port + 1))
+            self.assertTrue(broker.close("public-job"))
+            self.assertFalse(broker.owns_port(lease.port))
+        finally:
+            broker.close_all()
 
     def test_websocket_upgrade_uses_same_auth_fence_and_private_binding(self) -> None:
         self._require_loopback_servers()
