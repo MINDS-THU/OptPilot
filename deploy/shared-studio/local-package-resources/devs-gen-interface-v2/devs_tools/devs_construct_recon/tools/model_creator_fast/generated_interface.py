@@ -158,6 +158,25 @@ def _module_import_aliases(module: ast.Module) -> dict[str, str]:
     return aliases
 
 
+def _inherits_xdevs_component(
+    target_class: ast.ClassDef,
+    module: ast.Module,
+) -> bool:
+    """Return whether the class directly inherits an imported xDEVS model base."""
+
+    xdevs_bases: set[str] = set()
+    for statement in module.body:
+        if not isinstance(statement, ast.ImportFrom) or statement.module != "xdevs.models":
+            continue
+        for imported in statement.names:
+            if imported.name in {"Atomic", "Coupled"}:
+                xdevs_bases.add(imported.asname or imported.name)
+    return any(
+        isinstance(base, ast.Name) and base.id in xdevs_bases
+        for base in target_class.bases
+    )
+
+
 def _is_property(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(_callable_leaf_name(decorator) == "property" for decorator in method.decorator_list)
 
@@ -194,6 +213,12 @@ def extract_generated_python_interface(
     call_bindings: dict[str, set[str]] = {}
     properties: set[str] = set()
     public_methods: set[str] = set()
+
+    # Atomic and Coupled inherit these public port maps from xdevs.models.Component.
+    # Coupled generators legitimately use them when wiring child ports, even though
+    # the assignments live in the framework rather than in generated source.
+    if _inherits_xdevs_component(target_class, module):
+        instance_attributes.update({"input", "output"})
 
     for member in target_class.body:
         if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):

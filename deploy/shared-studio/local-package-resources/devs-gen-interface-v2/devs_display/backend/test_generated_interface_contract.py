@@ -80,6 +80,32 @@ class Parent:
         with self.assertRaisesRegex(ValueError, "Expected exactly one generated class"):
             extract_generated_python_interface(self.SOURCE, "Missing")
 
+    def test_includes_xdevs_inherited_port_maps(self):
+        source = """
+from xdevs.models import Atomic as AtomicModel
+
+class Child(AtomicModel):
+    def __init__(self, name):
+        super().__init__(name)
+"""
+
+        interface = extract_generated_python_interface(source, "Child")
+
+        self.assertEqual(interface.instance_attributes, ["input", "output"])
+
+    def test_does_not_infer_port_maps_from_an_unrelated_base_name(self):
+        source = """
+class Atomic:
+    pass
+
+class Child(Atomic):
+    pass
+"""
+
+        interface = extract_generated_python_interface(source, "Child")
+
+        self.assertEqual(interface.instance_attributes, [])
+
     def test_extracts_import_alias_local_alias_and_homogeneous_collections(self):
         source = """
 from package.children import Child as ChildModel

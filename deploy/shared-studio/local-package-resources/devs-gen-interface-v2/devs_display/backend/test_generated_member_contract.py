@@ -9,6 +9,9 @@ from devs_tools.devs_construct_recon.tools.generated_member_contract import (
     find_generated_member_violations,
     require_generated_member_contract,
 )
+from devs_tools.devs_construct_recon.tools.model_creator_fast.generated_interface import (
+    extract_generated_python_interface,
+)
 from devs_tools.devs_construct_recon.tools.simulation.top_simulation_creator import (
     DEVSExecuteWrapper,
 )
@@ -74,6 +77,32 @@ class SupplyChain:
 """
         self.assertEqual(
             find_generated_member_violations(source, _registry(), "SupplyChain"),
+            (),
+        )
+
+    def test_accepts_xdevs_inherited_port_maps_on_generated_children(self):
+        child_source = """
+from xdevs.models import Atomic
+
+class Retailer(Atomic):
+    def __init__(self, name):
+        super().__init__(name)
+"""
+        registry = _registry()
+        registry["Retailer"]["generated_interface"] = (
+            extract_generated_python_interface(child_source, "Retailer").model_dump()
+        )
+        source = """
+class SupplyChain:
+    def __init__(self):
+        self.retailer = Retailer()
+
+    def wire(self):
+        return self.retailer.input["orders"], self.retailer.output["served"]
+"""
+
+        self.assertEqual(
+            find_generated_member_violations(source, registry, "SupplyChain"),
             (),
         )
 
