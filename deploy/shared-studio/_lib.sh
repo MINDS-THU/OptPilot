@@ -13,6 +13,10 @@ if [ -f "${DEPLOY_CONFIG}" ]; then
   set +a
 fi
 
+# Deployment commands always target SOURCE_ROOT's uv environment. An unrelated
+# activated virtualenv would only make uv print a misleading mismatch warning.
+unset VIRTUAL_ENV
+
 : "${PUBLIC_HOST:=}"
 : "${PUBLIC_BIND_IP:=}"
 : "${OPTPILOT_PRIVATE_ROOT:=}"

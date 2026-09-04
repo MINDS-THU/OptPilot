@@ -56,6 +56,14 @@ class or suspected disclosure.
    bash deploy/shared-studio/deploy.sh init-credentials students
    ```
 
+   The password must contain at least 12 characters. To replace the password
+   later and restart safely in one step, use `reset-password`; it does not
+   restart the deployment if password creation fails:
+
+   ```bash
+   bash deploy/shared-studio/deploy.sh reset-password students
+   ```
+
    Install Certbot and issue the certificate before preflight. HTTP-01 uses a
    bounded standalone responder on privileged port 80. When inbound port 80 is
    unavailable, a direct `duckdns.org` hostname can instead use DNS-01 with a

@@ -1,19 +1,38 @@
+import io
 import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
 
 from optpilot_studio.ui.shared_auth import (
     COOKIE_NAME,
     SharedAuth,
     SharedAuthConfigurationError,
     SharedLoginCredentials,
+    _main,
     write_credentials,
 )
 
 
 class SharedAuthTests(unittest.TestCase):
+    def test_cli_rejects_short_password_without_traceback_or_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials_path = Path(tmp) / "credentials.json"
+            stderr = io.StringIO()
+            with (
+                patch("getpass.getpass", return_value="too-short"),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                _main([str(credentials_path), "--username", "students"])
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("at least 12 characters", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+            self.assertFalse(credentials_path.exists())
+
     def test_credentials_and_sessions_survive_restart_without_storing_token(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

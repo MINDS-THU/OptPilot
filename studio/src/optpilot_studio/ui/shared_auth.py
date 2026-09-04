@@ -353,11 +353,16 @@ def _main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     import getpass
 
-    first = getpass.getpass("Shared login password: ")
+    first = getpass.getpass("Shared login password (at least 12 characters): ")
+    if len(first) < 12:
+        parser.error("Password must contain at least 12 characters.")
     second = getpass.getpass("Repeat password: ")
     if first != second:
         parser.error("Passwords do not match.")
-    write_credentials(args.credentials_path, username=args.username, password=first)
+    try:
+        write_credentials(args.credentials_path, username=args.username, password=first)
+    except SharedAuthConfigurationError as error:
+        parser.error(str(error))
     print(f"Wrote private credentials to {args.credentials_path.expanduser().resolve()}")
     return 0
 

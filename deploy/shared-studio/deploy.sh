@@ -54,6 +54,10 @@ case "${command}" in
     uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen \
       python -m optpilot_studio.ui.shared_auth "${credentials_path}" --username "${2:-students}"
     ;;
+  reset-password)
+    bash "${DEPLOY_DIR}/deploy.sh" init-credentials "${2:-students}"
+    exec bash "${DEPLOY_DIR}/deploy.sh" restart
+    ;;
   install-resource) exec bash "${DEPLOY_DIR}/install_local_resource.sh" ;;
   check) exec bash "${DEPLOY_DIR}/preflight.sh" ;;
   studio) exec bash "${DEPLOY_DIR}/studio.sh" ;;
@@ -154,6 +158,7 @@ case "${command}" in
     printf '%s\n' \
       'Usage: bash deploy/shared-studio/deploy.sh COMMAND' \
       '  init-credentials [USERNAME]  Create the private shared login verifier' \
+      '  reset-password [USERNAME]    Set the password, then restart only on success' \
       '  install-resource             Install DEVS Generator v2 into local_package' \
       '  check                        Run fail-closed deployment preflight' \
       '  start | restart              Start private services and the TLS gateway' \
