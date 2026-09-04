@@ -8495,16 +8495,12 @@ def _configured_source_workspace_id(state: UiState, source_id: str) -> str:
     )[:24]
 
 
-def _configured_source_publisher_id(package_id: str, source_id: str) -> str:
-    from optpilot.realm.configured_package_ingress import (
-        configured_package_publisher_id,
-        configured_package_source_identity_digest,
-    )
+def _configured_source_publisher_id(
+    package_id: str, source_identity_digest: str
+) -> str:
+    """Return the publisher used by both first-start and Workspace updates."""
 
-    return configured_package_publisher_id(
-        package_id,
-        configured_package_source_identity_digest(source_id),
-    )
+    return configured_package_publisher_id(package_id, source_identity_digest)
 
 
 def _configured_source_workspace_authority(
@@ -8528,11 +8524,17 @@ def _configured_source_workspace_authority(
         or str(workspace.get("configured_package_id") or "") != package_id
     ):
         raise RealmConflict("Configured source Workspace authority changed.")
+    source_identity_digest = _configured_package_source_identity_digest(
+        authorized_resolved
+    )
     return {
         "kind": "configured-catalog-source",
         "source_id": source_id,
+        "source_identity_digest": source_identity_digest,
         "package_id": package_id,
-        "publisher_id": _configured_source_publisher_id(package_id, source_id),
+        "publisher_id": _configured_source_publisher_id(
+            package_id, source_identity_digest
+        ),
         "root": authorized_resolved,
     }
 
@@ -36431,6 +36433,9 @@ def _prepare_package_plan(
             {
                 "kind": "configured-catalog-source",
                 "source_id": str(configured_authority["source_id"]),
+                "source_identity_digest": str(
+                    configured_authority["source_identity_digest"]
+                ),
             }
             if configured_authority is not None
             else None
@@ -36776,7 +36781,7 @@ def _package_plan_publisher_id(plan: JsonDict) -> str:
         assert isinstance(authority, Mapping)
         expected = _configured_source_publisher_id(
             _package_plan_package_id(plan.get("package_id")),
-            str(authority.get("source_id") or ""),
+            str(authority.get("source_identity_digest") or ""),
         )
     else:
         identity = plan.get("package_identity")
@@ -36801,6 +36806,8 @@ def _assert_configured_package_plan_authority(
     if (
         not isinstance(recorded, Mapping)
         or recorded.get("source_id") != authority["source_id"]
+        or recorded.get("source_identity_digest")
+        != authority["source_identity_digest"]
         or plan.get("package_id") != authority["package_id"]
         or plan.get("publisher_id") != authority["publisher_id"]
     ):
@@ -41260,7 +41267,7 @@ def _configured_package_source_identity_digest(root: Path) -> str:
     return request_digest(
         {
             "schema": "optpilot.configured-package-source.v1",
-            "root": str(root),
+            "root": str(root.expanduser().resolve()),
         }
     )
 

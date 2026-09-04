@@ -21,6 +21,7 @@ from optpilot_studio.ui.server import (
     UiState,
     _apply_package_plan,
     _catalog_payload,
+    _configured_package_source_identity_digest,
     _configured_source_publisher_id,
     _create_ui_workspace,
     _handler_factory,
@@ -29,6 +30,7 @@ from optpilot_studio.ui.server import (
     _open_configured_catalog_source_workspace,
     _prepare_package_plan,
     _public_studio_payload,
+    _register_user_packages,
     _require_ui_workspace,
     _studio_actor_id,
     _validate_package_plan,
@@ -170,7 +172,10 @@ class StudioConfiguredSourceWorkspaceSetupTest(unittest.TestCase):
         self.assertEqual(plan["package_id"], "mutable-package")
         self.assertEqual(
             plan["publisher_id"],
-            _configured_source_publisher_id("mutable-package", self.source_id),
+            _configured_source_publisher_id(
+                "mutable-package",
+                _configured_package_source_identity_digest(self.package),
+            ),
         )
         self.assertTrue(setup["check"]["accepted"])
         self.assertEqual(plan["validation"]["test_policy"], "static-only")
@@ -366,8 +371,29 @@ class StudioConfiguredSourceWorkspaceSetupTest(unittest.TestCase):
         self.assertEqual(len(manifest.applications), 1)
         self.assertEqual(
             manifest.applications[0].publisher_id,
-            _configured_source_publisher_id("mutable-package", self.source_id),
+            _configured_source_publisher_id(
+                "mutable-package",
+                _configured_package_source_identity_digest(self.package),
+            ),
         )
+
+    def test_workspace_update_keeps_first_start_publishing_authority(self) -> None:
+        with mock.patch(
+            "optpilot.realm.config.default_packages_root",
+            return_value=self.package.parent,
+        ):
+            self.assertEqual(_register_user_packages(self.state), ["mutable-package"])
+        first = self.runtime.catalog.read_head(package_id="mutable-package")
+        self.assertIsNotNone(first)
+        self.assertEqual(first.revision, 1)
+
+        (self.package / "resources" / "viewer" / "README.md").write_text(
+            "updated after first-start publication\n", encoding="utf-8"
+        )
+        opened, plan, _setup = self._open_and_check()
+        updated = _apply_package_plan(self.state, opened["id"], plan["id"])
+
+        self.assertEqual(updated["catalog"]["head"]["revision"], 2)
 
     def test_lost_response_reconciles_the_existing_catalog_result(self) -> None:
         opened, plan, _setup = self._open_and_check()
