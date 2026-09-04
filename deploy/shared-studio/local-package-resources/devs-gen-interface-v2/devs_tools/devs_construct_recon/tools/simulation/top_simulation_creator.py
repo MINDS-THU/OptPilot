@@ -251,6 +251,9 @@ You must construct the script in the following **exact order**.
 - Use the model specification and exact generated interface to choose metric
   names and extraction expressions. Do not use reflection, attribute-name guessing,
   placeholder values, or a generic `"score"`.
+- Emit every trustworthy requested outcome that is reachable from stable model
+  state, even when only a subset is available; missing one metric is not a
+  reason to leave the entire `metrics` object empty.
 - If the model exposes no trustworthy outcome KPI, write an empty `metrics`
   object and a clear `metric_note` explaining what model state should be exposed
   before optimization. Do not present an input such as the requested horizon as

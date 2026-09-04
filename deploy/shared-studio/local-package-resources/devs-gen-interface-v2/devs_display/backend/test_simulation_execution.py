@@ -643,6 +643,9 @@ class SimulationExecutionTests(unittest.TestCase):
             self.assertIn(
                 "Do not use reflection, attribute-name guessing", prompt_source
             )
+            self.assertIn(
+                "missing one metric is not a", prompt_source
+            )
 
         with tempfile.TemporaryDirectory() as tmp:
             bundle = Path(tmp)

@@ -250,6 +250,9 @@ Initialize `argparse.ArgumentParser`:
   simulator's domain contract. Use the model specification and exact generated
   interface to choose them. Do not use reflection, attribute-name guessing,
   placeholder values, or a generic `"score"`.
+- Emit every trustworthy requested outcome that is reachable from stable model
+  state, even when only a subset is available; missing one metric is not a
+  reason to leave the entire `metrics` object empty.
 - If the model exposes no trustworthy outcome KPI, write an empty `metrics`
   object and a clear `metric_note` explaining what model state should be exposed
   before optimization. The run summary is still useful, but do not pretend an
