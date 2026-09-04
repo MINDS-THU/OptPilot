@@ -44,6 +44,16 @@ class StudioConversationContinuityStaticTest(unittest.TestCase):
         self.assertIn("assistantScrollBySession", restore)
         self.assertIn("sessionStorage", self.source)
 
+    def test_a_fresh_browser_does_not_write_into_an_automatic_fallback(self) -> None:
+        send = _function_source(self.source, "sendAgentMessage")
+        select = _function_source(self.source, "selectAgentSession")
+        create = _function_source(self.source, "createAgentSessionForSurface")
+
+        self.assertIn("selectedAgentSessionIsBrowserChoice", send)
+        self.assertIn("createAgentSessionForSurface", send)
+        self.assertIn("browserChoice: true", select)
+        self.assertIn("browserChoice: true", create)
+
     def test_timeline_replacement_is_guarded_by_a_content_signature(self) -> None:
         render = _function_source(self.source, "renderAssistant")
 

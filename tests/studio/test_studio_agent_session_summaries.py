@@ -151,7 +151,7 @@ class StudioAgentSessionSummaryStaticTests(unittest.TestCase):
         select = _function_source(self.source, "selectAgentSession")
         merge = _function_source(self.source, "mergeAgentSessionPayload")
 
-        self.assertLess(select.index("captureAssistantContinuity()"), select.index("setSelectedAgentSessionState(sessionId)"))
+        self.assertLess(select.index("captureAssistantContinuity()"), select.index("setSelectedAgentSessionState(sessionId"))
         self.assertLess(select.index("hydrateAgentSessionById(sessionId"), select.index("renderWorkspace()"))
         self.assertIn("await hydration", select)
         self.assertIn("Array.isArray(session.messages)", merge)

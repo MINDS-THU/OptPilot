@@ -44,7 +44,8 @@ class StudioConversationShellStaticTest(unittest.TestCase):
         self.assertIn('surface: "conversation"', parser)
         self.assertIn("#/conversations/", serializer)
         self.assertIn('state.shell.surface = "conversation"', application)
-        self.assertIn("setSelectedAgentSessionState(route.conversationId)", application)
+        self.assertIn("setSelectedAgentSessionState(route.conversationId", application)
+        self.assertIn("browserChoice: true", application)
         self.assertIn("shell-v2", self.source)
         # The legacy shell was retired with U7.
         self.assertNotIn("shell-legacy", self.source)

@@ -47,6 +47,7 @@ const ASSISTANT_MUTATION_TIMEOUT_MS = 60_000;
 const INTERFACE_LAUNCH_RECONNECT_LIMIT = 5;
 const INTERFACE_LAUNCH_POLL_TIMEOUT_MS = 10_000;
 const INTERFACE_BROWSER_READY_TIMEOUT_MS = 30_000;
+const initiallySelectedAgentSessionId = loadStoredValue(STORAGE_KEYS.selectedAgentSessionId);
 
 const state = {
   view: "workspace",
@@ -107,7 +108,8 @@ const state = {
   runUnavailable: null,
   sessions: [],
   agentSessions: [],
-  selectedAgentSessionId: loadStoredValue(STORAGE_KEYS.selectedAgentSessionId),
+  selectedAgentSessionId: initiallySelectedAgentSessionId,
+  selectedAgentSessionIsBrowserChoice: Boolean(initiallySelectedAgentSessionId),
   agentWorkspaceAttachments: {},
   selectedWorkspaceByAgentSession: {},
   assistantMessagesBySession: {},
@@ -1582,7 +1584,12 @@ function ensureAgentSessions() {
 
 function ensureSelectedAgentSession() {
   if (state.agentSessions.some((session) => session.id === state.selectedAgentSessionId)) {
-    storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+    storeValue(
+      STORAGE_KEYS.selectedAgentSessionId,
+      state.selectedAgentSessionIsBrowserChoice
+        ? state.selectedAgentSessionId
+        : null,
+    );
     return;
   }
   const withWorkspaces = state.agentSessions.find((session) => (state.agentWorkspaceAttachments[session.id] || []).length);
@@ -3792,7 +3799,7 @@ function applyStudioRoute(options = {}) {
       state.assistantOpen = true;
       if (state.agentSessions.some((session) => session.id === route.conversationId)) {
         const conversationChanged = state.selectedAgentSessionId !== route.conversationId;
-        setSelectedAgentSessionState(route.conversationId);
+        setSelectedAgentSessionState(route.conversationId, { browserChoice: true });
         if (conversationChanged) {
           conversationHydration = hydrateAgentSessionById(route.conversationId, { force: true });
         }
@@ -4670,7 +4677,7 @@ function leaveInterfaceSession() {
   const route = state.interfaceSessionRoute || {};
   const origin = state.agentSessions.find((session) => session.id === route.originConversationId);
   if (origin) {
-    setSelectedAgentSessionState(origin.id);
+    setSelectedAgentSessionState(origin.id, { browserChoice: true });
     openConversationSurface({ history: "push" });
     return;
   }
@@ -8983,7 +8990,7 @@ function startAssistantResize(event) {
   window.addEventListener(upEventName, onUp, { once: true });
 }
 
-function setSelectedAgentSessionState(sessionId) {
+function setSelectedAgentSessionState(sessionId, options = {}) {
   if (
     state.workspaceNotice
     && state.workspaceNotice.assistantSessionId
@@ -8992,12 +8999,18 @@ function setSelectedAgentSessionState(sessionId) {
     state.workspaceNotice = null;
   }
   state.selectedAgentSessionId = sessionId;
-  storeValue(STORAGE_KEYS.selectedAgentSessionId, state.selectedAgentSessionId);
+  state.selectedAgentSessionIsBrowserChoice = Boolean(
+    sessionId && options.browserChoice,
+  );
+  storeValue(
+    STORAGE_KEYS.selectedAgentSessionId,
+    state.selectedAgentSessionIsBrowserChoice ? sessionId : null,
+  );
 }
 
 async function selectAgentSession(sessionId) {
   captureAssistantContinuity();
-  setSelectedAgentSessionState(sessionId);
+  setSelectedAgentSessionState(sessionId, { browserChoice: true });
   state.assistantMode = "chat";
   const hydration = hydrateAgentSessionById(sessionId, { force: true });
   renderWorkspace();
@@ -9028,7 +9041,7 @@ async function createAgentSessionForSurface(options = {}) {
           throw new Error("Studio did not return the new Conversation.");
         }
         await updateAgentSessionFromPayload(payload.session);
-        setSelectedAgentSessionState(payload.session.id);
+        setSelectedAgentSessionState(payload.session.id, { browserChoice: true });
         state.assistantMode = "chat";
         return currentAgentSession() || payload.session;
       } catch (error) {
@@ -22036,7 +22049,13 @@ async function sendAgentMessage() {
   const message = els.agentInput.value.trim();
   if (!message) return;
   let session = currentAgentSession();
-  if (!session || String(session.id || "").startsWith("agent-session-")) {
+  // A shared deployment may display a server-side fallback from another
+  // browser. Do not write into it until this browser chose or created it.
+  if (
+    !session
+    || String(session.id || "").startsWith("agent-session-")
+    || !state.selectedAgentSessionIsBrowserChoice
+  ) {
     session = await createAgentSessionForSurface({ navigate: false });
     if (!session) {
       if (els.agentInput) {

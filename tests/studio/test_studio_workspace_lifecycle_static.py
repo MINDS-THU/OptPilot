@@ -232,8 +232,8 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
             "notice.assistantSessionId !== state.selectedAgentSessionId", notice
         )
         self.assertIn("state.workspaceNotice = null", selection)
-        self.assertIn("setSelectedAgentSessionState(sessionId)", select)
-        self.assertIn("setSelectedAgentSessionState(payload.session.id)", create)
+        self.assertIn("setSelectedAgentSessionState(sessionId", select)
+        self.assertIn("setSelectedAgentSessionState(payload.session.id", create)
         self.assertNotIn("const id = `agent-session-", create)
         self.assertIn("return null", create)
         self.assertIn(
