@@ -75,7 +75,11 @@ class NoDoomedApprovalTest(unittest.TestCase):
     def test_an_action_that_cannot_run_is_not_put_up_for_approval(self) -> None:
         result = self._run(
             "optpilot_resource_action_run",
-            {"resource_uid": self._DEVS_RESOURCE, "action_id": "generate"},
+            {
+                "resource_uid": self._DEVS_RESOURCE,
+                "action_id": "generate",
+                "inputs": {"specification": "A small queue."},
+            },
         )
         self.assertFalse(result["data"].get("approval_required"))
         self.assertFalse(result["ok"])
@@ -85,7 +89,11 @@ class NoDoomedApprovalTest(unittest.TestCase):
         # Not just "cannot run" -- the person has to know what to add.
         result = self._run(
             "optpilot_resource_action_run",
-            {"resource_uid": self._DEVS_RESOURCE, "action_id": "generate"},
+            {
+                "resource_uid": self._DEVS_RESOURCE,
+                "action_id": "generate",
+                "inputs": {"specification": "A small queue."},
+            },
         )
         self.assertIn("OPENROUTER_API_KEY", result["summary"])
 

@@ -18,16 +18,33 @@ export OPTPILOT_PRESENTATION_PORT_OFFSET="${PREVIEW_PORT_OFFSET}"
 # root. Studio publishes a first immutable revision at startup, which enables
 # Edit in Workspace and exact prepared-runtime execution.
 export OPTPILOT_PACKAGES_ROOT="${OPTPILOT_CATALOG_ROOT}"
+# Keep this deployment's published packages, outputs, and prepared runtimes
+# separate from every older OptPilot checkout on the same host.
+export OPTPILOT_REALM_ROOT
 export OPTPILOT_OPENHANDS_URL="http://${OPENHANDS_HOST}:${OPENHANDS_PORT}"
 export OPTPILOT_OPENHANDS_ENABLED
 # These deployment-only secrets and paths are not inputs to Studio or its
 # child workspaces. Keep them out of their inherited environment.
 unset OH_SECRET_KEY TLS_CERTIFICATE_KEY
 
+source_catalog_args=()
+for source_package in "${SOURCE_ROOT}/catalog"/*; do
+  [ -f "${source_package}/optpilot.package.yaml" ] || continue
+  package_name="$(basename "${source_package}")"
+  excluded=0
+  for excluded_name in ${OPTPILOT_SOURCE_CATALOG_EXCLUDES}; do
+    if [ "${package_name}" = "${excluded_name}" ]; then
+      excluded=1
+      break
+    fi
+  done
+  [ "${excluded}" -eq 1 ] || source_catalog_args+=(--catalog "${source_package}")
+done
+
 exec uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui \
   --host "${STUDIO_HOST}" \
   --port "${STUDIO_PORT}" \
-  --catalog "${SOURCE_ROOT}/catalog" \
+  "${source_catalog_args[@]}" \
   --catalog "${OPTPILOT_CATALOG_ROOT}" \
   --public-url "https://${PUBLIC_HOST}:${STUDIO_PORT}" \
   --trust-loopback-proxy \

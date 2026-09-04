@@ -717,7 +717,16 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
             {
                 "resource_uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."},
                 "action_id": {"type": "string"},
-                "inputs": {"type": "object"},
+                "inputs": {
+                    "type": "object",
+                    "description": (
+                        "Values keyed exactly as declared by "
+                        "optpilot_resource_action_list. Include every input "
+                        "without a default; for a generator's specification "
+                        "input, pass the user's system description rather "
+                        "than omitting it or inventing a different one."
+                    ),
+                },
                 "workspace_id": {"type": "string"},
             },
             ["resource_uid", "action_id"],

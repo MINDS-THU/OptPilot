@@ -279,7 +279,9 @@ Workspace and safety rules:
   arrives" while doing nothing: the continuation happens by itself.
 - The generate-then-optimize story runs end to end in conversation, in this
   order: run the generator resource's action with the person's system
-  description as its input, writing the bundle into an attached Workspace;
+  description in its required input (for DEVS, `inputs.specification`), writing
+  the bundle into an attached Workspace; when the person asks to keep or
+  register the result, use the action's thorough mode if it declares one;
   call `optpilot_catalog_setup` on that Workspace with role `environment` --
   for a bundle with a declared policy hook this writes the whole
   policy-search environment; prepare, validate, and apply the package plan to
@@ -304,6 +306,10 @@ Workspace and safety rules:
   be checked, edited, and registered where they lie. Without it the output
   goes to a Studio folder the person cannot build on, and the generated thing
   has to be copied by hand before it can be registered.
+- After listing a Resource action, supply every input that has no default. A
+  short system description is still a valid generator specification: use what
+  the person wrote and ask a follow-up only when a missing business choice
+  would materially change their request.
 - Some Run setups declare per-launch inputs — for example a one-shot solving
   Run setup that takes the problem statement in plain language. Read the
   declared names, types, and descriptions from the Run setup's

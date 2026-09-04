@@ -129,7 +129,7 @@ Configure the Assistant in Studio Settings, or use environment variables:
 ```bash
 OPTPILOT_OPENHANDS_URL=http://127.0.0.1:8781
 OPTPILOT_OPENHANDS_SESSION_ENDPOINT=/api/conversations
-OPTPILOT_OPENHANDS_MODEL=deepseek/deepseek-v4-flash
+OPTPILOT_OPENHANDS_MODEL=openrouter/deepseek/deepseek-v4-pro
 OPTPILOT_OPENHANDS_API_KEY=...
 ```
 

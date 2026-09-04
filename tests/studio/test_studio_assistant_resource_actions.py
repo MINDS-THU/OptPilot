@@ -34,6 +34,7 @@ from optpilot_studio.ui.server import (
     _create_ui_workspace,
     _execute_agent_tool,
     _read_agent_approvals,
+    _read_agent_messages,
     _resource_action_review,
     _resource_action_run_status,
     _update_agent_settings,
@@ -211,6 +212,60 @@ class AssistantResourceActionTest(unittest.TestCase):
                 {"resource_uid": self.resource_uid, "action_id": ""},
             )
         self.assertEqual(_read_agent_approvals(self.state, self.session["id"]), [])
+
+    def test_missing_declared_input_is_refused_before_approval(self) -> None:
+        result = _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+            },
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["data"]["missing_inputs"], ["name"])
+        self.assertIn("inputs.name is required", result["summary"])
+        self.assertEqual(_read_agent_approvals(self.state, self.session["id"]), [])
+
+    def test_immediate_action_failure_still_records_completion(self) -> None:
+        from unittest import mock
+
+        _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+                "inputs": {"name": "demo"},
+            },
+        )
+        approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        with mock.patch(
+            "optpilot_studio.ui.server.run_resource_action",
+            return_value={"ok": False, "error": "immediate failure"},
+        ):
+            approved = _approve_agent_action(
+                self.state, self.session["id"], approval["id"]
+            )
+            request_id = approved["result"]["data"]["request_id"]
+            final = self._await(request_id)
+        self.assertEqual(final["status"], "failed")
+        deadline = time.monotonic() + 2
+        messages = []
+        while time.monotonic() < deadline:
+            messages = _read_agent_messages(self.state, self.session["id"])
+            if any(
+                message.get("title") == "Background action finished"
+                for message in messages
+            ):
+                break
+            time.sleep(0.01)
+        self.assertTrue(
+            any(message.get("title") == "Background action finished" for message in messages),
+            messages,
+        )
 
     # ---- the point of the whole thing -----------------------------------
     def test_approved_output_lands_inside_the_attached_workspace(self) -> None:

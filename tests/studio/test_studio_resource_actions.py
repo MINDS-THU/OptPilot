@@ -187,7 +187,7 @@ print("bundle generated")
                 {**request, "inputs": {"name": "Grace"}},
             )
 
-    def test_invalid_inputs_fail_the_run_with_the_core_error(self) -> None:
+    def test_invalid_inputs_are_rejected_before_a_run_starts(self) -> None:
         resources = _catalog_payload(self.state)["resources"]
         entry = next(item for item in resources if item["id"] == "demo-generator")
         request = {
@@ -197,10 +197,10 @@ print("bundle generated")
             "inputs": {},
             "_approved_action_contract_digest": self._action_digest(entry["uid"]),
         }
-        _accepted, _status = _start_resource_action_run(self.state, request)
-        settled = self._await_run(request["request_id"])
-        self.assertEqual(settled["status"], "failed")
-        self.assertIn("required", str(settled["error"]))
+        with self.assertRaisesRegex(ValueError, "required"):
+            _start_resource_action_run(self.state, request)
+        with self.assertRaises(KeyError):
+            _resource_action_run_status(self.state, request["request_id"])
 
     def test_unknown_action_is_rejected_before_any_run_record(self) -> None:
         resources = _catalog_payload(self.state)["resources"]

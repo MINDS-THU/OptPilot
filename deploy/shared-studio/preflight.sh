@@ -4,7 +4,7 @@ source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 failed=0
 
 [ -f "${DEPLOY_CONFIG}" ] || { printf 'Missing %s; copy deploy.env.example first.\n' "${DEPLOY_CONFIG}" >&2; failed=1; }
-for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS SHARED_AUTH_CREDENTIALS_FILE SHARED_AUTH_SESSION_DB OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS SHARED_AUTH_CREDENTIALS_FILE SHARED_AUTH_SESSION_DB OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
   require_value "${name}" || failed=1
 done
 for command in uv python3 rsync lsof openssl "${WORKSPACE_RUNTIME_BIN}"; do
@@ -42,17 +42,18 @@ for root_name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT; do
     [ "${root_mode}" = "700" ] || { printf '%s must have mode 700.\n' "${root_name}" >&2; failed=1; }
   fi
 done
-python3 - "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}" "${OPTPILOT_CATALOG_ROOT}" "${SHARED_AUTH_CREDENTIALS_FILE}" "${SHARED_AUTH_SESSION_DB}" "${TLS_CERTIFICATE}" "${TLS_CERTIFICATE_KEY}" <<'PY' || failed=1
+python3 - "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}" "${OPTPILOT_CATALOG_ROOT}" "${OPTPILOT_REALM_ROOT}" "${SHARED_AUTH_CREDENTIALS_FILE}" "${SHARED_AUTH_SESSION_DB}" "${TLS_CERTIFICATE}" "${TLS_CERTIFICATE_KEY}" <<'PY' || failed=1
 from pathlib import Path
 import sys
 
-state, private, catalog, credentials, sessions, certificate, key = [
+state, private, catalog, realm, credentials, sessions, certificate, key = [
     Path(value).resolve() for value in sys.argv[1:]
 ]
 if private == state or private.is_relative_to(state) or state.is_relative_to(private):
     raise SystemExit("OPTPILOT_STATE_ROOT and OPTPILOT_PRIVATE_ROOT must be disjoint.")
 for label, path in (
     ("OPTPILOT_CATALOG_ROOT", catalog),
+    ("OPTPILOT_REALM_ROOT", realm),
     ("SHARED_AUTH_CREDENTIALS_FILE", credentials),
     ("SHARED_AUTH_SESSION_DB", sessions),
     ("TLS_CERTIFICATE", certificate),

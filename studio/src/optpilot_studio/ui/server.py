@@ -11845,7 +11845,11 @@ def _prepare_resource_action_execution(
 
 
 def _start_resource_action_run(
-    state: UiState, payload: Any
+    state: UiState,
+    payload: Any,
+    *,
+    agent_session_id: str = "",
+    agent_conversation_id: str = "",
 ) -> tuple[JsonDict, HTTPStatus]:
     if not isinstance(payload, Mapping):
         raise ValueError("Resource action request must be a JSON object.")
@@ -11913,6 +11917,13 @@ def _start_resource_action_run(
             resource_raw, location=str(manifest_path)
         )
         action = find_resource_action(actions, action_id)
+        input_errors = validate_parameter_values(
+            normalized_inputs, action.inputs, location="inputs"
+        )
+        if input_errors:
+            raise ValueError(
+                "Action input values are invalid: " + "; ".join(input_errors)
+            )
         actual_contract_digest = _resource_action_contract_digest(
             manifest_path.parent, resource_raw, action
         )
@@ -11955,6 +11966,8 @@ def _start_resource_action_run(
         "finished_at": None,
         "summary": None,
         "error": None,
+        "agent_session_id": str(agent_session_id or ""),
+        "agent_conversation_id": str(agent_conversation_id or ""),
     }
 
     def execute() -> None:
@@ -22242,6 +22255,25 @@ def _execute_agent_tool(
             compile_resource_actions(resource_raw, location=str(manifest_path)),
             action_id,
         )
+        inputs = arguments.get("inputs")
+        if inputs is not None and not isinstance(inputs, Mapping):
+            raise ValueError("inputs must be a JSON object.")
+        input_errors = validate_parameter_values(
+            inputs, action.inputs, location="inputs"
+        )
+        if input_errors:
+            return _tool_result(
+                tool,
+                False,
+                "Resource action inputs are invalid: " + "; ".join(input_errors),
+                data={
+                    "input_errors": input_errors,
+                    "missing_inputs": missing_required_parameters(
+                        inputs, action.inputs
+                    ),
+                    "declared_inputs": deepcopy(dict(action.inputs)),
+                },
+            )
         contract_digest = _resource_action_contract_digest(
             manifest_path.parent, resource_raw, action
         )
@@ -22263,9 +22295,6 @@ def _execute_agent_tool(
                 data={"remedy": {"kind": "configure_environment", "reason": blocked}},
             )
         workspace_id = str(arguments.get("workspace_id") or "").strip()
-        inputs = arguments.get("inputs")
-        if inputs is not None and not isinstance(inputs, Mapping):
-            raise ValueError("inputs must be a JSON object.")
         workspace_root: Optional[Path] = None
         if workspace_id:
             workspace, workspace_root, _target = _resolve_agent_workspace_path(
@@ -22343,6 +22372,7 @@ def _execute_agent_tool(
         )
         if gate is not None:
             return gate
+        session = _require_agent_session(state, session_id)
         payload, start_status = _start_resource_action_run(
             state,
             {
@@ -22356,6 +22386,10 @@ def _execute_agent_tool(
                     arguments.get("_approved_workspace_root") or ""
                 ),
             },
+            agent_session_id=session_id,
+            agent_conversation_id=str(
+                session.get("openhands_conversation_id") or ""
+            ),
         )
         # HTTPStatus.OK means the request id matched an existing run: nothing
         # new started, so a second "running in the background" note would
@@ -22366,16 +22400,6 @@ def _execute_agent_tool(
         # background thread finishes, the outcome is posted back into that
         # conversation and the loop resumes. Without this, "I'll continue
         # when the result arrives" was a promise nothing could keep.
-        session = _require_agent_session(state, session_id)
-        with state._lock:
-            record = state._resource_action_runs.get(
-                str(payload.get("request_id") or "")
-            )
-            if record is not None and record.get("status") == "running":
-                record["agent_session_id"] = session_id
-                record["agent_conversation_id"] = str(
-                    session.get("openhands_conversation_id") or ""
-                )
         if not already_running:
             _append_agent_message(
                 state,
@@ -25245,8 +25269,24 @@ def _clear_openhands_runtime_binding(session: JsonDict) -> None:
 
     session["openhands_conversation_id"] = ""
     session.pop("openhands_workspace_id", None)
+    session.pop("openhands_runtime_binding", None)
     session.pop("openhands_pending_sync", None)
     session.pop("cancelled_openhands_conversation_id", None)
+
+
+def _openhands_runtime_binding(state: UiState) -> str:
+    """Non-secret identity of the runtime configuration owning a conversation."""
+
+    config = state.agent_adapter.config
+    return json.dumps(
+        {
+            "base_url": config.base_url,
+            "session_endpoint": config.session_endpoint,
+            "model": config.model,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _append_agent_message(
@@ -25310,6 +25350,14 @@ def _append_agent_message(
         existing_conversation_id = str(
             session.get("openhands_conversation_id") or ""
         )
+        runtime_binding_changed = bool(
+            existing_conversation_id
+            and session.get("openhands_runtime_binding")
+            != _openhands_runtime_binding(state)
+        )
+        if runtime_binding_changed:
+            _clear_openhands_runtime_binding(session)
+            existing_conversation_id = ""
         runtime_workspace_id = str(session.get("openhands_workspace_id") or "")
         workspace_changed = bool(
             existing_conversation_id and runtime_workspace_id != target_workspace_id
@@ -25426,6 +25474,7 @@ def _append_agent_message(
         if conversation_id:
             session["openhands_conversation_id"] = conversation_id
             session["openhands_workspace_id"] = target_workspace_id
+            session["openhands_runtime_binding"] = _openhands_runtime_binding(state)
         cancelled_session = _cancelled_agent_turn_session(
             state,
             session_id,
