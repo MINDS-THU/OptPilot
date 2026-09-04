@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -28,6 +31,8 @@ from optpilot_studio.ui.server import (
     DEFAULT_ASSISTANT_PERMISSIONS,
     UiState,
     _approve_agent_action,
+    _append_agent_message,
+    _agent_session_by_id,
     _attach_agent_workspace,
     _catalog_payload,
     _create_agent_session,
@@ -37,6 +42,7 @@ from optpilot_studio.ui.server import (
     _read_agent_messages,
     _resource_action_review,
     _resource_action_run_status,
+    _session_background_action_runs,
     _update_agent_settings,
 )
 
@@ -495,11 +501,6 @@ class AssistantResourceActionTest(unittest.TestCase):
         # The transcript's live indicator and the Open Work shelf both read
         # this slim list off every session payload; heavy stdout/stderr
         # tails stay on the per-request status endpoint.
-        from optpilot_studio.ui.server import (
-            _agent_session_by_id,
-            _session_background_action_runs,
-        )
-
         session_id = self.session["id"]
         with self.state._lock:
             self.state._resource_action_runs["fake-run"] = {
@@ -531,6 +532,199 @@ class AssistantResourceActionTest(unittest.TestCase):
         finally:
             with self.state._lock:
                 self.state._resource_action_runs.pop("fake-run", None)
+
+    def test_two_sessions_run_into_separate_workspaces_without_cross_talk(self) -> None:
+        """One shared login may drive independent Conversations concurrently."""
+
+        (self.resource_dir / "generate.py").write_text(
+            _GENERATOR.replace(
+                "out = pathlib.Path",
+                "import time\ntime.sleep(0.2)\nout = pathlib.Path",
+            ),
+            encoding="utf-8",
+        )
+        sessions = [
+            _create_agent_session(
+                self.state,
+                {
+                    "title": f"Concurrent {label}",
+                    "openhands_conversation_id": f"conversation-{label}",
+                },
+            )
+            for label in ("alpha", "beta")
+        ]
+        workspaces = [
+            _create_ui_workspace(
+                self.state,
+                {
+                    "title": f"Generated {label}",
+                    "root": str(self.root / f"workspace-{label}"),
+                },
+            )
+            for label in ("alpha", "beta")
+        ]
+        for session, workspace in zip(sessions, workspaces):
+            _attach_agent_workspace(
+                self.state, session["id"], workspace["id"], select=True
+            )
+        source_snapshot = {
+            path.relative_to(self.resource_dir): path.read_bytes()
+            for path in self.resource_dir.rglob("*")
+            if path.is_file()
+        }
+
+        request_ids = {label: str(uuid.uuid4()) for label in ("alpha", "beta")}
+
+        def start(label: str) -> dict:
+            index = 0 if label == "alpha" else 1
+            session = sessions[index]
+            workspace = workspaces[index]
+            requested = _execute_agent_tool(
+                self.state,
+                session["id"],
+                "optpilot_resource_action_run",
+                {
+                    "resource_uid": self.resource_uid,
+                    "action_id": "generate",
+                    "inputs": {"name": label},
+                    "request_id": request_ids[label],
+                    "workspace_id": workspace["id"],
+                },
+            )
+            self.assertFalse(requested["ok"], requested)
+            approval = next(
+                item
+                for item in _read_agent_approvals(self.state, session["id"])
+                if item["status"] == "pending"
+            )
+            return _approve_agent_action(
+                self.state, session["id"], approval["id"]
+            )
+
+        posted_to: list[str] = []
+
+        def post_background_result(conversation_id: str, _message: str) -> dict:
+            posted_to.append(conversation_id)
+            return {"sent": True, "conversation_id": conversation_id}
+
+        with mock.patch.object(
+            self.state.agent_adapter,
+            "post_background_result",
+            side_effect=post_background_result,
+        ):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                approved = list(executor.map(start, ("alpha", "beta")))
+            self.assertTrue(all(item["result"]["ok"] for item in approved), approved)
+            final = {
+                label: self._await(request_ids[label])
+                for label in ("alpha", "beta")
+            }
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                sessions_waiting = all(
+                    _agent_session_by_id(self.state, session["id"])["status"]
+                    == "waiting_for_agent"
+                    for session in sessions
+                )
+                if len(posted_to) == 2 and sessions_waiting:
+                    break
+                time.sleep(0.01)
+
+        self.assertEqual(
+            {label: final[label]["status"] for label in final},
+            {"alpha": "succeeded", "beta": "succeeded"},
+        )
+        self.assertCountEqual(
+            posted_to, ["conversation-alpha", "conversation-beta"]
+        )
+        for index, label in enumerate(("alpha", "beta")):
+            own_request_id = request_ids[label]
+            other_request_id = request_ids["beta" if label == "alpha" else "alpha"]
+            output_root = Path(final[label]["result"]["output_root"])
+            self.assertTrue(output_root.is_relative_to(Path(workspaces[index]["root"])))
+            bundle = json.loads(
+                (output_root / "bundle.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(bundle["inputs"], {"name": label})
+            transcript = json.dumps(
+                _read_agent_messages(self.state, sessions[index]["id"]),
+                sort_keys=True,
+            )
+            self.assertIn(own_request_id, transcript)
+            self.assertNotIn(other_request_id, transcript)
+            visible_runs = _session_background_action_runs(
+                self.state, sessions[index]["id"]
+            )
+            self.assertEqual(
+                [item["request_id"] for item in visible_runs], [own_request_id]
+            )
+        self.assertEqual(
+            {
+                path.relative_to(self.resource_dir): path.read_bytes()
+                for path in self.resource_dir.rglob("*")
+                if path.is_file()
+            },
+            source_snapshot,
+            "Resource actions must run from per-request copies, not dirty the source",
+        )
+
+    def test_background_note_cannot_overwrite_a_concurrent_user_turn(self) -> None:
+        """A finishing action and a new turn share one Conversation lock."""
+
+        from optpilot_studio.ui import server
+
+        session = _create_agent_session(self.state, {"title": "One conversation"})
+        original_upsert = server._upsert_agent_session
+        background_at_upsert = threading.Event()
+        user_at_upsert = threading.Event()
+        release_background = threading.Event()
+
+        def delayed_upsert(state: UiState, record: dict) -> dict:
+            thread_name = threading.current_thread().name
+            if thread_name == "late-background":
+                background_at_upsert.set()
+                release_background.wait(timeout=2)
+            elif thread_name == "new-user-turn":
+                user_at_upsert.set()
+            return original_upsert(state, record)
+
+        with mock.patch.object(server, "_upsert_agent_session", side_effect=delayed_upsert):
+            background = threading.Thread(
+                target=_append_agent_message,
+                args=(
+                    self.state,
+                    session["id"],
+                    {
+                        "role": "assistant",
+                        "title": "Background action finished",
+                        "content": "The generation finished.",
+                    },
+                ),
+                name="late-background",
+            )
+            user = threading.Thread(
+                target=_append_agent_message,
+                args=(
+                    self.state,
+                    session["id"],
+                    {"role": "user", "content": "Start the next task."},
+                ),
+                name="new-user-turn",
+            )
+            background.start()
+            self.assertTrue(background_at_upsert.wait(timeout=2))
+            user.start()
+            # Without the per-Conversation operation lock the user reaches
+            # its upsert first, then the stale background record erases it.
+            user_at_upsert.wait(timeout=0.2)
+            release_background.set()
+            background.join(timeout=2)
+            user.join(timeout=2)
+
+        self.assertFalse(background.is_alive())
+        self.assertFalse(user.is_alive())
+        persisted = server._require_agent_session(self.state, session["id"])
+        self.assertTrue(persisted.get("has_user_message"), persisted)
 
     def test_a_replayed_approved_run_fabricates_no_second_launch_note(self) -> None:
         # Approving a repeat of an already-running request must not append

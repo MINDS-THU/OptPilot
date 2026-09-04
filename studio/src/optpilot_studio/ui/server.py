@@ -25294,6 +25294,18 @@ def _openhands_runtime_binding(state: UiState) -> str:
 def _append_agent_message(
     state: UiState, session_id: str, payload: JsonDict
 ) -> JsonDict:
+    # Messages can arrive from both an HTTP request and a Resource action's
+    # completion thread. Keep the read/dispatch/upsert sequence atomic for one
+    # Conversation so a late background note cannot restore a stale session
+    # record over a newer user turn. The lock is re-entrant because the HTTP
+    # route already holds it while checking pending approvals.
+    with _agent_session_operation_lock(state, session_id):
+        return _append_agent_message_unlocked(state, session_id, payload)
+
+
+def _append_agent_message_unlocked(
+    state: UiState, session_id: str, payload: JsonDict
+) -> JsonDict:
     session = _require_agent_session(state, session_id)
     role = str(payload.get("role") or "user")
     content = str(payload.get("content") or payload.get("message") or "")

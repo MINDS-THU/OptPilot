@@ -164,7 +164,8 @@ def main() -> int:
     except ImportError as error:
         raise SystemExit(_dependency_failure(error)) from None
 
-    workdir = Path(tempfile.mkdtemp(prefix="devs-headless-"))
+    workdir_owner = tempfile.TemporaryDirectory(prefix="devs-headless-")
+    workdir = Path(workdir_owner.name)
     bundle_folder = "generated_simulator"
     tool = DEVSConstructRecon(
         file_tools={
@@ -237,7 +238,7 @@ def main() -> int:
             "Declared metrics: none (register via Studio to review manually)"
         )
     print("\n".join(summary_lines))
-    shutil.rmtree(workdir, ignore_errors=True)
+    workdir_owner.cleanup()
     return 0
 
 
