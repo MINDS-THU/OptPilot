@@ -712,21 +712,15 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_resource_action_run",
-        "description": "Run one declared Resource action. Requires approval. Pass workspace_id whenever the action produces something the person will keep or register, such as a generated simulator: the results are then written inside that attached Workspace instead of Studio's private folder, and can be registered without copying. Returns a request_id; poll it with optpilot_resource_action_status.",
+        "description": "Run one declared Resource action. Requires approval. Set inputs with the exact keys declared by optpilot_resource_action_list, including every input without a default; a generator specification is the user's system description. Pass workspace_id whenever the action produces something the person will keep or register, such as a generated simulator: the results are then written inside that attached Workspace instead of Studio's private folder, and can be registered without copying. Returns a request_id; poll it with optpilot_resource_action_status.",
         "parameters": _tool_schema(
             {
                 "resource_uid": {"type": "string", "description": "A catalog entry's qualified_id (for example or_solving/method/coopa-solver), or its plain id when only one entry of that kind has it."},
                 "action_id": {"type": "string"},
-                "inputs": {
-                    "type": "object",
-                    "description": (
-                        "Values keyed exactly as declared by "
-                        "optpilot_resource_action_list. Include every input "
-                        "without a default; for a generator's specification "
-                        "input, pass the user's system description rather "
-                        "than omitting it or inventing a different one."
-                    ),
-                },
+                # Keep parameter schemas stable across releases: OpenHands
+                # caches them process-wide while it restores conversations.
+                # Usage guidance belongs in the tool description and prompt.
+                "inputs": {"type": "object"},
                 "workspace_id": {"type": "string"},
             },
             ["resource_uid", "action_id"],

@@ -5644,6 +5644,7 @@ class MvpIntegrationTest(unittest.TestCase):
         by_name = {str(tool.get("name")): tool for tool in OPTPILOT_AGENT_TOOL_SPECS}
         study_draft = by_name["optpilot_study_draft"]["parameters"]["properties"]
         smoke_description = str(by_name["optpilot_package_plan_smoke"].get("description") or "")
+        resource_action = by_name["optpilot_resource_action_run"]
 
         self.assertIn("workspace_id", study_draft)
         self.assertIn("expected_workspace_revision", study_draft)
@@ -5655,6 +5656,11 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertNotIn("evidenceOutputDir", study_draft)
         self.assertNotIn("approved=true", smoke_description)
         self.assertIn("approve or reject", smoke_description)
+        self.assertEqual(
+            resource_action["parameters"]["properties"]["inputs"],
+            {"type": "object"},
+        )
+        self.assertIn("including every input without a default", resource_action["description"])
 
     @unittest.skipUnless(_LOOPBACK_TCP_BIND_AVAILABLE, "sandbox denies loopback TCP bind")
     def test_ui_agent_session_dispatches_to_openhands_http_bridge(self) -> None:
