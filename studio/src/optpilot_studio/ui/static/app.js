@@ -46,6 +46,7 @@ const STUDY_LAUNCH_RECONNECT_LIMIT = 8;
 const ASSISTANT_MUTATION_TIMEOUT_MS = 60_000;
 const INTERFACE_LAUNCH_RECONNECT_LIMIT = 5;
 const INTERFACE_LAUNCH_POLL_TIMEOUT_MS = 10_000;
+const INTERFACE_BROWSER_READY_TIMEOUT_MS = 30_000;
 
 const state = {
   view: "workspace",
@@ -355,6 +356,7 @@ let appInitialized = false;
 let studioSecurityContext = null;
 let studioSecurityContextPromise = null;
 const operatorJobsPanelRenderCache = new WeakMap();
+let interfacePresentationReadyTimeout = null;
 
 function initializeApp() {
   if (appInitialized) return;
@@ -669,6 +671,7 @@ function bindEvents() {
     if (element) element.addEventListener(eventName, handler);
   };
   window.optpilotStudioOpenSettings = openSettings;
+  window.addEventListener("message", handleInterfacePresentationMessage);
   on(els.studioSettingsButton, "click", () => openSettings({ tab: "assistant" }));
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
@@ -4250,6 +4253,81 @@ function interfaceSessionModel() {
   };
 }
 
+function interfacePresentationOrigin(openUrl) {
+  try {
+    return new URL(openUrl, window.location.href).origin;
+  } catch (error) {
+    return "";
+  }
+}
+
+function clearInterfacePresentationTimeout() {
+  if (interfacePresentationReadyTimeout !== null) {
+    window.clearTimeout(interfacePresentationReadyTimeout);
+    interfacePresentationReadyTimeout = null;
+  }
+}
+
+function armInterfacePresentationTimeout() {
+  clearInterfacePresentationTimeout();
+  const frame = els.interfaceSessionFrame;
+  if (!frame || frame.dataset.presentationReadiness !== "loading") return;
+  const sessionKey = String(frame.dataset.sessionKey || "");
+  interfacePresentationReadyTimeout = window.setTimeout(() => {
+    interfacePresentationReadyTimeout = null;
+    if (
+      String(frame.dataset.sessionKey || "") !== sessionKey
+      || frame.dataset.presentationReadiness !== "loading"
+    ) return;
+    if (frame.dataset.presentationRetry !== "1") {
+      frame.dataset.presentationRetry = "1";
+      reloadCurrentInterfaceFrame({ resetRetry: false });
+      return;
+    }
+    frame.dataset.presentationReadiness = "failed";
+    renderInterfaceSession();
+  }, INTERFACE_BROWSER_READY_TIMEOUT_MS);
+}
+
+function reloadCurrentInterfaceFrame({ resetRetry = true } = {}) {
+  const model = interfaceSessionModel();
+  const frame = els.interfaceSessionFrame;
+  if (!model.openUrl || !frame) return false;
+  clearInterfacePresentationTimeout();
+  if (resetRetry) frame.dataset.presentationRetry = "0";
+  frame.dataset.presentationReadiness = "loading";
+  frame.src = model.openUrl;
+  armInterfacePresentationTimeout();
+  renderInterfaceSession();
+  return true;
+}
+
+function handleInterfacePresentationMessage(event) {
+  const data = event && event.data;
+  if (!data || typeof data !== "object" || data.version !== 1) return;
+  if (![
+    "optpilot.presentation.loading",
+    "optpilot.presentation.ready",
+  ].includes(data.type)) return;
+  const model = interfaceSessionModel();
+  const frame = els.interfaceSessionFrame;
+  if (
+    !model.openUrl
+    || !frame
+    || event.source !== frame.contentWindow
+    || event.origin !== interfacePresentationOrigin(model.openUrl)
+    || String(frame.dataset.sessionKey || "") !== model.key
+  ) return;
+  if (data.type === "optpilot.presentation.ready") {
+    frame.dataset.presentationReadiness = "ready";
+    clearInterfacePresentationTimeout();
+  } else {
+    frame.dataset.presentationReadiness = "loading";
+    armInterfacePresentationTimeout();
+  }
+  renderInterfaceSession();
+}
+
 function renderInterfaceSession() {
   if (!els.interfaceSessionFrame) return;
   const model = interfaceSessionModel();
@@ -4321,6 +4399,11 @@ function renderInterfaceSession() {
     // even when two launches happen to return the same URL.
     els.interfaceSessionFrame.removeAttribute("src");
   }
+  if (!sameFrameSession) {
+    clearInterfacePresentationTimeout();
+    delete els.interfaceSessionFrame.dataset.presentationReadiness;
+    delete els.interfaceSessionFrame.dataset.presentationRetry;
+  }
   if (model.frameSandbox) {
     if (els.interfaceSessionFrame.getAttribute("sandbox") !== model.frameSandbox) {
       els.interfaceSessionFrame.setAttribute("sandbox", model.frameSandbox);
@@ -4342,14 +4425,43 @@ function renderInterfaceSession() {
     && !["failed", "stopped", "cleanup_pending"].includes(model.status),
   );
   if (model.openUrl && currentUrl !== model.openUrl) {
+    clearInterfacePresentationTimeout();
+    delete els.interfaceSessionFrame.dataset.presentationReadiness;
+    els.interfaceSessionFrame.dataset.presentationRetry = "0";
     els.interfaceSessionFrame.setAttribute("src", model.openUrl);
   } else if (!model.openUrl && currentUrl && !retainCurrentFrame) {
     els.interfaceSessionFrame.removeAttribute("src");
   }
   els.interfaceSessionFrame.dataset.sessionKey = model.key;
   const frameMounted = Boolean(els.interfaceSessionFrame.getAttribute("src"));
+  const browserReadiness = String(els.interfaceSessionFrame.dataset.presentationReadiness || "");
+  const browserLoading = Boolean(model.openUrl && ["loading", "failed"].includes(browserReadiness));
   els.interfaceSessionFrame.hidden = !frameMounted;
-  if (els.interfaceSessionEmpty) els.interfaceSessionEmpty.hidden = frameMounted;
+  if (els.interfaceSessionEmpty) els.interfaceSessionEmpty.hidden = frameMounted && !browserLoading;
+  if (browserLoading) {
+    if (els.interfaceSessionEmptyTitle) {
+      els.interfaceSessionEmptyTitle.textContent = browserReadiness === "failed"
+        ? "Interface did not finish loading"
+        : els.interfaceSessionFrame.dataset.presentationRetry === "1"
+          ? "Reloading the interface"
+          : "Loading the interface";
+    }
+    if (els.interfaceSessionEmptyBody) {
+      els.interfaceSessionEmptyBody.textContent = browserReadiness === "failed"
+        ? "The interface still has not reported that its page is ready. You can try loading it again."
+        : els.interfaceSessionFrame.dataset.presentationRetry === "1"
+          ? "Studio is retrying this same interface once."
+          : "Studio will retry once if this page does not become ready.";
+    }
+    if (els.interfaceSessionRetryButton) {
+      els.interfaceSessionRetryButton.hidden = false;
+      els.interfaceSessionRetryButton.textContent = browserReadiness === "failed"
+        ? "Try again"
+        : "Reload now";
+    }
+  } else if (els.interfaceSessionRetryButton) {
+    els.interfaceSessionRetryButton.textContent = "Check again";
+  }
   renderInterfaceSessionOutputs(model);
 }
 
@@ -4573,6 +4685,12 @@ function stopCurrentInterfaceSession() {
 
 function refreshCurrentInterfaceSession() {
   const model = interfaceSessionModel();
+  if (
+    model.openUrl
+    && String(els.interfaceSessionFrame && els.interfaceSessionFrame.dataset.sessionKey || "") === model.key
+    && ["loading", "failed"].includes(String(els.interfaceSessionFrame.dataset.presentationReadiness || ""))
+    && reloadCurrentInterfaceFrame()
+  ) return;
   if (typeof model.retry === "function") model.retry();
 }
 

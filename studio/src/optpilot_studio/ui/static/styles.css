@@ -867,6 +867,7 @@ body.view-interface .main {
 .interface-session-empty {
   display: grid;
   position: absolute;
+  z-index: 1;
   inset: 0;
   place-items: center;
   padding: 28px;

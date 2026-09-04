@@ -513,6 +513,12 @@ const standardizeFiles = (rawFiles: FileMap): { name: string, files: FileMap } =
 };
 
 const App: React.FC = () => {
+  useEffect(() => {
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: 'optpilot.presentation.ready', version: 1 }, '*');
+    }
+  }, []);
+
   // Backend calls these generated bundles "projects". The student UI consistently calls them simulations.
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');

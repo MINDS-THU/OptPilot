@@ -17,6 +17,7 @@ from optpilot_studio.ui.server import (
     WorkspaceRuntimeManager,
     WorkspaceRuntimeOptions,
     _handler_factory,
+    _workspace_presentation_generation,
 )
 from optpilot_studio.ui.shared_auth import SharedAuth, write_credentials
 
@@ -181,6 +182,45 @@ class StudioSharedLoginHttpTests(unittest.TestCase):
 
 
 class WorkspaceRuntimePublicPortTests(unittest.TestCase):
+    def test_preview_ownership_is_exact_and_briefly_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = WorkspaceRuntimeManager(
+                studio_root=root,
+                runtime_root=root / "runtime",
+                options=WorkspaceRuntimeOptions(port_start=31000, port_count=2),
+            )
+            record = {
+                "workspace_id": "workspace-1",
+                "container_name": "optpilot-workspace-1",
+                "host_port": 31000,
+                "image": "workspace:latest",
+                "started_at": "start-1",
+                "code_server_started_at": "code-1",
+            }
+            generation = _workspace_presentation_generation("workspace-1", record)
+            with (
+                patch.object(manager, "_read_record", return_value=record),
+                patch.object(manager, "_container_running", return_value=True) as running,
+            ):
+                self.assertTrue(
+                    manager.owns_workspace_code_server_port(
+                        "workspace-1", 31000, generation
+                    )
+                )
+                self.assertTrue(
+                    manager.owns_workspace_code_server_port(
+                        "workspace-1", 31000, generation
+                    )
+                )
+                self.assertFalse(
+                    manager.owns_workspace_code_server_port(
+                        "workspace-1", 31000, "stale-generation"
+                    )
+                )
+
+            running.assert_called_once_with("optpilot-workspace-1")
+
     def test_delete_immediately_invalidates_cached_port_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

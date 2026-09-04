@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DEVS Generator v2</title>
+    <script>
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'optpilot.presentation.loading', version: 1 }, '*');
+      }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       /*

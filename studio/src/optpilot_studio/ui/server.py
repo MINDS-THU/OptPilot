@@ -1233,6 +1233,22 @@ def _workspace_runtime_record_is_prestart(record: Mapping[str, Any]) -> bool:
     return marker is False or "container_may_exist" not in record
 
 
+def _workspace_presentation_generation(
+    workspace_id: str,
+    record: Mapping[str, Any],
+) -> str:
+    return request_digest(
+        {
+            "schema": "optpilot.workspace-presentation-generation.v1",
+            "code_server_started_at": record.get("code_server_started_at"),
+            "container_name": record.get("container_name"),
+            "image": record.get("image"),
+            "started_at": record.get("started_at"),
+            "workspace_id": workspace_id,
+        }
+    )
+
+
 def _check_interface_launch_cancelled(
     should_stop: Optional[Callable[[], bool]],
 ) -> None:
@@ -1375,6 +1391,9 @@ class WorkspaceRuntimeManager:
         self.options = options
         self._health_cache: tuple[float, JsonDict] = (0.0, {})
         self._owned_code_ports_cache: dict[int, tuple[float, bool]] = {}
+        self._owned_workspace_ports_cache: dict[
+            tuple[str, int, str], tuple[float, bool]
+        ] = {}
         self._owned_code_ports_lock = threading.RLock()
         # Device/inode values are live attachment fences, not persisted
         # identities.  Filesystems may assign another device number after a
@@ -1439,6 +1458,57 @@ class WorkspaceRuntimeManager:
                     ):
                         continue
             self._owned_code_ports_cache[requested] = (now, allowed)
+            return allowed
+
+    def owns_workspace_code_server_port(
+        self,
+        workspace_id: str,
+        port: int,
+        generation: str,
+    ) -> bool:
+        """Return whether one exact runtime generation still owns its code port."""
+
+        try:
+            requested = int(port)
+        except (TypeError, ValueError):
+            return False
+        workspace_id = str(workspace_id or "")
+        generation = str(generation or "")
+        range_start = int(self.options.port_start)
+        range_end = range_start + max(1, int(self.options.port_count))
+        if (
+            not workspace_id
+            or not generation
+            or requested not in range(range_start, range_end)
+        ):
+            return False
+        cache_key = (workspace_id, requested, generation)
+        now = time.monotonic()
+        with self._owned_code_ports_lock:
+            cached = self._owned_workspace_ports_cache.get(cache_key)
+            if cached is not None and now - cached[0] < 2.0:
+                return cached[1]
+            allowed = False
+            try:
+                record = self._read_record(workspace_id)
+                container_name = str(record.get("container_name") or "")
+                allowed = bool(
+                    int(record.get("host_port") or 0) == requested
+                    and container_name
+                    and _workspace_presentation_generation(workspace_id, record)
+                    == generation
+                    and self._container_running(container_name)
+                )
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                allowed = False
+            self._owned_workspace_ports_cache[cache_key] = (now, allowed)
             return allowed
 
     def _mark_code_server_port_owned(self, port: int) -> None:
@@ -2590,6 +2660,7 @@ class WorkspaceRuntimeManager:
         # request to a port whose backing container has already disappeared.
         with self._owned_code_ports_lock:
             self._owned_code_ports_cache.clear()
+            self._owned_workspace_ports_cache.clear()
         runtime_dir = self._workspace_runtime_dir(workspace_id)
         container_name = self._container_name(workspace_id)
         if not runtime_dir.exists():
@@ -3228,9 +3299,10 @@ class WorkspaceRuntimeManager:
             host_port = int(payload.get("host_port") or 0)
         except (TypeError, ValueError):
             host_port = 0
-        if host_port:
-            with self._owned_code_ports_lock:
+        with self._owned_code_ports_lock:
+            if host_port:
                 self._owned_code_ports_cache.pop(host_port, None)
+            self._owned_workspace_ports_cache.clear()
 
     def _create_runtime_claim(self, workspace_id: str, runtime_path: Path) -> None:
         claim = {
@@ -4185,7 +4257,6 @@ class UiState:
             int(port),
             target_base_url,
             allowed_ports=allowed_ports,
-            runtime_workspace=workspace,
         )
         return {
             "workspace_id": workspace_id,
@@ -4206,7 +4277,6 @@ class UiState:
         target_base_url: str,
         *,
         allowed_ports: List[int],
-        runtime_workspace: Optional[JsonDict] = None,
     ) -> WebPresentationLease:
         key = f"{workspace_id}:{int(port)}"
         code_server_base, separator, _tail = target_base_url.partition("/proxy/")
@@ -4219,29 +4289,14 @@ class UiState:
             for logical_port in allowed_ports
         }
         record = self.workspace_runtime._read_record(workspace_id)
-        generation = request_digest(
-            {
-                "schema": "optpilot.workspace-presentation-generation.v1",
-                "code_server_started_at": record.get("code_server_started_at"),
-                "container_name": record.get("container_name"),
-                "image": record.get("image"),
-                "started_at": record.get("started_at"),
-                "workspace_id": workspace_id,
-            }
-        )
-        transient_workspace = (
-            dict(runtime_workspace) if runtime_workspace is not None else None
-        )
+        generation = _workspace_presentation_generation(workspace_id, record)
 
         def validate_owned_workspace_endpoint() -> None:
-            workspace = transient_workspace or _workspace_by_id(self, workspace_id)
-            if not workspace:
-                raise RuntimeError("The workspace runtime descriptor no longer exists.")
-            status = self.workspace_runtime.status(workspace)
-            current_url = str(status.get("url") or "").rstrip("/")
-            if not status.get(
-                "container_running"
-            ) or current_url != code_server_base.rstrip("/"):
+            if not self.workspace_runtime.owns_workspace_code_server_port(
+                workspace_id,
+                int(record.get("host_port") or 0),
+                generation,
+            ):
                 raise RuntimeError(
                     "The workspace runtime no longer owns this Preview endpoint."
                 )

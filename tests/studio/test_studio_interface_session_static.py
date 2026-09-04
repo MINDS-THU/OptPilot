@@ -93,6 +93,22 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertNotIn("els.interfaceSessionView.innerHTML", renderer)
         self.assertNotIn("els.interfaceSessionFrame.outerHTML", renderer)
 
+    def test_opt_in_browser_readiness_recovers_one_failed_page_load(self) -> None:
+        handler = _function_source(self.source, "handleInterfacePresentationMessage")
+        timeout = _function_source(self.source, "armInterfacePresentationTimeout")
+        reloader = _function_source(self.source, "reloadCurrentInterfaceFrame")
+        renderer = _function_source(self.source, "renderInterfaceSession")
+
+        self.assertIn('"optpilot.presentation.loading"', handler)
+        self.assertIn('"optpilot.presentation.ready"', handler)
+        self.assertIn("event.source !== frame.contentWindow", handler)
+        self.assertIn("event.origin !== interfacePresentationOrigin(model.openUrl)", handler)
+        self.assertIn('frame.dataset.presentationRetry !== "1"', timeout)
+        self.assertIn("reloadCurrentInterfaceFrame({ resetRetry: false })", timeout)
+        self.assertIn("frame.src = model.openUrl", reloader)
+        self.assertIn("presentationReadiness", renderer)
+        self.assertIn("Studio will retry once", renderer)
+
     def test_full_stage_interface_has_an_accessible_nonmodal_outputs_panel(self) -> None:
         self.assertEqual(self.html.count('id="interfaceSessionOutputsButton"'), 1)
         self.assertIn('aria-controls="interfaceSessionOutputsDrawer"', self.html)
