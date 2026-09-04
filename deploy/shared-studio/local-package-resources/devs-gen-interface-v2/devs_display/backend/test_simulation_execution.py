@@ -612,6 +612,9 @@ class SimulationExecutionTests(unittest.TestCase):
         )
         source = materials.read_text(encoding="utf-8")
         compile(source, str(materials), "exec")
+        unit_runner = materials.with_name("runner_example_unit.py")
+        unit_source = unit_runner.read_text(encoding="utf-8")
+        compile(unit_source, str(unit_runner), "exec")
         require_result_summary_contract(source, filename=str(materials))
         require_event_trace_contract(source, filename=str(materials))
         with self.assertRaisesRegex(ValueError, "summary.json contract"):
