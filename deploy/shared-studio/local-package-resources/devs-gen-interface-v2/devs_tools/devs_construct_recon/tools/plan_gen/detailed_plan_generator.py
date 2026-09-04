@@ -15,6 +15,7 @@ from ...base_types import (
 )
 from ...utils import get_content_strict, extract_json
 from ...wrapped_completion import completion_with_logging
+from ...json_retry_guidance import append_retry_guidance, json_retry_guidance
 
 from .detailed_plan_prompt import (
     BASE_PROMPT,
@@ -320,6 +321,7 @@ class DetailedPlanGenerator:
         last_error: Optional[Exception] = None
         retry_correction = ""
         for attempt in range(retry):
+            resp = None
             try:
                 prompt = _build_prompt(
                     target_name=target_name,
@@ -331,8 +333,7 @@ class DetailedPlanGenerator:
                     is_root=is_root,
                     is_coupled=is_coupled, # 将类型传入，用于隔离 Prompt
                 )
-                if retry_correction:
-                    prompt = f"{prompt}\n\n{retry_correction}"
+                prompt = append_retry_guidance(prompt, retry_correction)
                 
                 resp = completion_with_logging(
                     model=model,
@@ -371,27 +372,19 @@ class DetailedPlanGenerator:
 
             except Exception as e:
                 last_error = e
-                if isinstance(e, ApprovedHierarchyMismatch):
-                    expected_types = {
-                        node.name: "coupled" if node.children_names else "atomic"
-                        for node in global_plan
-                    }
-                    exact_children = ", ".join(
-                        f"{name} ({expected_types.get(name, 'approved type')})"
-                        for name in children_names
-                    ) or "none"
-                    retry_correction = f"""
-<RetryCorrection>
-The previous response changed the approved hierarchy and was rejected.
-Return exactly one children_plans entry for each of these direct child types, and no others: {exact_children}.
-Do not duplicate a child entry to represent multiple runtime instances. Express multiplicity through init arguments and coupling semantics on the single approved child type.
-</RetryCorrection>
-""".strip()
                 es = str(e)
                 if "rate" in es.lower() or "429" in es:
                     wait = 10 * (attempt + 1)
                     print(f"[DetailedPlan] Rate limited, waiting {wait}s...")
                     time.sleep(wait)
+                elif resp is not None and attempt < retry - 1:
+                    retry_correction = json_retry_guidance(
+                        model=model,
+                        target=target_name,
+                        schema=ResponseModel,
+                        error=e,
+                        attempt=attempt,
+                    )
                 print(f"[DetailedPlan] Attempt {attempt + 1} failed for '{target_name}': {e}")
                 if attempt < retry - 1:
                     time.sleep(2)

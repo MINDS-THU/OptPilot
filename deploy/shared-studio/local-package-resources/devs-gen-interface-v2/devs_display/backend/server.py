@@ -49,6 +49,10 @@ from .simulation_execution import (
     SimulationManifestError,
     simulation_metadata,
 )
+from devs_tools.devs_construct_recon.json_retry_guidance import (
+    append_retry_guidance,
+    json_retry_guidance,
+)
 from devs_settings import (
     first_preset_model,
     max_active_generations,
@@ -6125,23 +6129,48 @@ class DEVSBackendService:
                         f"User request: {user_content}",
                     )
                 )
-                try:
-                    response = generate(
-                        [
-                            {
-                                "role": "user",
-                                "content": prompt,
-                            }
-                        ]
-                    )
-                    raw = self._extract_json_object(response)
-                except Exception as exc:
-                    # A failed side-effect-free interpretation must not make
-                    # guided mode less reliable than automatic generation.
-                    print(
-                        "[Backend] Intent interpretation fell back to a local "
-                        f"summary ({type(exc).__name__}: {exc})."
-                    )
+                retry_guidance = ""
+                for attempt in range(2):
+                    response = None
+                    try:
+                        response = generate(
+                            [
+                                {
+                                    "role": "user",
+                                    "content": append_retry_guidance(
+                                        prompt, retry_guidance
+                                    ),
+                                }
+                            ]
+                        )
+                        raw = self._extract_json_object(response)
+                        if raw is None:
+                            raise ValueError(
+                                "The intent response was not one valid JSON object."
+                            )
+                        break
+                    except Exception as exc:
+                        model_id = str(getattr(model, "model_id", "") or "")
+                        if response is not None and model_id and attempt == 0:
+                            retry_guidance = json_retry_guidance(
+                                model=model_id,
+                                target="intent interpretation",
+                                schema=(
+                                    "One JSON object with summary, root_model_name, "
+                                    "project_folder, requirements, assumptions, entities, "
+                                    "event_flow, parameters, metrics, and questions."
+                                ),
+                                error=exc,
+                                attempt=attempt,
+                            )
+                            continue
+                        # A failed side-effect-free interpretation must not make
+                        # guided mode less reliable than automatic generation.
+                        print(
+                            "[Backend] Intent interpretation fell back to a local "
+                            f"summary ({type(exc).__name__}: {exc})."
+                        )
+                        break
         return self._normalize_intent_payload(
             raw,
             user_content,

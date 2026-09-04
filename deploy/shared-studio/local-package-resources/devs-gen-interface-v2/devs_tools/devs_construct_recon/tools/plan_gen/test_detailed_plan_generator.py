@@ -52,19 +52,21 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
         )
 
     def _generate_with_responses(self, responses: list[dict], *, retry: int = 3):
-        with patch.object(
-            module,
-            "completion_with_logging",
-            return_value=object(),
-        ) as completion, patch.object(
-            module,
-            "get_content_strict",
-            return_value="{}",
-        ), patch.object(
-            module,
-            "extract_json",
-            side_effect=responses,
-        ), patch.object(module.time, "sleep"):
+        with (
+            patch.object(
+                module,
+                "completion_with_logging",
+                return_value=object(),
+            ) as completion,
+            patch.object(module, "get_content_strict", return_value="{}"),
+            patch.object(module, "extract_json", side_effect=responses),
+            patch.object(
+                module,
+                "json_retry_guidance",
+                return_value="Return the exact approved names and field contract.",
+            ) as guidance,
+            patch.object(module.time, "sleep"),
+        ):
             result = self.generator.generate(
                 target_name="Kitchen",
                 requirements="Model a restaurant kitchen.",
@@ -72,10 +74,10 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
                 children_names=["Chef"],
                 retry=retry,
             )
-        return result, completion
+        return result, completion, guidance
 
     def test_unapproved_extra_child_is_retried_and_corrected(self):
-        result, completion = self._generate_with_responses(
+        result, completion, guidance = self._generate_with_responses(
             [
                 _raw_kitchen(_raw_child("Chef"), _raw_child("Dispatcher")),
                 _raw_kitchen(_raw_child("Chef")),
@@ -87,12 +89,12 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
         )
         self.assertEqual(completion.call_count, 2)
         retry_prompt = completion.call_args_list[1].kwargs["messages"][0]["content"]
-        self.assertIn("previous response changed the approved hierarchy", retry_prompt)
-        self.assertIn("Chef (atomic)", retry_prompt)
-        self.assertIn("Do not duplicate", retry_prompt)
+        self.assertIn("Generate a completely fresh response", retry_prompt)
+        self.assertIn("Return the exact approved names", retry_prompt)
+        guidance.assert_called_once()
 
     def test_duplicate_child_is_retried(self):
-        result, completion = self._generate_with_responses(
+        result, completion, _guidance = self._generate_with_responses(
             [
                 _raw_kitchen(_raw_child("Chef"), _raw_child("Chef")),
                 _raw_kitchen(_raw_child("Chef")),
@@ -105,7 +107,7 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
         self.assertEqual(completion.call_count, 2)
 
     def test_wrong_approved_child_type_is_retried(self):
-        result, completion = self._generate_with_responses(
+        result, completion, _guidance = self._generate_with_responses(
             [
                 _raw_kitchen(_raw_child("Chef", "coupled")),
                 _raw_kitchen(_raw_child("Chef", "atomic")),
@@ -129,7 +131,11 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
             module,
             "extract_json",
             side_effect=[invalid, invalid, invalid],
-        ), patch.object(module.time, "sleep"), self.assertRaisesRegex(
+        ), patch.object(
+            module,
+            "json_retry_guidance",
+            return_value="Preserve the approved hierarchy exactly.",
+        ) as guidance, patch.object(module.time, "sleep"), self.assertRaisesRegex(
             Exception,
             r"Last error: .*missing \['Chef'\].*unexpected \['Dispatcher'\]",
         ):
@@ -142,6 +148,24 @@ class DetailedPlanApprovedHierarchyTests(unittest.TestCase):
             )
 
         self.assertEqual(completion.call_count, 3)
+        self.assertEqual(guidance.call_count, 2)
+
+    def test_init_arg_contract_error_is_normalized_before_fresh_retry(self):
+        invalid = _raw_kitchen(_raw_child("Chef"))
+        invalid["detailed_plan"]["model_init_args"] = [
+            {"name": "simulation_time"},
+            {"name": "taking_order_time"},
+        ]
+
+        result, completion, guidance = self._generate_with_responses(
+            [invalid, _raw_kitchen(_raw_child("Chef"))]
+        )
+
+        self.assertEqual(result.detailed_plan.class_name, "Kitchen")
+        error = guidance.call_args.kwargs["error"]
+        self.assertIn("must start with exactly one 'name' and one 'parent'", str(error))
+        retry_prompt = completion.call_args_list[1].kwargs["messages"][0]["content"]
+        self.assertIn("Generate a completely fresh response", retry_prompt)
 
 
 if __name__ == "__main__":

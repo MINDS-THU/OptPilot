@@ -10,6 +10,7 @@ litellm.drop_params = True
 from ...base_types import GlobalPlanNode
 from ...utils import get_content_strict
 from ...wrapped_completion import completion_with_logging
+from ...json_retry_guidance import append_retry_guidance, json_retry_guidance
 
 
 class GlobalPlanResponse(BaseModel):
@@ -86,12 +87,19 @@ class GlobalPlanGenerator:
         Returns a list of GlobalPlanNode.
         """
         prompt = GLOBAL_PLAN_PROMPT.format(root_name=root_name, requirements=requirements)
+        retry_guidance = ""
 
         for attempt in range(retry):
+            response = None
             try:
                 response = completion_with_logging(
                     model=self.model_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": append_retry_guidance(prompt, retry_guidance),
+                        }
+                    ],
                     phase="phase1a_global_plan",
                     target=root_name,
                     attempt=attempt,
@@ -122,27 +130,37 @@ class GlobalPlanGenerator:
                 return modules
 
             except Exception as e:
+                final_error = e
                 print(f"[GlobalPlan] Attempt {attempt + 1} failed: {e}")
                 # Fallback to manual extraction if response_format fails
-                try:
-                    raw_content = get_content_strict(response)
-                    plan_list = self._extract_json_list(raw_content)
-                    modules = [GlobalPlanNode.model_validate(m) for m in plan_list]
+                if response is not None:
+                    try:
+                        raw_content = get_content_strict(response)
+                        plan_list = self._extract_json_list(raw_content)
+                        modules = [GlobalPlanNode.model_validate(m) for m in plan_list]
 
-                    names = {m.name for m in modules}
-                    for m in modules:
-                        m.children_names = list(dict.fromkeys(m.children_names))
-                        for cn in m.children_names:
-                            if cn not in names:
-                                raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")
+                        names = {m.name for m in modules}
+                        for m in modules:
+                            m.children_names = list(dict.fromkeys(m.children_names))
+                            for cn in m.children_names:
+                                if cn not in names:
+                                    raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")
 
-                    if modules[0].name != root_name:
-                        raise ValueError(f"First module must be '{root_name}', got '{modules[0].name}'")
+                        if modules[0].name != root_name:
+                            raise ValueError(f"First module must be '{root_name}', got '{modules[0].name}'")
 
-                    print(f"[GlobalPlan] Generated {len(modules)} modules (fallback)")
-                    return modules
-                except Exception:
-                    continue
+                        print(f"[GlobalPlan] Generated {len(modules)} modules (fallback)")
+                        return modules
+                    except Exception as fallback_error:
+                        final_error = fallback_error
+                if response is not None and attempt < retry - 1:
+                    retry_guidance = json_retry_guidance(
+                        model=self.model_id,
+                        target=root_name,
+                        schema=GlobalPlanResponse,
+                        error=final_error,
+                        attempt=attempt,
+                    )
 
         raise Exception(f"Failed to generate global plan after {retry} attempts")
 

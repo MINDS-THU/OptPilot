@@ -13,6 +13,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
 from pydantic import BaseModel, Field
+from devs_tools.devs_construct_recon.json_retry_guidance import (
+    append_retry_guidance,
+    json_retry_guidance,
+)
 
 from devs_settings import (
     graph_parse_max_workers as configured_graph_parse_max_workers,
@@ -178,28 +182,59 @@ def parse_model_for_visualizer(
     )
     print(f"[Visualizer] Prompt for {class_name}:\n{prompt}\n[Visualizer] End prompt")
 
-    response = litellm.completion(
-        model=llm_model,
-        messages=messages,
-        api_key=effective_key,
-        timeout=timeout_seconds,
-        temperature=0,
-        response_format=VisualizerParseResult,
-        max_tokens=4096,
-        extra_headers={
-            "HTTP-Referer": "http://localhost:3000",
-            "X-Title": "DEVS Generator Interface",
-        },
-    )
+    retry_guidance = ""
+    headers = {
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": "DEVS Generator Interface",
+    }
+    for attempt in range(2):
+        response = None
+        try:
+            attempt_messages = [
+                messages[0],
+                {
+                    "role": "user",
+                    "content": append_retry_guidance(prompt, retry_guidance),
+                },
+            ]
+            response = litellm.completion(
+                model=llm_model,
+                messages=attempt_messages,
+                api_key=effective_key,
+                timeout=timeout_seconds,
+                temperature=0,
+                response_format=VisualizerParseResult,
+                max_tokens=4096,
+                extra_headers=headers,
+            )
 
-    parsed_payload = extract_litellm_parsed(response)
-    if parsed_payload is not None:
-        return validate_visualizer_parse_result(parsed_payload)
+            parsed_payload = extract_litellm_parsed(response)
+            if parsed_payload is not None:
+                return validate_visualizer_parse_result(parsed_payload)
 
-    content = extract_litellm_content(response)
-    if not content:
-        raise RuntimeError("LiteLLM returned an empty response")
-    return validate_visualizer_parse_result(json.loads(clean_json_text(content)))
+            content = extract_litellm_content(response)
+            if not content:
+                raise RuntimeError("LiteLLM returned an empty response")
+            return validate_visualizer_parse_result(
+                json.loads(clean_json_text(content))
+            )
+        except Exception as error:
+            if response is None or attempt == 1:
+                raise
+            retry_guidance = json_retry_guidance(
+                model=llm_model,
+                target=class_name,
+                schema=VisualizerParseResult,
+                error=error,
+                attempt=attempt,
+                completion_options={
+                    "api_key": effective_key,
+                    "timeout": timeout_seconds,
+                    "extra_headers": headers,
+                },
+            )
+
+    raise RuntimeError("Visualizer JSON generation failed")
 
 
 def build_project_graph(

@@ -14,6 +14,7 @@ from ...base_types import StandardContextModel, PlanResult, ModelSpecification, 
 from .unified_model_creator import process_sub_models
 from ...utils import get_content_strict
 from ...wrapped_completion import completion_with_logging
+from ...json_retry_guidance import append_retry_guidance, json_retry_guidance
 from .generated_interface import extract_generated_python_interface
 
 
@@ -272,16 +273,17 @@ class ModelSummarizer:
             target_file_path=model_plan.model_info.file_path,
         )
         
-        current_feedback = ""
+        retry_guidance = ""
         validated_data = None
         for i in range(5):
+            response = None
             try:
-                feedback_str = f"## [Feedback] Previous attempt failed, here is the feedback: {current_feedback}\n" if current_feedback else ""
                 prompt = SUMMARIZE_PROMPT_TEMPLATE.format(
                     code=code_content,
                     sub_models=sub_models_str,
-                    feedback=feedback_str
+                    feedback="",
                 )
+                prompt = append_retry_guidance(prompt, retry_guidance)
                 response = completion_with_logging(
                     model=self.model_id,
                     messages=[{"role": "user", "content": prompt}],
@@ -298,7 +300,14 @@ class ModelSummarizer:
                 break
             except Exception as e:
                 print(f"Error occurred while processing {full_path}: {e}")
-                current_feedback = f"{current_feedback}\n{str(e)}"
+                if response is not None and i < 4:
+                    retry_guidance = json_retry_guidance(
+                        model=self.model_id,
+                        target=model_plan.model_info.class_name,
+                        schema=DEVSModelExtraction,
+                        error=e,
+                        attempt=i,
+                    )
 
         if validated_data is None:
             raise Exception(f"Failed to summarize model at {full_path} after 5 attempts")

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ...base_types import PlanResult
 from ...utils import get_content_strict
 from ...wrapped_completion import completion_with_logging
+from ...json_retry_guidance import append_retry_guidance, json_retry_guidance
 
 # ==============================================================================
 # Judge Prompt: 强调 ROI (投入产出比) 和 Mock 成本
@@ -80,11 +81,18 @@ class SimulationNecessityJudge:
             code_snippet=code_content[:1500] 
         )
 
-        for attempt in range(1):
+        retry_guidance = ""
+        for attempt in range(2):
+            response = None
             try:
                 response = completion_with_logging(
                     model=self.model_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": append_retry_guidance(prompt, retry_guidance),
+                        }
+                    ],
                     phase="phase2_sim_necessity_judge",
                     target=model_plan.model_info.class_name,
                     attempt=attempt,
@@ -101,6 +109,14 @@ class SimulationNecessityJudge:
                 return result.should_test
             except Exception as e:
                 print(f"   >> [Judge: AI] Error: {e}")
+                if response is not None and attempt == 0:
+                    retry_guidance = json_retry_guidance(
+                        model=self.model_id,
+                        target=model_plan.model_info.class_name,
+                        schema=SimulationJudgement,
+                        error=e,
+                        attempt=attempt,
+                    )
                 continue
 
         return False

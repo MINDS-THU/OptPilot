@@ -9,6 +9,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from devs_display.backend.routes import _auth_required, _issue_auth_token, _verify_auth_token
@@ -1070,6 +1071,46 @@ class BackendServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(parsed["components"], [{"name": "child", "className": "Child"}])
+
+    def test_visualizer_parse_uses_normalized_guidance_for_fresh_retry(self):
+        invalid = {"choices": [{"message": {"content": "not json"}}]}
+        valid = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "components": [
+                                    {"name": "child", "className": "Child"}
+                                ],
+                                "couplings": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}), patch(
+            "devs_display.backend.graph_parser.litellm.completion",
+            side_effect=[invalid, valid],
+        ) as completion, patch(
+            "devs_display.backend.graph_parser.json_retry_guidance",
+            return_value="Return one object matching the visualizer schema.",
+        ) as guidance:
+            parsed = parse_model_for_visualizer(
+                "Root",
+                "class Root(Coupled):\n    pass\n",
+                "openai",
+                "openai/gpt-5.4-mini",
+                None,
+            )
+
+        self.assertEqual(parsed["components"][0]["name"], "child")
+        guidance.assert_called_once()
+        retry_prompt = completion.call_args_list[1].kwargs["messages"][1]["content"]
+        self.assertIn("Generate a completely fresh response", retry_prompt)
+        self.assertIn("visualizer schema", retry_prompt)
 
     def test_service_visualizer_parse_falls_back_to_local_parser(self):
         code = (
@@ -3818,6 +3859,55 @@ class BackendServiceTests(unittest.TestCase):
                 "Build a restaurant queue simulation.",
             )
             self.assertNotIn("output_contract", generic)
+
+    def test_intent_json_failure_uses_guidance_for_fresh_retry(self):
+        class RetryModel:
+            model_id = "test-model"
+
+            def __init__(self):
+                self.messages = []
+
+            def generate(self, messages):
+                self.messages.append(messages)
+                if len(self.messages) == 1:
+                    return SimpleNamespace(content="not json")
+                return SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "summary": "Queue simulation",
+                            "root_model_name": "QueueSystem",
+                            "project_folder": "queue_sim",
+                            "requirements": "Model a queue.",
+                            "assumptions": [],
+                            "entities": [],
+                            "event_flow": [],
+                            "parameters": [],
+                            "metrics": [],
+                            "questions": [],
+                        }
+                    )
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = DEVSBackendService(DummyAgent(), tmp, start_worker=False)
+            model = RetryModel()
+            agent = SimpleNamespace(model=model)
+            with patch(
+                "devs_display.backend.server.json_retry_guidance",
+                return_value="Return exactly one intent object.",
+            ) as guidance:
+                intent = service._interpret_intent(
+                    agent,
+                    user_content="Model a queue.",
+                    feedback="",
+                    edited_intent=None,
+                )
+
+        self.assertEqual(intent["root_model_name"], "QueueSystem")
+        guidance.assert_called_once()
+        retry_prompt = model.messages[1][0]["content"]
+        self.assertIn("Generate a completely fresh response", retry_prompt)
+        self.assertIn("Return exactly one intent object", retry_prompt)
 
     def test_guided_request_persists_both_reviews_and_builds_exact_plan(self):
         with tempfile.TemporaryDirectory() as tmp:

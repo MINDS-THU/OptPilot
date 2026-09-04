@@ -12,6 +12,7 @@ litellm.drop_params = True
 from ...base_types import PlanResult, StandardContext, format_context_str
 from ...utils import get_content_strict
 from ...wrapped_completion import completion_with_logging
+from ...json_retry_guidance import append_retry_guidance, json_retry_guidance
 
 from .unified_model_creator import process_sub_models
 
@@ -445,14 +446,21 @@ Return the result as a JSON list of objects.
                 reasoning=f"{role_name} crashed without detailed diagnostics",
             )
         ]
-        for _ in range(3):
+        retry_guidance = ""
+        for attempt in range(3):
+            response = None
             try:
                 response = completion_with_logging(
                     model=self.model_id,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": append_retry_guidance(prompt, retry_guidance),
+                        }
+                    ],
                     phase="phase2_static_check",
                     target=f"{role_name}_{model_plan_type}",
-                    attempt=_,
+                    attempt=attempt,
                     temperature=0.5,
                     response_format=InspectionReport,
                 )
@@ -465,6 +473,14 @@ Return the result as a JSON list of objects.
                 return report.checks
             except Exception as e:
                 print(f"  !!! {role_name} CRASHED: {str(e)}")
+                if response is not None and attempt < 2:
+                    retry_guidance = json_retry_guidance(
+                        model=self.model_id,
+                        target=f"{role_name}_{model_plan_type}",
+                        schema=InspectionReport,
+                        error=e,
+                        attempt=attempt,
+                    )
                 fallback_report = [
                     CheckItem(
                         rule_id="SYS_ERR",
@@ -581,14 +597,23 @@ Return the result as a JSON list of objects.
         fallback_json = json.dumps(
             {"error": "Arbitration crashed", "details": "unknown"}
         )
-        for _ in range(3):
+        retry_guidance = ""
+        for attempt in range(3):
+            judge_response = None
             try:
                 judge_response = completion_with_logging(
                     model=self.model_id,
-                    messages=[{"role": "user", "content": arbiter_prompt}],
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": append_retry_guidance(
+                                arbiter_prompt, retry_guidance
+                            ),
+                        }
+                    ],
                     phase="phase2_arbiter_judge",
                     target=model_plan.model_info.class_name,
-                    attempt=_,
+                    attempt=attempt,
                     temperature=0.2,
                     response_format=CodeReview,
                 )
@@ -626,6 +651,14 @@ Return the result as a JSON list of objects.
 
             except Exception as e:
                 print(f"[Error] Arbitration process crashed: {str(e)}")
+                if judge_response is not None and attempt < 2:
+                    retry_guidance = json_retry_guidance(
+                        model=self.model_id,
+                        target=model_plan.model_info.class_name,
+                        schema=CodeReview,
+                        error=e,
+                        attempt=attempt,
+                    )
                 fallback_json = json.dumps(
                     {"error": "Arbitration crashed", "details": str(e)}
                 )
