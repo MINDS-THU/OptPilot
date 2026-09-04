@@ -36409,7 +36409,14 @@ def _prepare_package_plan(
         )
     classification = _package_plan_classification(components, resources)
     readiness = "draft" if selected or resources else "not-yet-classifiable"
-    package_identity_value = _package_identity_for(state, package_id)
+    # A configured source already owns its package folder.  Creating a second
+    # identity file under Studio's own catalog would manufacture an empty,
+    # same-named package and make the configured source ambiguous.
+    package_identity_value = (
+        package_identity(root)
+        if configured_authority is not None
+        else _package_identity_for(state, package_id)
+    )
     plan = {
         "id": plan_id,
         "workspace_id": workspace_id,

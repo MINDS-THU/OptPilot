@@ -180,6 +180,10 @@ class StudioConfiguredSourceWorkspaceSetupTest(unittest.TestCase):
         self.assertTrue(setup["check"]["accepted"])
         self.assertEqual(plan["validation"]["test_policy"], "static-only")
         self.assertEqual(plan["artifact"]["owned_paths"], ["resources"])
+        self.assertFalse(
+            (self.state.cwd / "catalog" / "mutable-package").exists(),
+            "opening a configured source must not create a same-named local package",
+        )
 
         first = _apply_package_plan(self.state, opened["id"], plan["id"])
         replay = _apply_package_plan(self.state, opened["id"], plan["id"])
