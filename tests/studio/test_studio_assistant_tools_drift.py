@@ -47,6 +47,8 @@ class AssistantToolDriftTest(unittest.TestCase):
                 )
                 self.assertNotIn("Risky", descriptions[name])
                 self.assertNotIn("risky", descriptions[name])
+        self.assertIn("direct-argv", descriptions["optpilot_shell_run"])
+        self.assertIn("not interpreted", descriptions["optpilot_shell_run"])
         self.assertIn("explicit approval", descriptions["optpilot_smoke_test_study"])
 
     def _prompt_paths(self) -> list[Path]:

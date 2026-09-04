@@ -23897,10 +23897,19 @@ def _agent_tool_shell_run(
 
 def _normalize_shell_command(raw: Any) -> List[str]:
     if isinstance(raw, str):
-        return shlex.split(raw)
-    if isinstance(raw, list):
-        return [str(item) for item in raw if str(item)]
-    raise ValueError("command must be a string or list of strings.")
+        command = shlex.split(raw)
+    elif isinstance(raw, list):
+        command = [str(item) for item in raw if str(item)]
+    else:
+        raise ValueError("command must be a string or list of strings.")
+    shell_operators = {"&&", "||", ";", "|", ">", ">>", "<", "<<"}
+    if any(part in shell_operators for part in command):
+        raise ValueError(
+            "optpilot_shell_run executes direct argv and does not interpret shell "
+            "operators. Use optpilot_terminal for shell syntax, or run one command "
+            "per call."
+        )
+    return command
 
 
 def _refuse_assistant_shell_control_reference(
@@ -27850,6 +27859,9 @@ def _delete_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
         ]
         _write_workspace_index(state, workspaces)
     root = Path(str(workspace["root"])).resolve()
+    # Stop the writer before removing its mounted workspace. Otherwise the
+    # container can recreate files while rmtree is walking the directory.
+    runtime_deleted = state.workspace_runtime.delete(workspace_id)
     files_deleted = False
     delete_error = ""
     if _is_managed_draft_root(state, workspace_id, root):
@@ -27858,7 +27870,6 @@ def _delete_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
         except Exception as exc:
             delete_error = str(exc)
         files_deleted = not root.parent.exists()
-    runtime_deleted = state.workspace_runtime.delete(workspace_id)
     workspace = dict(workspace)
     workspace["deleted"] = True
     workspace["files_deleted"] = files_deleted

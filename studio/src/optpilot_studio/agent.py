@@ -641,7 +641,7 @@ OPTPILOT_AGENT_TOOL_SPECS: List[JsonDict] = [
     },
     {
         "name": "optpilot_shell_run",
-        "description": "Run a bounded command in an editable attached workspace. Every command requires explicit Studio approval.",
+        "description": "Run one bounded direct-argv command in an editable attached workspace; shell operators are not interpreted. Every command requires explicit Studio approval.",
         "parameters": _tool_schema({
             "workspace_id": {"type": "string"},
             "cwd": {"type": "string"},

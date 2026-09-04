@@ -112,6 +112,7 @@ from optpilot_studio.ui.server import (
     _execute_agent_tool,
     _local_code_server_executable,
     _match_workspace_pattern,
+    _normalize_shell_command,
     _start_catalog_interface_launch,
     _start_workspace_interface_launch,
     _stop_interface_launch,
@@ -4805,7 +4806,24 @@ class MvpIntegrationTest(unittest.TestCase):
             session = _create_agent_session(state, {"title": "Draft cleanup"})
             _attach_agent_workspace(state, session["id"], workspace["id"], select=True)
 
-            deleted = _delete_ui_workspace(state, workspace["id"])
+            cleanup_order: List[str] = []
+            original_runtime_delete = state.workspace_runtime.delete
+            original_rmtree = shutil.rmtree
+
+            def delete_runtime(workspace_id: str) -> bool:
+                cleanup_order.append("runtime")
+                return original_runtime_delete(workspace_id)
+
+            def delete_files(path: Any) -> None:
+                cleanup_order.append("files")
+                original_rmtree(path)
+
+            with patch.object(
+                state.workspace_runtime, "delete", side_effect=delete_runtime
+            ), patch(
+                "optpilot_studio.ui.server.shutil.rmtree", side_effect=delete_files
+            ):
+                deleted = _delete_ui_workspace(state, workspace["id"])
             sessions = _list_agent_sessions(state)
 
             self.assertTrue(workspace["managed_by_studio"])
@@ -4815,6 +4833,7 @@ class MvpIntegrationTest(unittest.TestCase):
             self.assertTrue(deleted["runtime_deleted"])
             self.assertFalse(workspace_container.exists())
             self.assertFalse(runtime_root.exists())
+            self.assertEqual(cleanup_order, ["runtime", "files"])
             self.assertFalse(any(item["id"] == workspace["id"] for item in _list_ui_workspaces(state)))
             self.assertEqual(sessions[0]["attached_workspace_ids"], [])
 
@@ -5583,6 +5602,15 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(approvals[0]["tool"], "optpilot_terminal")
         self.assertIn("python -c", approvals[0]["summary"])
         self.assertIn("call-terminal-install", approvals[0]["openhands_tool_call_ids"])
+
+    def test_ui_agent_shell_rejects_shell_operators_in_direct_argv(self) -> None:
+        for command in (
+            ["python3", "-m", "venv", ".venv", "&&", ".venv/bin/pip", "install", "wheel"],
+            "python3 -m venv .venv && .venv/bin/pip install wheel",
+        ):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(ValueError, "optpilot_terminal"):
+                    _normalize_shell_command(command)
 
     def test_ui_agent_docs_and_smoke_tools_are_available(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
