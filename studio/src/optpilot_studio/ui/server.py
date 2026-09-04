@@ -28332,7 +28332,7 @@ def _catalog_component_source_root(kind: str, config_path: Path, raw: JsonDict) 
 def _catalog_edit_workspace_operation_id(
     state: UiState, kind: str, source: CatalogSourceProjection
 ) -> str:
-    """Identify the one editable derivation of an exact Catalog entry."""
+    """Identify the active editable derivation of an exact Catalog entry."""
 
     return "studio/workspace-create/catalog/" + request_digest(
         {
@@ -28340,6 +28340,26 @@ def _catalog_edit_workspace_operation_id(
             "component_kind": kind,
             "relative_path": source.relative_path,
             "schema": "optpilot.catalog-edit-workspace-intent.v1",
+            "selection": source.selection.to_dict(),
+        }
+    )
+
+
+def _catalog_edit_workspace_replacement_operation_id(
+    state: UiState,
+    kind: str,
+    source: CatalogSourceProjection,
+    request_id: str,
+) -> str:
+    """Identify one retry-safe replacement after the prior derivation retired."""
+
+    return "studio/workspace-create/catalog-replacement/" + request_digest(
+        {
+            "actor_id": _studio_actor_id(state),
+            "component_kind": kind,
+            "relative_path": source.relative_path,
+            "request_id": _canonical_request_uuid(request_id),
+            "schema": "optpilot.catalog-edit-workspace-replacement-intent.v1",
             "selection": source.selection.to_dict(),
         }
     )
@@ -28361,6 +28381,7 @@ def _open_realm_catalog_workspace(
     title_prefix: str,
     install: bool,
     create_operation_id: Optional[str],
+    replacement_operation_id: Optional[str],
 ) -> JsonDict:
     """Open one exact catalog selection without a source-specific copier."""
 
@@ -28420,9 +28441,24 @@ def _open_realm_catalog_workspace(
                 "Editable catalog workspace creation requires a request_id."
             )
         try:
+            entry_id = str(
+                raw_for_workspace.get("id")
+                or raw_for_workspace.get("name")
+                or selected_config_path.stem
+            )
+            existing_link = _catalog_workspace_link_lookup(
+                _list_ui_workspaces(state)
+            ).get((kind, source.package_id, source.revision, entry_id))
+            if existing_link is not None:
+                existing_workspace = _workspace_by_id(
+                    state, str(existing_link.get("workspace_id") or "")
+                )
+                if existing_workspace is not None:
+                    return existing_workspace
             kept = _keep_selection_as_ui_workspace(
                 state,
                 operation_id=create_operation_id,
+                replacement_operation_id=replacement_operation_id,
                 selection=source.selection,
                 title=f"{title_prefix} {label}",
                 description=f"Editable workspace kept from {kind} catalog selection",
@@ -28560,10 +28596,9 @@ def _open_catalog_workspace(
     request_id: Optional[str] = None,
 ) -> JsonDict:
     if editable:
-        # Keep a strict client request token at the HTTP boundary, but derive
-        # the durable creation identity from the exact Catalog source.  A
-        # refreshed browser or lost response must reopen the same Workspace.
-        _canonical_request_uuid(request_id)
+        # A later explicit request may replace a retired derivation, while the
+        # exact Catalog origin still reopens any active Workspace first.
+        request_id = _canonical_request_uuid(request_id)
     realm_source = _borrow_catalog_entry_ref_projection(
         state,
         kind,
@@ -28577,6 +28612,13 @@ def _open_catalog_workspace(
             if editable
             else None
         )
+        replacement_operation_id = (
+            _catalog_edit_workspace_replacement_operation_id(
+                state, kind, realm_source, request_id or ""
+            )
+            if editable
+            else None
+        )
         return _open_realm_catalog_workspace(
             state,
             kind,
@@ -28585,6 +28627,7 @@ def _open_catalog_workspace(
             title_prefix=title_prefix,
             install=install,
             create_operation_id=create_operation_id,
+            replacement_operation_id=replacement_operation_id,
         )
     resolved_source = _resolve_catalog_identifier(state, kind, uid)
     realm_source = _borrow_realm_catalog_source_projection(
@@ -28599,6 +28642,13 @@ def _open_catalog_workspace(
             if editable
             else None
         )
+        replacement_operation_id = (
+            _catalog_edit_workspace_replacement_operation_id(
+                state, kind, realm_source, request_id or ""
+            )
+            if editable
+            else None
+        )
         return _open_realm_catalog_workspace(
             state,
             kind,
@@ -28607,6 +28657,7 @@ def _open_catalog_workspace(
             title_prefix=title_prefix,
             install=install,
             create_operation_id=create_operation_id,
+            replacement_operation_id=replacement_operation_id,
         )
     if editable:
         raise CatalogWorkspaceCreationUnsupported(
@@ -31468,6 +31519,7 @@ def _keep_selection_as_ui_workspace(
     state: UiState,
     *,
     operation_id: str,
+    replacement_operation_id: Optional[str] = None,
     selection: SelectionRef,
     title: str,
     description: str,
@@ -31482,11 +31534,34 @@ def _keep_selection_as_ui_workspace(
             (WorkspaceRequestSource.build(selection=selection),)
         ),
     )
-    summary = runtime.editable_workspaces.read_workspace(
-        workspace_id=created.workspace_id
-    )
+    workspace_operation_id = operation_id
+    try:
+        summary = runtime.editable_workspaces.read_workspace(
+            workspace_id=created.workspace_id
+        )
+    except RealmConflict:
+        retired = runtime.editable_workspaces.read_workspace(
+            workspace_id=created.workspace_id,
+            include_retired=True,
+        )
+        if (
+            str(getattr(retired.state, "value", retired.state)) != "deleted"
+            or replacement_operation_id is None
+        ):
+            raise
+        created = runtime.editable_workspaces.create_workspace(
+            operation_id=replacement_operation_id,
+            title=title,
+            seed=WorkspaceSelectionSeed.build(
+                (WorkspaceRequestSource.build(selection=selection),)
+            ),
+        )
+        workspace_operation_id = replacement_operation_id
+        summary = runtime.editable_workspaces.read_workspace(
+            workspace_id=created.workspace_id
+        )
     checkout = runtime.editable_workspaces.open_workspace(
-        operation_id=f"{operation_id}/open-checkout",
+        operation_id=f"{workspace_operation_id}/open-checkout",
         workspace_id=created.workspace_id,
         expected_workspace_revision=summary.workspace_revision,
     )

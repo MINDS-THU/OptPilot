@@ -46,6 +46,12 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         reopen = _function_source(
             self.source, "reopenManagedWorkspace", "keepWorkspaceSelected"
         )
+        embedded = _function_source(
+            self.source, "openCodeServerEmbedded", "setWorkspaceActionNotice"
+        )
+        external = _function_source(
+            self.source, "openCodeServerFull", "reloadEmbeddedCodeWorkspace"
+        )
         card = _function_source(self.source, "sessionCard", "workspaceSubtitle")
 
         self.assertIn('realmManaged: workspace.ownership === "realm-managed"', mapping)
@@ -54,6 +60,10 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("await reopenManagedWorkspace(workspace)", attach)
         self.assertIn("/reopen", reopen)
         self.assertIn("expected_workspace_revision: workspace.workspaceRevision", reopen)
+        self.assertIn("session.reopenRequired", embedded)
+        self.assertIn("await reopenManagedWorkspace(session)", embedded)
+        self.assertIn("session.reopenRequired", external)
+        self.assertIn("await reopenManagedWorkspace(session)", external)
         self.assertIn('class="session-card-more"', card)
         self.assertIn("assistantSessionLabel(assistantSession)", card)
         self.assertIn("Make available to ${escapeHtml(assistantLabel)}", card)

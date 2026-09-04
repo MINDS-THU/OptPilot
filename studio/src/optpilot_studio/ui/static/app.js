@@ -21378,6 +21378,10 @@ async function openCatalogSourceCode(session, requestSeq) {
 async function openCodeServerEmbedded() {
   let session = currentSession();
   if (!session) return;
+  if (session.realmManaged && session.reopenRequired) {
+    session = await reopenManagedWorkspace(session);
+    if (!session) return;
+  }
   const requestedSessionId = session.id;
   const requestSeq = ++state.codeWorkspaceRequestSeq;
   let folder = codeFolderForSession(session);
@@ -21494,8 +21498,6 @@ function closeReservedExternalWindow(externalWindow) {
 async function openCodeServerFull() {
   let session = currentSession();
   if (!session) return;
-  const requestedSessionId = session.id;
-  const catalogSourceView = isCatalogSourceView(session);
   const externalWindow = reserveExternalWindow();
   if (!externalWindow) {
     setWorkspaceActionNotice(
@@ -21506,6 +21508,15 @@ async function openCodeServerFull() {
     );
     return;
   }
+  if (session.realmManaged && session.reopenRequired) {
+    session = await reopenManagedWorkspace(session);
+    if (!session) {
+      closeReservedExternalWindow(externalWindow);
+      return;
+    }
+  }
+  const requestedSessionId = session.id;
+  const catalogSourceView = isCatalogSourceView(session);
   let openKey = codeWorkspaceOpenKey(session);
   if (state.embeddedCodeUrl && state.embeddedCodeFolder === openKey) {
     if (!navigateExternalWindow(externalWindow, state.embeddedCodeUrl)) {

@@ -812,13 +812,27 @@ class StudioCatalogEntryRefTest(unittest.TestCase):
         edit_action = refreshed_entry["actions"]["create_editable_workspace"]
         self.assertEqual(edit_action["code"], "workspace_exists")
         self.assertEqual(edit_action["workspace_id"], first["id"])
+        self.runtime.editable_workspaces.retire_workspace(
+            operation_id=self._operation("retire-edited-workspace"),
+            workspace_id=str(first["id"]),
+            expected_workspace_revision=1,
+        )
+        replacement = _open_catalog_workspace(
+            self.state,
+            "resource",
+            entry["uid"],
+            editable=True,
+            request_id="55555555-5555-4555-8555-555555555555",
+        )
+        self.assertNotEqual(replacement["id"], first["id"])
+        self.assertEqual(replacement["realm_workspace_revision"], 1)
         self.runtime.editable_workspaces.delete_checkout(
             operation_id=self._operation("delete-edited-checkout"),
-            workspace_id=str(first["id"]),
+            workspace_id=str(replacement["id"]),
         )
         reopened = self.runtime.editable_workspaces.open_workspace(
             operation_id=self._operation("reopen-edited-checkout"),
-            workspace_id=str(first["id"]),
+            workspace_id=str(replacement["id"]),
             expected_workspace_revision=1,
         )
         saved = yaml.safe_load(
