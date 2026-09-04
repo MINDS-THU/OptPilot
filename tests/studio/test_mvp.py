@@ -6506,6 +6506,48 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertIn("timed out", events[0]["payload"]["delivery_error"])
         self.assertEqual(events[0]["payload"]["result"]["summary"], "Listed workspaces.")
 
+    def test_ui_agent_batches_parallel_tool_results_before_resuming(self) -> None:
+        class RecordingAdapter(OpenHandsAdapter):
+            def __init__(self) -> None:
+                super().__init__(OpenHandsRuntimeConfig(enabled=False))
+                self.posts: List[JsonDict] = []
+
+            def _request_json(self, method: str, url: str, *, payload: object = None, timeout: float = 10.0, **kwargs: object) -> tuple[JsonDict, JsonDict]:
+                self.posts.append(dict(payload or {}))
+                return {}, {}
+
+        adapter = RecordingAdapter()
+        executed: List[str] = []
+        # OpenHands search results are newest-first.
+        events = [
+            {
+                "kind": "ActionEvent",
+                "tool_name": "optpilot_workspace_list",
+                "tool_call_id": "call-second",
+                "action": {"kind": "optpilot_workspace_list"},
+            },
+            {
+                "kind": "ActionEvent",
+                "tool_name": "optpilot_catalog_list",
+                "tool_call_id": "call-first",
+                "action": {"kind": "optpilot_catalog_list"},
+            },
+        ]
+
+        tool_events, approval_id = adapter._execute_openhands_client_tools(
+            events,
+            "http://openhands.example/api/conversations",
+            "conversation-1",
+            lambda name, _arguments: executed.append(name)
+            or {"ok": True, "tool": name, "summary": name},
+            set(),
+        )
+
+        self.assertEqual(approval_id, "")
+        self.assertEqual(executed, ["optpilot_catalog_list", "optpilot_workspace_list"])
+        self.assertEqual([post["run"] for post in adapter.posts], [False, True])
+        self.assertEqual(len(tool_events), 2)
+
     def test_ui_agent_submit_tool_result_confirms_delivery_after_timeout(self) -> None:
         class ConfirmedTimeoutAdapter(OpenHandsAdapter):
             def __init__(self) -> None:

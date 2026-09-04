@@ -22,6 +22,8 @@ start-up rather than silently reverting to the misleading wording.
 
 from __future__ import annotations
 
+import threading
+
 from openhands.sdk.tool import client_tool as _client_tool
 
 __all__ = ["ACKNOWLEDGEMENT", "install"]
@@ -41,7 +43,10 @@ def install() -> None:
 
     def __call__(self, action, conversation=None):  # noqa: ANN001, ARG001
         if conversation is not None:
-            conversation.pause()
+            # The SDK executes tools on a worker while its run loop holds the
+            # conversation lock. Calling pause() inline would deadlock. FIFO
+            # locking ensures this request wins before the next agent step.
+            threading.Thread(target=conversation.pause, daemon=True).start()
         return _client_tool.ClientToolObservation.from_text(text=ACKNOWLEDGEMENT)
 
     executor.__call__ = __call__

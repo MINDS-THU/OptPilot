@@ -2440,7 +2440,12 @@ class OpenHandsAdapter:
         handled_tool_calls: set[str],
     ) -> tuple[List[JsonDict], str]:
         tool_events: List[JsonDict] = []
-        for event in events if isinstance(events, list) else []:
+        deliveries: List[tuple[str, str, JsonDict]] = []
+        paused_approval_id = ""
+        # The search endpoint returns newest-first. Execute one model step's
+        # calls in the order in which the model emitted them.
+        source_events = list(reversed(events)) if isinstance(events, list) else []
+        for event in source_events:
             name, arguments, call_id = self._openhands_tool_call(event)
             if not name or name not in SUPPORTED_CLIENT_TOOL_NAMES or not call_id or call_id in handled_tool_calls:
                 continue
@@ -2476,13 +2481,29 @@ class OpenHandsAdapter:
                         },
                     }
                 )
-                return tool_events, approval_id
+                paused_approval_id = approval_id
+                break
             result = self._redact_tool_result(result)
+            deliveries.append((name, call_id, result))
+
+        # A model may emit several independent client tools in one completion.
+        # Queue all of their result messages while the conversation is paused,
+        # then let only the final message resume it. Otherwise the first result
+        # starts a new model turn and later results block behind that turn.
+        for index, (name, call_id, result) in enumerate(deliveries):
             result_preview = self._json_preview(result, 2400)
             delivery_status = "sent"
             delivery_error = ""
             try:
-                self._send_tool_result_message(conversations_url, conversation_id, name, call_id, result, timeout=2.0)
+                self._send_tool_result_message(
+                    conversations_url,
+                    conversation_id,
+                    name,
+                    call_id,
+                    result,
+                    timeout=2.0,
+                    run=(not paused_approval_id and index == len(deliveries) - 1),
+                )
             except Exception as exc:
                 if self._is_timeout_error(exc) and self._tool_result_feedback_exists(conversations_url, conversation_id, call_id):
                     delivery_status = "confirmed_after_timeout"
@@ -2510,7 +2531,7 @@ class OpenHandsAdapter:
                     "payload": payload,
                 }
             )
-        return tool_events, ""
+        return tool_events, paused_approval_id
 
     def _send_tool_result_message(
         self,
@@ -2521,6 +2542,7 @@ class OpenHandsAdapter:
         result: JsonDict,
         *,
         timeout: float = 15.0,
+        run: bool = True,
     ) -> None:
         result_json = json.dumps(result, indent=2, sort_keys=True, default=str)
         if len(result_json) > 18000:
@@ -2538,7 +2560,7 @@ class OpenHandsAdapter:
                     ),
                 }
             ],
-            "run": True,
+            "run": run,
         }
         self._request_json("POST", f"{conversations_url}/{conversation_id}/events", payload=payload, timeout=timeout)
 
