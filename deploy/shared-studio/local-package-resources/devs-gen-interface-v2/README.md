@@ -135,9 +135,10 @@ optpilot resource run \
 The action requires `OPENROUTER_API_KEY`; its two generation model ids have
 package defaults and may be overridden through its own `grants` block.
 `DEVS_DISPLAY_MODEL_ID` is interface-only. The action also needs network access
-because generation calls the provider and setup installs from PyPI. Setting `thorough=true`
-additionally runs the verification and simulation-check stages, whose
-generated-code execution may need a container runtime.
+because generation calls the provider and setup installs from PyPI. In the
+shared deployment, the finished bundle goes through the same host Codex
+automatic check as the web interface. Setting `thorough=true` additionally
+runs the generator's internal verification and simulation-check stages.
 
 ### The Action's Python Runtime
 

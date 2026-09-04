@@ -35104,18 +35104,27 @@ def _load_manifest(simulator_root):
         "arguments",
         "result_files",
         "python_runtime",
+        "metrics",
+        "policy",
     }
     unexpected = sorted(set(manifest) - allowed_top)
     if unexpected:
         raise ValueError(
             "simulation.json has unsupported fields: " + ", ".join(unexpected) + "."
         )
-    if (
-        manifest.get("schema_version") != "devs.simulation.v1"
-        or manifest.get("entrypoint") != "run.py"
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {"devs.simulation.v1", "devs.simulation.v2"} or (
+        manifest.get("entrypoint") != "run.py"
     ):
         raise ValueError(
-            "simulation.json must use devs.simulation.v1 with entrypoint run.py."
+            "simulation.json must use devs.simulation.v1 or devs.simulation.v2 "
+            "with entrypoint run.py."
+        )
+    if schema_version == "devs.simulation.v1" and (
+        "metrics" in manifest or "policy" in manifest
+    ):
+        raise ValueError(
+            "simulation.json metrics and policy require devs.simulation.v2."
         )
     runner = simulator_root / "run.py"
     try:

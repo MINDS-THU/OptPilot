@@ -3615,8 +3615,8 @@ class DEVSBackendService:
             payload["verdict"] = verdict
         return payload
 
+    @staticmethod
     def _codex_finalizer_prompt(
-        self,
         *,
         review_id: str,
         project_rel: str,

@@ -18,6 +18,7 @@ from optpilot_studio.ui.server import (
     UiState,
     _configure_workspace_catalog_role,
     _create_ui_workspace,
+    _simulation_environment_adapter_starter,
     _workspace_simulation_handoff,
 )
 
@@ -144,6 +145,25 @@ class DevsSimulationV2MetricsTest(unittest.TestCase):
                 environment["metrics"],
                 {"source": "return", "keys": ["throughput", "queue_length"]},
             )
+
+    def test_v2_environment_adapter_accepts_the_manifest_it_was_created_for(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = self._bundle(Path(tmp_dir))
+            _upgrade_bundle_to_v2(root)
+            namespace = {}
+            exec(
+                _simulation_environment_adapter_starter(
+                    "runtime_dependencies/requirements.lock"
+                ),
+                namespace,
+            )
+
+            manifest = namespace["_load_manifest"](root)
+
+            self.assertEqual(manifest["timeout_seconds"], 30)
+            self.assertEqual(manifest["result_files"], ["summary.json"])
 
     def test_policy_bundle_emits_the_file_candidate_variant(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

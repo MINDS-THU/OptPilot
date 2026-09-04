@@ -36,8 +36,11 @@ actions:
         valueType: bool
         default: false
         description: >-
-          Run the verification and simulation-check stages too (slower;
-          generated-code smoke execution may need a container runtime).
+          Also run the generator's internal verification stages. The normal
+          automatic check still runs when this is false.
+    env:
+      DEVS_HEADLESS_CODEX_FINALIZER: "1"
+      DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS: "900"
     grants:
       # Generation calls the configured model through OpenRouter, and setup
       # installs the dependency closure from PyPI.
@@ -60,7 +63,8 @@ actions:
             ID. OpenRouter models need the "openrouter/" prefix, e.g.
             "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
             the OpenRouter key is the granted credential).
-      secretsFromHost: [OPENROUTER_API_KEY]
+        - DEVS_HEADLESS_CODEX_FINALIZER_URL
+      secretsFromHost: [OPENROUTER_API_KEY, DEVS_COLLECTOR_INGEST_TOKEN]
     runtime:
       sandbox: process
       setup:

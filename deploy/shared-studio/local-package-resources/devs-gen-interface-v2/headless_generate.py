@@ -17,6 +17,7 @@ import re
 import shutil
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 _RESOURCE_ROOT = Path(__file__).resolve().parent
@@ -46,6 +47,75 @@ def _dependency_failure(error: BaseException) -> str:
             "into the interpreter you are running this action with.",
         )
     )
+
+
+def _run_automatic_check(bundle: Path, bundle_folder: str) -> dict[str, object] | None:
+    """Run the same host Codex finalizer used by the managed web interface."""
+
+    if os.getenv("DEVS_HEADLESS_CODEX_FINALIZER", "0").strip() in {
+        "0",
+        "false",
+        "False",
+    }:
+        return None
+    endpoint = os.getenv("DEVS_HEADLESS_CODEX_FINALIZER_URL", "").strip()
+    token = os.getenv("DEVS_COLLECTOR_INGEST_TOKEN", "").strip()
+    if not endpoint or not token:
+        raise RuntimeError(
+            "Automatic check is enabled, but its host endpoint or token is missing."
+        )
+    try:
+        timeout_seconds = int(
+            os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS", "900")
+        )
+    except ValueError:
+        timeout_seconds = 900
+    timeout_seconds = max(120, min(timeout_seconds, 3600))
+
+    from devs_display.backend.remote_finalizer import RemoteCodexFinalizerClient
+    from devs_display.backend.server import DEVSBackendService
+
+    review_id = f"headless-{uuid.uuid4().hex}"
+    prompt = DEVSBackendService._codex_finalizer_prompt(
+        review_id=review_id,
+        project_rel=bundle_folder,
+        validation_record={
+            "status": "succeeded",
+            "failure_kind": "",
+            "message": "Headless generation completed; perform an independent review.",
+        },
+        diagnostic=(
+            "The headless generator produced a complete bundle. Independently inspect "
+            "its retained requirements and plan, generated code, and actual run output."
+        ),
+        run_instruction=DEVSBackendService._remote_codex_run_instruction(bundle_folder),
+    )
+    client = RemoteCodexFinalizerClient(
+        endpoint=endpoint,
+        token=token,
+        timeout_seconds=timeout_seconds,
+    )
+    client.run(
+        review_id=review_id,
+        project_rel=bundle_folder,
+        prompt=prompt,
+        bundle_root=bundle,
+    )
+    result = DEVSBackendService._read_codex_finalizer_result(
+        DEVSBackendService._codex_finalizer_result_path(bundle), review_id
+    )
+    if result.get("verdict") != "pass":
+        issues = result.get("issues")
+        detail = (
+            "; ".join(str(item) for item in issues[:5])
+            if isinstance(issues, list)
+            else ""
+        )
+        raise RuntimeError(
+            str(result.get("summary") or "Automatic check did not pass the bundle.")
+            + (f" Issues: {detail}" if detail else "")
+        )
+    return result
 
 
 def main() -> int:
@@ -130,6 +200,10 @@ def main() -> int:
             "(run.py or devs_project is missing)."
         )
     ensure_simulation_manifest(bundle)
+    finalizer_result = _run_automatic_check(bundle, bundle_folder)
+    # The finalizer may have made a minimal source repair. Revalidate and
+    # restamp the portable handoff before exposing the finished bundle.
+    ensure_simulation_manifest(bundle)
     metadata = simulation_metadata(bundle)
 
     destination = output_root / "simulator"
@@ -146,6 +220,11 @@ def main() -> int:
         f"Result files: {', '.join(metadata.get('result_files') or []) or 'none'}",
     ]
     metrics = metadata.get("metrics") or {}
+    if finalizer_result is not None:
+        summary_lines.append(
+            "Automatic check: passed"
+            + (" (repaired)" if finalizer_result.get("fixed") else "")
+        )
     if metrics.get("keys"):
         summary_lines.append("Declared metrics: " + ", ".join(metrics["keys"]))
         if metrics.get("objective"):

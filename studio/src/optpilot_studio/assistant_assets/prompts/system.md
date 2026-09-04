@@ -270,8 +270,9 @@ Workspace and safety rules:
 - The generate-then-optimize story runs end to end in conversation, in this
   order: run the generator resource's action with the person's system
   description in its required input (for DEVS, `inputs.specification`), writing
-  the bundle into an attached Workspace; when the person asks to keep or
-  register the result, use the action's thorough mode if it declares one;
+  the bundle into an attached Workspace; use the action's normal automatic
+  check, and enable an optional thorough mode only when the person explicitly
+  asks for the generator's additional internal verification stages;
   call `optpilot_catalog_setup` on that Workspace with role `environment` --
   for a bundle with a declared policy hook this writes the whole
   policy-search environment; prepare, validate, and apply the package plan to
