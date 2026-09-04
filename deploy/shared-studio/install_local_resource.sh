@@ -29,7 +29,7 @@ if [ ! -f "${package_root}/optpilot.package.yaml" ]; then
 fi
 
 mkdir -p "${target}"
-rsync -a --delete \
+rsync -a --delete --delete-excluded \
   --exclude node_modules \
   --exclude dist \
   --exclude __pycache__ \
