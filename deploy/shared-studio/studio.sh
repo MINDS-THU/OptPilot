@@ -45,7 +45,12 @@ for source_package in "${SOURCE_ROOT}/catalog"/*; do
   [ "${excluded}" -eq 1 ] || source_catalog_args+=(--catalog "${source_package}")
 done
 
-exec uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui \
+studio_bin="${SOURCE_ROOT}/.venv/bin/optpilot"
+[ -x "${studio_bin}" ] || {
+  printf 'Prepared OptPilot entry point is unavailable: %s\n' "${studio_bin}" >&2
+  exit 1
+}
+exec "${studio_bin}" ui \
   --host "${STUDIO_HOST}" \
   --port "${STUDIO_PORT}" \
   "${source_catalog_args[@]}" \
