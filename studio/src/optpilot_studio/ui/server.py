@@ -667,6 +667,7 @@ PACKAGE_PLAN_CATALOG_BASE_SCHEMA = "optpilot.package-plan-catalog-base.v1"
 PACKAGE_PLAN_PUBLICATION_SCHEMA = "optpilot.package-plan-publication.v1"
 CATALOG_ENTRY_REF_SCHEMA = "optpilot.catalog-entry-ref.v1"
 CATALOG_ENTRY_VISIBILITY_SCHEMA = "optpilot.catalog-entry-visibility.v1"
+INTERFACE_LAUNCH_VISIBILITY_SCHEMA = "optpilot.interface-launch-visibility.v1"
 CATALOG_ENTRY_REF_TOKEN_PREFIX = "cref_"
 CONFIGURED_PACKAGE_SOURCE_SCHEMA = "optpilot.configured-package-source.v1"
 CONFIGURED_SOURCE_WORKSPACE_SCHEMA = "optpilot.configured-source-workspace.v1"
@@ -4798,6 +4799,11 @@ class UiState:
             int(port),
             target_base_url,
             allowed_ports=allowed_ports,
+            access_owner=(
+                ("interface-launch", str(workspace["launch_id"]))
+                if workspace.get("launch_id")
+                else None
+            ),
         )
         return {
             "workspace_id": workspace_id,
@@ -4818,6 +4824,7 @@ class UiState:
         target_base_url: str,
         *,
         allowed_ports: List[int],
+        access_owner: Optional[tuple[str, str]] = None,
     ) -> WebPresentationLease:
         key = f"{workspace_id}:{int(port)}"
         code_server_base, separator, _tail = target_base_url.partition("/proxy/")
@@ -4842,9 +4849,10 @@ class UiState:
                     "The workspace runtime no longer owns this Preview endpoint."
                 )
 
+        owner_kind, owner_id = access_owner or ("workspace-runtime", workspace_id)
         endpoint = OwnedWebEndpoint(
-            owner_kind="workspace-runtime",
-            owner_id=workspace_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
             generation=generation,
             access_policy="trusted-local-authoring",
             # code-server's /proxy/<port> WebSocket tunnel rejects browser
@@ -6690,6 +6698,20 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path.startswith(
                     "/api/interface-launches/"
+                ) and parsed.path.endswith("/visibility"):
+                    parts = parsed.path.split("/")
+                    if len(parts) != 5:
+                        raise ValueError("Invalid interface visibility path.")
+                    self._send_json(
+                        _set_interface_launch_visibility(
+                            state,
+                            unquote(parts[3]),
+                            self._read_json_body(),
+                        )
+                    )
+                    return
+                if parsed.path.startswith(
+                    "/api/interface-launches/"
                 ) and parsed.path.endswith("/stop"):
                     parts = parsed.path.split("/")
                     if len(parts) != 5:
@@ -8192,6 +8214,23 @@ def _handler_factory(state: UiState):
                         )
                         if allowed:
                             state.workspace_runtime.touch(owner_id)
+                    elif owner_kind == "interface-launch":
+                        allowed = _account_can_access_asset(
+                            state,
+                            "interface-launch",
+                            owner_id,
+                            principal=principal,
+                        )
+                        if allowed:
+                            with state._lock:
+                                launch_job = state.interface_launches.get(owner_id)
+                                runtime_workspace_id = (
+                                    str(launch_job.runtime_workspace.get("id") or "")
+                                    if launch_job is not None
+                                    else ""
+                                )
+                            if runtime_workspace_id:
+                                state.workspace_runtime.touch(runtime_workspace_id)
                     elif owner_kind.startswith("operator-job"):
                         allowed = _account_can_access_asset(
                             state,
@@ -33054,6 +33093,78 @@ def _finalize_transient_interface_launch(
         return result
 
 
+def _interface_launch_access(state: UiState, launch_id: str) -> JsonDict:
+    """Describe one launch audience without exposing the owning account."""
+
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or principal is None:
+        return {
+            "visibility": "private",
+            "can_manage_visibility": False,
+            "owned_by_current_account": True,
+        }
+    ownership = auth.asset_ownership(
+        asset_type="interface-launch",
+        asset_id=launch_id,
+    )
+    if ownership is None:
+        return {
+            "visibility": "private",
+            "can_manage_visibility": False,
+            "owned_by_current_account": False,
+        }
+    return {
+        "visibility": (
+            "public" if ownership["visibility"] == "classroom" else "private"
+        ),
+        "can_manage_visibility": principal.role == "admin",
+        "owned_by_current_account": (
+            ownership["owner_account_id"] == principal.account_id
+        ),
+    }
+
+
+def _set_interface_launch_visibility(
+    state: UiState,
+    launch_id: str,
+    payload: JsonDict,
+) -> JsonDict:
+    """Let the admin share or privatize one live Interface instance."""
+
+    request = _exact_json_object(
+        payload,
+        expected={"schema", "visibility"},
+        label="Interface visibility request",
+    )
+    if request["schema"] != INTERFACE_LAUNCH_VISIBILITY_SCHEMA:
+        raise ValueError("Interface visibility request schema is unsupported.")
+    visibility = str(request["visibility"] or "").casefold()
+    if visibility not in {"private", "public"}:
+        raise ValueError("Interface visibility must be private or public.")
+    _require_admin_account(state)
+    with state._lock:
+        job = state.interface_launches.get(launch_id)
+        if job is None or job.status not in {"queued", "running", "ready"}:
+            raise KeyError(launch_id)
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or principal is None:
+        raise ValueError(
+            "Interface visibility controls require classroom account authentication."
+        )
+    auth.set_asset_visibility(
+        asset_type="interface-launch",
+        asset_id=launch_id,
+        visibility="classroom" if visibility == "public" else "private",
+        principal=principal,
+    )
+    return {
+        "schema": INTERFACE_LAUNCH_VISIBILITY_SCHEMA,
+        "access": _interface_launch_access(state, launch_id),
+    }
+
+
 def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
     if not _account_can_access_asset(state, "interface-launch", launch_id):
         raise KeyError(launch_id)
@@ -33118,9 +33229,21 @@ def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
         }
     assert snapshot is not None
     payload = _render_interface_launch_public_snapshot(snapshot)
+    can_write = _account_can_access_asset(
+        state, "interface-launch", launch_id, write=True
+    )
+    payload["can_stop"] = bool(payload.get("can_stop") and can_write)
+    payload["access"] = _interface_launch_access(state, launch_id)
     payload["actions"] = {
         "capture_output_tree": _interface_output_tree_capability(state, job)
     }
+    if not can_write and payload["actions"]["capture_output_tree"].get("eligible"):
+        payload["actions"]["capture_output_tree"] = {
+            **payload["actions"]["capture_output_tree"],
+            "eligible": False,
+            "code": "shared_interface_read_only",
+            "reason": "Only the account that launched this interface can save its Studio outputs.",
+        }
     return payload
 
 
@@ -34036,6 +34159,47 @@ def _discard_registered_interface_launch_job(
             state.interface_launches.pop(job.launch_id, None)
 
 
+def _shared_catalog_interface_launch(
+    state: UiState,
+    *,
+    kind: str,
+    uid: str,
+    profile_id: Optional[str],
+) -> Optional[JsonDict]:
+    """Return the newest classroom-shared launch for one exact Catalog source."""
+
+    auth = getattr(state, "shared_auth", None)
+    if not isinstance(auth, ClassroomAuth) or _current_request_principal() is None:
+        return None
+    requested_profile = str(profile_id or "")
+    with state._lock:
+        candidates = sorted(
+            (
+                job
+                for job in state.interface_launches.values()
+                if job.launch_scope == "catalog-transient"
+                and job.kind == kind
+                and job.uid == uid
+                and job.status in {"queued", "running", "ready"}
+                and (not requested_profile or job.profile_id == requested_profile)
+            ),
+            key=lambda job: job.started_at,
+            reverse=True,
+        )
+    for job in candidates:
+        ownership = auth.asset_ownership(
+            asset_type="interface-launch",
+            asset_id=job.launch_id,
+        )
+        if ownership is None or ownership["visibility"] != "classroom":
+            continue
+        try:
+            return _interface_launch_by_id(state, job.launch_id)
+        except KeyError:
+            continue
+    return None
+
+
 def _start_catalog_interface_launch(
     state: UiState,
     kind: str,
@@ -34054,6 +34218,14 @@ def _start_catalog_interface_launch(
         _resolve_catalog_identifier(state, kind, uid)
     else:
         _require_catalog_entry_access(state, entry_ref)
+    shared_launch = _shared_catalog_interface_launch(
+        state,
+        kind=kind,
+        uid=uid,
+        profile_id=profile_id,
+    )
+    if shared_launch is not None:
+        return {"launch": shared_launch, "reused_shared_launch": True}
     # Every currently supported interface uses the shared isolated Workspace
     # runtime. Reject before borrowing an exact Catalog projection or creating
     # any transient launch state.

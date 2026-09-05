@@ -17,12 +17,14 @@ from optpilot_studio.ui.server import (
     CatalogEntryRef,
     InterfaceLaunchCapacityExceeded,
     PublicAccessOptions,
+    UiLaunchJob,
     UiState,
     _catalog_entry_asset_id,
     _catalog_edit_workspace_operation_id,
     _handler_factory,
     _REQUEST_PRINCIPAL,
     _reserve_catalog_publication_ownership,
+    _shared_catalog_interface_launch,
 )
 from optpilot_studio.ui.shared_auth import ClassroomAuth
 
@@ -307,6 +309,155 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(payload["code"], "interface_launch_capacity_reached")
         self.assertEqual(payload["limit"], 1)
         self.assertEqual(payload["active_interfaces"], error.active_interfaces)
+
+    def test_admin_can_share_a_live_interface_without_granting_stop_access(self) -> None:
+        bob = self._register("interface-bob", "interface-bob-password-123")
+        admin = self._login_admin()
+        admin_principal = self.state.shared_auth.principal_from_cookie(admin)
+        self.assertIsNotNone(admin_principal)
+        launch_id = "launch-shared-classroom"
+        job = UiLaunchJob(
+            launch_id=launch_id,
+            kind="resource",
+            uid="catalog-resource-ref",
+            label="Shared generator",
+            port=3000,
+            profile_id="default",
+            status="ready",
+            launch_scope="catalog-transient",
+            owner_account_id=admin_principal.account_id,
+            runtime_workspace={"id": f"interface-{launch_id}"},
+        )
+        with self.state._lock:
+            self.state.interface_launches[launch_id] = job
+        self.addCleanup(self.state.interface_launches.pop, launch_id, None)
+        self.state.shared_auth.claim_asset(
+            asset_type="interface-launch",
+            asset_id=launch_id,
+            principal=admin_principal,
+        )
+        runtime_workspace_id = f"interface-{launch_id}"
+        self.state.shared_auth.claim_asset(
+            asset_type="runtime-workspace",
+            asset_id=runtime_workspace_id,
+            principal=admin_principal,
+        )
+
+        status, _headers, body = self._request(
+            "GET", f"/api/interface-launches/{launch_id}", cookie=bob
+        )
+        self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+
+        visibility_path = f"/api/interface-launches/{launch_id}/visibility"
+        status, _headers, body = self._request(
+            "POST",
+            visibility_path,
+            payload={
+                "schema": "optpilot.interface-launch-visibility.v1",
+                "visibility": "public",
+            },
+            cookie=bob,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.FORBIDDEN, body)
+
+        status, _headers, body = self._request(
+            "POST",
+            visibility_path,
+            payload={
+                "schema": "optpilot.interface-launch-visibility.v1",
+                "visibility": "public",
+            },
+            cookie=admin,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertEqual(json.loads(body)["access"]["visibility"], "public")
+
+        status, _headers, body = self._request(
+            "GET", f"/api/interface-launches/{launch_id}", cookie=bob
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        launch = json.loads(body)["launch"]
+        self.assertEqual(launch["access"]["visibility"], "public")
+        self.assertFalse(launch["access"]["can_manage_visibility"])
+        self.assertFalse(launch["can_stop"])
+
+        bob_principal = self.state.shared_auth.principal_from_cookie(bob)
+        self.assertIsNotNone(bob_principal)
+        principal_token = _REQUEST_PRINCIPAL.set(bob_principal)
+        try:
+            reused = _shared_catalog_interface_launch(
+                self.state,
+                kind="resource",
+                uid="catalog-resource-ref",
+                profile_id="default",
+            )
+        finally:
+            _REQUEST_PRINCIPAL.reset(principal_token)
+        self.assertIsNotNone(reused)
+        self.assertEqual(reused["launch_id"], launch_id)
+        self.assertFalse(reused["can_stop"])
+
+        with patch.object(
+            self.state.presentation_broker,
+            "owner_for_port",
+            return_value=("interface-launch", launch_id),
+        ), patch.object(self.state.workspace_runtime, "touch") as touch:
+            status, _headers, _body = self._request_with_headers(
+                "/api/auth/verify",
+                cookie=bob,
+                target_kind="presentation",
+                target_port="3000",
+            )
+        self.assertEqual(status, HTTPStatus.NO_CONTENT)
+        touch.assert_called_once_with(runtime_workspace_id)
+
+        with patch.object(
+            self.state.workspace_runtime,
+            "workspace_id_for_code_server_port",
+            return_value=runtime_workspace_id,
+        ):
+            status, _headers, _body = self._request_with_headers(
+                "/api/auth/verify",
+                cookie=bob,
+                target_kind="code",
+                target_port="28766",
+            )
+        self.assertEqual(status, HTTPStatus.FORBIDDEN)
+
+        status, _headers, body = self._request(
+            "POST",
+            f"/api/interface-launches/{launch_id}/stop",
+            payload={},
+            cookie=bob,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+
+        status, _headers, body = self._request(
+            "POST",
+            visibility_path,
+            payload={
+                "schema": "optpilot.interface-launch-visibility.v1",
+                "visibility": "private",
+            },
+            cookie=admin,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        with patch.object(
+            self.state.presentation_broker,
+            "owner_for_port",
+            return_value=("interface-launch", launch_id),
+        ):
+            status, _headers, _body = self._request_with_headers(
+                "/api/auth/verify",
+                cookie=bob,
+                target_kind="presentation",
+                target_port="3000",
+            )
+        self.assertEqual(status, HTTPStatus.FORBIDDEN)
 
     def test_catalog_workspace_coordinates_are_account_scoped(self) -> None:
         alice_cookie = self._register("alice", "alice-password-123")

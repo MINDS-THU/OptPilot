@@ -2143,6 +2143,7 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
             "renderComponentDetail",
             "componentEditableWorkspaceCapability",
         )
+        header = _function_source(self.source, "entityHeader", "sessionCard")
 
         self.assertIn("access.can_manage_visibility", action)
         self.assertIn('"Make public"', action)
@@ -2150,7 +2151,10 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("every signed-in OptPilot user", action)
         self.assertIn("optpilot.catalog-entry-visibility.v1", update)
         self.assertIn("/visibility`,", update)
+        self.assertIn("catalogPublicNameCollisions(component)", update)
+        self.assertIn("package-qualified identity", update)
         self.assertIn("bindCatalogVisibilityControl(component)", detail)
+        self.assertIn("Catalog ID:", header)
         self.assertIn(".catalog-visibility-private", self.styles)
         self.assertIn(".catalog-visibility-public", self.styles)
 

@@ -578,6 +578,7 @@ function cacheElements() {
     "interfaceSessionOutputsEmpty",
     "interfaceSessionOutputsTitle",
     "interfaceSessionOpenButton",
+    "interfaceSessionVisibilityButton",
     "interfaceSessionStopButton",
     "interfaceSessionNotice",
     "interfaceSessionFrame",
@@ -837,6 +838,7 @@ function bindEvents() {
   on(els.interfaceSessionOutputsScrim, "click", () => setInterfaceSessionOutputsOpen(false));
   on(els.interfaceSessionOutputsDrawer, "keydown", handleInterfaceSessionOutputsKeydown);
   on(els.interfaceSessionOpenButton, "click", openCurrentInterfaceSessionExternal);
+  on(els.interfaceSessionVisibilityButton, "click", updateCurrentInterfaceVisibility);
   on(els.interfaceSessionStopButton, "click", stopCurrentInterfaceSession);
   on(els.interfaceSessionRetryButton, "click", refreshCurrentInterfaceSession);
   on(els.returnToActiveInterfaceButton, "click", openActiveInterfaceLocation);
@@ -4154,9 +4156,13 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
   const openUrl = status === "ready" ? String(preview.preview_url || "") : "";
   const stopping = status === "stopping";
   const terminal = ["failed", "stopped", "cleanup_pending"].includes(status);
+  const access = launch.access && typeof launch.access === "object" ? launch.access : {};
+  const shared = access.visibility === "public";
   const preparation = interfaceLaunchPreparationProgress(launch);
   return {
     ...base,
+    eyebrow: shared ? "Shared interface" : base.eyebrow,
+    source: `${base.source}${shared ? " · Shared with signed-in users" : ""}`,
     title: String(launch.label || "Interactive interface"),
     status,
     statusLabel: reconnecting
@@ -4208,7 +4214,8 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
       ? "Return to the source to launch it again."
       : preparation.detail)),
     openUrl,
-    canStop: !["failed", "stopped", "stopping"].includes(status),
+    canStop: launch.can_stop !== false
+      && !["failed", "stopped", "stopping"].includes(status),
     stopPending: stopping,
     stop: () => stopInterfaceLaunch(launch.key),
     retry: connectionUnavailable ? () => resumeInterfaceLaunchPolling(launch) : null,
@@ -4404,6 +4411,26 @@ function renderInterfaceSession() {
     els.interfaceSessionOpenButton.hidden = !model.openUrl;
     els.interfaceSessionOpenButton.disabled = !model.openUrl;
   }
+  if (els.interfaceSessionVisibilityButton) {
+    const launch = interfaceSessionOutputLaunch();
+    const access = launch && launch.access && typeof launch.access === "object"
+      ? launch.access
+      : {};
+    const canManage = access.can_manage_visibility === true
+      && !["failed", "stopped", "stopping", "cleanup_pending"].includes(String(launch && launch.status || ""));
+    const isPublic = access.visibility === "public";
+    const pending = Boolean(launch && launch.visibility_pending);
+    els.interfaceSessionVisibilityButton.hidden = !canManage;
+    els.interfaceSessionVisibilityButton.disabled = pending;
+    els.interfaceSessionVisibilityButton.textContent = pending
+      ? "Saving…"
+      : isPublic
+      ? "Make private"
+      : "Share interface";
+    els.interfaceSessionVisibilityButton.title = isPublic
+      ? "Stop other signed-in users from opening this running interface"
+      : "Let every signed-in user open and use this same running interface";
+  }
   if (els.interfaceSessionStopButton) {
     els.interfaceSessionStopButton.hidden = !model.canStop && !model.stopPending;
     els.interfaceSessionStopButton.disabled = model.stopPending || !model.canStop;
@@ -4521,6 +4548,48 @@ function openCurrentInterfaceSessionExternal(event) {
     return;
   }
   state.interfaceSessionActionError = null;
+  renderInterfaceSession();
+}
+
+async function updateCurrentInterfaceVisibility() {
+  const launch = interfaceSessionOutputLaunch();
+  const launchId = String(launch && launch.launch_id || "");
+  const access = launch && launch.access && typeof launch.access === "object"
+    ? launch.access
+    : {};
+  if (!launchId || access.can_manage_visibility !== true || launch.visibility_pending) return;
+  const makePublic = access.visibility !== "public";
+  const confirmed = window.confirm(makePublic
+    ? "Share this running interface with every signed-in user? Everyone who opens it will use the same interface data and state."
+    : "Make this running interface private? Other users who currently have it open will lose access.");
+  if (!confirmed) return;
+  state.interfaceLaunch = { ...state.interfaceLaunch, visibility_pending: true };
+  state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
+  renderInterfaceSession();
+  try {
+    const payload = await postJson(
+      `/api/interface-launches/${encodeURIComponent(launchId)}/visibility`,
+      {
+        schema: "optpilot.interface-launch-visibility.v1",
+        visibility: makePublic ? "public" : "private",
+      },
+    );
+    state.interfaceLaunch = {
+      ...state.interfaceLaunch,
+      access: payload.access || access,
+      visibility_pending: false,
+    };
+    state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
+    persistActiveInterfaceLaunch(state.interfaceLaunch);
+    state.interfaceSessionActionError = null;
+  } catch (error) {
+    state.interfaceLaunch = { ...state.interfaceLaunch, visibility_pending: false };
+    state.interfaceSessionLaunchSnapshot = { ...state.interfaceLaunch };
+    setInterfaceSessionActionError(
+      boundedPublicActionError(error, "Interface visibility could not be changed."),
+    );
+    return;
+  }
   renderInterfaceSession();
 }
 
@@ -10627,12 +10696,46 @@ function bindCatalogVisibilityControl(component) {
   button.addEventListener("click", () => updateCatalogVisibility(component));
 }
 
+function catalogPublicNameCollisions(component) {
+  const item = component && component.entry || {};
+  const normalizedId = String(item.id || "").trim().toLowerCase();
+  const normalizedLabel = String(item.label || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return allComponents().filter((candidate) => {
+    const other = candidate && candidate.entry || {};
+    const access = other.access && typeof other.access === "object" ? other.access : {};
+    if (
+      candidate.kind !== component.kind
+      || String(other.uid || "") === String(item.uid || "")
+      || access.visibility !== "public"
+    ) return false;
+    const sameId = normalizedId
+      && String(other.id || "").trim().toLowerCase() === normalizedId;
+    const sameLabel = normalizedLabel
+      && String(other.label || "").trim().replace(/\s+/g, " ").toLowerCase() === normalizedLabel;
+    return sameId || sameLabel;
+  });
+}
+
 async function updateCatalogVisibility(component) {
   const access = component && component.entry && component.entry.access || {};
   if (access.can_manage_visibility !== true) return;
   const key = componentLaunchKey(component);
   if (state.catalogVisibilityActions[key] && state.catalogVisibilityActions[key].pending) return;
   const visibility = access.visibility === "private" ? "public" : "private";
+  if (visibility === "public") {
+    const collisions = catalogPublicNameCollisions(component);
+    if (collisions.length) {
+      const identities = collisions.slice(0, 5).map((candidate) => (
+        String(candidate.entry.qualified_id || `${candidate.entry.package_id}/${candidate.kind}/${candidate.entry.id}`)
+      ));
+      const more = collisions.length > identities.length
+        ? `\n…and ${collisions.length - identities.length} more.`
+        : "";
+      if (!window.confirm(
+        `A public ${component.kind} already uses the same short id or display name:\n\n${identities.join("\n")}${more}\n\nYour item keeps its own package-qualified identity. Make it public anyway?`,
+      )) return;
+    }
+  }
   state.catalogVisibilityActions[key] = { pending: true, error: "" };
   renderComponentDetail();
   try {
@@ -23085,6 +23188,7 @@ function entityHeader(item, kind) {
           ${visibilityChip}
         </div>
         <p class="path-text catalog-package-context">${packageContext}</p>
+        <p class="path-text">Catalog ID: ${escapeHtml(String(item.qualified_id || `${item.package_id || item.package}/${kind}/${item.id}`))}</p>
         <p class="path-text">${escapeHtml(shortPath(item.path))}</p>
       </div>
     </div>

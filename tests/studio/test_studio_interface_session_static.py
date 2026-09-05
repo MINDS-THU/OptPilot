@@ -180,6 +180,23 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertIn("state.selectedOperatorJob", candidate)
         self.assertIn("state.interfaceLaunch", launch)
 
+    def test_admin_can_share_one_running_interface_without_granting_stop(self) -> None:
+        renderer = _function_source(self.source, "renderInterfaceSession")
+        updater = _function_source(self.source, "updateCurrentInterfaceVisibility")
+        model = _function_source(self.source, "launchInterfaceSessionModel")
+
+        self.assertEqual(
+            self.html.count('id="interfaceSessionVisibilityButton"'), 1
+        )
+        self.assertIn("access.can_manage_visibility", renderer)
+        self.assertIn('access.visibility === "public"', renderer)
+        self.assertIn('"Share interface"', renderer)
+        self.assertIn('"Make private"', renderer)
+        self.assertIn("optpilot.interface-launch-visibility.v1", updater)
+        self.assertIn("same interface data and state", updater)
+        self.assertIn("launch.can_stop !== false", model)
+        self.assertIn('eyebrow: shared ? "Shared interface"', model)
+
     def test_catalog_interface_startup_explains_one_time_runtime_preparation(self) -> None:
         model = _function_source(self.source, "launchInterfaceSessionModel")
         progress = _function_source(self.source, "interfaceLaunchPreparationProgress")
