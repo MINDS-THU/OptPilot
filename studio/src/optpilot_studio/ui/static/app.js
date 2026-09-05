@@ -5051,6 +5051,7 @@ function assistantTimelineSignature(session, isRegistration = false) {
     sessionId,
     hydration: agentSessionHydrationState(session),
     status: assistantSessionStatus(session),
+    conversationCreateError: state.agentSessionCreateError,
     messages: currentAssistantMessages().map((message) => ({
       id: message && message[3] && message[3].id || "",
       role: message && message[0] || "",
@@ -5661,7 +5662,10 @@ function refreshBackgroundActionElapsed() {
 }
 
 function assistantTimelineHtml(session) {
-  return `${assistantInterleavedTimelineHtml(session)}${assistantBackgroundActionsHtml(session)}${assistantApprovalsHtml()}`;
+  const createError = state.agentSessionCreateError
+    ? `<p class="error-text onboarding-conversation-error" role="alert">${escapeHtml(state.agentSessionCreateError)}</p>`
+    : "";
+  return `${assistantInterleavedTimelineHtml(session)}${assistantBackgroundActionsHtml(session)}${assistantApprovalsHtml()}${createError}`;
 }
 
 function assistantApprovalsHtml() {
@@ -23842,6 +23846,24 @@ async function studioMutationHeaders() {
   return headers;
 }
 
+async function refreshStudioSecurityContextAfterRejection(response, payload, headers) {
+  if (
+    !response
+    || response.status !== 403
+    || !payload
+    || payload.code !== "studio_mutation_token_invalid"
+  ) return false;
+  const rejectedToken = String(headers && headers["X-OptPilot-CSRF-Token"] || "");
+  if (
+    studioSecurityContext
+    && studioSecurityContext.csrf_token === rejectedToken
+  ) {
+    studioSecurityContext = null;
+  }
+  await loadStudioSecurityContext();
+  return true;
+}
+
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -23855,6 +23877,12 @@ async function postJson(url, payload, options = {}) {
     keepalive: Boolean(options.keepalive),
   }, Number(options.timeoutMs || 0));
   const json = await response.json();
+  if (
+    options.retryInvalidMutationToken !== false
+    && await refreshStudioSecurityContextAfterRejection(response, json, headers)
+  ) {
+    return postJson(url, payload, { ...options, retryInvalidMutationToken: false });
+  }
   if (!response.ok && options.tolerateError && json && typeof json === "object") {
     Object.defineProperty(json, "__httpStatus", {
       value: response.status,
@@ -23892,6 +23920,12 @@ async function deleteJson(url, options = {}) {
     Number(options.timeoutMs || 0),
   );
   const json = await response.json();
+  if (
+    options.retryInvalidMutationToken !== false
+    && await refreshStudioSecurityContextAfterRejection(response, json, headers)
+  ) {
+    return deleteJson(url, { ...options, retryInvalidMutationToken: false });
+  }
   if (!response.ok && !options.tolerateError) {
     const error = new Error(json.error || `${response.status} ${response.statusText}`);
     error.status = response.status;
