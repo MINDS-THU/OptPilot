@@ -115,6 +115,7 @@ const state = {
   assistantMessagesBySession: {},
   assistantDraftsBySession: loadSessionStoredJson(STORAGE_KEYS.assistantDrafts),
   assistantScrollBySession: {},
+  assistantDisclosureBySession: {},
   assistantTimelineSignatures: {},
   renderedAssistantSessionId: null,
   agentSessionCreatePromise: null,
@@ -424,6 +425,9 @@ function studioHasLiveActivity() {
   if ((state.operatorJobs || []).some((job) => activeJobStatuses.has(String(job.state || job.status || "")))) return true;
   const busySessionStatuses = new Set(["waiting_for_agent", "running", "resuming_after_approval"]);
   if ((state.agentSessions || []).some((session) => busySessionStatuses.has(assistantSessionStatus(session)))) return true;
+  if (Object.values(state.agentBackgroundActionsBySession || {}).some((actions) => (
+    (actions || []).some((action) => action && action.status === "running")
+  ))) return true;
   const interfaceStatus = String(state.interfaceLaunch && state.interfaceLaunch.status || "");
   if (state.interfaceLaunch && !["ready", "failed", "stopped", "cleanup_pending"].includes(interfaceStatus)) return true;
   if (state.studyLaunch && !studyLaunchIsTerminal(state.studyLaunch)) return true;
@@ -1335,6 +1339,7 @@ function forgetAgentSessionLocalState(sessionId) {
   delete state.assistantMessagesBySession[sessionId];
   delete state.assistantDraftsBySession[sessionId];
   delete state.assistantScrollBySession[sessionId];
+  delete state.assistantDisclosureBySession[sessionId];
   delete state.assistantTimelineSignatures[sessionId];
   delete state.agentApprovalsBySession[sessionId];
   delete state.assistantApprovalKeysBySession[sessionId];
@@ -4981,6 +4986,22 @@ function captureAssistantContinuity(sessionId = state.renderedAssistantSessionId
     storeSessionValue(STORAGE_KEYS.assistantDrafts, JSON.stringify(state.assistantDraftsBySession));
   }
   if (els.agentTimeline) {
+    const disclosures = state.assistantDisclosureBySession[sessionId] || {};
+    els.agentTimeline.querySelectorAll("[data-assistant-disclosure-key]").forEach((details) => {
+      const key = String(details.dataset.assistantDisclosureKey || "");
+      if (!key) return;
+      const next = { ...(disclosures[key] || {}), open: Boolean(details.open) };
+      const scroller = details.classList.contains("assistant-step-group")
+        ? details.querySelector(".assistant-step-scroll")
+        : null;
+      if (scroller) {
+        const distanceFromBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+        next.scrollTop = scroller.scrollTop;
+        next.nearBottom = distanceFromBottom < 24;
+      }
+      disclosures[key] = next;
+    });
+    state.assistantDisclosureBySession[sessionId] = disclosures;
     const distanceFromBottom = els.agentTimeline.scrollHeight - els.agentTimeline.clientHeight - els.agentTimeline.scrollTop;
     state.assistantScrollBySession[sessionId] = {
       top: els.agentTimeline.scrollTop,
@@ -5004,6 +5025,15 @@ function restoreAssistantContinuity(sessionId, options = {}) {
     if (!saved || saved.nearBottom) els.agentTimeline.scrollTop = els.agentTimeline.scrollHeight;
     else els.agentTimeline.scrollTop = Math.min(saved.top || 0, els.agentTimeline.scrollHeight);
   });
+}
+
+function assistantDisclosureOpen(sessionId, key, defaultOpen = false) {
+  const disclosure = sessionId
+    && state.assistantDisclosureBySession[sessionId]
+    && state.assistantDisclosureBySession[sessionId][key];
+  return disclosure && typeof disclosure.open === "boolean"
+    ? disclosure.open
+    : Boolean(defaultOpen);
 }
 
 function assistantTimelineSignature(session, isRegistration = false) {
@@ -5041,6 +5071,7 @@ function assistantTimelineSignature(session, isRegistration = false) {
     backgroundActions: currentAssistantBackgroundActions(session).map((item) => ({
       id: item && item.request_id || "",
       status: item && item.status || "",
+      progress: item && item.progress || null,
     })),
   });
 }
@@ -5542,8 +5573,19 @@ function queueAssistantStepAutoScroll() {
 
 function scrollWorkingAssistantStepsToBottom() {
   if (!els.agentTimeline) return;
-  els.agentTimeline.querySelectorAll(".assistant-step-group.working .assistant-step-scroll").forEach((scroller) => {
-    scroller.scrollTop = scroller.scrollHeight;
+  const sessionId = String(els.agentTimeline.dataset.timelineSessionId || "");
+  const disclosures = state.assistantDisclosureBySession[sessionId] || {};
+  els.agentTimeline.querySelectorAll(".assistant-step-group").forEach((group) => {
+    if (!group.open) return;
+    const scroller = group.querySelector(".assistant-step-scroll");
+    if (!scroller) return;
+    const key = String(group.dataset.assistantDisclosureKey || "");
+    const saved = disclosures[key];
+    if (saved && saved.nearBottom === false) {
+      scroller.scrollTop = Math.min(Number(saved.scrollTop || 0), scroller.scrollHeight);
+      return;
+    }
+    if (!saved || saved.nearBottom === true) scroller.scrollTop = scroller.scrollHeight;
   });
 }
 
@@ -6358,6 +6400,7 @@ function assistantInterleavedTimelineHtml(session) {
       .map((card) => card.id),
   );
   let index = 0;
+  let userTurnOrdinal = 0;
   while (index < messages.length) {
     const message = messages[index];
     html.push(timelineItem(message));
@@ -6365,6 +6408,8 @@ function assistantInterleavedTimelineHtml(session) {
       index += 1;
       continue;
     }
+    userTurnOrdinal += 1;
+    const turnKey = `turn:${userTurnOrdinal}`;
     const messageTime = messageTimes[index];
     const nextUserIndex = messages
       .slice(index + 1)
@@ -6388,7 +6433,12 @@ function assistantInterleavedTimelineHtml(session) {
       : [];
     turnEvents.forEach((event) => renderedEventIndexes.add(event.__index));
     if (turnEvents.length || isWorking) {
-      html.push(assistantStepGroupHtml(turnEvents, { isWorking, open: isWorking }));
+      html.push(assistantStepGroupHtml(turnEvents, {
+        isWorking,
+        key: turnKey,
+        sessionId: session && session.id || "",
+        open: assistantDisclosureOpen(session && session.id || "", turnKey, isWorking),
+      }));
     }
     for (let turnIndex = index + 1; turnIndex < turnEndIndex; turnIndex += 1) {
       html.push(timelineItem(messages[turnIndex]));
@@ -6431,6 +6481,7 @@ function assistantWorkingLabel(visibleEvents, startMs) {
 function assistantStepGroupHtml(events, options = {}) {
   const visibleEvents = events.filter(assistantEventIsInformative);
   if (!visibleEvents.length && !options.isWorking) return "";
+  const disclosureKey = String(options.key || "assistant-steps");
   const start = firstFinite(visibleEvents.map(eventTimestampMs));
   const end = lastFinite(visibleEvents.map(eventTimestampMs));
   const label = options.isWorking
@@ -6439,7 +6490,7 @@ function assistantStepGroupHtml(events, options = {}) {
     ? `Worked for ${formatDuration(Math.max(0, end - start))}`
     : `${visibleEvents.length} assistant step${visibleEvents.length === 1 ? "" : "s"}`;
   return `
-    <details class="assistant-step-group ${options.isWorking ? "working" : ""}" ${options.open ? "open" : ""}>
+    <details class="assistant-step-group ${options.isWorking ? "working" : ""}" data-assistant-disclosure-key="${escapeHtml(disclosureKey)}" ${options.open ? "open" : ""}>
       <summary>
         ${options.isWorking ? assistantTypingDotsHtml() : ""}
         <span>${escapeHtml(label)}</span>
@@ -6450,6 +6501,7 @@ function assistantStepGroupHtml(events, options = {}) {
           <ol>
             ${visibleEvents.map((event) => {
               const step = assistantStepSummary(event);
+              const technicalKey = `${disclosureKey}:technical:${event.id || event.__index || "event"}`;
               return `
                 <li class="${escapeHtml(step.status)}">
                   <span>${escapeHtml(step.time)}</span>
@@ -6457,7 +6509,7 @@ function assistantStepGroupHtml(events, options = {}) {
                     <strong>${escapeHtml(step.title)}</strong>
                     ${step.detail ? `<p>${escapeHtml(step.detail)}</p>` : ""}
                     ${step.technical ? `
-                      <details class="assistant-step-technical">
+                      <details class="assistant-step-technical" data-assistant-disclosure-key="${escapeHtml(technicalKey)}" ${assistantDisclosureOpen(options.sessionId || "", technicalKey) ? "open" : ""}>
                         <summary>Technical details</summary>
                         <pre class="assistant-step-pre">${escapeHtml(step.technical)}</pre>
                       </details>

@@ -44,6 +44,45 @@ class StudioConversationContinuityStaticTest(unittest.TestCase):
         self.assertIn("assistantScrollBySession", restore)
         self.assertIn("sessionStorage", self.source)
 
+    def test_assistant_activity_disclosures_survive_timeline_replacement(self) -> None:
+        capture = _function_source(self.source, "captureAssistantContinuity")
+        timeline = _function_source(
+            self.source, "assistantInterleavedTimelineHtml"
+        )
+        group = _function_source(self.source, "assistantStepGroupHtml")
+        forget = _function_source(self.source, "forgetAgentSessionLocalState")
+
+        self.assertIn("assistantDisclosureBySession", capture)
+        self.assertIn('[data-assistant-disclosure-key]', capture)
+        self.assertIn("open: Boolean(details.open)", capture)
+        self.assertIn("assistantDisclosureOpen", timeline)
+        self.assertIn("turnKey", timeline)
+        self.assertIn("data-assistant-disclosure-key", group)
+        self.assertIn("assistantDisclosureOpen", group)
+        self.assertIn("delete state.assistantDisclosureBySession[sessionId]", forget)
+
+    def test_assistant_step_scroll_follows_only_when_the_reader_is_at_the_end(self) -> None:
+        capture = _function_source(self.source, "captureAssistantContinuity")
+        scroll = _function_source(
+            self.source, "scrollWorkingAssistantStepsToBottom"
+        )
+
+        self.assertIn("distanceFromBottom < 24", capture)
+        self.assertIn("saved.nearBottom === false", scroll)
+        self.assertIn("saved.scrollTop", scroll)
+        self.assertIn("saved.nearBottom === true", scroll)
+        self.assertNotIn(
+            '.assistant-step-group.working .assistant-step-scroll', scroll
+        )
+
+    def test_background_action_progress_drives_rendering_and_active_polling(self) -> None:
+        signature = _function_source(self.source, "assistantTimelineSignature")
+        activity = _function_source(self.source, "studioHasLiveActivity")
+
+        self.assertIn("progress: item && item.progress || null", signature)
+        self.assertIn("state.agentBackgroundActionsBySession", activity)
+        self.assertIn('action.status === "running"', activity)
+
     def test_a_fresh_browser_does_not_write_into_an_automatic_fallback(self) -> None:
         send = _function_source(self.source, "sendAgentMessage")
         select = _function_source(self.source, "selectAgentSession")
