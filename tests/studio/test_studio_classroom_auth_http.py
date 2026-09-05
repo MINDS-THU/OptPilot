@@ -5,6 +5,7 @@ import json
 import socket
 import tempfile
 import threading
+import time
 import unittest
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
@@ -13,12 +14,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from optpilot_studio.ui.server import (
+    CatalogEntryRef,
     InterfaceLaunchCapacityExceeded,
     PublicAccessOptions,
     UiState,
+    _catalog_entry_asset_id,
     _catalog_edit_workspace_operation_id,
     _handler_factory,
     _REQUEST_PRINCIPAL,
+    _reserve_catalog_publication_ownership,
 )
 from optpilot_studio.ui.shared_auth import ClassroomAuth
 
@@ -330,6 +334,265 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             finally:
                 _REQUEST_PRINCIPAL.reset(principal_token)
         self.assertNotEqual(coordinates[0], coordinates[1])
+
+    def test_catalog_item_visibility_is_private_then_owner_or_admin_controlled(
+        self,
+    ) -> None:
+        alice = self._register("catalog-alice", "catalog-alice-password-123")
+        bob = self._register("catalog-bob", "catalog-bob-password-456")
+        admin = self._login_admin()
+        entry_ref = CatalogEntryRef(
+            source_kind="realm-catalog",
+            source_id="student-package",
+            source_revision=1,
+            source_digest="a" * 64,
+            kind="resource",
+            entry_id="student-viewer",
+            focus_path="resources/student-viewer",
+        )
+        entry = {
+            "config": "resource",
+            "id": "student-viewer",
+            "uid": entry_ref.token(),
+            "ref": entry_ref.to_dict(),
+            "label": "Student viewer",
+            "description": "A privately published item.",
+            "package_id": "student-package",
+            "path": "catalog://student-package/resources/student-viewer",
+            "summary": {},
+            "tags": [],
+        }
+        index = {
+            "roots": ["catalog://student-package"],
+            "environments": [],
+            "methods": [],
+            "studies": [],
+            "resources": [entry],
+            "sources": [],
+            "builtins": {},
+        }
+        alice_principal = self.state.shared_auth.principal_from_cookie(alice)
+        self.assertIsNotNone(alice_principal)
+        asset_id = _catalog_entry_asset_id(
+            package_id="student-package",
+            kind="resource",
+            entry_id="student-viewer",
+        )
+        self.state.shared_auth.claim_asset(
+            asset_type="catalog-entry",
+            asset_id=asset_id,
+            principal=alice_principal,
+        )
+
+        with patch(
+            "optpilot_studio.ui.server._catalog_index_payload",
+            return_value=index,
+        ):
+            status, _headers, body = self._request("GET", "/api/catalog", cookie=alice)
+            self.assertEqual(status, HTTPStatus.OK, body)
+            listed = json.loads(body)["resources"]
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0]["access"]["visibility"], "private")
+            self.assertTrue(listed[0]["access"]["can_manage_visibility"])
+
+            status, _headers, body = self._request("GET", "/api/catalog", cookie=bob)
+            self.assertEqual(status, HTTPStatus.OK, body)
+            self.assertEqual(json.loads(body)["resources"], [])
+            self.assertEqual(json.loads(body)["roots"], [])
+            status, _headers, body = self._request(
+                "GET", f"/api/resources/{entry_ref.token()}", cookie=bob
+            )
+            self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+
+            visibility_path = (
+                "/api/catalog/resource/"
+                f"{entry_ref.token()}/visibility"
+            )
+            status, _headers, body = self._request(
+                "POST",
+                visibility_path,
+                payload={
+                    "schema": "optpilot.catalog-entry-visibility.v1",
+                    "visibility": "public",
+                },
+                cookie=alice,
+                mutation=True,
+            )
+            self.assertEqual(status, HTTPStatus.OK, body)
+            self.assertEqual(json.loads(body)["access"]["visibility"], "public")
+
+            status, _headers, body = self._request("GET", "/api/catalog", cookie=bob)
+            self.assertEqual(status, HTTPStatus.OK, body)
+            self.assertEqual(len(json.loads(body)["resources"]), 1)
+
+            status, _headers, body = self._request(
+                "POST",
+                visibility_path,
+                payload={
+                    "schema": "optpilot.catalog-entry-visibility.v1",
+                    "visibility": "private",
+                },
+                cookie=bob,
+                mutation=True,
+            )
+            self.assertEqual(status, HTTPStatus.FORBIDDEN, body)
+
+            status, _headers, body = self._request(
+                "POST",
+                visibility_path,
+                payload={
+                    "schema": "optpilot.catalog-entry-visibility.v1",
+                    "visibility": "private",
+                },
+                cookie=admin,
+                mutation=True,
+            )
+            self.assertEqual(status, HTTPStatus.OK, body)
+            status, _headers, body = self._request("GET", "/api/catalog", cookie=bob)
+            self.assertEqual(status, HTTPStatus.OK, body)
+            self.assertEqual(json.loads(body)["resources"], [])
+
+    def test_new_catalog_publication_is_reserved_private_for_its_publisher(self) -> None:
+        alice_cookie = self._register(
+            "publishing-alice", "publishing-alice-password-123"
+        )
+        alice = self.state.shared_auth.principal_from_cookie(alice_cookie)
+        self.assertIsNotNone(alice)
+        empty_index = {
+            "roots": [],
+            "environments": [],
+            "methods": [],
+            "studies": [],
+            "resources": [],
+            "sources": [],
+            "builtins": {},
+        }
+        principal_token = _REQUEST_PRINCIPAL.set(alice)
+        try:
+            with patch(
+                "optpilot_studio.ui.server._catalog_index_payload",
+                return_value=empty_index,
+            ):
+                _reserve_catalog_publication_ownership(
+                    self.state,
+                    package_id="alice-package",
+                    entries=[{"kind": "resource", "id": "alice-viewer"}],
+                )
+        finally:
+            _REQUEST_PRINCIPAL.reset(principal_token)
+
+        ownership = self.state.shared_auth.asset_ownership(
+            asset_type="catalog-entry",
+            asset_id=_catalog_entry_asset_id(
+                package_id="alice-package",
+                kind="resource",
+                entry_id="alice-viewer",
+            ),
+        )
+        self.assertEqual(ownership["owner_account_id"], alice.account_id)
+        self.assertEqual(ownership["visibility"], "private")
+
+    def test_cached_compatibility_is_filtered_for_each_account(self) -> None:
+        alice_cookie = self._register(
+            "compat-alice", "compat-alice-password-123"
+        )
+        bob_cookie = self._register("compat-bob", "compat-bob-password-456")
+        alice = self.state.shared_auth.principal_from_cookie(alice_cookie)
+        self.assertIsNotNone(alice)
+        environment_ref = CatalogEntryRef(
+            source_kind="realm-catalog",
+            source_id="private-environment-package",
+            source_revision=1,
+            source_digest="b" * 64,
+            kind="environment",
+            entry_id="private-environment",
+            focus_path="environments/private.yaml",
+        )
+        method_ref = CatalogEntryRef(
+            source_kind="realm-catalog",
+            source_id="public-method-package",
+            source_revision=1,
+            source_digest="c" * 64,
+            kind="method",
+            entry_id="public-method",
+            focus_path="methods/public.yaml",
+        )
+
+        def entry(reference: CatalogEntryRef) -> dict[str, object]:
+            return {
+                "config": reference.kind,
+                "id": reference.entry_id,
+                "uid": reference.token(),
+                "ref": reference.to_dict(),
+                "label": reference.entry_id,
+                "package_id": reference.source_id,
+                "path": f"catalog://{reference.source_id}/{reference.focus_path}",
+                "summary": {},
+            }
+
+        environment = entry(environment_ref)
+        method = entry(method_ref)
+        index = {
+            "roots": [
+                "catalog://private-environment-package",
+                "catalog://public-method-package",
+            ],
+            "environments": [environment],
+            "methods": [method],
+            "studies": [],
+            "resources": [],
+            "sources": [],
+            "builtins": {},
+        }
+        raw_compatibility = {
+            "environments": [environment],
+            "methods": [method],
+            "pairs": [
+                {
+                    "compatible": True,
+                    "environment": environment,
+                    "method": method,
+                    "checks": [],
+                    "reasons": [],
+                }
+            ],
+        }
+        self.state.shared_auth.claim_asset(
+            asset_type="catalog-entry",
+            asset_id=_catalog_entry_asset_id(
+                package_id=environment_ref.source_id,
+                kind=environment_ref.kind,
+                entry_id=environment_ref.entry_id,
+            ),
+            principal=alice,
+        )
+        self.state.catalog_refresh_ttl_seconds = 60
+        self.state._compatibility_cache = (
+            index,
+            time.monotonic(),
+            raw_compatibility,
+        )
+
+        with patch(
+            "optpilot_studio.ui.server._catalog_index_payload",
+            return_value=index,
+        ):
+            status, _headers, body = self._request(
+                "GET", "/api/compatibility", cookie=bob_cookie
+            )
+            self.assertEqual(status, HTTPStatus.OK, body)
+            bob_payload = json.loads(body)
+            self.assertEqual(bob_payload["environments"], [])
+            self.assertEqual(bob_payload["pairs"], [])
+            self.assertEqual(len(bob_payload["methods"]), 1)
+
+            status, _headers, body = self._request(
+                "GET", "/api/compatibility", cookie=alice_cookie
+            )
+            self.assertEqual(status, HTTPStatus.OK, body)
+            alice_payload = json.loads(body)
+            self.assertEqual(len(alice_payload["environments"]), 1)
+            self.assertEqual(len(alice_payload["pairs"]), 1)
 
     def _request_with_headers(
         self, path: str, *, cookie: str, target_kind: str, target_port: str

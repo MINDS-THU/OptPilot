@@ -524,6 +524,17 @@ class ClassroomAuth:
                 );
                 CREATE INDEX IF NOT EXISTS classroom_assets_owner
                 ON asset_ownership(owner_account_id, asset_type);
+                CREATE TABLE IF NOT EXISTS asset_visibility_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_type TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    actor_account_id TEXT NOT NULL,
+                    previous_visibility TEXT NOT NULL,
+                    visibility TEXT NOT NULL,
+                    changed_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS classroom_asset_visibility_events_asset
+                ON asset_visibility_events(asset_type, asset_id, event_id);
                 """
             )
             schema = connection.execute(
@@ -630,6 +641,121 @@ class ClassroomAuth:
             ).rowcount
         if not updated:
             raise KeyError(identifier)
+
+    def asset_ownership(
+        self, *, asset_type: str, asset_id: str
+    ) -> Optional[dict[str, str]]:
+        """Return one ownership policy without treating absence as access denial."""
+
+        kind, identifier = self._asset_coordinate(asset_type, asset_id)
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT owner_account_id, visibility FROM asset_ownership "
+                "WHERE asset_type = ? AND asset_id = ?",
+                (kind, identifier),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "owner_account_id": str(row[0]),
+            "visibility": str(row[1]),
+        }
+
+    def set_catalog_entry_visibility(
+        self,
+        *,
+        asset_id: str,
+        visibility: str,
+        principal: AuthPrincipal,
+    ) -> None:
+        """Let a Catalog item's owner or the admin change its audience."""
+
+        kind, identifier = self._asset_coordinate("catalog-entry", asset_id)
+        normalized_visibility = str(visibility or "").casefold()
+        if normalized_visibility not in {"private", "classroom"}:
+            raise ValueError("Catalog visibility must be private or classroom.")
+        now = self._clock()
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT owner_account_id, visibility FROM asset_ownership "
+                "WHERE asset_type = ? AND asset_id = ?",
+                (kind, identifier),
+            ).fetchone()
+            if row is None:
+                # Catalog entries that predate per-account ownership stay
+                # classroom-visible.  Only the admin may adopt one in order to
+                # make that legacy policy explicit or later privatize it.
+                if principal.role != "admin":
+                    raise PermissionError(
+                        "Only the Catalog item owner or admin may change visibility."
+                    )
+                owner_account_id = principal.account_id
+                previous_visibility = "classroom"
+                connection.execute(
+                    "INSERT INTO asset_ownership(asset_type, asset_id, owner_account_id, visibility, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        kind,
+                        identifier,
+                        owner_account_id,
+                        normalized_visibility,
+                        now,
+                    ),
+                )
+            else:
+                owner_account_id = str(row[0])
+                previous_visibility = str(row[1])
+                if (
+                    principal.role != "admin"
+                    and owner_account_id != principal.account_id
+                ):
+                    raise PermissionError(
+                        "Only the Catalog item owner or admin may change visibility."
+                    )
+                connection.execute(
+                    "UPDATE asset_ownership SET visibility = ? "
+                    "WHERE asset_type = ? AND asset_id = ?",
+                    (normalized_visibility, kind, identifier),
+                )
+            if previous_visibility != normalized_visibility:
+                connection.execute(
+                    "INSERT INTO asset_visibility_events("
+                    "asset_type, asset_id, actor_account_id, previous_visibility, visibility, changed_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        kind,
+                        identifier,
+                        principal.account_id,
+                        previous_visibility,
+                        normalized_visibility,
+                        now,
+                    ),
+                )
+
+    def asset_visibility_events(
+        self, *, asset_type: str, asset_id: str, limit: int = 100
+    ) -> list[dict[str, object]]:
+        """Return bounded newest-first visibility history for local auditing."""
+
+        kind, identifier = self._asset_coordinate(asset_type, asset_id)
+        bounded_limit = min(max(int(limit), 1), 1000)
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT actor_account_id, previous_visibility, visibility, changed_at "
+                "FROM asset_visibility_events "
+                "WHERE asset_type = ? AND asset_id = ? "
+                "ORDER BY event_id DESC LIMIT ?",
+                (kind, identifier, bounded_limit),
+            ).fetchall()
+        return [
+            {
+                "actor_account_id": str(row[0]),
+                "previous_visibility": str(row[1]),
+                "visibility": str(row[2]),
+                "changed_at": float(row[3]),
+            }
+            for row in rows
+        ]
 
     def asset_owner_account_id(self, *, asset_type: str, asset_id: str) -> str:
         """Return a claimed asset's stable owner id, or an empty string."""

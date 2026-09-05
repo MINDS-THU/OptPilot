@@ -1370,6 +1370,27 @@ th {
   white-space: nowrap;
 }
 
+.catalog-visibility-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.catalog-visibility-private {
+  background: #fff1dc;
+  color: #85510d;
+}
+
+.catalog-visibility-public {
+  background: #e8f5ef;
+  color: #23674b;
+}
+
 .catalog-kind-environment {
   background: #e8f5ef;
   color: #23674b;

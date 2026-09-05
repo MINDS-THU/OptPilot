@@ -666,6 +666,7 @@ PACKAGE_PLAN_ARTIFACT_ROLE = "package-plan-artifact"
 PACKAGE_PLAN_CATALOG_BASE_SCHEMA = "optpilot.package-plan-catalog-base.v1"
 PACKAGE_PLAN_PUBLICATION_SCHEMA = "optpilot.package-plan-publication.v1"
 CATALOG_ENTRY_REF_SCHEMA = "optpilot.catalog-entry-ref.v1"
+CATALOG_ENTRY_VISIBILITY_SCHEMA = "optpilot.catalog-entry-visibility.v1"
 CATALOG_ENTRY_REF_TOKEN_PREFIX = "cref_"
 CONFIGURED_PACKAGE_SOURCE_SCHEMA = "optpilot.configured-package-source.v1"
 CONFIGURED_SOURCE_WORKSPACE_SCHEMA = "optpilot.configured-source-workspace.v1"
@@ -937,6 +938,108 @@ class CatalogEntryRef:
             ).encode("utf-8")
         ).decode("ascii")
         return CATALOG_ENTRY_REF_TOKEN_PREFIX + encoded.rstrip("=")
+
+
+def _catalog_entry_asset_id(
+    *, package_id: str, kind: str, entry_id: str
+) -> str:
+    """Identify one logical Catalog item independently of its revision."""
+
+    return "catalog-entry/" + request_digest(
+        {
+            "schema": "optpilot.catalog-entry-asset.v1",
+            "package_id": str(package_id),
+            "kind": str(kind),
+            "entry_id": str(entry_id),
+        }
+    )
+
+
+def _catalog_entry_access(
+    state: "UiState",
+    *,
+    source_kind: str,
+    package_id: str,
+    kind: str,
+    entry_id: str,
+) -> JsonDict:
+    """Resolve one Catalog item's account audience without exposing its owner."""
+
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    manageable = source_kind == "realm-catalog" and isinstance(auth, ClassroomAuth)
+    if not manageable or principal is None:
+        return {
+            "visible": True,
+            "visibility": "public",
+            "can_manage_visibility": False,
+            "owned_by_current_account": False,
+        }
+    asset_id = _catalog_entry_asset_id(
+        package_id=package_id,
+        kind=kind,
+        entry_id=entry_id,
+    )
+    ownership = auth.asset_ownership(
+        asset_type="catalog-entry",
+        asset_id=asset_id,
+    )
+    if ownership is None:
+        # Entries published before this policy existed stay visible.  The
+        # admin can adopt one through the visibility endpoint; a student
+        # cannot claim existing shared material merely by browsing it.
+        return {
+            "visible": True,
+            "visibility": "public",
+            "can_manage_visibility": principal.role == "admin",
+            "owned_by_current_account": False,
+        }
+    owner_account_id = str(ownership["owner_account_id"])
+    visibility = str(ownership["visibility"])
+    owned = owner_account_id == principal.account_id
+    return {
+        "visible": principal.role == "admin" or owned or visibility == "classroom",
+        "visibility": "public" if visibility == "classroom" else "private",
+        "can_manage_visibility": principal.role == "admin" or owned,
+        "owned_by_current_account": owned,
+    }
+
+
+def _catalog_entry_access_from_ref(
+    state: "UiState", entry_ref: CatalogEntryRef
+) -> JsonDict:
+    return _catalog_entry_access(
+        state,
+        source_kind=entry_ref.source_kind,
+        package_id=entry_ref.source_id,
+        kind=entry_ref.kind,
+        entry_id=entry_ref.entry_id,
+    )
+
+
+def _catalog_entry_access_from_entry(state: "UiState", entry: Mapping[str, Any]) -> JsonDict:
+    raw_ref = entry.get("ref")
+    source_kind = ""
+    source_id = str(entry.get("package_id") or entry.get("package") or "")
+    if isinstance(raw_ref, Mapping):
+        source_kind = str(raw_ref.get("source_kind") or "")
+        source_id = str(raw_ref.get("source_id") or source_id)
+    return _catalog_entry_access(
+        state,
+        source_kind=source_kind,
+        package_id=source_id,
+        kind=str(entry.get("config") or entry.get("kind") or ""),
+        entry_id=str(entry.get("id") or ""),
+    )
+
+
+def _require_catalog_entry_access(
+    state: "UiState", entry_ref: CatalogEntryRef
+) -> None:
+    if not _catalog_entry_access_from_ref(state, entry_ref)["visible"]:
+        # A private item must not be distinguishable from a nonexistent one by
+        # guessing or retaining an old exact ref token.
+        raise RealmNotFound("Catalog item was not found.")
 
 
 @dataclass
@@ -7158,6 +7261,7 @@ def _handler_factory(state: UiState):
                 "open-code",
                 "edit-copy",
                 "launch-interface-job",
+                "visibility",
             }:
                 self._send_json(
                     {"error": "Unknown catalog workspace action"},
@@ -7171,6 +7275,11 @@ def _handler_factory(state: UiState):
                 )
                 return
             payload = self._read_json_body()
+            if action == "visibility":
+                self._send_json(
+                    _set_catalog_entry_visibility(state, kind, uid, payload)
+                )
+                return
             if action == "launch-interface-job":
                 request = _exact_json_object(
                     payload,
@@ -8661,6 +8770,7 @@ def _catalog_entry_ref_selection(
     entry_ref = _catalog_entry_ref_from_value(state, expected_config, value)
     if entry_ref is None or entry_ref.source_kind != "realm-catalog":
         return None
+    _require_catalog_entry_access(state, entry_ref)
     runtime = _package_plan_realm_runtime(state)
     assert entry_ref.source_revision is not None
     manifest = runtime.catalog.read_revision(
@@ -8930,26 +9040,49 @@ def _catalog_payload(state: UiState) -> JsonDict:
     """Return the public catalog index with no provider-local coordinates."""
 
     index = _catalog_index_payload(state)
+    visible = {
+        key: [
+            item
+            for item in index[key]
+            if _catalog_entry_access_from_entry(state, item)["visible"]
+        ]
+        for key in ("environments", "methods", "studies", "resources")
+    }
     entries = [
-        *index["environments"],
-        *index["methods"],
-        *index["studies"],
-        *index["resources"],
+        *visible["environments"],
+        *visible["methods"],
+        *visible["studies"],
+        *visible["resources"],
     ]
     workspace_links = (
         _catalog_workspace_link_lookup(_list_ui_workspaces(state))
         if any(_realm_catalog_entry_link_key(item) is not None for item in entries)
         else {}
     )
+    filter_roots = isinstance(state.shared_auth, ClassroomAuth) and (
+        _current_request_principal() is not None
+    )
+    visible_package_roots = (
+        {
+            _package_plan_catalog_destination(str(item.get("package_id") or ""))
+            for item in entries
+            if item.get("package_id")
+        }
+        if filter_roots
+        else set(index["roots"])
+    )
     return {
         **index,
+        "roots": [
+            root for root in index["roots"] if root in visible_package_roots
+        ],
         "environments": [
             _public_catalog_entry_with_workspace(
                 state,
                 item,
                 workspace_links=workspace_links,
             )
-            for item in index["environments"]
+            for item in visible["environments"]
         ],
         "methods": [
             _public_catalog_entry_with_workspace(
@@ -8957,7 +9090,7 @@ def _catalog_payload(state: UiState) -> JsonDict:
                 item,
                 workspace_links=workspace_links,
             )
-            for item in index["methods"]
+            for item in visible["methods"]
         ],
         "studies": [
             _public_catalog_entry_with_workspace(
@@ -8965,7 +9098,7 @@ def _catalog_payload(state: UiState) -> JsonDict:
                 item,
                 workspace_links=workspace_links,
             )
-            for item in index["studies"]
+            for item in visible["studies"]
         ],
         "resources": [
             _public_catalog_entry_with_workspace(
@@ -8973,7 +9106,7 @@ def _catalog_payload(state: UiState) -> JsonDict:
                 item,
                 workspace_links=workspace_links,
             )
-            for item in index["resources"]
+            for item in visible["resources"]
         ],
     }
 
@@ -9137,6 +9270,18 @@ def _public_catalog_entry_with_workspace(
     """Expose only the durable editable result linked to one exact entry."""
 
     result = _public_catalog_entry(entry)
+    if isinstance(state.shared_auth, ClassroomAuth) and (
+        _current_request_principal() is not None
+    ):
+        access = _catalog_entry_access_from_entry(state, entry)
+        result["access"] = {
+            key: access[key]
+            for key in (
+                "visibility",
+                "can_manage_visibility",
+                "owned_by_current_account",
+            )
+        }
     interface = result.get("interface")
     raw_config = entry.get("raw_config")
     if isinstance(interface, Mapping) and interface and isinstance(
@@ -12305,6 +12450,60 @@ def _catalog_detail(state: UiState, expected_config: str, uid: str) -> JsonDict:
             source_projection.close()
 
 
+def _set_catalog_entry_visibility(
+    state: UiState,
+    expected_config: str,
+    uid: str,
+    payload: JsonDict,
+) -> JsonDict:
+    """Change one logical Realm Catalog item's audience without republishing it."""
+
+    request = _exact_json_object(
+        payload,
+        expected={"schema", "visibility"},
+        label="Catalog visibility request",
+    )
+    if request["schema"] != CATALOG_ENTRY_VISIBILITY_SCHEMA:
+        raise ValueError("Catalog visibility request schema is unsupported.")
+    visibility = str(request["visibility"] or "").casefold()
+    if visibility not in {"private", "public"}:
+        raise ValueError("Catalog visibility must be private or public.")
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or principal is None:
+        raise ValueError(
+            "Catalog visibility controls require classroom account authentication."
+        )
+    entry_ref = _catalog_entry_ref_from_value(state, expected_config, uid)
+    if entry_ref is None or entry_ref.source_kind != "realm-catalog":
+        raise ValueError(
+            "Only an immutable published Catalog item can change visibility."
+        )
+    _catalog_index_entry_by_ref(state, entry_ref)
+    asset_id = _catalog_entry_asset_id(
+        package_id=entry_ref.source_id,
+        kind=entry_ref.kind,
+        entry_id=entry_ref.entry_id,
+    )
+    auth.set_catalog_entry_visibility(
+        asset_id=asset_id,
+        visibility="classroom" if visibility == "public" else "private",
+        principal=principal,
+    )
+    access = _catalog_entry_access_from_ref(state, entry_ref)
+    return {
+        "schema": CATALOG_ENTRY_VISIBILITY_SCHEMA,
+        "access": {
+            key: access[key]
+            for key in (
+                "visibility",
+                "can_manage_visibility",
+                "owned_by_current_account",
+            )
+        },
+    }
+
+
 _MAX_RESOURCE_ACTION_RUNS = 64
 _RESOURCE_ACTION_RUN_SCHEMA = "optpilot.studio-resource-action-run.v1"
 
@@ -13174,7 +13373,11 @@ def _catalog_index_entry_for_source(
     resolved = path.resolve()
     for entry in catalog.get(key, []) if key else []:
         source = str(entry.get("_source_path") or "")
-        if source and Path(source).resolve() == resolved:
+        if (
+            source
+            and Path(source).resolve() == resolved
+            and _catalog_entry_access_from_entry(state, entry)["visible"]
+        ):
             return entry
     raise FileNotFoundError(
         f"{expected_config} is not part of the current catalog index."
@@ -13195,6 +13398,7 @@ def _resolve_catalog_identifier(
 
     entry_ref = _catalog_entry_ref_from_value(state, expected_config, value)
     if entry_ref is not None:
+        _require_catalog_entry_access(state, entry_ref)
         if entry_ref.source_kind == "configured-filesystem-import":
             return _configured_catalog_entry_ref_path(state, entry_ref)
         entry = _catalog_index_entry_by_ref(state, entry_ref)
@@ -13202,7 +13406,18 @@ def _resolve_catalog_identifier(
     identifier = str(value or "").strip()
     if not identifier:
         raise FileNotFoundError(f"{expected_config} config not found: {value}")
-    catalog = _catalog_index_payload(state)
+    raw_catalog = _catalog_index_payload(state)
+    catalog = {
+        **raw_catalog,
+        **{
+            key: [
+                entry
+                for entry in raw_catalog.get(key, [])
+                if _catalog_entry_access_from_entry(state, entry)["visible"]
+            ]
+            for key in ("environments", "methods", "studies", "resources")
+        },
+    }
     if expected_config == "resource":
         entries = catalog.get("resources", [])
     else:
@@ -13351,7 +13566,12 @@ def _catalog_entry_ref_from_readable_id(
     key = _CATALOG_KIND_KEYS.get(str(expected_config or ""))
     if not key:
         return None
-    entries = _catalog_index_payload(state).get(key) or []
+    entries = [
+        entry
+        for entry in (_catalog_index_payload(state).get(key) or [])
+        if isinstance(entry, Mapping)
+        and _catalog_entry_access_from_entry(state, entry)["visible"]
+    ]
 
     exact = [
         entry
@@ -13431,6 +13651,7 @@ def _catalog_entry_ref_from_value(
 
 
 def _catalog_index_entry_by_ref(state: UiState, entry_ref: CatalogEntryRef) -> JsonDict:
+    _require_catalog_entry_access(state, entry_ref)
     catalog = _catalog_index_payload(state)
     key = (
         "resources"
@@ -13515,6 +13736,7 @@ def _compatibility_payload(state: UiState) -> JsonDict:
     # index it came from, so a refreshed catalog rebuilds it and nothing else
     # does.
     ttl_seconds = state.catalog_refresh_ttl_seconds
+    payload: Optional[JsonDict] = None
     if ttl_seconds > 0:
         with state._catalog_projection_lock:
             cached = state._compatibility_cache
@@ -13523,32 +13745,68 @@ def _compatibility_payload(state: UiState) -> JsonDict:
             and cached[0] is catalog
             and time.monotonic() - cached[1] < ttl_seconds
         ):
-            return cached[2]
-    pairs = []
-    # Each method's settings file was read once per environment: with the
-    # shipped packages that is 182 parses where 13 will do, and parsing is the
-    # dominant cost of this whole response. Read each file once.
-    method_raws = {
-        str(method["_source_path"]): _read_yaml(Path(str(method["_source_path"])))
-        for method in catalog["methods"]
+            payload = cached[2]
+    if payload is None:
+        pairs = []
+        # Each method's settings file was read once per environment: with the
+        # shipped packages that is 182 parses where 13 will do, and parsing is the
+        # dominant cost of this whole response. Read each file once.
+        method_raws = {
+            str(method["_source_path"]): _read_yaml(
+                Path(str(method["_source_path"]))
+            )
+            for method in catalog["methods"]
+        }
+        for environment in catalog["environments"]:
+            env_raw = _read_yaml(Path(str(environment["_source_path"])))
+            for method in catalog["methods"]:
+                method_raw = method_raws[str(method["_source_path"])]
+                result = _compatibility_result(
+                    environment, env_raw, method, method_raw
+                )
+                pairs.append(result)
+        payload = {
+            "environments": [
+                _public_catalog_entry(item) for item in catalog["environments"]
+            ],
+            "methods": [
+                _public_catalog_entry(item) for item in catalog["methods"]
+            ],
+            "pairs": pairs,
+        }
+        if ttl_seconds > 0:
+            with state._catalog_projection_lock:
+                state._compatibility_cache = (catalog, time.monotonic(), payload)
+
+    visible_environments = {
+        str(entry.get("uid") or "")
+        for entry in catalog["environments"]
+        if _catalog_entry_access_from_entry(state, entry)["visible"]
     }
-    for environment in catalog["environments"]:
-        env_raw = _read_yaml(Path(str(environment["_source_path"])))
-        for method in catalog["methods"]:
-            method_raw = method_raws[str(method["_source_path"])]
-            result = _compatibility_result(environment, env_raw, method, method_raw)
-            pairs.append(result)
-    payload = {
+    visible_methods = {
+        str(entry.get("uid") or "")
+        for entry in catalog["methods"]
+        if _catalog_entry_access_from_entry(state, entry)["visible"]
+    }
+    return {
         "environments": [
-            _public_catalog_entry(item) for item in catalog["environments"]
+            item
+            for item in payload["environments"]
+            if str(item.get("uid") or "") in visible_environments
         ],
-        "methods": [_public_catalog_entry(item) for item in catalog["methods"]],
-        "pairs": pairs,
+        "methods": [
+            item
+            for item in payload["methods"]
+            if str(item.get("uid") or "") in visible_methods
+        ],
+        "pairs": [
+            item
+            for item in payload["pairs"]
+            if str(item.get("environment", {}).get("uid") or "")
+            in visible_environments
+            and str(item.get("method", {}).get("uid") or "") in visible_methods
+        ],
     }
-    if ttl_seconds > 0:
-        with state._catalog_projection_lock:
-            state._compatibility_cache = (catalog, time.monotonic(), payload)
-    return payload
 
 
 def _compatibility_for_catalog_refs(
@@ -13759,6 +14017,7 @@ def _realm_catalog_ref_for_readable_id(
         entry
         for entry in (_catalog_index_payload(state).get(key) or [])
         if isinstance(entry, dict)
+        and _catalog_entry_access_from_entry(state, entry)["visible"]
         and text in {entry.get("qualified_id"), entry.get("catalog_key"), entry.get("id")}
     ]
     resolved: List[CatalogEntryRef] = []
@@ -33790,8 +34049,11 @@ def _start_catalog_interface_launch(
     # Preserve catalog-coordinate authorization even when the runtime is down.
     # Exact Realm refs are validated by their signed logical fields below;
     # legacy/local identifiers must first resolve inside a configured root.
-    if _catalog_entry_ref_from_value(state, kind, uid) is None:
+    entry_ref = _catalog_entry_ref_from_value(state, kind, uid)
+    if entry_ref is None:
         _resolve_catalog_identifier(state, kind, uid)
+    else:
+        _require_catalog_entry_access(state, entry_ref)
     # Every currently supported interface uses the shared isolated Workspace
     # runtime. Reject before borrowing an exact Catalog projection or creating
     # any transient launch state.
@@ -39047,6 +39309,64 @@ def _complete_registration_publication(
     )
 
 
+def _reserve_catalog_publication_ownership(
+    state: UiState,
+    *,
+    package_id: str,
+    entries: Iterable[Mapping[str, Any]],
+) -> None:
+    """Privately claim newly introduced logical items before Realm publication."""
+
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or principal is None:
+        return
+    index = _catalog_index_payload(state)
+    existing_asset_ids = {
+        _catalog_entry_asset_id(
+            package_id=str(item.get("package_id") or ""),
+            kind=str(item.get("config") or item.get("kind") or ""),
+            entry_id=str(item.get("id") or ""),
+        )
+        for key in ("environments", "methods", "studies", "resources")
+        for item in index.get(key, [])
+        if isinstance(item, Mapping)
+        and isinstance(item.get("ref"), Mapping)
+        and item["ref"].get("source_kind") == "realm-catalog"
+    }
+    candidate_asset_ids = {
+        _catalog_entry_asset_id(
+            package_id=package_id,
+            kind=str(item.get("kind") or ""),
+            entry_id=str(item.get("id") or ""),
+        )
+        for item in entries
+        if str(item.get("kind") or "") in OPT_CONFIGS
+        and str(item.get("id") or "")
+    }
+    for asset_id in sorted(candidate_asset_ids):
+        if asset_id in existing_asset_ids:
+            ownership = auth.asset_ownership(
+                asset_type="catalog-entry",
+                asset_id=asset_id,
+            )
+            if (
+                ownership is not None
+                and principal.role != "admin"
+                and ownership["owner_account_id"] != principal.account_id
+            ):
+                raise PermissionError(
+                    "A Catalog item in this publication belongs to another account."
+                )
+            continue
+        auth.claim_asset(
+            asset_type="catalog-entry",
+            asset_id=asset_id,
+            principal=principal,
+            visibility="private",
+        )
+
+
 def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> JsonDict:
     plan = _read_package_plan(state, workspace_id, plan_id)
     if not isinstance(plan.get("artifact"), dict) or not plan.get("artifact"):
@@ -39151,6 +39471,16 @@ def _apply_package_plan(state: UiState, workspace_id: str, plan_id: str) -> Json
     )
     registration_setup = None
     with _PACKAGE_PLAN_APPLY_LOCK:
+        publication_workspace = dict(_require_ui_workspace(state, workspace_id))
+        _reserve_catalog_publication_ownership(
+            state,
+            package_id=package_id,
+            entries=_package_plan_workspace_registration_entries(
+                plan,
+                workspace=publication_workspace,
+                registered_at=_now_iso(),
+            ),
+        )
         published_head = _package_plan_existing_publication_head(
             state,
             plan,

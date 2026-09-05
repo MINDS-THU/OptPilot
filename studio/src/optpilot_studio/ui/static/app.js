@@ -148,6 +148,7 @@ const state = {
   componentSearch: "",
   configuredSourceWorkspaceActions: {},
   catalogComponentActions: {},
+  catalogVisibilityActions: {},
   catalogSourceComponents: {},
   catalogWorkspaceRequestIds: {},
   interfaceProfileSelections: {},
@@ -10597,6 +10598,66 @@ function catalogComponentActionStatus(component) {
   `;
 }
 
+function catalogVisibilityAction(component) {
+  const access = component && component.entry && component.entry.access || {};
+  if (access.can_manage_visibility !== true) return "";
+  const key = componentLaunchKey(component);
+  const action = state.catalogVisibilityActions[key] || {};
+  const isPrivate = access.visibility === "private";
+  const label = action.pending
+    ? "Saving visibility…"
+    : isPrivate
+    ? "Make public"
+    : "Make private";
+  const title = isPrivate
+    ? "Allow every signed-in OptPilot user to find, copy, and launch this Catalog item"
+    : "Limit this Catalog item to its owner and the admin";
+  return `<button class="ghost-button component-visibility" type="button" ${action.pending ? "disabled" : ""} title="${escapeHtml(title)}">${escapeHtml(label)}</button>`;
+}
+
+function catalogVisibilityStatus(component) {
+  const action = state.catalogVisibilityActions[componentLaunchKey(component)] || {};
+  if (!action.error) return "";
+  return `<p class="source-note component-visibility-error error-text" role="alert">${escapeHtml(action.error)}</p>`;
+}
+
+function bindCatalogVisibilityControl(component) {
+  const button = els.componentDetail.querySelector(".component-visibility");
+  if (!button) return;
+  button.addEventListener("click", () => updateCatalogVisibility(component));
+}
+
+async function updateCatalogVisibility(component) {
+  const access = component && component.entry && component.entry.access || {};
+  if (access.can_manage_visibility !== true) return;
+  const key = componentLaunchKey(component);
+  if (state.catalogVisibilityActions[key] && state.catalogVisibilityActions[key].pending) return;
+  const visibility = access.visibility === "private" ? "public" : "private";
+  state.catalogVisibilityActions[key] = { pending: true, error: "" };
+  renderComponentDetail();
+  try {
+    const payload = await postJson(
+      `/api/catalog/${encodeURIComponent(component.kind)}/${encodeURIComponent(component.entry.uid)}/visibility`,
+      { schema: "optpilot.catalog-entry-visibility.v1", visibility },
+    );
+    if (!payload.access || typeof payload.access !== "object") {
+      throw new Error("Studio did not return the updated Catalog visibility.");
+    }
+    component.entry.access = payload.access;
+    delete state.catalogVisibilityActions[key];
+    renderCatalog();
+  } catch (error) {
+    state.catalogVisibilityActions[key] = {
+      pending: false,
+      error: boundedPublicActionError(
+        error,
+        "Catalog visibility could not be changed.",
+      ),
+    };
+    renderComponentDetail();
+  }
+}
+
 function renderComponentDetail() {
   const component = componentByKey(state.selectedComponentKey);
   if (!component) {
@@ -10654,6 +10715,8 @@ function renderComponentDetail() {
   const componentAction = catalogComponentAction(component);
   const componentActionPending = Boolean(componentAction && componentAction.pending);
   const componentActionStatus = catalogComponentActionStatus(component);
+  const visibilityAction = catalogVisibilityAction(component);
+  const visibilityStatus = catalogVisibilityStatus(component);
   const editableCapability = componentEditableWorkspaceCapability(component);
   const editDisabled = editableCapability.eligible !== true || componentActionPending;
   const editReason = String(editableCapability.reason || "");
@@ -10680,10 +10743,12 @@ function renderComponentDetail() {
         ${interfaceAction}
         <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
         ${editButton}
+        ${visibilityAction}
       </div>
       ${interfaceGuidance}
       ${editGuidance}
       ${componentActionStatus}
+      ${visibilityStatus}
       <div class="detail-grid">
         ${kvPanel("Resource", [
           ["Purpose", resourcePurposeLabel(item)],
@@ -10706,6 +10771,7 @@ function renderComponentDetail() {
     els.componentDetail.querySelector(".component-edit").addEventListener("click", () => openCatalogEditableWorkspace(component));
     const launchButton = els.componentDetail.querySelector(".component-launch-interface");
     if (launchButton) launchButton.addEventListener("click", () => openComponentInterface(component));
+    bindCatalogVisibilityControl(component);
     bindResourceActionControls(item);
     bindComponentReadOnlyControls();
     return;
@@ -10724,11 +10790,13 @@ function renderComponentDetail() {
       <button class="ghost-button component-inspect" type="button" ${componentActionPending ? "disabled" : ""}>${escapeHtml(inspectLabel)}</button>
       ${editButton}
       ${interfaceAction}
+      ${visibilityAction}
     </div>
     ${studyActionReason ? `<p class="source-note component-study-guidance">${escapeHtml(studyActionReason)}</p>` : ""}
     ${interfaceGuidance}
     ${editGuidance}
     ${componentActionStatus}
+    ${visibilityStatus}
     <div class="detail-grid">
       ${kvPanel("Contract", component.kind === "environment" ? [
         ["Candidate", summary.candidate_format],
@@ -10771,6 +10839,7 @@ function renderComponentDetail() {
   });
   const launchButton = els.componentDetail.querySelector(".component-launch-interface");
   if (launchButton) launchButton.addEventListener("click", () => openComponentInterface(component));
+  bindCatalogVisibilityControl(component);
   bindComponentReadOnlyControls();
   els.componentDetail.querySelectorAll("[data-build-study-index]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -22998,12 +23067,22 @@ function entityHeader(item, kind) {
   const packageContext = paper && paper.url
     ? `Package: <strong>${escapeHtml(packageTitle)}</strong> · <a href="${escapeHtml(paper.url)}" target="_blank" rel="noopener">Research paper</a>`
     : `Package: <strong>${escapeHtml(packageTitle)}</strong>`;
+  const access = item.access && typeof item.access === "object" ? item.access : null;
+  const visibilityLabel = access
+    ? access.visibility === "private"
+      ? "Private"
+      : "Public to signed-in users"
+    : "";
+  const visibilityChip = visibilityLabel
+    ? `<span class="catalog-visibility-chip catalog-visibility-${escapeHtml(access.visibility)}" title="${escapeHtml(access.visibility === "private" ? "Only the owner and admin can use this Catalog item" : "Every signed-in OptPilot user can use this Catalog item")}">${escapeHtml(visibilityLabel)}</span>`
+    : "";
   return `
     <div class="detail-heading">
       <div class="detail-title-block">
         <div class="detail-title-line">
           <h2>${escapeHtml(item.label)}</h2>
           <span class="catalog-kind-chip catalog-kind-${escapeHtml(kind)}">${escapeHtml(catalogKindLabel(kind, item))}</span>
+          ${visibilityChip}
         </div>
         <p class="path-text catalog-package-context">${packageContext}</p>
         <p class="path-text">${escapeHtml(shortPath(item.path))}</p>

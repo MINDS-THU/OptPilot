@@ -2127,6 +2127,33 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         self.assertIn("#catalogView.active-view .catalog-entity-layout", self.styles)
         self.assertIn("grid-template-rows: minmax(260px, 42svh) auto", self.styles)
 
+    def test_catalog_visibility_control_is_explicit_and_owner_capability_driven(
+        self,
+    ) -> None:
+        action = _function_source(
+            self.source,
+            "catalogVisibilityAction",
+            "catalogVisibilityStatus",
+        )
+        update_start = self.source.index("async function updateCatalogVisibility(")
+        update_end = self.source.index("function renderComponentDetail(", update_start)
+        update = self.source[update_start:update_end]
+        detail = _function_source(
+            self.source,
+            "renderComponentDetail",
+            "componentEditableWorkspaceCapability",
+        )
+
+        self.assertIn("access.can_manage_visibility", action)
+        self.assertIn('"Make public"', action)
+        self.assertIn('"Make private"', action)
+        self.assertIn("every signed-in OptPilot user", action)
+        self.assertIn("optpilot.catalog-entry-visibility.v1", update)
+        self.assertIn("/visibility`,", update)
+        self.assertIn("bindCatalogVisibilityControl(component)", detail)
+        self.assertIn(".catalog-visibility-private", self.styles)
+        self.assertIn(".catalog-visibility-public", self.styles)
+
     def test_historical_interface_cards_are_interleaved_at_their_original_time(self) -> None:
         approval_events = _function_source(
             self.source,

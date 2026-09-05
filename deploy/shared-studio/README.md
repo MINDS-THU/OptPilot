@@ -29,6 +29,15 @@ Unclaimed data from an older shared-login deployment is visible only to the
 admin. The DEVS interface still uses its launch-scoped participant identity for
 its own history view and sends durable records to the configured collector.
 
+New Catalog items published by an account start private. Their owner or the
+admin can make an item public to every signed-in OptPilot account, or make it
+private again, from the Catalog detail view. This visibility belongs to the
+logical item across its immutable revisions; it never creates anonymous access
+and does not turn an already running Interface into a shared Interface. Existing
+Catalog items without an ownership record remain visible for compatibility and
+can be adopted or privatized only by the admin. Visibility changes are retained
+in the classroom account database for local auditing.
+
 `INTERFACE_MAX_ACTIVE_PER_ACCOUNT` defaults to `1`. A live Interface keeps
 application memory that cannot yet be reconstructed after its container stops,
 so Studio does not idle-suspend it. A second launch is rejected with the

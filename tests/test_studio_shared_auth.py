@@ -340,6 +340,106 @@ class ClassroomAuthTests(unittest.TestCase):
                 )
             )
 
+    def test_catalog_visibility_is_controlled_by_owner_or_admin_and_audited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            auth = self._auth(Path(tmp))
+            first_token = auth.register(
+                username="catalog-owner",
+                display_name="",
+                password="catalog-owner-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-owner",
+            )
+            second_token = auth.register(
+                username="catalog-reader",
+                display_name="",
+                password="catalog-reader-password-456",
+                invitation_code="class-invitation-2026",
+                client_key="client-reader",
+            )
+            owner = auth.principal_from_token(first_token)
+            reader = auth.principal_from_token(second_token)
+            self.assertIsNotNone(owner)
+            self.assertIsNotNone(reader)
+            asset_id = "catalog-entry/example"
+            auth.claim_asset(
+                asset_type="catalog-entry",
+                asset_id=asset_id,
+                principal=owner,
+            )
+
+            with self.assertRaisesRegex(PermissionError, "owner or admin"):
+                auth.set_catalog_entry_visibility(
+                    asset_id=asset_id,
+                    visibility="classroom",
+                    principal=reader,
+                )
+            auth.set_catalog_entry_visibility(
+                asset_id=asset_id,
+                visibility="classroom",
+                principal=owner,
+            )
+            self.assertTrue(
+                auth.can_access_asset(
+                    asset_type="catalog-entry",
+                    asset_id=asset_id,
+                    principal=reader,
+                )
+            )
+            events = auth.asset_visibility_events(
+                asset_type="catalog-entry", asset_id=asset_id
+            )
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["actor_account_id"], owner.account_id)
+            self.assertEqual(events[0]["previous_visibility"], "private")
+            self.assertEqual(events[0]["visibility"], "classroom")
+
+            admin_token = auth.login(
+                username="admin",
+                password="admin-correct-horse-battery-staple",
+                client_key="client-admin",
+            )
+            admin = auth.principal_from_token(admin_token or "")
+            self.assertIsNotNone(admin)
+            auth.set_catalog_entry_visibility(
+                asset_id=asset_id,
+                visibility="private",
+                principal=admin,
+            )
+            self.assertFalse(
+                auth.can_access_asset(
+                    asset_type="catalog-entry",
+                    asset_id=asset_id,
+                    principal=reader,
+                )
+            )
+
+    def test_admin_can_adopt_legacy_catalog_entry_without_hiding_it_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            auth = self._auth(Path(tmp))
+            admin_token = auth.login(
+                username="admin",
+                password="admin-correct-horse-battery-staple",
+                client_key="client-admin",
+            )
+            admin = auth.principal_from_token(admin_token or "")
+            self.assertIsNotNone(admin)
+
+            auth.set_catalog_entry_visibility(
+                asset_id="catalog-entry/legacy",
+                visibility="private",
+                principal=admin,
+            )
+            ownership = auth.asset_ownership(
+                asset_type="catalog-entry", asset_id="catalog-entry/legacy"
+            )
+            self.assertEqual(ownership["owner_account_id"], admin.account_id)
+            self.assertEqual(ownership["visibility"], "private")
+            events = auth.asset_visibility_events(
+                asset_type="catalog-entry", asset_id="catalog-entry/legacy"
+            )
+            self.assertEqual(events[0]["previous_visibility"], "classroom")
+
 
 if __name__ == "__main__":
     unittest.main()
