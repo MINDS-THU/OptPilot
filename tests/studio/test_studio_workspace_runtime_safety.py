@@ -324,6 +324,58 @@ class StudioWorkspaceRuntimeSafetyTest(unittest.TestCase):
         self.assertTrue(quiesced)
         state.coordination.close.assert_not_called()
 
+    def test_interface_capacity_registration_is_atomic_per_account(self) -> None:
+        state = object.__new__(UiState)
+        state._lock = threading.RLock()
+        state.interface_launches = {}
+        state.interface_max_active_per_account = 1
+        barrier = threading.Barrier(3)
+        jobs = [
+            studio_server.UiLaunchJob(
+                launch_id=f"launch-alice-{index}",
+                kind="resource",
+                uid=f"resource-{index}",
+                label=f"Alice interface {index}",
+                port=8000 + index,
+                owner_account_id="alice",
+                launch_scope="catalog-transient",
+            )
+            for index in range(2)
+        ]
+        failures = []
+
+        def register(job) -> None:
+            barrier.wait(timeout=2)
+            try:
+                studio_server._register_interface_launch_job(state, job)
+            except studio_server.InterfaceLaunchCapacityExceeded as error:
+                failures.append(error)
+
+        threads = [threading.Thread(target=register, args=(job,)) for job in jobs]
+        for thread in threads:
+            thread.start()
+        barrier.wait(timeout=2)
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertEqual(len(state.interface_launches), 1)
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].limit, 1)
+        self.assertEqual(len(failures[0].active_interfaces), 1)
+        self.assertTrue(failures[0].active_interfaces[0]["can_stop"])
+
+        bob = studio_server.UiLaunchJob(
+            launch_id="launch-bob",
+            kind="resource",
+            uid="resource-bob",
+            label="Bob interface",
+            port=8010,
+            owner_account_id="bob",
+            launch_scope="catalog-transient",
+        )
+        studio_server._register_interface_launch_job(state, bob)
+        self.assertIn("launch-bob", state.interface_launches)
+
     def test_interface_shutdown_joins_stopped_job_worker_not_done_event(self) -> None:
         state = object.__new__(UiState)
         state._lock = threading.Lock()

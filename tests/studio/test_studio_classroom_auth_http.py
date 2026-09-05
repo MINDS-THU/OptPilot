@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from optpilot_studio.ui.server import (
+    InterfaceLaunchCapacityExceeded,
     PublicAccessOptions,
     UiState,
     _catalog_edit_workspace_operation_id,
@@ -269,6 +270,39 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             mutation=True,
         )
         self.assertEqual(status, HTTPStatus.FORBIDDEN, body)
+
+    def test_interface_capacity_conflict_lists_only_stoppable_launches(self) -> None:
+        student = self._register("capacity", "capacity-password-123")
+        error = InterfaceLaunchCapacityExceeded(
+            limit=1,
+            active_interfaces=[
+                {
+                    "launch_id": "launch-existing",
+                    "label": "Existing interface",
+                    "status": "ready",
+                    "started_at": 123.0,
+                    "updated_at": 456.0,
+                    "launch_scope": "catalog-transient",
+                    "can_stop": True,
+                }
+            ],
+        )
+        with patch(
+            "optpilot_studio.ui.server._start_workspace_interface_launch",
+            side_effect=error,
+        ):
+            status, _headers, body = self._request(
+                "POST",
+                "/api/workspaces/unused/launch-interface-job",
+                payload={"profile_id": "default"},
+                cookie=student,
+                mutation=True,
+            )
+        payload = json.loads(body)
+        self.assertEqual(status, HTTPStatus.CONFLICT, body)
+        self.assertEqual(payload["code"], "interface_launch_capacity_reached")
+        self.assertEqual(payload["limit"], 1)
+        self.assertEqual(payload["active_interfaces"], error.active_interfaces)
 
     def test_catalog_workspace_coordinates_are_account_scoped(self) -> None:
         alice_cookie = self._register("alice", "alice-password-123")

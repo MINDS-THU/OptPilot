@@ -1706,6 +1706,33 @@ class StudioWorkbenchStaticTest(unittest.TestCase):
         )
         self.assertIn("state.interfaceLaunch = null;", stop)
 
+    def test_interface_capacity_error_lists_and_stops_existing_launches(self) -> None:
+        notice = _function_source(
+            self.source,
+            "renderInterfaceCapacityNotice",
+            "compactInterfaceLaunchStatus",
+        )
+        stop = _async_function_source(
+            self.source,
+            "stopCapacityInterfaceLaunch",
+            "stopWorkspaceInterface",
+        )
+        polling_error = _function_source(
+            self.source,
+            "handleInterfaceLaunchPollingError",
+            "resumeInterfaceLaunchPolling",
+        )
+
+        self.assertIn("Interfaces currently running for this account", notice)
+        self.assertIn("interface-capacity-stop", notice)
+        self.assertIn('errorPayload.code === "interface_launch_capacity_reached"', polling_error)
+        self.assertIn(
+            "/api/interface-launches/${encodeURIComponent(launchId)}/stop",
+            stop,
+        )
+        self.assertIn("Any unsaved in-progress work", stop)
+        self.assertIn(".interface-capacity-notice", self.styles)
+
     def test_catalog_interface_outputs_are_generic_status_cards(self) -> None:
         output_list = _function_source(
             self.source,

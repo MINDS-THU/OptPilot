@@ -29,6 +29,12 @@ Unclaimed data from an older shared-login deployment is visible only to the
 admin. The DEVS interface still uses its launch-scoped participant identity for
 its own history view and sends durable records to the configured collector.
 
+`INTERFACE_MAX_ACTIVE_PER_ACCOUNT` defaults to `1`. A live Interface keeps
+application memory that cannot yet be reconstructed after its container stops,
+so Studio does not idle-suspend it. A second launch is rejected with the
+account's live Interface list and explicit Stop actions. Ordinary Workspace
+runtimes keep their separate idle timeout and active-container limit.
+
 ## Collector prerequisite
 
 This deployment reuses the separate trusted `devs-gen-collector`; it does not

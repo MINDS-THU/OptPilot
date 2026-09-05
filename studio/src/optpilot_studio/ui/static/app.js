@@ -11209,6 +11209,44 @@ function renderInterfaceOutputRecovery(launchState) {
   `;
 }
 
+function renderInterfaceCapacityNotice(launchState) {
+  const active = launchState && Array.isArray(launchState.active_interfaces)
+    ? launchState.active_interfaces
+    : [];
+  if (!active.length) return "";
+  return `
+    <div class="interface-capacity-notice">
+      <strong>Interfaces currently running for this account</strong>
+      <p>Stop one you no longer need, then choose Try again.</p>
+      <ul>
+        ${active.map((item) => {
+          const status = String(item && item.status || "running");
+          const launchId = String(item && item.launch_id || "");
+          const stopping = status === "stopping" || status === "cleanup_pending";
+          return `
+            <li>
+              <span>
+                <strong>${escapeHtml(String(item && item.label || "Interface"))}</strong>
+                <small>${escapeHtml(status)}${item && item.started_at ? ` · started ${escapeHtml(formatRealmTime(item.started_at))}` : ""}</small>
+              </span>
+              ${launchId && item && item.can_stop !== false ? `
+                <button
+                  class="ghost-button interface-capacity-stop"
+                  type="button"
+                  data-interface-launch-id="${escapeHtml(launchId)}"
+                  ${stopping ? "disabled" : ""}
+                >${stopping ? "Stopping…" : "Stop"}</button>
+              ` : ""}
+            </li>
+          `;
+        }).join("")}
+      </ul>
+      ${launchState.capacity_stop_notice ? `<p class="interface-capacity-stop-notice">${escapeHtml(launchState.capacity_stop_notice)}</p>` : ""}
+      ${launchState.capacity_stop_error ? `<p class="interface-capacity-stop-error">${escapeHtml(launchState.capacity_stop_error)}</p>` : ""}
+    </div>
+  `;
+}
+
 function compactInterfaceLaunchStatus({
   launchState,
   label,
@@ -11253,6 +11291,7 @@ function compactInterfaceLaunchStatus({
     ? `Connection to ${label} needs attention`
     : interfaceLaunchTitle(label, status);
   const recovery = outputs.length ? "" : renderInterfaceOutputRecovery(launchState);
+  const capacityNotice = renderInterfaceCapacityNotice(launchState);
   return `
     <section
       class="interface-launch-status interface-launch-compact ${failed ? "interface-launch-failed" : ""}"
@@ -11294,6 +11333,7 @@ function compactInterfaceLaunchStatus({
           ${errorDetail ? `<p><strong>Last process error:</strong> ${escapeHtml(errorDetail)}</p>` : ""}
           ${launchState.stop_error ? `<p>${escapeHtml(launchState.stop_error)}</p>` : ""}
           ${connectionUnavailable ? `<p>${escapeHtml(launchState.connection_error || connectionDetail)}</p>` : ""}
+          ${capacityNotice}
         </div>
       ` : ""}
       <div
@@ -12022,6 +12062,7 @@ function bindComponentInterfaceLaunchControls(component, root = els.componentDet
   const reconnectButton = root.querySelector(".interface-reconnect");
   if (reconnectButton) reconnectButton.addEventListener("click", () => resumeInterfaceLaunchPolling());
   bindInterfaceLaunchDisclosureControls(root);
+  bindInterfaceCapacityControls(root);
   bindInterfaceOutputControls(root);
 }
 
@@ -19826,10 +19867,21 @@ function handleInterfaceLaunchPollingError(error, launchKey, launchId, fallback)
     renderInterfaceLaunchSurface(state.interfaceLaunch);
     return;
   }
+  const errorPayload = error && error.payload && typeof error.payload === "object"
+    ? error.payload
+    : {};
+  const activeInterfaces = errorPayload.code === "interface_launch_capacity_reached"
+    && Array.isArray(errorPayload.active_interfaces)
+    ? errorPayload.active_interfaces
+    : [];
   state.interfaceLaunch = {
     ...state.interfaceLaunch,
     status: "failed",
     error: boundedPublicActionError(error, fallback),
+    active_interfaces: activeInterfaces,
+    interface_limit: Number(errorPayload.limit || 0) || 0,
+    capacity_stop_notice: "",
+    capacity_stop_error: "",
     connection_status: "",
     reconnect_attempts: 0,
     connection_error: "",
@@ -20594,6 +20646,79 @@ async function performInterfaceStop(launchKey) {
   }
 }
 
+async function stopCapacityInterfaceLaunch(launchId, button) {
+  const launch = state.interfaceLaunch;
+  const active = launch && Array.isArray(launch.active_interfaces)
+    ? launch.active_interfaces
+    : [];
+  const item = active.find((candidate) => String(candidate && candidate.launch_id || "") === String(launchId || ""));
+  if (!launch || !item || !launchId) return;
+  const label = String(item.label || "this interface");
+  if (!window.confirm(`Stop ${label}? Any unsaved in-progress work in that interface will be lost.`)) return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Stopping…";
+  }
+  state.interfaceLaunch = {
+    ...launch,
+    capacity_stop_notice: "",
+    capacity_stop_error: "",
+    active_interfaces: active.map((candidate) => (
+      String(candidate && candidate.launch_id || "") === String(launchId)
+        ? { ...candidate, status: "stopping" }
+        : candidate
+    )),
+  };
+  renderInterfaceLaunchSurface(state.interfaceLaunch);
+  try {
+    const payload = await postJson(`/api/interface-launches/${encodeURIComponent(launchId)}/stop`, {});
+    const stopped = payload && payload.launch && typeof payload.launch === "object"
+      ? payload.launch
+      : { status: "stopped" };
+    const terminal = String(stopped.status || "") === "stopped";
+    state.interfaceLaunch = {
+      ...state.interfaceLaunch,
+      active_interfaces: terminal
+        ? state.interfaceLaunch.active_interfaces.filter((candidate) => String(candidate && candidate.launch_id || "") !== String(launchId))
+        : state.interfaceLaunch.active_interfaces.map((candidate) => (
+          String(candidate && candidate.launch_id || "") === String(launchId)
+            ? { ...candidate, ...stopped }
+            : candidate
+        )),
+      capacity_stop_notice: terminal
+        ? `${label} stopped. You can try the new interface again.`
+        : `Stop requested for ${label}. Cleanup is still in progress.`,
+      capacity_stop_error: "",
+      error: terminal
+        ? `${label} stopped. Choose Try again to start the new interface.`
+        : state.interfaceLaunch.error,
+    };
+  } catch (error) {
+    state.interfaceLaunch = {
+      ...state.interfaceLaunch,
+      active_interfaces: state.interfaceLaunch.active_interfaces.map((candidate) => (
+        String(candidate && candidate.launch_id || "") === String(launchId)
+          ? { ...candidate, status: String(item.status || "running") }
+          : candidate
+      )),
+      capacity_stop_notice: "",
+      capacity_stop_error: boundedPublicActionError(error, "This interface could not be stopped."),
+    };
+  }
+  persistActiveInterfaceLaunch(state.interfaceLaunch);
+  renderInterfaceLaunchSurface(state.interfaceLaunch);
+}
+
+function bindInterfaceCapacityControls(root) {
+  if (!root) return;
+  root.querySelectorAll(".interface-capacity-stop").forEach((button) => {
+    button.addEventListener("click", () => stopCapacityInterfaceLaunch(
+      button.dataset.interfaceLaunchId,
+      button,
+    ));
+  });
+}
+
 async function stopWorkspaceInterface(launchKey) {
   await stopInterfaceLaunch(launchKey);
 }
@@ -20608,6 +20733,7 @@ function bindWorkspaceInterfaceLaunchControls(launchState) {
   const reconnectButton = root.querySelector(".interface-reconnect");
   if (reconnectButton) reconnectButton.addEventListener("click", () => resumeInterfaceLaunchPolling());
   bindInterfaceLaunchDisclosureControls(root);
+  bindInterfaceCapacityControls(root);
   bindInterfaceOutputControls(root);
 }
 

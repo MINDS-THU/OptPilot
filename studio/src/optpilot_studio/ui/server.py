@@ -497,6 +497,21 @@ class InterfaceLaunchRuntimeUnavailable(RealmConflict):
     code = "interface_runtime_unavailable"
 
 
+class InterfaceLaunchCapacityExceeded(RealmConflict):
+    """An account must stop one of its live interfaces before starting another."""
+
+    code = "interface_launch_capacity_reached"
+
+    def __init__(self, *, limit: int, active_interfaces: List[JsonDict]) -> None:
+        self.limit = int(limit)
+        self.active_interfaces = deepcopy(active_interfaces)
+        noun = "interface" if self.limit == 1 else "interfaces"
+        super().__init__(
+            f"This account can run up to {self.limit} {noun} at once. "
+            "Stop an interface below, then try again."
+        )
+
+
 class InterfaceLaunchProcessExited(RuntimeError):
     """A detached interface command ended before its readiness contract passed."""
 
@@ -4137,6 +4152,12 @@ class UiState:
         # only tests and helpers without silently opening a second authority.
         self.realm_runtime = realm_runtime
         self.interface_launches: Dict[str, UiLaunchJob] = {}
+        # Transient interface processes retain application memory that cannot
+        # be reconstructed after a real container stop. Bound their count per
+        # authenticated account instead of presenting an unsafe fake suspend.
+        self.interface_max_active_per_account = max(
+            0, _int_env("OPTPILOT_INTERFACE_MAX_ACTIVE_PER_ACCOUNT", 1)
+        )
         self.jobs_dir = self.cwd / ".optpilot-ui" / "jobs"
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self.sessions_dir = self.cwd / ".optpilot-ui" / "sessions"
@@ -6369,6 +6390,12 @@ def _handler_factory(state: UiState):
                 code = getattr(exc, "code", None)
                 if isinstance(code, str) and code:
                     response["code"] = code
+                active_interfaces = getattr(exc, "active_interfaces", None)
+                if isinstance(active_interfaces, list):
+                    response["active_interfaces"] = deepcopy(active_interfaces)
+                limit = getattr(exc, "limit", None)
+                if isinstance(limit, int):
+                    response["limit"] = limit
                 self._send_json(response, status=HTTPStatus.CONFLICT)
             except PermissionError as exc:
                 self._send_json(
@@ -6746,6 +6773,12 @@ def _handler_factory(state: UiState):
                 code = getattr(exc, "code", None)
                 if isinstance(code, str) and code:
                     response["code"] = code
+                active_interfaces = getattr(exc, "active_interfaces", None)
+                if isinstance(active_interfaces, list):
+                    response["active_interfaces"] = deepcopy(active_interfaces)
+                limit = getattr(exc, "limit", None)
+                if isinstance(limit, int):
+                    response["limit"] = limit
                 self._send_json(response, status=HTTPStatus.CONFLICT)
             except KeyError as exc:
                 self._send_json(
@@ -33689,6 +33722,61 @@ def _interface_launch_blocked_reason(state: UiState, kind: str, uid: str) -> str
     return str(launch.get("reason") or "This interface cannot be launched yet.")
 
 
+_ACTIVE_INTERFACE_LAUNCH_STATUSES = frozenset(
+    {"queued", "running", "ready", "stopping", "cleanup_pending"}
+)
+
+
+def _interface_capacity_summary(job: UiLaunchJob) -> JsonDict:
+    """Return only the information needed to identify and stop a live launch."""
+
+    return {
+        "launch_id": job.launch_id,
+        "label": job.label,
+        "status": job.status,
+        "started_at": job.started_at,
+        "updated_at": job.updated_at,
+        "launch_scope": job.launch_scope,
+        "can_stop": job.launch_scope
+        in {"catalog-transient", "workspace-transient"}
+        and job.status in _ACTIVE_INTERFACE_LAUNCH_STATUSES,
+    }
+
+
+def _register_interface_launch_job(state: UiState, job: UiLaunchJob) -> None:
+    """Atomically enforce the per-account cap and publish one launch job."""
+
+    with state._lock:
+        limit = int(state.interface_max_active_per_account)
+        owner_account_id = job.owner_account_id
+        active = sorted(
+            (
+                _interface_capacity_summary(candidate)
+                for candidate in state.interface_launches.values()
+                if owner_account_id
+                and candidate.owner_account_id == owner_account_id
+                and candidate.status in _ACTIVE_INTERFACE_LAUNCH_STATUSES
+            ),
+            key=lambda item: float(item.get("started_at") or 0.0),
+        )
+        if owner_account_id and limit > 0 and len(active) >= limit:
+            raise InterfaceLaunchCapacityExceeded(
+                limit=limit,
+                active_interfaces=active,
+            )
+        state.interface_launches[job.launch_id] = job
+
+
+def _discard_registered_interface_launch_job(
+    state: UiState, job: UiLaunchJob
+) -> None:
+    """Undo a registration whose authority claim or thread start failed."""
+
+    with state._lock:
+        if state.interface_launches.get(job.launch_id) is job:
+            state.interface_launches.pop(job.launch_id, None)
+
+
 def _start_catalog_interface_launch(
     state: UiState,
     kind: str,
@@ -33761,20 +33849,6 @@ def _start_catalog_interface_launch(
     owner = principal or _current_request_principal()
     if owner is not None:
         runtime_workspace["_owner_account_id"] = owner.account_id
-    try:
-        _claim_account_asset(
-            state, "interface-launch", launch_id, principal=owner
-        )
-        _claim_account_asset(
-            state,
-            "runtime-workspace",
-            str(runtime_workspace.get("id") or ""),
-            principal=owner,
-        )
-    except Exception:
-        if source_projection is not None:
-            source_projection.close()
-        raise
     job = UiLaunchJob(
         launch_id=launch_id,
         kind=kind,
@@ -33818,9 +33892,28 @@ def _start_catalog_interface_launch(
         daemon=True,
     )
     job.worker_thread = worker
-    with state._lock:
-        state.interface_launches[launch_id] = job
-    worker.start()
+    try:
+        _register_interface_launch_job(state, job)
+    except Exception:
+        if source_projection is not None:
+            source_projection.close()
+        raise
+    try:
+        _claim_account_asset(
+            state, "interface-launch", launch_id, principal=owner
+        )
+        _claim_account_asset(
+            state,
+            "runtime-workspace",
+            str(runtime_workspace.get("id") or ""),
+            principal=owner,
+        )
+        worker.start()
+    except Exception:
+        _discard_registered_interface_launch_job(state, job)
+        if source_projection is not None:
+            source_projection.close()
+        raise
     return {"launch": _interface_launch_by_id(state, launch_id)}
 
 
@@ -33856,13 +33949,6 @@ def _start_workspace_interface_launch(
     owner = _current_request_principal()
     if owner is not None:
         runtime_workspace["_owner_account_id"] = owner.account_id
-    _claim_account_asset(state, "interface-launch", launch_id, principal=owner)
-    _claim_account_asset(
-        state,
-        "runtime-workspace",
-        str(runtime_workspace.get("id") or ""),
-        principal=owner,
-    )
     job = UiLaunchJob(
         launch_id=launch_id,
         kind=kind,
@@ -33909,9 +33995,19 @@ def _start_workspace_interface_launch(
         daemon=True,
     )
     job.worker_thread = worker
-    with state._lock:
-        state.interface_launches[launch_id] = job
-    worker.start()
+    _register_interface_launch_job(state, job)
+    try:
+        _claim_account_asset(state, "interface-launch", launch_id, principal=owner)
+        _claim_account_asset(
+            state,
+            "runtime-workspace",
+            str(runtime_workspace.get("id") or ""),
+            principal=owner,
+        )
+        worker.start()
+    except Exception:
+        _discard_registered_interface_launch_job(state, job)
+        raise
     return {"launch": _interface_launch_by_id(state, launch_id)}
 
 
