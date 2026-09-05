@@ -161,7 +161,7 @@ main()
             )
             with (
                 patch(
-                    "devs_tools.devs_construct_recon.tools.simulation.top_simulation_creator_fast.completion",
+                    "devs_tools.devs_construct_recon.tools.simulation.top_simulation_creator_fast.completion_with_logging",
                     return_value=object(),
                 ) as completion_mock,
                 patch(

@@ -543,26 +543,6 @@ Return the result as a JSON list of objects.
             model_plan_type=model_plan.type,
         )
 
-        # PASS 2: LOGIC
-        common_logic_context = f"[Model Type]: {model_plan.type}\n\n[Original Spec]\n{model_plan.model_info.model_dump_json()}\n\n[Available Utils]\n{util_desc}"
-
-        if model_plan.type == "atomic":
-            logic_rules = LOGIC_CHECKLIST_ATOMIC
-            logic_context = common_logic_context
-        else:
-            logic_rules = LOGIC_CHECKLIST_COUPLED
-            logic_context = (
-                common_logic_context + f"\n\n[Sub-models Info]\n{sub_models_info}"
-            )
-
-        logic_results = self._run_inspector(
-            role_name="Logic Inspector",
-            checklist=logic_rules,
-            code=code_content,
-            context_info=logic_context,
-            model_plan_type=model_plan.type,
-        )
-
         # FILTERING
         all_checks = structure_results + logic_results
         violations = [

@@ -17,6 +17,7 @@ from devs_tools.devs_construct_recon.base_types import (
 )
 from devs_tools.devs_construct_recon.tools.model_creator_fast.generated_interface import (
     extract_generated_python_interface,
+    refresh_generated_interface_registry,
 )
 from devs_tools.devs_construct_recon.tools.model_creator_fast.model_summarizer import (
     ModelSummarizer,
@@ -79,6 +80,45 @@ class Parent:
     def test_rejects_a_missing_expected_generated_class(self):
         with self.assertRaisesRegex(ValueError, "Expected exactly one generated class"):
             extract_generated_python_interface(self.SOURCE, "Missing")
+
+    def test_refreshes_registry_after_a_source_repair(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = Path(temporary_directory) / "generated_simulator"
+            project = bundle / "devs_project"
+            project.mkdir(parents=True)
+            (project / "Parent.py").write_text(self.SOURCE, encoding="utf-8")
+            registry_path = project / "system_model_info.json"
+            registry_path.write_text(
+                json.dumps(
+                    {
+                        "Parent": {
+                            "class_name": "Parent",
+                            "file_path": "generated_simulator/devs_project/Parent.py",
+                            "logic_path": "Parent",
+                            "specification": {},
+                            "generated_interface": {"instance_attributes": []},
+                        },
+                        "Child": {
+                            "class_name": "Child",
+                            "file_path": "generated_simulator/devs_project/Child.py",
+                            "logic_path": "Parent.Child",
+                            "specification": {},
+                            "generated_interface": {},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project / "Child.py").write_text("class Child:\n    pass\n", encoding="utf-8")
+
+            refresh_generated_interface_registry(bundle)
+            refreshed = json.loads(registry_path.read_text(encoding="utf-8"))
+
+        self.assertIn("counter", refreshed["Parent"]["generated_interface"]["instance_attributes"])
+        self.assertEqual(
+            refreshed["Parent"]["generated_interface"]["child_instances"],
+            {"child": "Child"},
+        )
 
     def test_includes_xdevs_inherited_port_maps(self):
         source = """

@@ -17,6 +17,59 @@ class GlobalPlanResponse(BaseModel):
     modules: list[GlobalPlanNode]
 
 
+def _validate_global_plan(
+    modules: list[GlobalPlanNode], root_name: str
+) -> list[GlobalPlanNode]:
+    if not modules:
+        raise ValueError("Global plan must contain at least one module")
+    names = [module.name for module in modules]
+    if len(names) != len(set(names)):
+        raise ValueError("Global plan module names must be unique")
+    if modules[0].name != root_name:
+        raise ValueError(f"First module must be '{root_name}', got '{modules[0].name}'")
+
+    known_names = set(names)
+    parent_counts = {name: 0 for name in names}
+    children_by_name: dict[str, list[str]] = {}
+    for module in modules:
+        children = list(dict.fromkeys(module.children_names))
+        module.children_names = children
+        children_by_name[module.name] = children
+        for child_name in children:
+            if child_name not in known_names:
+                raise ValueError(
+                    f"Child '{child_name}' referenced by '{module.name}' not found in module list"
+                )
+            if child_name == module.name:
+                raise ValueError(f"Module '{module.name}' cannot contain itself")
+            parent_counts[child_name] += 1
+
+    if parent_counts[root_name] != 0:
+        raise ValueError("Global plan root cannot have a parent")
+    for name in names[1:]:
+        if parent_counts[name] != 1:
+            raise ValueError(f"Module '{name}' must have exactly one parent")
+
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise ValueError("Global plan hierarchy contains a cycle")
+        if name in visited:
+            return
+        visiting.add(name)
+        for child_name in children_by_name[name]:
+            visit(child_name)
+        visiting.remove(name)
+        visited.add(name)
+
+    visit(root_name)
+    if visited != known_names:
+        raise ValueError("Global plan contains modules outside its root hierarchy")
+    return modules
+
+
 GLOBAL_PLAN_PROMPT = """
 ## [Role]
 You are a **DEVS System Architect**. Your task is to design the overall module hierarchy for a DEVS simulation system.
@@ -112,19 +165,7 @@ class GlobalPlanGenerator:
                 parsed = GlobalPlanResponse.model_validate_json(raw_content)
                 modules = parsed.modules
 
-                # Validate: root must be first, all children_names must exist
-                names = {m.name for m in modules}
-                for m in modules:
-                    # Preserve the architect's order while removing duplicate
-                    # child references.  Set iteration made otherwise-identical
-                    # review artifacts produce different digests across runs.
-                    m.children_names = list(dict.fromkeys(m.children_names))
-                    for cn in m.children_names:
-                        if cn not in names:
-                            raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")
-
-                if modules[0].name != root_name:
-                    raise ValueError(f"First module must be '{root_name}', got '{modules[0].name}'")
+                modules = _validate_global_plan(modules, root_name)
 
                 print(f"[GlobalPlan] Generated {len(modules)} modules")
                 return modules
@@ -139,15 +180,7 @@ class GlobalPlanGenerator:
                         plan_list = self._extract_json_list(raw_content)
                         modules = [GlobalPlanNode.model_validate(m) for m in plan_list]
 
-                        names = {m.name for m in modules}
-                        for m in modules:
-                            m.children_names = list(dict.fromkeys(m.children_names))
-                            for cn in m.children_names:
-                                if cn not in names:
-                                    raise ValueError(f"Child '{cn}' referenced by '{m.name}' not found in module list")
-
-                        if modules[0].name != root_name:
-                            raise ValueError(f"First module must be '{root_name}', got '{modules[0].name}'")
+                        modules = _validate_global_plan(modules, root_name)
 
                         print(f"[GlobalPlan] Generated {len(modules)} modules (fallback)")
                         return modules

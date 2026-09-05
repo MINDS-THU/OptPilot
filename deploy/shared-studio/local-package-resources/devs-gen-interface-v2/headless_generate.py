@@ -372,6 +372,9 @@ def main() -> int:
             SmartReplace,
         )
         from devs_tools.devs_construct_recon.constructor import DEVSConstructRecon
+        from devs_tools.devs_construct_recon.tools.model_creator_fast.generated_interface import (
+            refresh_generated_interface_registry,
+        )
         from devs_display.backend.simulation_execution import (
             ensure_simulation_manifest,
             simulation_metadata,
@@ -437,7 +440,9 @@ def main() -> int:
     )
     # The finalizer may have made a minimal source repair. Revalidate and
     # restamp the portable handoff before exposing the finished bundle.
-    ensure_simulation_manifest(bundle)
+    if finalizer_result is not None:
+        refresh_generated_interface_registry(bundle)
+    ensure_simulation_manifest(bundle, refresh_derived_metadata=True)
     metadata = simulation_metadata(bundle)
 
     destination = output_root / "simulator"

@@ -7,6 +7,7 @@ from .devs_execute import DEVSExecute
 from typing import Optional
 
 from ...utils import get_content_strict
+from ...wrapped_completion import completion_with_logging
 from .result_summary_contract import (
     require_event_trace_contract,
     require_result_summary_contract,
@@ -15,7 +16,6 @@ from .runner_argument_contract import require_runner_argument_contract
 from ..generated_member_contract import require_generated_member_contract
 from ..generated_python_response import extract_generated_python_response
 from src.llm_resilience import litellm_retry_options
-from litellm import completion
 import litellm
 
 litellm.drop_params = True
@@ -472,9 +472,12 @@ class TopSimulationCreatorFast(Tool):
         full_path = Path(abs_save_path)
         for attempt in range(3):
             try:
-                response = completion(
+                response = completion_with_logging(
                     model=self.model_id,
                     messages=[{"role": "user", "content": prompt}],
+                    phase="phase4_simulation_runner",
+                    target=model_class_name,
+                    attempt=attempt,
                     temperature=0.5,
                     **litellm_retry_options(),
                 )

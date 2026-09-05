@@ -67,15 +67,18 @@ def completion_with_logging(
         
     except Exception as e:
         duration = time.time() - start_time
-        log_llm_call(
-            phase=phase,
-            model_name=model,
-            target=target,
-            input_text=input_text,
-            output_text="",
-            duration=duration,
-            attempt=attempt,
-            status="error",
-            error=str(e),
-        )
+        try:
+            log_llm_call(
+                phase=phase,
+                model_name=model,
+                target=target,
+                input_text=input_text,
+                output_text="",
+                duration=duration,
+                attempt=attempt,
+                status="error",
+                error=str(e),
+            )
+        except Exception as log_err:
+            print(f"[LLM Logger] Failed to log call: {log_err}")
         raise

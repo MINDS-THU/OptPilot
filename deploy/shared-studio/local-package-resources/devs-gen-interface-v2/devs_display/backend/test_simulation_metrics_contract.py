@@ -52,9 +52,39 @@ class DeclaredMetricsTest(unittest.TestCase):
             ),
         )
 
+    def test_call_site_metrics_missing_from_a_stale_declaration_are_retained(self):
+        stale = _EXPLICIT_RUNNER.replace('    "utilization": None,\n', "")
+        self.assertEqual(
+            declared_metrics(stale),
+            (
+                {
+                    "name": "completed_items",
+                    "direction": "maximize",
+                    "description": "Items finished in the horizon.",
+                },
+                {"name": "utilization"},
+            ),
+        )
+
     def test_call_site_keys_are_reported_names_only(self):
         self.assertEqual(
             declared_metrics(_CALLSITE_RUNNER),
+            ({"name": "completed_items"}, {"name": "utilization"}),
+        )
+
+    def test_metric_keys_assigned_to_the_passed_dictionary_are_reported(self):
+        runner = _REFERENCE_RUNNER.replace(
+            "metrics={},",
+            "metrics=metrics,",
+        ).replace(
+            "if __name__ == \"__main__\":",
+            "metrics = {}\n"
+            "metrics['completed_items'] = 4\n"
+            "metrics['utilization'] = 0.5\n\n"
+            "if __name__ == \"__main__\":",
+        )
+        self.assertEqual(
+            declared_metrics(runner),
             ({"name": "completed_items"}, {"name": "utilization"}),
         )
 
@@ -103,6 +133,29 @@ class DerivedManifestMetricsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = self._bundle(Path(tmp_dir), _REFERENCE_RUNNER)
             self.assertIsNone(se._derive_metrics(root))
+
+    def test_refresh_replaces_stale_generated_manifest_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stale_runner = _EXPLICIT_RUNNER.replace('    "utilization": None,\n', "")
+            root = self._bundle(Path(tmp_dir), stale_runner)
+            (root / "simulation.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": se.SIMULATION_SCHEMA,
+                        "entrypoint": "run.py",
+                        "timeout_seconds": 30,
+                        "arguments": [],
+                        "result_files": ["summary.json"],
+                        "metrics": {"keys": ["completed_items"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            se.ensure_simulation_manifest(root, refresh_derived_metadata=True)
+            manifest = json.loads((root / "simulation.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["metrics"]["keys"], ["completed_items", "utilization"])
 
 
 class ManifestMetricsValidationTest(unittest.TestCase):

@@ -404,7 +404,6 @@ class CodeFixer(Tool):
         except Exception as e:
             print(f"[Fixer WARNING] Failed to load logs: {str(e)}")
             all_events = "Failed to analyze the log, please carefully check all the instance names and events"
-            input()
 
 
         # 3. 初始化 Agent

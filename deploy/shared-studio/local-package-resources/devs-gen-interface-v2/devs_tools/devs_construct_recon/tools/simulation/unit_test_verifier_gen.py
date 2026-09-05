@@ -256,6 +256,7 @@ class LogVerifierCreator(Tool):
             max_print_outputs_length=4000,
         )
     
+        result2 = ""
         for _ in range(3):
             try:
                 result2 = agent2.run(verifier_prompt, reset=True)
@@ -270,7 +271,6 @@ class LogVerifierCreator(Tool):
                 continue
             break
         
-        assert isinstance(result2, str)
         if not verifier_saver.has_executed:
             raise Exception("CRITICAL: Failed to save the verifier.")
 

@@ -6,6 +6,7 @@ import json
 import os
 import time
 import threading
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional, Any, Dict
 from datetime import datetime
@@ -189,20 +190,24 @@ class LLMCallLogger:
         }
 
 
-# Global instance
-_llm_logger: Optional[LLMCallLogger] = None
+# One logger belongs to one generation request. The planner and generator copy
+# this context explicitly when they fan work out to worker threads.
+_llm_logger: ContextVar[Optional[LLMCallLogger]] = ContextVar(
+    "devs_llm_logger", default=None
+)
 
 
 def get_llm_logger(log_dir: Optional[str] = None) -> LLMCallLogger:
-    global _llm_logger
-    if _llm_logger is None:
-        _llm_logger = LLMCallLogger.get_instance(log_dir)
-    return _llm_logger
+    logger = _llm_logger.get()
+    if logger is None:
+        logger = LLMCallLogger(log_dir)
+        _llm_logger.set(logger)
+    return logger
 
 def reset_llm_logger(log_dir: Optional[str] = None) -> LLMCallLogger:
-    global _llm_logger
-    _llm_logger = LLMCallLogger.reset_instance(log_dir)
-    return _llm_logger
+    logger = LLMCallLogger(log_dir)
+    _llm_logger.set(logger)
+    return logger
 
 
 def log_llm_call(

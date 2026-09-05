@@ -175,7 +175,14 @@ class ModelCreator:
         # Process Sub-models (Coupled Only logic applied via Utils, but safe to run for both)
         processed_sub_models = process_sub_models(model_plan.children_plan, model_plan.model_info.file_path)
 
-        context_str = format_context_str(context, use_path=True, use_parent=True, use_siblings=True, use_global_plan=True)
+        context_str = format_context_str(
+            context,
+            use_path=True,
+            use_system_goal=True,
+            use_parent=True,
+            use_siblings=True,
+            use_global_plan=True,
+        )
 
         # Build Prompt
         model_spec = model_plan.model_info.specification.to_llm_json()

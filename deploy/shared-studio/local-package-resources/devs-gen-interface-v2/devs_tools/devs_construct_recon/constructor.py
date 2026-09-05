@@ -189,7 +189,7 @@ class _PlanTree:
         return missing
 
     def build_plan_tree_node(self, requirements: str, root_info: StandardContextModel, global_plan: list[GlobalPlanNode]) -> 'PlanTreeNode':
-        return self._build_recursive(self.root, requirements, root_info, global_plan, [], 0)
+        return self._build_recursive(self.root, requirements, root_info, global_plan, [], [], 0)
 
     def _build_recursive(
         self,
@@ -198,6 +198,7 @@ class _PlanTree:
         root_info: StandardContextModel,
         global_plan: list[GlobalPlanNode],
         ancestors: list[StandardContextModel],
+        siblings: list[_PlanNode],
         depth: int,
     ) -> 'PlanTreeNode':
         dp = node.detailed_plan
@@ -224,7 +225,7 @@ class _PlanTree:
             )
 
         sibling_specs = []
-        for sib in node.children:
+        for sib in siblings:
             sib_dp = sib.detailed_plan
             if sib_dp is None:
                 continue
@@ -251,7 +252,17 @@ class _PlanTree:
         if node.children:
             updated_ancestors = ancestors + [model_info]
             for child in node.children:
-                children_nodes.append(self._build_recursive(child, requirements, root_info, global_plan, updated_ancestors, depth + 1))
+                children_nodes.append(
+                    self._build_recursive(
+                        child,
+                        requirements,
+                        root_info,
+                        global_plan,
+                        updated_ancestors,
+                        [sibling for sibling in node.children if sibling is not child],
+                        depth + 1,
+                    )
+                )
 
         if dp.model_type == "atomic":
             plan = PlanResult(type="atomic", model_info=model_info, children_plan=[], coupling_specification=None)
@@ -1495,6 +1506,11 @@ class DEVSConstructRecon(Tool):
 
         # -- BFS level by level --
         queue = list(tree.root.children)
+        parent_by_child = {
+            child.name: parent
+            for parent in tree.node_map.values()
+            for child in parent.children
+        }
         while queue:
             level_nodes = queue[:]
             queue = [c for n in level_nodes for c in n.children]
@@ -1515,6 +1531,7 @@ class DEVSConstructRecon(Tool):
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.concur_num, self.max_workers)) as executor:
                 future_to_name = {}
                 for node in tasks:
+                    parent_node = parent_by_child[node.name]
                     ctx = contextvars.copy_context()
                     future = executor.submit(
                         ctx.run,
@@ -1524,7 +1541,7 @@ class DEVSConstructRecon(Tool):
                         global_plan,
                         node.children_names,
                         node.simple_plan,
-                        root_node.detailed_plan,
+                        parent_node.detailed_plan,
                         3,
                     )
                     future_to_name[future] = node.name

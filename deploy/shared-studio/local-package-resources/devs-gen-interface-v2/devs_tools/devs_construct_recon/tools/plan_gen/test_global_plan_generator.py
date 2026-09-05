@@ -60,6 +60,35 @@ class GlobalPlanRetryGuidanceTests(unittest.TestCase):
         self.assertIn("Generate a completely fresh response", retry_prompt)
         self.assertIn("exactly match QueueSystem", retry_prompt)
 
+    def test_duplicate_module_names_are_retried_before_tree_construction(self):
+        duplicate = json.dumps(
+            {
+                "modules": [
+                    {"name": "Root", "description": "root", "children_names": ["Leaf"]},
+                    {"name": "Leaf", "description": "first", "children_names": []},
+                    {"name": "Leaf", "description": "duplicate", "children_names": []},
+                ]
+            }
+        )
+        valid = json.dumps(
+            {
+                "modules": [
+                    {"name": "Root", "description": "root", "children_names": ["Leaf"]},
+                    {"name": "Leaf", "description": "leaf", "children_names": []},
+                ]
+            }
+        )
+        with (
+            patch.object(module, "completion_with_logging", side_effect=[object(), object()]) as completion,
+            patch.object(module, "get_content_strict", side_effect=[duplicate, duplicate, valid]),
+            patch.object(module, "json_retry_guidance", return_value="Use unique module names.") as guidance,
+        ):
+            modules = module.GlobalPlanGenerator("test").forward("Root", "Build it", retry=2)
+
+        self.assertEqual([item.name for item in modules], ["Root", "Leaf"])
+        self.assertEqual(completion.call_count, 2)
+        self.assertIn("unique", str(guidance.call_args.kwargs["error"]).lower())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -357,6 +357,19 @@ def _call_site_metric_names(tree: ast.Module) -> list[dict[str, str]]:
 
     names: list[dict[str, str]] = []
     seen: set[str] = set()
+    metric_variables: set[str] = set()
+
+    def add_key(key_node: ast.AST) -> None:
+        if (
+            isinstance(key_node, ast.Constant)
+            and isinstance(key_node.value, str)
+            and _METRIC_NAME_RE.fullmatch(key_node.value)
+            and key_node.value not in seen
+            and len(names) < MAX_DECLARED_METRICS
+        ):
+            names.append({"name": key_node.value})
+            seen.add(key_node.value)
+
     for node in ast.walk(tree):
         if (
             not isinstance(node, ast.Call)
@@ -370,18 +383,29 @@ def _call_site_metric_names(tree: ast.Module) -> list[dict[str, str]]:
         for keyword in node.keywords:
             if keyword.arg == "metrics":
                 metrics_node = keyword.value
-        if not isinstance(metrics_node, ast.Dict):
-            continue
-        for key_node in metrics_node.keys:
-            if (
-                isinstance(key_node, ast.Constant)
-                and isinstance(key_node.value, str)
-                and _METRIC_NAME_RE.fullmatch(key_node.value)
-                and key_node.value not in seen
-                and len(names) < MAX_DECLARED_METRICS
-            ):
-                names.append({"name": key_node.value})
-                seen.add(key_node.value)
+        if isinstance(metrics_node, ast.Dict):
+            for key_node in metrics_node.keys:
+                add_key(key_node)
+        elif isinstance(metrics_node, ast.Name):
+            metric_variables.add(metrics_node.id)
+
+    if metric_variables:
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = node.value
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in metric_variables:
+                    if isinstance(value, ast.Dict):
+                        for key_node in value.keys:
+                            add_key(key_node)
+                elif (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id in metric_variables
+                ):
+                    add_key(target.slice)
     return names
 
 
@@ -481,9 +505,8 @@ def declared_metrics(
 
     Metrics exist only through the ``summary.json`` writer, so nothing is
     reported unless the complete summary contract holds. An explicit
-    module-level ``OPTPILOT_METRICS`` literal (name -> optional direction /
-    description) wins; otherwise the literal string keys of the ``metrics``
-    dict at ``write_simulation_summary`` call sites are reported, names only.
+    module-level ``OPTPILOT_METRICS`` literal supplies metadata; literal keys
+    written at call sites are also retained when the declaration is stale.
     Purely static — no generated code is imported or executed.
     """
 
@@ -495,7 +518,14 @@ def declared_metrics(
         return ()
     explicit = _explicit_metric_declarations(tree)
     if explicit:
-        return tuple(explicit)
+        declared = list(explicit)
+        declared_names = {item["name"] for item in declared}
+        declared.extend(
+            item
+            for item in _call_site_metric_names(tree)
+            if item["name"] not in declared_names
+        )
+        return tuple(declared)
     return tuple(_call_site_metric_names(tree))
 
 

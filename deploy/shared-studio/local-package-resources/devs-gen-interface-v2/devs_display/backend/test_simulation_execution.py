@@ -973,7 +973,7 @@ class SimulationExecutionTests(unittest.TestCase):
                     )
                     with patch.object(
                         creator_module,
-                        "completion",
+                        "completion_with_logging",
                         return_value=object(),
                     ) as completion_mock, patch.object(
                         creator_module,

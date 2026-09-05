@@ -116,6 +116,26 @@ def select_skills(model_plan: PlanResult, context: StandardContext) -> list[Crea
         if target == "file":
             add("file_writer")
 
+    specification_text = model_plan.model_info.specification.to_llm_json().lower()
+    if any(
+        marker in specification_text
+        for marker in (
+            "distribution",
+            "distributed",
+            "uniform",
+            "triangular",
+            "normal distribution",
+            "normally distributed",
+            "gaussian",
+            "exponential",
+            "lognormal",
+            "bernoulli",
+            "categorical",
+            "poisson",
+        )
+    ):
+        add("distribution")
+
     if model_plan.type == "coupled":
         add("runtime_multiplicity")
 

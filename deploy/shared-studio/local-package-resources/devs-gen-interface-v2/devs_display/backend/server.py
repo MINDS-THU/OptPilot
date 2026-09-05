@@ -47,7 +47,11 @@ from .simulation_execution import (
     SimulationExecutionError,
     SimulationExecutionService,
     SimulationManifestError,
+    ensure_simulation_manifest,
     simulation_metadata,
+)
+from devs_tools.devs_construct_recon.tools.model_creator_fast.generated_interface import (
+    refresh_generated_interface_registry,
 )
 from devs_tools.devs_construct_recon.json_retry_guidance import (
     append_retry_guidance,
@@ -3941,6 +3945,11 @@ class DEVSBackendService:
                         "Unsupported Codex finalizer driver "
                         f"{driver!r}; use 'codex_cli', 'remote_codex_cli', or 'agent'."
                     )
+                if (bundle_root / "devs_project" / "system_model_info.json").is_file():
+                    refresh_generated_interface_registry(bundle_root)
+                ensure_simulation_manifest(
+                    bundle_root, refresh_derived_metadata=True
+                )
             except Exception as exc:
                 finalizer_exception = exc
                 print(

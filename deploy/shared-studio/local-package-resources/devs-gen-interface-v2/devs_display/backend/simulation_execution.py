@@ -719,7 +719,9 @@ def _atomic_write_manifest(path: Path, document: Mapping[str, Any]) -> None:
     _atomic_write(path, payload)
 
 
-def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
+def ensure_simulation_manifest(
+    bundle_root: str | Path, *, refresh_derived_metadata: bool = False
+) -> Path:
     """Create a conservative manifest for an existing generated bundle.
 
     Only Python AST is inspected.  No generated module is imported or run.  If
@@ -761,7 +763,10 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                     f"{SIMULATION_MANIFEST} must contain a JSON object."
                 )
             derived_results = _derive_result_files(root)
-            if TRACE_FILE in derived_results:
+            if refresh_derived_metadata:
+                manifest["arguments"] = _derive_arguments(root)
+                manifest["result_files"] = derived_results
+            elif TRACE_FILE in derived_results:
                 # The exact generated trace attachment is a static provenance
                 # marker for a Generator-owned runner. Repairs may replace that
                 # runner while leaving its earlier manifest in place, so add any
@@ -772,7 +777,20 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                     if result not in existing_results:
                         existing_results.append(result)
                 manifest["result_files"] = existing_results
-            if "metrics" not in manifest:
+            if refresh_derived_metadata:
+                derived_metrics = _derive_metrics(root)
+                if derived_metrics is None:
+                    manifest.pop("metrics", None)
+                else:
+                    manifest["metrics"] = derived_metrics
+                    manifest["schema_version"] = SIMULATION_SCHEMA
+                derived_policy = _derive_policy(root)
+                if derived_policy is None:
+                    manifest.pop("policy", None)
+                else:
+                    manifest["policy"] = derived_policy
+                    manifest["schema_version"] = SIMULATION_SCHEMA
+            elif "metrics" not in manifest:
                 # A repaired or regenerated runner may newly declare its
                 # metric names; adopt them (and the v2 grammar that carries
                 # them) without touching an authored metrics declaration.
@@ -780,7 +798,7 @@ def ensure_simulation_manifest(bundle_root: str | Path) -> Path:
                 if derived_metrics is not None:
                     manifest["metrics"] = derived_metrics
                     manifest["schema_version"] = SIMULATION_SCHEMA
-            if "policy" not in manifest:
+            if not refresh_derived_metadata and "policy" not in manifest:
                 derived_policy = _derive_policy(root)
                 if derived_policy is not None:
                     manifest["policy"] = derived_policy

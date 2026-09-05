@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
+import stat
+import tempfile
 from collections.abc import Iterable
+from pathlib import Path
 
 from ...base_types import GeneratedPythonInterface
 
@@ -251,3 +256,66 @@ def extract_generated_python_interface(
         public_methods=sorted(public_methods - properties),
         child_instances=child_instances,
     )
+
+
+def refresh_generated_interface_registry(bundle_root: str | Path) -> Path:
+    """Refresh only generated interfaces after a source-code repair."""
+
+    root = Path(bundle_root).resolve(strict=True)
+    registry_path = root / "devs_project" / "system_model_info.json"
+    metadata = registry_path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("system_model_info.json must be a regular file")
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    if not isinstance(registry, dict):
+        raise ValueError("system_model_info.json must contain an object")
+
+    class_names = {
+        str(entry.get("class_name") or name)
+        for name, entry in registry.items()
+        if isinstance(entry, dict)
+    }
+    for registry_name, entry in registry.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"Invalid registry entry for {registry_name!r}")
+        class_name = str(entry.get("class_name") or registry_name)
+        raw_path = Path(str(entry.get("file_path") or ""))
+        try:
+            devs_index = raw_path.parts.index("devs_project")
+        except ValueError as exc:
+            raise ValueError(
+                f"Registry path for {class_name!r} is outside devs_project"
+            ) from exc
+        source_candidate = root / Path(*raw_path.parts[devs_index:])
+        source_metadata = source_candidate.lstat()
+        if stat.S_ISLNK(source_metadata.st_mode) or not stat.S_ISREG(source_metadata.st_mode):
+            raise ValueError(f"Generated source for {class_name!r} must be a regular file")
+        source_path = source_candidate.resolve(strict=True)
+        source_path.relative_to(root)
+        entry["generated_interface"] = extract_generated_python_interface(
+            source_path.read_text(encoding="utf-8"),
+            class_name,
+            filename=str(source_path),
+            child_class_names=class_names,
+        ).model_dump(mode="json")
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=registry_path.parent,
+            prefix=f".{registry_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(registry, temporary, indent=2, ensure_ascii=False)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, registry_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return registry_path
