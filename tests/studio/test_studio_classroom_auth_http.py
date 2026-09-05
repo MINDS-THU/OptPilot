@@ -310,6 +310,41 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 1)
         self.assertEqual(payload["active_interfaces"], error.active_interfaces)
 
+    def test_interface_preview_keeps_the_trusted_workspace_endpoint_contract(self) -> None:
+        captured = {}
+
+        def open_endpoint(*, key, endpoint):
+            captured["key"] = key
+            captured["endpoint"] = endpoint
+            return SimpleNamespace(preview_url="http://127.0.0.1:31000/")
+
+        with patch.object(
+            self.state.workspace_runtime,
+            "_read_record",
+            return_value={
+                "code_server_started_at": 1,
+                "container_name": "workspace-container",
+                "image": "workspace-image",
+                "started_at": 1,
+                "host_port": 32000,
+            },
+        ), patch.object(
+            self.state.presentation_broker,
+            "open",
+            side_effect=open_endpoint,
+        ):
+            self.state._workspace_preview_proxy(
+                "interface-launch-example",
+                3000,
+                "http://127.0.0.1:32000/proxy/3000",
+                allowed_ports=[3000],
+            )
+
+        endpoint = captured["endpoint"]
+        self.assertEqual(endpoint.owner_kind, "workspace-runtime")
+        self.assertEqual(endpoint.owner_id, "interface-launch-example")
+        self.assertEqual(endpoint.websocket_origin_policy, "omit")
+
     def test_admin_can_share_a_live_interface_without_granting_stop_access(self) -> None:
         bob = self._register("interface-bob", "interface-bob-password-123")
         admin = self._login_admin()
@@ -402,7 +437,7 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         with patch.object(
             self.state.presentation_broker,
             "owner_for_port",
-            return_value=("interface-launch", launch_id),
+            return_value=("workspace-runtime", runtime_workspace_id),
         ), patch.object(self.state.workspace_runtime, "touch") as touch:
             status, _headers, _body = self._request_with_headers(
                 "/api/auth/verify",
@@ -449,7 +484,7 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         with patch.object(
             self.state.presentation_broker,
             "owner_for_port",
-            return_value=("interface-launch", launch_id),
+            return_value=("workspace-runtime", runtime_workspace_id),
         ):
             status, _headers, _body = self._request_with_headers(
                 "/api/auth/verify",

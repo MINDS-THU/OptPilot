@@ -4799,11 +4799,6 @@ class UiState:
             int(port),
             target_base_url,
             allowed_ports=allowed_ports,
-            access_owner=(
-                ("interface-launch", str(workspace["launch_id"]))
-                if workspace.get("launch_id")
-                else None
-            ),
         )
         return {
             "workspace_id": workspace_id,
@@ -4824,7 +4819,6 @@ class UiState:
         target_base_url: str,
         *,
         allowed_ports: List[int],
-        access_owner: Optional[tuple[str, str]] = None,
     ) -> WebPresentationLease:
         key = f"{workspace_id}:{int(port)}"
         code_server_base, separator, _tail = target_base_url.partition("/proxy/")
@@ -4849,10 +4843,9 @@ class UiState:
                     "The workspace runtime no longer owns this Preview endpoint."
                 )
 
-        owner_kind, owner_id = access_owner or ("workspace-runtime", workspace_id)
         endpoint = OwnedWebEndpoint(
-            owner_kind=owner_kind,
-            owner_id=owner_id,
+            owner_kind="workspace-runtime",
+            owner_id=workspace_id,
             generation=generation,
             access_policy="trusted-local-authoring",
             # code-server's /proxy/<port> WebSocket tunnel rejects browser
@@ -8212,25 +8205,26 @@ def _handler_factory(state: UiState):
                             owner_id,
                             principal=principal,
                         )
+                        if not allowed:
+                            with state._lock:
+                                launch_id = next(
+                                    (
+                                        job.launch_id
+                                        for job in state.interface_launches.values()
+                                        if str(job.runtime_workspace.get("id") or "")
+                                        == owner_id
+                                    ),
+                                    "",
+                                )
+                            if launch_id:
+                                allowed = _account_can_access_asset(
+                                    state,
+                                    "interface-launch",
+                                    launch_id,
+                                    principal=principal,
+                                )
                         if allowed:
                             state.workspace_runtime.touch(owner_id)
-                    elif owner_kind == "interface-launch":
-                        allowed = _account_can_access_asset(
-                            state,
-                            "interface-launch",
-                            owner_id,
-                            principal=principal,
-                        )
-                        if allowed:
-                            with state._lock:
-                                launch_job = state.interface_launches.get(owner_id)
-                                runtime_workspace_id = (
-                                    str(launch_job.runtime_workspace.get("id") or "")
-                                    if launch_job is not None
-                                    else ""
-                                )
-                            if runtime_workspace_id:
-                                state.workspace_runtime.touch(runtime_workspace_id)
                     elif owner_kind.startswith("operator-job"):
                         allowed = _account_can_access_asset(
                             state,
