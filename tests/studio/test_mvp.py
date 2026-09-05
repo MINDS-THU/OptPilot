@@ -7910,6 +7910,110 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(record["status"], "stopped")
         self.assertTrue(record["idle_stopped"])
 
+    def test_idle_runtime_can_restart_with_the_same_workspace_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    idle_timeout_seconds=1,
+                    port_start=19115,
+                ),
+            )
+            workspace = _create_ui_workspace(
+                state, {"title": "Resumable", "root": str(tmp_path / "resume-ws")}
+            )
+            marker = Path(workspace["root"]) / "student-work.txt"
+            marker.write_text("keep me", encoding="utf-8")
+            first = state.workspace_runtime.start(workspace)
+            record = state.workspace_runtime._read_record(workspace["id"])
+            record["last_used_at"] = "2000-01-01T00:00:00Z"
+            state.workspace_runtime._write_record(workspace["id"], record)
+
+            stopped = state.workspace_runtime.garbage_collect([workspace])
+            resumed = state.workspace_runtime.start(workspace)
+            retained_text = marker.read_text(encoding="utf-8")
+
+        self.assertEqual(len(stopped["stopped"]), 1, stopped)
+        self.assertEqual(resumed["status"], "running")
+        self.assertEqual(resumed["port"], first["port"])
+        self.assertEqual(retained_text, "keep me")
+
+    def test_transient_interface_runtime_is_not_idle_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    idle_timeout_seconds=1,
+                    port_start=19116,
+                ),
+            )
+            root = tmp_path / "transient"
+            root.mkdir()
+            workspace = {
+                "id": "transient-launch",
+                "root": str(root),
+                "transient": True,
+            }
+            state.workspace_runtime.start(workspace)
+            record = state.workspace_runtime._read_record(workspace["id"])
+            record["last_used_at"] = "2000-01-01T00:00:00Z"
+            state.workspace_runtime._write_record(workspace["id"], record)
+
+            result = state.workspace_runtime.garbage_collect([workspace])
+
+        self.assertEqual(result["stopped"], [])
+        self.assertEqual(result["skipped"][0]["reason"], "transient_runtime")
+
+    def test_workspace_runtime_limits_active_containers_per_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    max_active_per_account=1,
+                    port_start=19117,
+                ),
+            )
+            roots = [tmp_path / "cap-first", tmp_path / "cap-second"]
+            for root in roots:
+                root.mkdir()
+            first = {
+                "id": "cap-first",
+                "root": str(roots[0]),
+                "owner_account_id": "student-1",
+            }
+            second = {
+                "id": "cap-second",
+                "root": str(roots[1]),
+                "owner_account_id": "student-1",
+            }
+            state.workspace_runtime.start(first)
+
+            with self.assertRaisesRegex(RuntimeError, "maximum number"):
+                state.workspace_runtime.start(second)
+
+            state.workspace_runtime.stop(first)
+            resumed = state.workspace_runtime.start(second)
+
+        self.assertEqual(resumed["status"], "running")
+
     def test_runtime_health_rate_limits_container_garbage_collection(self) -> None:
         from optpilot_studio.ui.server import _rate_limited_runtime_gc
 

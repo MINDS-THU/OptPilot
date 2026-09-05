@@ -182,6 +182,36 @@ class StudioSharedLoginHttpTests(unittest.TestCase):
 
 
 class WorkspaceRuntimePublicPortTests(unittest.TestCase):
+    def test_idle_stopped_code_port_remains_resolvable_for_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manager = WorkspaceRuntimeManager(
+                studio_root=root,
+                runtime_root=root / "runtime",
+                options=WorkspaceRuntimeOptions(port_start=31000, port_count=2),
+            )
+            manager._ensure_workspace_runtime_dir("workspace-1")
+            manager._write_record(
+                "workspace-1",
+                {
+                    "status": "stopped",
+                    "host_port": 31000,
+                    "transient": False,
+                    "terminal_proof": {
+                        "terminal_confirmed": True,
+                        "state": "absent",
+                    },
+                },
+            )
+
+            self.assertEqual(
+                manager.workspace_id_for_reserved_code_server_port(31000),
+                "workspace-1",
+            )
+            self.assertEqual(
+                manager.workspace_id_for_reserved_code_server_port(31001), ""
+            )
+
     def test_preview_ownership_is_exact_and_briefly_cached(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

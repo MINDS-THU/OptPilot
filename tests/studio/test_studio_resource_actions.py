@@ -167,9 +167,11 @@ print("bundle generated")
         accepted, status = _start_resource_action_run(self.state, request)
         self.assertEqual(status, HTTPStatus.ACCEPTED)
         self.assertEqual(accepted["status"], "running")
+        self.assertIn("progress", accepted)
 
         settled = self._await_run(request["request_id"])
         self.assertEqual(settled["status"], "succeeded", settled)
+        self.assertEqual(settled["progress"]["activity_state"], "completed")
         result = settled["result"]
         self.assertTrue(result["ok"])
         self.assertEqual(

@@ -35,6 +35,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -1224,6 +1225,7 @@ class WorkspaceRuntimeOptions:
     password: Optional[str] = None
     network: str = "bridge"
     idle_timeout_seconds: int = 3600
+    max_active_per_account: int = 3
     image_pull_timeout_seconds: int = 600
     image_build_timeout_seconds: int = 1200
     start_timeout_seconds: int = 90
@@ -1269,6 +1271,10 @@ class WorkspaceRuntimeOptions:
             idle_timeout_seconds=_int_env(
                 "OPTPILOT_WORKSPACE_RUNTIME_IDLE_TIMEOUT_SECONDS",
                 cls.idle_timeout_seconds,
+            ),
+            max_active_per_account=_int_env(
+                "OPTPILOT_WORKSPACE_RUNTIME_MAX_ACTIVE_PER_ACCOUNT",
+                cls.max_active_per_account,
             ),
             image_pull_timeout_seconds=_int_env(
                 "OPTPILOT_WORKSPACE_RUNTIME_IMAGE_PULL_TIMEOUT_SECONDS",
@@ -1537,6 +1543,10 @@ class WorkspaceRuntimeManager:
         # so a same-process path replacement still fails closed.
         self._runtime_attachments: Dict[str, tuple[str, int, int]] = {}
         self._runtime_attachment_lock = threading.RLock()
+        self._capacity_lock = threading.RLock()
+        self._starting_owner_by_workspace: Dict[str, str] = {}
+        self._active_operations: Dict[str, int] = {}
+        self._last_touch_monotonic: Dict[str, float] = {}
         self.runtime_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         if self.runtime_root.is_symlink() or not self.runtime_root.is_dir():
             raise ValueError("Workspace runtime storage must be a real directory.")
@@ -1622,6 +1632,58 @@ class WorkspaceRuntimeManager:
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 continue
         return ""
+
+    def workspace_id_for_reserved_code_server_port(self, port: int) -> str:
+        """Resolve a persisted Code Server port, including an idle-stopped one."""
+
+        try:
+            requested = int(port)
+        except (TypeError, ValueError):
+            return ""
+        range_start = int(self.options.port_start)
+        range_end = range_start + max(1, int(self.options.port_count))
+        if requested not in range(range_start, range_end):
+            return ""
+        try:
+            paths = tuple(self.runtime_root.glob("*/runtime.json"))
+        except OSError:
+            return ""
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                workspace_id = str(payload.get("workspace_id") or "")
+                if (
+                    workspace_id
+                    and int(payload.get("host_port") or 0) == requested
+                    and self._workspace_runtime_dir(workspace_id) == path.parent
+                    and not payload.get("transient")
+                ):
+                    return workspace_id
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return ""
+
+    def touch(self, workspace_id: str) -> None:
+        """Record authenticated browser activity without writing per asset request."""
+
+        workspace_id = str(workspace_id or "")
+        if not workspace_id:
+            return
+        now = time.monotonic()
+        with self._capacity_lock:
+            previous = self._last_touch_monotonic.get(workspace_id, 0.0)
+            if now - previous < 30.0:
+                return
+            self._last_touch_monotonic[workspace_id] = now
+        try:
+            record = self._read_record(workspace_id)
+            if record.get("status") != "running":
+                return
+            record["last_used_at"] = _now_iso()
+            record["updated_at"] = _now_iso()
+            self._write_record(workspace_id, record)
+        except (OSError, RuntimeError, ValueError):
+            return
 
     def owns_workspace_code_server_port(
         self,
@@ -1922,6 +1984,8 @@ class WorkspaceRuntimeManager:
             "memory_limit": self.options.memory_limit,
             "pids_limit": self.options.pids_limit,
             "no_new_privileges": self.options.no_new_privileges,
+            "idle_timeout_seconds": self.options.idle_timeout_seconds,
+            "max_active_per_account": self.options.max_active_per_account,
             "container_name": container_name,
             "container_running": running,
             "code_server_running": code_reachable,
@@ -1984,6 +2048,8 @@ class WorkspaceRuntimeManager:
                 "memory_limit": self.options.memory_limit,
                 "pids_limit": self.options.pids_limit,
                 "no_new_privileges": self.options.no_new_privileges,
+                "idle_timeout_seconds": self.options.idle_timeout_seconds,
+                "max_active_per_account": self.options.max_active_per_account,
                 "runtime_dir": str(self.runtime_root),
             },
             "engine": health.get("engine") or "",
@@ -1998,6 +2064,63 @@ class WorkspaceRuntimeManager:
         }
 
     def start(
+        self,
+        workspace: JsonDict,
+        *,
+        image: Optional[str] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> JsonDict:
+        workspace_id = str(workspace.get("id") or "")
+        if not workspace_id:
+            raise ValueError("Workspace id is required to start a runtime container.")
+        owner_account_id = str(
+            workspace.get("_owner_account_id")
+            or workspace.get("owner_account_id")
+            or ""
+        )
+        reserved = False
+        with self._capacity_lock:
+            container_name = self._container_name(workspace_id)
+            if (
+                owner_account_id
+                and not self._container_running(container_name)
+                and self.options.max_active_per_account > 0
+            ):
+                active_ids = self._active_runtime_ids_for_owner(owner_account_id)
+                reserved_ids = {
+                    item_id
+                    for item_id, owner in self._starting_owner_by_workspace.items()
+                    if owner == owner_account_id
+                }
+                occupied = (active_ids | reserved_ids) - {workspace_id}
+                if len(occupied) >= int(self.options.max_active_per_account):
+                    raise RuntimeError(
+                        "This account already has the maximum number of active "
+                        f"workspace runtimes ({self.options.max_active_per_account}). "
+                        "Stop an open Workspace or interface and try again."
+                    )
+                self._starting_owner_by_workspace[workspace_id] = owner_account_id
+                reserved = True
+            self._active_operations[workspace_id] = (
+                self._active_operations.get(workspace_id, 0) + 1
+            )
+        try:
+            return self._start_impl(
+                workspace,
+                image=image,
+                should_stop=should_stop,
+            )
+        finally:
+            with self._capacity_lock:
+                if reserved:
+                    self._starting_owner_by_workspace.pop(workspace_id, None)
+                remaining = self._active_operations.get(workspace_id, 1) - 1
+                if remaining > 0:
+                    self._active_operations[workspace_id] = remaining
+                else:
+                    self._active_operations.pop(workspace_id, None)
+
+    def _start_impl(
         self,
         workspace: JsonDict,
         *,
@@ -2022,6 +2145,11 @@ class WorkspaceRuntimeManager:
         if not workspace_id:
             raise ValueError("Workspace id is required to start a runtime container.")
         root = Path(str(workspace.get("root") or "")).resolve()
+        owner_account_id = str(
+            workspace.get("_owner_account_id")
+            or workspace.get("owner_account_id")
+            or ""
+        )
         if not root.exists() or not root.is_dir():
             raise FileNotFoundError(f"Workspace root not found: {root}")
         executable = self._require_container_executable()
@@ -2116,6 +2244,7 @@ class WorkspaceRuntimeManager:
                     "status": "preparing",
                     "updated_at": _now_iso(),
                     "workspace_root": str(root),
+                    "owner_account_id": owner_account_id,
                     "container_may_exist": False,
                     "terminal_proof": removal,
                 }
@@ -2144,6 +2273,7 @@ class WorkspaceRuntimeManager:
                     "image": resolved_image,
                     "image_source": record_image_source,
                     "workspace_root": str(root),
+                    "owner_account_id": owner_account_id,
                     "control_mask_digest": control_mask_digest,
                     # This is intentionally set before ``docker run``. A
                     # timeout or interrupted subprocess may still have created
@@ -2193,6 +2323,7 @@ class WorkspaceRuntimeManager:
                     "pids_limit": self.options.pids_limit,
                     "no_new_privileges": self.options.no_new_privileges,
                     "workspace_root": str(root),
+                    "owner_account_id": owner_account_id,
                     "control_mask_digest": control_mask_digest,
                     "container_may_exist": True,
                 }
@@ -2209,6 +2340,8 @@ class WorkspaceRuntimeManager:
             record["container_name"] = container_name
             record["container_may_exist"] = True
             record["status"] = "running"
+            if owner_account_id:
+                record["owner_account_id"] = owner_account_id
             record["last_used_at"] = _now_iso()
             record["updated_at"] = _now_iso()
             self._write_record(workspace_id, record)
@@ -2485,7 +2618,38 @@ class WorkspaceRuntimeManager:
             "containerized": True,
         }
 
+    @contextmanager
+    def _runtime_operation(self, workspace_id: str) -> Iterator[None]:
+        with self._capacity_lock:
+            self._active_operations[workspace_id] = (
+                self._active_operations.get(workspace_id, 0) + 1
+            )
+        try:
+            yield
+        finally:
+            with self._capacity_lock:
+                remaining = self._active_operations.get(workspace_id, 1) - 1
+                if remaining > 0:
+                    self._active_operations[workspace_id] = remaining
+                else:
+                    self._active_operations.pop(workspace_id, None)
+
     def exec(
+        self,
+        workspace: JsonDict,
+        command: List[str],
+        *,
+        cwd: Path,
+        env: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+    ) -> tuple[subprocess.CompletedProcess[str], JsonDict]:
+        workspace_id = str(workspace.get("id") or "")
+        with self._runtime_operation(workspace_id):
+            return self._exec_impl(
+                workspace, command, cwd=cwd, env=env, timeout=timeout
+            )
+
+    def _exec_impl(
         self,
         workspace: JsonDict,
         command: List[str],
@@ -2582,6 +2746,29 @@ class WorkspaceRuntimeManager:
         name: str = "process",
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> tuple[subprocess.CompletedProcess[str], JsonDict, JsonDict]:
+        workspace_id = str(workspace.get("id") or "")
+        with self._runtime_operation(workspace_id):
+            return self._exec_logged_impl(
+                workspace,
+                command,
+                cwd=cwd,
+                env=env,
+                timeout=timeout,
+                name=name,
+                should_stop=should_stop,
+            )
+
+    def _exec_logged_impl(
+        self,
+        workspace: JsonDict,
+        command: List[str],
+        *,
+        cwd: Path,
+        env: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+        name: str = "process",
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> tuple[subprocess.CompletedProcess[str], JsonDict, JsonDict]:
         """Run a foreground command while exposing live stdout/stderr files."""
 
         if not command:
@@ -2638,6 +2825,29 @@ class WorkspaceRuntimeManager:
         return completed, self.status(workspace), log_paths
 
     def exec_detached(
+        self,
+        workspace: JsonDict,
+        command: List[str],
+        *,
+        cwd: Path,
+        env: Optional[Dict[str, str]] = None,
+        name: str = "process",
+        timeout: int = 15,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> JsonDict:
+        workspace_id = str(workspace.get("id") or "")
+        with self._runtime_operation(workspace_id):
+            return self._exec_detached_impl(
+                workspace,
+                command,
+                cwd=cwd,
+                env=env,
+                name=name,
+                timeout=timeout,
+                should_stop=should_stop,
+            )
+
+    def _exec_detached_impl(
         self,
         workspace: JsonDict,
         command: List[str],
@@ -2734,6 +2944,13 @@ class WorkspaceRuntimeManager:
         now = time.time()
         stopped: List[JsonDict] = []
         skipped: List[JsonDict] = []
+        if int(self.options.idle_timeout_seconds) <= 0:
+            return {
+                "stopped": stopped,
+                "skipped": skipped,
+                "idle_timeout_seconds": int(self.options.idle_timeout_seconds),
+                "max_active_per_account": int(self.options.max_active_per_account),
+            }
         for workspace in workspaces:
             workspace_id = str(workspace.get("id") or "")
             if not workspace_id:
@@ -2743,6 +2960,14 @@ class WorkspaceRuntimeManager:
                 record.get("container_name") or self._container_name(workspace_id)
             )
             if not record or not self._container_running(container_name):
+                continue
+            if record.get("transient") or workspace.get("transient"):
+                skipped.append(
+                    {
+                        "workspace_id": workspace_id,
+                        "reason": "transient_runtime",
+                    }
+                )
                 continue
             if self._workspace_has_active_reference(
                 workspace, record, active_workspace_id=active_workspace_id
@@ -2794,6 +3019,7 @@ class WorkspaceRuntimeManager:
             "stopped": stopped,
             "skipped": skipped,
             "idle_timeout_seconds": int(self.options.idle_timeout_seconds),
+            "max_active_per_account": int(self.options.max_active_per_account),
         }
 
     def stop(self, workspace: JsonDict) -> JsonDict:
@@ -3174,6 +3400,36 @@ class WorkspaceRuntimeManager:
                 return f"Workspace runtime image is not allowed by OPTPILOT_WORKSPACE_RUNTIME_IMAGE_ALLOWLIST: {image}"
         return ""
 
+    def _active_runtime_ids_for_owner(self, owner_account_id: str) -> set[str]:
+        active: set[str] = set()
+        try:
+            paths = tuple(self.runtime_root.glob("*/runtime.json"))
+        except OSError:
+            return active
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                workspace_id = str(payload.get("workspace_id") or "")
+                container_name = str(payload.get("container_name") or "")
+                if (
+                    workspace_id
+                    and payload.get("owner_account_id") == owner_account_id
+                    and container_name
+                    and self._workspace_runtime_dir(workspace_id) == path.parent
+                    and self._container_running(container_name)
+                ):
+                    active.add(workspace_id)
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                continue
+        return active
+
     def _enforce_image_policy(self) -> None:
         error = self._image_policy_error()
         if error:
@@ -3183,14 +3439,12 @@ class WorkspaceRuntimeManager:
         self, workspace: JsonDict, record: JsonDict, *, active_workspace_id: str
     ) -> bool:
         workspace_id = str(workspace.get("id") or "")
-        if active_workspace_id and workspace_id == active_workspace_id:
-            return True
-        if workspace.get("attached_sessions"):
-            return True
-        host_port = int(record.get("host_port") or 0)
-        if host_port and _code_server_reachable(self._code_server_base_url(host_port)):
-            return True
-        return False
+        # A selected Workspace, an Assistant attachment, or a reachable port
+        # does not prove a person is using the runtime. Authenticated browser
+        # requests and execution methods refresh last_used_at instead. Only an
+        # operation currently crossing the runtime boundary is a hard fence.
+        with self._capacity_lock:
+            return self._active_operations.get(workspace_id, 0) > 0
 
     def _image_dockerfile(self) -> Path:
         if self.options.dockerfile:
@@ -7738,6 +7992,13 @@ def _handler_factory(state: UiState):
                 workspace_id = state.workspace_runtime.workspace_id_for_code_server_port(
                     port
                 )
+                live_workspace_id = workspace_id
+                if not workspace_id:
+                    workspace_id = (
+                        state.workspace_runtime.workspace_id_for_reserved_code_server_port(
+                            port
+                        )
+                    )
                 allowed = bool(workspace_id) and (
                     _account_can_access_asset(
                         state,
@@ -7752,6 +8013,24 @@ def _handler_factory(state: UiState):
                         principal=principal,
                     )
                 )
+                if allowed and not live_workspace_id:
+                    workspace = _workspace_by_id(state, workspace_id)
+                    if workspace is None:
+                        allowed = False
+                    else:
+                        try:
+                            state.start_workspace_code_server(workspace)
+                        except Exception:
+                            allowed = False
+                        else:
+                            allowed = (
+                                state.workspace_runtime.workspace_id_for_code_server_port(
+                                    port
+                                )
+                                == workspace_id
+                            )
+                if allowed:
+                    state.workspace_runtime.touch(workspace_id)
             elif kind == "presentation":
                 endpoint_owner = state.presentation_broker.owner_for_port(port)
                 allowed = False
@@ -7769,6 +8048,8 @@ def _handler_factory(state: UiState):
                             owner_id,
                             principal=principal,
                         )
+                        if allowed:
+                            state.workspace_runtime.touch(owner_id)
                     elif owner_kind.startswith("operator-job"):
                         allowed = _account_can_access_asset(
                             state,
@@ -12067,6 +12348,9 @@ def _public_resource_action_run(record: JsonDict) -> JsonDict:
         "finished_at": record.get("finished_at"),
         "error": record.get("error"),
     }
+    progress = record.get("progress")
+    if isinstance(progress, Mapping):
+        payload["progress"] = deepcopy(dict(progress))
     summary = record.get("summary")
     if isinstance(summary, Mapping):
         payload["result"] = {
@@ -12081,6 +12365,91 @@ def _public_resource_action_run(record: JsonDict) -> JsonDict:
             "error": summary.get("error"),
         }
     return payload
+
+
+def _report_assistant_resource_action(
+    host_env: Mapping[str, str], record: Mapping[str, Any]
+) -> bool:
+    """Store one bounded Assistant action event without conversation contents."""
+
+    session_id = str(record.get("agent_session_id") or "")
+    endpoint = str(
+        host_env.get("DEVS_HEADLESS_COLLECTOR_URL")
+        or host_env.get("DEVS_COLLECTOR_URL")
+        or ""
+    ).strip().rstrip("/")
+    token = str(host_env.get("DEVS_COLLECTOR_INGEST_TOKEN") or "").strip()
+    if not session_id or not endpoint or not token:
+        return False
+    request_id = str(record.get("request_id") or "")
+    owner = str(record.get("owner_account_id") or "") or f"session-{session_id}"
+    started_at = float(record.get("started_at") or time.time())
+    finished_at = float(record.get("finished_at") or time.time())
+    status = str(record.get("status") or "unknown")
+    summary = record.get("summary") if isinstance(record.get("summary"), Mapping) else {}
+    payload = {
+        "source": "optpilot-assistant",
+        "participant_id": re.sub(r"[^A-Za-z0-9_.:-]+", "-", owner)[:256],
+        "session": {
+            "session_id": re.sub(r"[^A-Za-z0-9_.:-]+", "-", session_id)[:256],
+            "title": "OptPilot Assistant activity",
+            "status": status,
+            "created_at": datetime.fromtimestamp(
+                started_at, tz=timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+            "updated_at": datetime.fromtimestamp(
+                finished_at, tz=timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+        },
+        "messages": [],
+        "requests": [
+            {
+                "request_id": request_id,
+                "kind": "resource_action",
+                "resource_id": str(record.get("resource_id") or ""),
+                "action_id": str(record.get("action_id") or ""),
+                "workspace_id": str(record.get("workspace_id") or ""),
+                "status": status,
+                "duration_seconds": round(max(0.0, finished_at - started_at), 3),
+                "returncode": summary.get("returncode"),
+                "timed_out": summary.get("timed_out"),
+                "created_at": datetime.fromtimestamp(
+                    started_at, tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+            }
+        ],
+        "events": [
+            {
+                "event_id": f"resource-action-{request_id}",
+                "request_id": request_id,
+                "type": "resource_action_finished",
+                "status": status,
+                "created_at": datetime.fromtimestamp(
+                    finished_at, tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z"),
+            }
+        ],
+        "trace": [],
+        "evaluations": [],
+        "projects": [],
+    }
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    request = Request(
+        endpoint + "/api/v1/ingest/session",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-DEVS-Collector-Token": token,
+        },
+    )
+    try:
+        with urlopen(request, timeout=3) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
 
 
 def _resource_action_output_root(
@@ -12602,10 +12971,39 @@ def _start_resource_action_run(
         "finished_at": None,
         "summary": None,
         "error": None,
+        "progress": {
+            "activity_key": "queued",
+            "activity_state": "queued",
+            "title": "Waiting to start",
+            "detail": "",
+            "current": None,
+            "total": None,
+            "observed_at": time.time(),
+        },
         "agent_session_id": str(agent_session_id or ""),
         "agent_conversation_id": str(agent_conversation_id or ""),
         "owner_account_id": principal.account_id if principal is not None else "",
     }
+
+    secret_progress_values = tuple(
+        value
+        for name in action.secrets_from_host
+        if (value := str(action_host_env.get(name) or ""))
+    )
+
+    def update_progress(progress: Mapping[str, Any]) -> None:
+        public_progress = deepcopy(dict(progress))
+        for key in ("activity_key", "activity_state", "title", "detail"):
+            value = public_progress.get(key)
+            if not isinstance(value, str):
+                continue
+            value = sanitize_run_text(value)
+            for secret_value in secret_progress_values:
+                value = value.replace(secret_value, "[REDACTED]")
+            public_progress[key] = value
+        with state._lock:
+            if state._resource_action_runs.get(request_id) is record:
+                record["progress"] = public_progress
 
     def execute() -> None:
         terminal_status = "failed"
@@ -12618,6 +13016,13 @@ def _start_resource_action_run(
                 input_values=normalized_inputs,
                 output_root=output_root,
                 host_env=action_host_env,
+                context_env={
+                    "OPTPILOT_ACTION_REQUEST_ID": request_id,
+                    "OPTPILOT_ASSISTANT_SESSION_ID": agent_session_id,
+                    "OPTPILOT_ACCOUNT_ID": record["owner_account_id"],
+                    "OPTPILOT_WORKSPACE_ID": workspace_id,
+                },
+                progress_callback=update_progress,
             )
             for key in ("error", "stdout_tail", "stderr_tail"):
                 if isinstance(summary.get(key), str):
@@ -12647,6 +13052,7 @@ def _start_resource_action_run(
             # hear the outcome either way, or a failed generation looks like
             # the stall it was built to prevent.
             _notify_agent_session_resource_action_done(state, record)
+            _report_assistant_resource_action(action_host_env, record)
 
     start_failed = False
     capacity_exhausted = False
@@ -21702,6 +22108,7 @@ def _session_background_action_runs(state: UiState, session_id: str) -> List[Jso
             "started_at": record.get("started_at"),
             "finished_at": record.get("finished_at"),
             "error": str(record.get("error") or "")[:300],
+            "progress": deepcopy(record.get("progress")),
         }
         for record in records[:8]
     ]
@@ -33352,6 +33759,8 @@ def _start_catalog_interface_launch(
             source_projection.close()
         raise
     owner = principal or _current_request_principal()
+    if owner is not None:
+        runtime_workspace["_owner_account_id"] = owner.account_id
     try:
         _claim_account_asset(
             state, "interface-launch", launch_id, principal=owner
@@ -33445,6 +33854,8 @@ def _start_workspace_interface_launch(
     workspace_root = Path(str(workspace["root"])).resolve()
     config_relative = config_path.resolve().relative_to(workspace_root).as_posix()
     owner = _current_request_principal()
+    if owner is not None:
+        runtime_workspace["_owner_account_id"] = owner.account_id
     _claim_account_asset(state, "interface-launch", launch_id, principal=owner)
     _claim_account_asset(
         state,

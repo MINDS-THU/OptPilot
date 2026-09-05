@@ -41,6 +41,7 @@ actions:
     env:
       DEVS_HEADLESS_CODEX_FINALIZER: "1"
       DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS: "900"
+      DEVS_COLLECTOR_SOURCE: devs-gen-interface-v2-headless
     grants:
       # Generation calls the configured model through OpenRouter, and setup
       # installs the dependency closure from PyPI.
@@ -64,6 +65,9 @@ actions:
             "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
             the OpenRouter key is the granted credential).
         - DEVS_HEADLESS_CODEX_FINALIZER_URL
+        - name: DEVS_HEADLESS_COLLECTOR_URL
+          default: http://127.0.0.1:8010
+          description: Collector origin reachable from the host Resource Action.
       secretsFromHost: [OPENROUTER_API_KEY, DEVS_COLLECTOR_INGEST_TOKEN]
     runtime:
       sandbox: process

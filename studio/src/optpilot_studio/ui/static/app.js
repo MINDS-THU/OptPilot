@@ -2452,6 +2452,8 @@ function buildOpenWorkItems() {
     const actions = (state.agentBackgroundActionsBySession || {})[session.id] || [];
     actions.forEach((action) => {
       if (!action || action.status !== "running") return;
+      const progress = action.progress && typeof action.progress === "object" ? action.progress : {};
+      const progressTitle = String(progress.title || "").trim();
       items.push({
         key: `background-action:${action.request_id}`,
         kind: "background-action",
@@ -2459,7 +2461,7 @@ function buildOpenWorkItems() {
         typeLabel: "Background action",
         section: "Running",
         title: `${action.action_id || "action"} · ${action.resource_id || action.resource_uid || "resource"}`,
-        subtitle: `Running for ${backgroundActionElapsedLabel(action.started_at)} · Click to open the conversation`,
+        subtitle: `${progressTitle || "Running"} · ${backgroundActionElapsedLabel(action.started_at)} · Click to open the conversation`,
         status: "running",
         active: true,
       });
@@ -5575,6 +5577,16 @@ function backgroundActionElapsedLabel(startedAt) {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+function backgroundActionProgress(item) {
+  const progress = item && item.progress && typeof item.progress === "object" ? item.progress : {};
+  const title = String(progress.title || "Running").trim() || "Running";
+  const detail = String(progress.detail || "").trim();
+  const count = Number.isInteger(progress.current) && Number.isInteger(progress.total) && progress.total > 0
+    ? ` · ${progress.current}/${progress.total}`
+    : "";
+  return { title, detail, count };
+}
+
 function assistantBackgroundActionsHtml(session) {
   // Live pulse for jobs the conversation started and then stepped away
   // from: the person can tell "still working" from "dead" without asking.
@@ -5584,16 +5596,18 @@ function assistantBackgroundActionsHtml(session) {
   if (!running.length) return "";
   return `
     <div class="background-action-strip">
-      ${running.map((item) => `
+      ${running.map((item) => {
+        const progress = backgroundActionProgress(item);
+        return `
         <div class="background-action-card" data-background-action-request="${escapeHtml(item.request_id || "")}">
           <span class="background-action-dot" aria-hidden="true"></span>
           <div class="background-action-body">
             <strong>${escapeHtml(item.action_id || "action")} · ${escapeHtml(item.resource_id || item.resource_uid || "resource")}</strong>
-            <small>Running for <span data-background-action-elapsed data-started-at="${escapeHtml(String(item.started_at || ""))}">${escapeHtml(backgroundActionElapsedLabel(item.started_at))}</span>${item.workspace_id ? ` · workspace ${escapeHtml(item.workspace_id)}` : ""}</small>
+            <small>${escapeHtml(progress.title)}${escapeHtml(progress.count)} · <span data-background-action-elapsed data-started-at="${escapeHtml(String(item.started_at || ""))}">${escapeHtml(backgroundActionElapsedLabel(item.started_at))}</span>${progress.detail ? ` · ${escapeHtml(progress.detail)}` : ""}${item.workspace_id ? ` · workspace ${escapeHtml(item.workspace_id)}` : ""}</small>
           </div>
           <span class="status-pill status-running">running</span>
-        </div>
-      `).join("")}
+        </div>`;
+      }).join("")}
     </div>`;
 }
 

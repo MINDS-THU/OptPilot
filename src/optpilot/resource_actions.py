@@ -41,10 +41,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Tuple
 
 from .method_protocol_limits import RETAINED_COMMAND_METHOD_INTERPRETERS
 from .host_env import compile_host_env_declarations
@@ -57,6 +58,16 @@ OUTPUT_ROOT_PLACEHOLDER = "{output_root}"
 INPUT_PLACEHOLDER_PREFIX = "{input:"
 INPUTS_FILE_ENV = "OPTPILOT_RESOURCE_ACTION_INPUTS_FILE"
 OUTPUT_ROOT_ENV = "OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"
+PROGRESS_FILE_ENV = "OPTPILOT_RESOURCE_ACTION_PROGRESS_FILE"
+
+_ACTION_CONTEXT_ENV_KEYS = frozenset(
+    {
+        "OPTPILOT_ACTION_REQUEST_ID",
+        "OPTPILOT_ASSISTANT_SESSION_ID",
+        "OPTPILOT_ACCOUNT_ID",
+        "OPTPILOT_WORKSPACE_ID",
+    }
+)
 
 MAX_RESOURCE_ACTIONS = 16
 MAX_ACTION_TIMEOUT_SECONDS = 86_400
@@ -307,6 +318,8 @@ def run_resource_action(
     output_root: str | Path,
     run_setup: bool = True,
     host_env: Mapping[str, str] | None = None,
+    context_env: Mapping[str, str] | None = None,
+    progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> Dict[str, Any]:
     """Execute one declared resource action headlessly and return a summary.
 
@@ -317,6 +330,12 @@ def run_resource_action(
     from .config import validate_authoring_config  # local import: config imports us
     import yaml
 
+    _emit_action_progress(
+        progress_callback,
+        activity_key="prepare_action",
+        state="running",
+        title="Preparing the resource action",
+    )
     resource_path = Path(resource_config_path).expanduser().resolve()
     validation = validate_authoring_config(resource_path)
     if not validation.get("valid"):
@@ -402,7 +421,19 @@ def run_resource_action(
     if runtime_setup and run_setup:
         from .setup import run_process_setup
 
+        _emit_action_progress(
+            progress_callback,
+            activity_key="prepare_runtime",
+            state="running",
+            title="Preparing the action runtime",
+        )
         setup_summary = run_process_setup(dict(runtime_setup), resource_root)
+        _emit_action_progress(
+            progress_callback,
+            activity_key="prepare_runtime",
+            state="completed",
+            title="Action runtime is ready",
+        )
     if declared_python is not None and not Path(declared_python).is_file():
         raise ValueError(
             f"Action {action.action_id!r} declares a Python runtime at "
@@ -410,6 +441,8 @@ def run_resource_action(
         )
 
     work_dir = Path(tempfile.mkdtemp(prefix="optpilot-resource-action-"))
+    progress_path = work_dir / "progress.jsonl"
+    progress_path.touch(mode=0o600)
     started = time.monotonic()
     try:
         inputs_file = work_dir / "inputs.json"
@@ -437,7 +470,14 @@ def run_resource_action(
             },
             INPUTS_FILE_ENV: str(inputs_file),
             OUTPUT_ROOT_ENV: str(output_path),
+            PROGRESS_FILE_ENV: str(progress_path),
         }
+        normalized_context = {
+            str(key): str(value)
+            for key, value in (context_env or {}).items()
+            if key in _ACTION_CONTEXT_ENV_KEYS and value not in {None, ""}
+        }
+        run_env.update(normalized_context)
         path_entries = runtime_hints.get("pathPrepend")
         if path_entries:
             from .setup import apply_prepared_env
@@ -450,6 +490,20 @@ def run_resource_action(
         if not cwd.is_dir():
             raise ValueError(f"Action cwd {cwd} is not a directory.")
         timed_out = False
+        monitor_stop = threading.Event()
+        monitor = threading.Thread(
+            target=_monitor_action_progress,
+            args=(progress_path, progress_callback, monitor_stop),
+            name=f"optpilot-action-progress-{action.action_id}",
+            daemon=True,
+        )
+        _emit_action_progress(
+            progress_callback,
+            activity_key="run_action",
+            state="running",
+            title=f"Running {action.label}",
+        )
+        monitor.start()
         try:
             completed = subprocess.run(
                 argv,
@@ -468,8 +522,17 @@ def run_resource_action(
             returncode = None
             stdout = _expired_text(error.stdout)
             stderr = _expired_text(error.stderr)
+        finally:
+            monitor_stop.set()
+            monitor.join(timeout=2.0)
         duration = time.monotonic() - started
         ok = returncode == 0 and not timed_out
+        _emit_action_progress(
+            progress_callback,
+            activity_key="run_action",
+            state="completed" if ok else "failed",
+            title=(f"Finished {action.label}" if ok else f"{action.label} failed"),
+        )
         result: Dict[str, Any] = {
             "ok": ok,
             "resource_id": str(resource.get("id", "")),
@@ -505,6 +568,90 @@ def run_resource_action(
         return _redact_sensitive_values(result, secret_values)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _emit_action_progress(
+    callback: Callable[[Mapping[str, Any]], None] | None,
+    *,
+    activity_key: str,
+    state: str,
+    title: str,
+    detail: str = "",
+    current: int | None = None,
+    total: int | None = None,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(
+            {
+                "activity_key": str(activity_key)[:160],
+                "activity_state": str(state)[:40],
+                "title": str(title)[:240],
+                "detail": str(detail)[:1000],
+                "current": current,
+                "total": total,
+                "observed_at": time.time(),
+            }
+        )
+    except Exception:
+        # Progress is advisory and must never change action execution.
+        return
+
+
+def _monitor_action_progress(
+    path: Path,
+    callback: Callable[[Mapping[str, Any]], None] | None,
+    stop: threading.Event,
+) -> None:
+    """Forward bounded JSONL progress written by the authored action."""
+
+    if callback is None:
+        return
+    offset = 0
+    buffered = b""
+    while True:
+        try:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                chunk = handle.read(64 * 1024)
+                offset = handle.tell()
+        except OSError:
+            chunk = b""
+        if chunk:
+            buffered += chunk
+            lines = buffered.split(b"\n")
+            buffered = lines.pop()
+            if len(buffered) > 16 * 1024:
+                buffered = b""
+            for line in lines[:256]:
+                if not line or len(line) > 16 * 1024:
+                    continue
+                try:
+                    raw = json.loads(line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(raw, Mapping):
+                    continue
+                state = str(raw.get("activity_state") or "running")[:40]
+                if state not in {"queued", "running", "completed", "failed"}:
+                    state = "running"
+                current = raw.get("current")
+                total = raw.get("total")
+                _emit_action_progress(
+                    callback,
+                    activity_key=str(raw.get("activity_key") or "action_progress")[:160],
+                    state=state,
+                    title=str(raw.get("title") or "Resource action progress")[:240],
+                    detail=str(raw.get("detail") or "")[:1000],
+                    current=current if isinstance(current, int) else None,
+                    total=total if isinstance(total, int) else None,
+                )
+        if stop.is_set():
+            if not chunk:
+                return
+            continue
+        stop.wait(0.25)
 
 
 def _declared_runtime_hints(

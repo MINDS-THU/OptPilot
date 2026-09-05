@@ -351,6 +351,39 @@ print("generated one bundle")
             )
         self.assertFalse(self.output_dir.exists())
 
+    def test_forwards_bounded_action_progress_and_context(self) -> None:
+        self._write_script(
+            "import json, os, pathlib\n"
+            "progress = pathlib.Path(os.environ['OPTPILOT_RESOURCE_ACTION_PROGRESS_FILE'])\n"
+            "with progress.open('a', encoding='utf-8') as stream:\n"
+            "    stream.write(json.dumps({'activity_key': 'build', 'activity_state': 'running', 'title': 'Building model', 'detail': 'phase one', 'current': 1, 'total': 3}) + '\\n')\n"
+            "out = pathlib.Path(os.environ['OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT'])\n"
+            "out.joinpath('context.txt').write_text(os.environ['OPTPILOT_ACTION_REQUEST_ID'])\n"
+        )
+        resource = self._write_resource([_action()])
+        events: list[dict] = []
+
+        summary = run_resource_action(
+            resource,
+            "generate",
+            output_root=self.output_dir,
+            context_env={
+                "OPTPILOT_ACTION_REQUEST_ID": "request-123",
+                "NOT_AN_INTERNAL_CONTEXT_VALUE": "ignored",
+            },
+            progress_callback=lambda event: events.append(dict(event)),
+        )
+
+        self.assertTrue(summary["ok"], summary)
+        self.assertEqual(
+            (self.output_dir / "context.txt").read_text(encoding="utf-8"),
+            "request-123",
+        )
+        generated = [event for event in events if event["activity_key"] == "build"]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(generated[0]["current"], 1)
+        self.assertEqual(generated[0]["total"], 3)
+
     def test_missing_host_environment_fails_before_execution(self) -> None:
         self._write_script("print('never runs')\n")
         resource = self._write_resource(
