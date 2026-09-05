@@ -3,8 +3,8 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 
 require_value OPTPILOT_STATE_ROOT
-require_value SHARED_AUTH_CREDENTIALS_FILE
-require_value SHARED_AUTH_SESSION_DB
+require_value CLASSROOM_AUTH_DB
+require_value OPTPILOT_ADMIN_PASSWORD
 require_value OPTPILOT_CATALOG_ROOT
 mkdir -p "${OPTPILOT_STATE_ROOT}"
 mkdir -p "${RUNTIME_ROOT}"
@@ -23,6 +23,10 @@ export OPTPILOT_PACKAGES_ROOT="${OPTPILOT_CATALOG_ROOT}"
 export OPTPILOT_REALM_ROOT
 export OPTPILOT_OPENHANDS_URL="http://${OPENHANDS_HOST}:${OPENHANDS_PORT}"
 export OPTPILOT_OPENHANDS_ENABLED
+# Only Studio receives these two secrets. The Python entry point removes them
+# from its environment before any Workspace or agent child can be launched.
+export OPTPILOT_ADMIN_PASSWORD OPTPILOT_INVITATION_CODE
+export OPTPILOT_REGISTRATION_ENABLED
 # These deployment-only secrets and paths are not inputs to Studio or its
 # child workspaces. Keep them out of their inherited environment.
 unset OH_SECRET_KEY TLS_CERTIFICATE_KEY
@@ -48,9 +52,9 @@ exec uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpil
   --catalog "${OPTPILOT_CATALOG_ROOT}" \
   --public-url "https://${PUBLIC_HOST}:${STUDIO_PORT}" \
   --trust-loopback-proxy \
-  --shared-auth-credentials-file "${SHARED_AUTH_CREDENTIALS_FILE}" \
-  --shared-auth-session-db "${SHARED_AUTH_SESSION_DB}" \
-  --shared-auth-session-ttl-seconds "${SHARED_AUTH_SESSION_TTL_SECONDS}" \
+  --classroom-auth-db "${CLASSROOM_AUTH_DB}" \
+  --classroom-auth-session-ttl-seconds "${CLASSROOM_AUTH_SESSION_TTL_SECONDS}" \
+  --classroom-auth-max-accounts "${CLASSROOM_AUTH_MAX_ACCOUNTS}" \
   --code-server-host "${WORKSPACE_RUNTIME_HOST}" \
   --code-server-port "${WORKSPACE_RUNTIME_PORT_START}" \
   --code-server-auth none \

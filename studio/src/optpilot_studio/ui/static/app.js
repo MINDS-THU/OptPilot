@@ -294,6 +294,7 @@ const state = {
   interfaceStopReturnFocus: null,
   localFolderReturnFocus: null,
   localFolderAttachToConversation: false,
+  authAccount: null,
 };
 
 const els = {};
@@ -360,10 +361,11 @@ let studioSecurityContextPromise = null;
 const operatorJobsPanelRenderCache = new WeakMap();
 let interfacePresentationReadyTimeout = null;
 
-function initializeApp() {
+async function initializeApp() {
   if (appInitialized) return;
   appInitialized = true;
   cacheElements();
+  if (!await loadAccountSession()) return;
   bindEvents();
   applyStudioRoute({ loadRun: false, render: false });
   renderAll();
@@ -460,6 +462,9 @@ function cacheElements() {
     "sidebarCodeServer",
     "sidebarServiceStatus",
     "studioSettingsButton",
+    "accountBar",
+    "accountName",
+    "signOutButton",
     "pageTitle",
     "pageSubtitle",
     "refreshButton",
@@ -675,6 +680,7 @@ function bindEvents() {
   window.optpilotStudioOpenSettings = openSettings;
   window.addEventListener("message", handleInterfacePresentationMessage);
   on(els.studioSettingsButton, "click", () => openSettings({ tab: "assistant" }));
+  on(els.signOutButton, "click", () => signOut());
   document.querySelectorAll(".nav-button[data-view]").forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));
   });
@@ -23645,6 +23651,90 @@ async function getJson(url, options = {}) {
     if (responseEtag) conditionalRequestEtags.set(conditionalKey, responseEtag);
   }
   return response.json();
+}
+
+function bindBrowserStateToAccount(accountId) {
+  const accountKey = "optpilot.studio.accountId.v1";
+  let previous = null;
+  let hasUnscopedState = false;
+  try {
+    previous = window.localStorage.getItem(accountKey);
+    hasUnscopedState = Object.values(STORAGE_KEYS).some((key) => (
+      window.localStorage.getItem(key) !== null
+      || window.sessionStorage.getItem(key) !== null
+    ));
+    if ((previous && previous !== accountId) || (!previous && hasUnscopedState)) {
+      Object.values(STORAGE_KEYS).forEach((key) => {
+        window.localStorage.removeItem(key);
+        window.sessionStorage.removeItem(key);
+      });
+      window.localStorage.setItem(accountKey, accountId);
+      return true;
+    }
+    window.localStorage.setItem(accountKey, accountId);
+  } catch (error) {
+    // Restricted browser storage does not weaken server-side ownership.
+  }
+  return false;
+}
+
+async function loadAccountSession() {
+  try {
+    const payload = await getJson("/api/auth/session", {
+      timeoutMs: PLATFORM_STATUS_TIMEOUT_MS,
+    });
+    if (!payload || !payload.authenticated || !payload.account) {
+      window.location.assign("/login");
+      return false;
+    }
+    if (!payload.shared_login_enabled) return true;
+    const accountId = String(payload.account.account_id || "");
+    if (accountId && bindBrowserStateToAccount(accountId)) {
+      window.location.reload();
+      return false;
+    }
+    state.authAccount = payload.account;
+    if (els.accountBar) els.accountBar.hidden = false;
+    if (els.accountName) {
+      const label = String(payload.account.display_name || payload.account.username || "Account");
+      els.accountName.textContent = `${label} · ${String(payload.account.role || "user")}`;
+    }
+    const isAdmin = payload.account.role === "admin";
+    if (els.studioSettingsButton) els.studioSettingsButton.hidden = !isAdmin;
+    if (els.openLocalFolderButton) els.openLocalFolderButton.hidden = !isAdmin;
+    document.querySelectorAll('[data-conversation-workspace-action="folder"]').forEach((button) => {
+      button.hidden = !isAdmin;
+    });
+    return true;
+  } catch (error) {
+    if (error && error.status === 401) {
+      window.location.assign("/login");
+      return false;
+    }
+    // The authenticated API remains authoritative; a temporary label failure
+    // must not make the rest of Studio unusable.
+    return true;
+  }
+}
+
+async function signOut() {
+  if (els.signOutButton) els.signOutButton.disabled = true;
+  try {
+    await postJson("/api/auth/logout", {});
+  } catch (error) {
+    // Redirecting to the login boundary is still the safe outcome.
+  } finally {
+    try {
+      Object.values(STORAGE_KEYS).forEach((key) => {
+        window.localStorage.removeItem(key);
+        window.sessionStorage.removeItem(key);
+      });
+      window.localStorage.removeItem("optpilot.studio.accountId.v1");
+    } catch (error) {
+      // The expired HttpOnly server session remains the authority.
+    }
+    window.location.assign("/login");
+  }
 }
 
 async function loadStudioSecurityContext() {

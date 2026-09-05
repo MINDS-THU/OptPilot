@@ -314,6 +314,31 @@ body.assistant-open .sidebar {
   font-size: 13px;
 }
 
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.account-bar[hidden] {
+  display: none;
+}
+
+.account-bar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-bar button {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
 .sidebar-workspaces {
   display: grid;
   flex: 1 1 auto;

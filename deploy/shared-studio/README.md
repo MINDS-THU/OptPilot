@@ -1,13 +1,17 @@
 # Shared Studio deployment
 
-This deployment gives a class one shared OptPilot login while keeping Studio,
+This deployment gives a class invite-only OptPilot accounts while keeping Studio,
 OpenHands, Code Server, and Preview providers on loopback. Only the isolated
 nginx TLS gateway binds the configured campus address. The authoritative design
 and threat model are in [`designs/shared-studio-deployment.md`](../../designs/shared-studio-deployment.md).
 
 ## Authentication boundary
 
-- Studio owns the password verifier and restart-persistent opaque sessions.
+- Studio owns student password verifiers, restart-persistent opaque sessions,
+  and private asset ownership in one SQLite database under the private root.
+- The `admin` account cannot be registered. Its password is supplied as
+  `OPTPILOT_ADMIN_PASSWORD` when Studio starts and is not stored in the account
+  database. Student registration can be opened or closed independently.
 - nginx does not use Basic Auth. It asks Studio to authorize every Studio,
   Code Server, and Preview request with `auth_request`.
 - A valid login alone cannot expose an arbitrary process in a configured port
@@ -19,10 +23,11 @@ and threat model are in [`designs/shared-studio-deployment.md`](../../designs/sh
   while all loopback/listener, TLS, allowlist, `auth_request`, and port-ownership
   preflight checks pass. Do not launch it this way outside this deployment.
 
-The shared account controls entry to the service; it is not a multi-user
-authorization model. Workspace privacy inside Studio is therefore not promised.
-The DEVS interface still uses its launch-scoped participant identity for its own
-history view and sends durable records to the configured collector.
+New Conversations, Workspaces, background Resource actions, Interface launches,
+and their dynamic Code Server/Preview ports are bound to the creating account.
+Unclaimed data from an older shared-login deployment is visible only to the
+admin. The DEVS interface still uses its launch-scoped participant identity for
+its own history view and sends durable records to the configured collector.
 
 ## Collector prerequisite
 
@@ -50,19 +55,19 @@ class or suspected disclosure.
    rendered into an isolated nginx configuration.
 2. Confirm `ALLOWED_CIDRS` with the campus network operator. The example ranges
    are configuration examples, not an authoritative current network list.
-3. Create the password verifier interactively:
+3. Set a strong `OPTPILOT_ADMIN_PASSWORD` in `deploy.env`. To open student
+   registration, generate one random class invitation code:
 
    ```bash
-   bash deploy/shared-studio/deploy.sh init-credentials students
+   bash deploy/shared-studio/deploy.sh generate-invitation
    ```
 
-   The password must contain at least 12 characters. To replace the password
-   later and restart safely in one step, use `reset-password`; it does not
-   restart the deployment if password creation fails:
-
-   ```bash
-   bash deploy/shared-studio/deploy.sh reset-password students
-   ```
+   Put the output in `OPTPILOT_INVITATION_CODE` and set
+   `OPTPILOT_REGISTRATION_ENABLED=1`. Both secrets must contain at least 12
+   characters. Set the registration switch back to `0` and restart after the
+   class has registered; existing accounts continue to work. Changing the
+   startup admin password and restarting invalidates all existing admin
+   sessions, without affecting student accounts.
 
    Install Certbot and issue the certificate before preflight. HTTP-01 uses a
    bounded standalone responder on privileged port 80. When inbound port 80 is
@@ -123,15 +128,14 @@ an occupied managed port, resolve that conflict before starting.
 
 The nginx access log records the request method and normalized path, but omits
 query strings and Cookies. This keeps launch-scoped Preview tokens and the
-shared session Cookie out of gateway logs. Login POSTs are additionally
+account session Cookie out of gateway logs. Login and registration POSTs are additionally
 rate-limited per source address by nginx; Studio applies its own per-address
 and global failed-login limits.
 
-Rotate the shared password by writing a new credentials file and restarting
-Studio. Existing browser sessions are stored in a separate SQLite database; to
-force immediate logout after a password rotation, stop the service and move
-that session database to a retained incident/archive directory before restart.
-Do not delete evidence during incident response.
+Rotate the admin password by changing `OPTPILOT_ADMIN_PASSWORD` and restarting
+Studio. The restart invalidates prior admin sessions. Student sessions and
+account-owned work remain in `CLASSROOM_AUTH_DB`; retain that database during
+backup or incident response.
 
 ## What remains private
 

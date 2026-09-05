@@ -321,7 +321,12 @@ class StudioPresentationBrokerTests(unittest.TestCase):
             )
             self.assertEqual(urlparse(lease.open_url).scheme, "https")
             self.assertTrue(broker.owns_port(lease.port))
+            self.assertEqual(
+                broker.owner_for_port(lease.port),
+                ("operator-job", "operator-job-1"),
+            )
             self.assertFalse(broker.owns_port(lease.port + 1))
+            self.assertIsNone(broker.owner_for_port(lease.port + 1))
             self.assertTrue(broker.close("public-job"))
             self.assertFalse(broker.owns_port(lease.port))
         finally:

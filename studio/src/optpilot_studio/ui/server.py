@@ -32,6 +32,7 @@ import time
 import uuid
 import webbrowser
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from http import HTTPStatus
@@ -258,10 +259,144 @@ from .runtime_supervisor import (
     StudioRuntimeSupervisorBusy,
     StudioRuntimeSupervisorClaim,
 )
-from .shared_auth import SharedAuth
+from .shared_auth import AuthPrincipal, ClassroomAuth, SharedAuth
 
 
 JsonDict = Dict[str, Any]
+
+_REQUEST_PRINCIPAL: ContextVar[Optional[AuthPrincipal]] = ContextVar(
+    "optpilot_request_principal", default=None
+)
+
+
+def _current_request_principal() -> Optional[AuthPrincipal]:
+    return _REQUEST_PRINCIPAL.get()
+
+
+def _account_coordinate_scope(state: "UiState") -> str:
+    """Return the stable account coordinate used only in classroom mode."""
+
+    principal = _current_request_principal()
+    if isinstance(getattr(state, "shared_auth", None), ClassroomAuth) and (
+        principal is not None
+    ):
+        return principal.account_id
+    return ""
+
+
+def _account_scoped_identity(
+    state: "UiState", identity: Mapping[str, Any]
+) -> JsonDict:
+    """Add account identity only where classroom coordinates must diverge."""
+
+    scoped = dict(identity)
+    account_scope = _account_coordinate_scope(state)
+    if account_scope:
+        scoped["account_id"] = account_scope
+    return scoped
+
+
+def _claim_account_asset(
+    state: "UiState",
+    asset_type: str,
+    asset_id: str,
+    *,
+    principal: Optional[AuthPrincipal] = None,
+) -> None:
+    auth = getattr(state, "shared_auth", None)
+    owner = principal or _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or owner is None:
+        return
+    auth.claim_asset(
+        asset_type=asset_type,
+        asset_id=asset_id,
+        principal=owner,
+    )
+
+
+def _account_can_access_asset(
+    state: "UiState",
+    asset_type: str,
+    asset_id: str,
+    *,
+    write: bool = False,
+    principal: Optional[AuthPrincipal] = None,
+) -> bool:
+    auth = getattr(state, "shared_auth", None)
+    actor = principal or _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or actor is None:
+        return True
+    return auth.can_access_asset(
+        asset_type=asset_type,
+        asset_id=asset_id,
+        principal=actor,
+        write=write,
+    )
+
+
+def _require_admin_account(state: "UiState") -> None:
+    principal = _current_request_principal()
+    if isinstance(getattr(state, "shared_auth", None), ClassroomAuth) and (
+        principal is None or principal.role != "admin"
+    ):
+        raise PermissionError("This operation is available only to the admin.")
+
+
+def _account_asset_owner_principal(
+    state: "UiState", asset_type: str, asset_id: str
+) -> Optional[AuthPrincipal]:
+    auth = getattr(state, "shared_auth", None)
+    if not isinstance(auth, ClassroomAuth):
+        return None
+    account_id = auth.asset_owner_account_id(
+        asset_type=asset_type, asset_id=asset_id
+    )
+    if not account_id:
+        return None
+    return AuthPrincipal(
+        account_id=account_id,
+        username=account_id,
+        display_name=account_id,
+        role="admin" if account_id == "admin" else "student",
+    )
+
+
+def _account_safe_platform_payload(state: "UiState", payload: JsonDict) -> JsonDict:
+    """Remove host-only paths from shared status shown to student accounts."""
+
+    principal = _current_request_principal()
+    if not isinstance(getattr(state, "shared_auth", None), ClassroomAuth) or (
+        principal is None or principal.role == "admin"
+    ):
+        return payload
+    hidden_keys = {
+        "catalog_roots",
+        "cwd",
+        "dockerfile",
+        "executable",
+        "jobs_dir",
+        "run_roots",
+        "runtime_dir",
+        "sessions_dir",
+        "settings_path",
+        "stderr_log",
+        "stdout_log",
+        "workspace_root",
+        "workspaces_dir",
+    }
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): scrub(item)
+                for key, item in value.items()
+                if str(key) not in hidden_keys
+            }
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return scrub(payload)
 
 _WORKSPACE_RUNTIME_RECORD_SCHEMA = "optpilot.studio-workspace-runtime.v2"
 _WORKSPACE_RUNTIME_CLAIM_SCHEMA = "optpilot.studio-workspace-runtime-claim.v1"
@@ -873,6 +1008,7 @@ class UiLaunchJob:
     terminal_error: str = field(default="", repr=False)
     terminal_error_code: str = field(default="", repr=False)
     launch_scope: str = ""
+    owner_account_id: str = field(default="", repr=False)
     source_workspace_id: str = field(default="", repr=False)
     runtime_workspace: JsonDict = field(default_factory=dict, repr=False)
     runtime_handles: JsonDict = field(default_factory=dict, repr=False)
@@ -1459,6 +1595,33 @@ class WorkspaceRuntimeManager:
                         continue
             self._owned_code_ports_cache[requested] = (now, allowed)
             return allowed
+
+    def workspace_id_for_code_server_port(self, port: int) -> str:
+        """Resolve a live public Code Server port to its exact Workspace id."""
+
+        try:
+            requested = int(port)
+        except (TypeError, ValueError):
+            return ""
+        if not self.owns_code_server_port(requested):
+            return ""
+        try:
+            paths = tuple(self.runtime_root.glob("*/runtime.json"))
+        except OSError:
+            return ""
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                workspace_id = str(payload.get("workspace_id") or "")
+                if (
+                    workspace_id
+                    and int(payload.get("host_port") or 0) == requested
+                    and self._workspace_runtime_dir(workspace_id) == path.parent
+                ):
+                    return workspace_id
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return ""
 
     def owns_workspace_code_server_port(
         self,
@@ -3658,7 +3821,7 @@ class UiState:
         code_server: Optional[CodeServerOptions] = None,
         workspace_runtime: Optional[WorkspaceRuntimeOptions] = None,
         public_access: Optional[PublicAccessOptions] = None,
-        shared_auth: Optional[SharedAuth] = None,
+        shared_auth: Optional[SharedAuth | ClassroomAuth] = None,
         runtime_supervisor_claim: Optional[StudioRuntimeSupervisorClaim] = None,
         catalog_refresh_ttl_seconds: float = 0.0,
         agent_tick_interval_seconds: float = 0.0,
@@ -4841,18 +5004,29 @@ def run_ui(
     shared_auth_credentials_file: Optional[str] = None,
     shared_auth_session_db: Optional[str] = None,
     shared_auth_session_ttl_seconds: int = 12 * 60 * 60,
+    classroom_auth_db: Optional[str] = None,
+    classroom_admin_password: Optional[str] = None,
+    classroom_invitation_code: str = "",
+    classroom_registration_enabled: bool = False,
+    classroom_auth_session_ttl_seconds: int = 7 * 24 * 60 * 60,
+    classroom_auth_max_accounts: int = 100,
     open_browser: bool = False,
 ) -> None:
     cwd = Path.cwd().resolve()
     public_access = PublicAccessOptions.from_url(
         public_url, trust_loopback_proxy=trust_loopback_proxy
     )
+    if shared_auth_credentials_file and classroom_auth_db:
+        raise ValueError(
+            "Choose either shared login or classroom accounts, not both."
+        )
+    auth_configured = bool(shared_auth_credentials_file or classroom_auth_db)
     if public_access.enabled:
         if not public_access.trust_loopback_proxy:
             raise ValueError("Public Studio access requires --trust-loopback-proxy.")
-        if not shared_auth_credentials_file:
+        if not auth_configured:
             raise ValueError(
-                "Public Studio access requires --shared-auth-credentials-file."
+                "Public Studio access requires a configured login system."
             )
         for label, value in (("Studio", host), ("Code Server", code_server_host)):
             try:
@@ -4863,8 +5037,8 @@ def run_ui(
                 raise ValueError(
                     f"{label} must bind to loopback when public access is enabled."
                 )
-    elif shared_auth_credentials_file:
-        raise ValueError("Shared login requires --public-url.")
+    elif auth_configured:
+        raise ValueError("Public login requires --public-url.")
     # Validate and pin the Realm root before deriving or creating any
     # project-local control path beneath it.  This prevents an unsafe terminal
     # symlink from receiving even the supervisor lock before Realm startup.
@@ -4873,8 +5047,17 @@ def run_ui(
         cwd,
         authority_root=realm_root,
     )
-    shared_auth = (
-        SharedAuth.from_files(
+    if classroom_auth_db:
+        shared_auth = ClassroomAuth(
+            database_path=Path(classroom_auth_db),
+            admin_password=str(classroom_admin_password or ""),
+            invitation_code=classroom_invitation_code,
+            registration_enabled=classroom_registration_enabled,
+            session_ttl_seconds=classroom_auth_session_ttl_seconds,
+            max_accounts=classroom_auth_max_accounts,
+        )
+    elif shared_auth_credentials_file:
+        shared_auth = SharedAuth.from_files(
             credentials_path=Path(shared_auth_credentials_file),
             database_path=(
                 Path(shared_auth_session_db)
@@ -4883,9 +5066,8 @@ def run_ui(
             ),
             session_ttl_seconds=shared_auth_session_ttl_seconds,
         )
-        if shared_auth_credentials_file
-        else None
-    )
+    else:
+        shared_auth = None
     runtime_supervisor_claim = StudioRuntimeSupervisorClaim.acquire(
         cwd,
         control_root=project_state_root,
@@ -5252,6 +5434,26 @@ def add_ui_arguments(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
         help="Shared login session lifetime (default: 12 hours).",
     )
     parser.add_argument(
+        "--classroom-auth-db",
+        default=None,
+        help=(
+            "Private SQLite path for invite-only classroom accounts. The admin "
+            "password and invitation code are read from environment variables."
+        ),
+    )
+    parser.add_argument(
+        "--classroom-auth-session-ttl-seconds",
+        type=int,
+        default=7 * 24 * 60 * 60,
+        help="Classroom account login session lifetime (default: 7 days).",
+    )
+    parser.add_argument(
+        "--classroom-auth-max-accounts",
+        type=int,
+        default=100,
+        help="Maximum number of active student accounts (default: 100).",
+    )
+    parser.add_argument(
         "--open-browser", action="store_true", help="Open the UI in a browser"
     )
     return parser
@@ -5264,6 +5466,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    classroom_admin_password = os.environ.pop("OPTPILOT_ADMIN_PASSWORD", None)
+    classroom_invitation_code = os.environ.pop("OPTPILOT_INVITATION_CODE", "")
+    classroom_registration_enabled = str(
+        os.environ.pop("OPTPILOT_REGISTRATION_ENABLED", "0")
+    ).strip().casefold() in {"1", "true", "yes", "on"}
     try:
         run_ui(
             host=args.host,
@@ -5293,6 +5500,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             shared_auth_credentials_file=args.shared_auth_credentials_file,
             shared_auth_session_db=args.shared_auth_session_db,
             shared_auth_session_ttl_seconds=args.shared_auth_session_ttl_seconds,
+            classroom_auth_db=args.classroom_auth_db,
+            classroom_admin_password=classroom_admin_password,
+            classroom_invitation_code=classroom_invitation_code,
+            classroom_registration_enabled=classroom_registration_enabled,
+            classroom_auth_session_ttl_seconds=(
+                args.classroom_auth_session_ttl_seconds
+            ),
+            classroom_auth_max_accounts=args.classroom_auth_max_accounts,
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:
@@ -5396,11 +5611,24 @@ def _safe_login_next(value: Any) -> str:
     return candidate
 
 
-def _shared_login_page(*, next_path: str = "/", error: str = "") -> bytes:
+def _shared_login_page(
+    *,
+    next_path: str = "/",
+    error: str = "",
+    registration_enabled: bool = False,
+) -> bytes:
     safe_next = html.escape(_safe_login_next(next_path), quote=True)
     error_markup = (
         f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
     )
+    registration_markup = ""
+    if registration_enabled:
+        registration_next = quote(_safe_login_next(next_path), safe="")
+        registration_markup = (
+            '<p style="margin:18px 0 0;text-align:center">'
+            f'<a href="/register?next={registration_next}">'
+            "Create an account with an invitation code</a></p>"
+        )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in · OptPilot</title><style>
@@ -5410,11 +5638,41 @@ h1{{font-size:22px;margin:0 0 8px}}p{{color:#5b6474;margin:0 0 22px}}label{{disp
 input{{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bcc6d5;border-radius:8px;font:inherit}}
 button{{width:100%;margin-top:22px;padding:11px;border:0;border-radius:8px;background:#2458d3;color:#fff;font:600 15px system-ui;cursor:pointer}}
 .error{{padding:10px;border-radius:8px;background:#fff0f0;color:#a22626;margin:14px 0}}
-</style></head><body><main><h1>Sign in to OptPilot</h1><p>Use the shared access account provided for this session.</p>{error_markup}
+</style></head><body><main><h1>Sign in to OptPilot</h1><p>Use your OptPilot account.</p>{error_markup}
 <form method="post" action="/api/auth/login"><input type="hidden" name="next" value="{safe_next}">
 <label for="username">Username</label><input id="username" name="username" autocomplete="username" required autofocus>
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Sign in</button></form></main></body></html>""".encode("utf-8")
+<button type="submit">Sign in</button></form>
+{registration_markup}
+</main></body></html>""".encode("utf-8")
+
+
+def _classroom_registration_page(
+    *, next_path: str = "/", error: str = ""
+) -> bytes:
+    safe_next = html.escape(_safe_login_next(next_path), quote=True)
+    error_markup = (
+        f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Create account · OptPilot</title><style>
+html,body{{min-height:100%;margin:0}}body{{display:grid;place-items:center;background:#f4f7fb;color:#172033;font:15px system-ui,sans-serif;padding:24px 0}}
+main{{width:min(390px,calc(100% - 40px));padding:30px;border:1px solid #d9e0ea;border-radius:14px;background:#fff;box-shadow:0 12px 35px #18243b14}}
+h1{{font-size:22px;margin:0 0 8px}}p{{color:#5b6474;margin:0 0 18px}}label{{display:block;font-weight:600;margin:14px 0 6px}}
+input{{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bcc6d5;border-radius:8px;font:inherit}}
+button{{width:100%;margin-top:22px;padding:11px;border:0;border-radius:8px;background:#2458d3;color:#fff;font:600 15px system-ui;cursor:pointer}}
+.error{{padding:10px;border-radius:8px;background:#fff0f0;color:#a22626;margin:14px 0}}.hint{{font-size:13px;margin-top:6px}}a{{color:#2458d3}}
+</style></head><body><main><h1>Create a classroom account</h1><p>Registration requires the invitation code provided by your instructor.</p>{error_markup}
+<form method="post" action="/api/auth/register"><input type="hidden" name="next" value="{safe_next}">
+<label for="username">Username</label><input id="username" name="username" autocomplete="username" minlength="2" maxlength="64" required autofocus>
+<label for="display_name">Display name <span style="font-weight:400">(optional)</span></label><input id="display_name" name="display_name" autocomplete="name" maxlength="80">
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required><p class="hint">Use at least 12 characters.</p>
+<label for="password_confirm">Repeat password</label><input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" required>
+<label for="invitation_code">Invitation code</label><input id="invitation_code" name="invitation_code" type="password" autocomplete="off" required>
+<button type="submit">Create account</button></form>
+<p style="margin:18px 0 0;text-align:center"><a href="/login?next={quote(_safe_login_next(next_path), safe='')}">Back to sign in</a></p>
+</main></body></html>""".encode("utf-8")
 
 
 def _handler_factory(state: UiState):
@@ -5422,6 +5680,13 @@ def _handler_factory(state: UiState):
 
     class OptPilotUiHandler(BaseHTTPRequestHandler):
         server_version = "OptPilotUI/0.1"
+
+        def handle_one_request(self) -> None:
+            principal_token = _REQUEST_PRINCIPAL.set(None)
+            try:
+                super().handle_one_request()
+            finally:
+                _REQUEST_PRINCIPAL.reset(principal_token)
 
         def _send_storage_unavailable(
             self,
@@ -5465,11 +5730,35 @@ def _handler_factory(state: UiState):
                     else:
                         self._send_login_page(next_path=next_path)
                     return
+                if path == "/register":
+                    next_path = _safe_login_next((query.get("next") or ["/"])[0])
+                    if state.shared_auth is None or self._shared_authenticated():
+                        self._redirect(next_path)
+                    elif not state.shared_auth.registration_enabled:
+                        self._redirect(f"/login?next={quote(next_path, safe='')}")
+                    else:
+                        self._send_registration_page(next_path=next_path)
+                    return
                 if path == "/api/auth/session":
+                    principal = self._authenticated_principal()
                     self._send_json(
                         {
-                            "authenticated": self._shared_authenticated(),
+                            "authenticated": principal is not None,
                             "shared_login_enabled": state.shared_auth is not None,
+                            "registration_enabled": bool(
+                                state.shared_auth is not None
+                                and state.shared_auth.registration_enabled
+                            ),
+                            "account": (
+                                {
+                                    "account_id": principal.account_id,
+                                    "username": principal.username,
+                                    "display_name": principal.display_name,
+                                    "role": principal.role,
+                                }
+                                if principal is not None
+                                else None
+                            ),
                         }
                     )
                     return
@@ -5511,10 +5800,18 @@ def _handler_factory(state: UiState):
                     self._send_static_file(path.removeprefix("/static/"))
                     return
                 if path == "/api/health":
-                    self._send_json({"ok": True, "cwd": str(state.cwd)})
+                    self._send_json(
+                        _account_safe_platform_payload(
+                            state, {"ok": True, "cwd": str(state.cwd)}
+                        )
+                    )
                     return
                 if path == "/api/workspace":
-                    self._send_json(_workspace_payload(state))
+                    self._send_json(
+                        _account_safe_platform_payload(
+                            state, _workspace_payload(state)
+                        )
+                    )
                     return
                 if path == "/api/workspaces":
                     self._send_json({"workspaces": _list_ui_workspaces(state)})
@@ -5557,7 +5854,11 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if path == "/api/agent/settings":
-                    self._send_json(_agent_settings_payload(state))
+                    self._send_json(
+                        _account_safe_platform_payload(
+                            state, _agent_settings_payload(state)
+                        )
+                    )
                     return
                 if path == "/api/agent/capabilities":
                     self._send_json(_assistant_capability_list(state))
@@ -5577,16 +5878,26 @@ def _handler_factory(state: UiState):
                         )
                     return
                 if path == "/api/agent/runtime/status":
-                    self._send_json(state.agent_adapter.status())
+                    self._send_json(
+                        _account_safe_platform_payload(
+                            state, state.agent_adapter.status()
+                        )
+                    )
                     return
                 if path.startswith("/api/agent-sessions/"):
                     self._handle_agent_session_get(path)
                     return
                 if path == "/api/runtime/health":
-                    self._send_json(_runtime_health(state))
+                    self._send_json(
+                        _account_safe_platform_payload(state, _runtime_health(state))
+                    )
                     return
                 if path == "/api/code-server/status":
-                    self._send_json(state.code_server_status())
+                    self._send_json(
+                        _account_safe_platform_payload(
+                            state, state.code_server_status()
+                        )
+                    )
                     return
                 if path == "/api/catalog":
                     self._send_json(_catalog_payload(state))
@@ -5624,8 +5935,13 @@ def _handler_factory(state: UiState):
                     parts = path.split("/")
                     if len(parts) != 5 or not parts[4]:
                         raise ValueError("Invalid Study launch status path.")
+                    launch_id = unquote(parts[4])
+                    if not _account_can_access_asset(
+                        state, "study-launch", launch_id
+                    ):
+                        raise RealmNotFound("Study launch was not found.")
                     launch = _study_launch_service_for_state(state).read(
-                        launch_id=unquote(parts[4])
+                        launch_id=launch_id
                     )
                     self._send_json(_study_launch_response(launch))
                     return
@@ -5644,7 +5960,11 @@ def _handler_factory(state: UiState):
                 if path == "/api/runs":
                     page_token = _query_value(query, "page_token")
                     limit = _bounded_query_int(query, "limit", default=50)
-                    if page_token is None and state.realm_runtime is not None:
+                    if (
+                        page_token is None
+                        and state.realm_runtime is not None
+                        and not isinstance(state.shared_auth, ClassroomAuth)
+                    ):
                         entry = _runs_response_entry(state, limit=limit)
                         if (
                             self.headers.get("If-None-Match")
@@ -5708,6 +6028,9 @@ def _handler_factory(state: UiState):
                         [
                             launch.to_dict()
                             for launch in _study_launch_service_for_state(state).list()
+                            if _account_can_access_asset(
+                                state, "study-launch", launch.launch_id
+                            )
                         ]
                         if _study_launch_provider_available(state)
                         else []
@@ -5724,6 +6047,10 @@ def _handler_factory(state: UiState):
                     return
                 if path.startswith("/api/interface-launches/"):
                     parts = path.split("/")
+                    if len(parts) > 3 and not _account_can_access_asset(
+                        state, "interface-launch", parts[3]
+                    ):
+                        raise RealmNotFound("Interface launch was not found.")
                     if (
                         len(parts) == 8
                         and parts[4] == "output-action-executions"
@@ -5789,6 +6116,11 @@ def _handler_factory(state: UiState):
                 if isinstance(code, str) and code:
                     response["code"] = code
                 self._send_json(response, status=HTTPStatus.CONFLICT)
+            except PermissionError as exc:
+                self._send_json(
+                    {"error": str(exc), "code": "studio_admin_required"},
+                    status=HTTPStatus.FORBIDDEN,
+                )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # pragma: no cover - defensive HTTP boundary
@@ -5802,6 +6134,9 @@ def _handler_factory(state: UiState):
             if parsed.path == "/api/auth/login":
                 self._handle_auth_login()
                 return
+            if parsed.path == "/api/auth/register":
+                self._handle_auth_register()
+                return
             if parsed.path == "/api/auth/logout":
                 self._handle_auth_logout()
                 return
@@ -5812,6 +6147,7 @@ def _handler_factory(state: UiState):
             try:
                 if parsed.path == "/api/studies/validate":
                     payload = self._read_json_body()
+                    _require_admin_account(state)
                     study_path = _resolve_user_path(
                         payload.get("study_path"), state.cwd
                     )
@@ -5840,8 +6176,11 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if parsed.path == "/api/studies/launch":
+                    launch_payload = self._read_json_body()
+                    if "study_path" in launch_payload:
+                        _require_admin_account(state)
                     response, status = _submit_study_launch_request(
-                        state, self._read_json_body()
+                        state, launch_payload
                     )
                     self._send_json(response, status=status)
                     return
@@ -5864,6 +6203,10 @@ def _handler_factory(state: UiState):
                         raise ValueError("Study launch Stop request schema is unsupported.")
                     request_id = _canonical_request_uuid(request["request_id"])
                     launch_id = unquote(parts[4])
+                    if not _account_can_access_asset(
+                        state, "study-launch", launch_id, write=True
+                    ):
+                        raise RealmNotFound("Study launch was not found.")
                     stopped = state.stop_job(
                         launch_id,
                         operation_id=(
@@ -5884,6 +6227,8 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path == "/api/studies/workspace":
                     payload = self._read_json_body()
+                    if payload.get("study_path"):
+                        _require_admin_account(state)
                     self._send_json(
                         {"workspace": _open_study_workspace(state, payload)},
                         status=HTTPStatus.CREATED,
@@ -5891,12 +6236,27 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path == "/api/workspaces":
                     payload = self._read_json_body()
+                    principal = _current_request_principal()
+                    if (
+                        isinstance(state.shared_auth, ClassroomAuth)
+                        and principal is not None
+                        and principal.role != "admin"
+                    ):
+                        unexpected = sorted(
+                            set(payload)
+                            - {"title", "description", "attached_sessions"}
+                        )
+                        if unexpected or payload.get("attached_sessions"):
+                            raise PermissionError(
+                                "Student accounts may create only a blank Workspace."
+                            )
                     self._send_json(
                         {"workspace": _create_ui_workspace(state, payload)},
                         status=HTTPStatus.CREATED,
                     )
                     return
                 if parsed.path == "/api/workspaces/connect-local-folder":
+                    _require_admin_account(state)
                     payload = self._read_json_body()
                     self._send_json(
                         {"workspace": _connect_local_folder(state, payload)},
@@ -5908,12 +6268,36 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path == "/api/agent-sessions":
                     payload = self._read_json_body()
+                    principal = _current_request_principal()
+                    if (
+                        isinstance(state.shared_auth, ClassroomAuth)
+                        and principal is not None
+                        and principal.role != "admin"
+                    ):
+                        unexpected = sorted(
+                            set(payload)
+                            - {
+                                "title",
+                                "description",
+                                "attached_workspace_ids",
+                                "selected_workspace_id",
+                            }
+                        )
+                        if (
+                            unexpected
+                            or payload.get("attached_workspace_ids")
+                            or payload.get("selected_workspace_id")
+                        ):
+                            raise PermissionError(
+                                "Student accounts must attach Workspaces after creating the Conversation."
+                            )
                     self._send_json(
                         {"session": _create_agent_session(state, payload)},
                         status=HTTPStatus.CREATED,
                     )
                     return
                 if parsed.path == "/api/agent/settings":
+                    _require_admin_account(state)
                     payload = self._read_json_body()
                     self._send_json(_update_agent_settings(state, payload))
                     return
@@ -5926,10 +6310,18 @@ def _handler_factory(state: UiState):
                     parts = parsed.path.split("/")
                     if len(parts) != 5:
                         raise ValueError("Invalid interface launch stop path.")
+                    if not _account_can_access_asset(
+                        state, "interface-launch", parts[3], write=True
+                    ):
+                        raise RealmNotFound("Interface launch was not found.")
                     self._send_json({"launch": _stop_interface_launch(state, parts[3])})
                     return
                 if parsed.path.startswith("/api/interface-launches/"):
                     parts = parsed.path.split("/")
+                    if len(parts) > 3 and not _account_can_access_asset(
+                        state, "interface-launch", parts[3], write=True
+                    ):
+                        raise RealmNotFound("Interface launch was not found.")
                     if (
                         len(parts) == 9
                         and parts[4] == "outputs"
@@ -6026,6 +6418,7 @@ def _handler_factory(state: UiState):
                         return
                 if parsed.path.startswith("/api/catalog/"):
                     if parsed.path.startswith("/api/catalog/sources/"):
+                        _require_admin_account(state)
                         self._handle_configured_catalog_source_post(parsed.path)
                         return
                     self._handle_catalog_workspace_post(parsed.path)
@@ -6040,6 +6433,7 @@ def _handler_factory(state: UiState):
                     self._handle_operator_job_post(parsed.path)
                     return
                 if parsed.path == "/api/code-server/start":
+                    _require_admin_account(state)
                     payload = self._read_json_body()
                     folder = _optional_user_path(payload.get("folder"), state.cwd)
                     self._send_json(
@@ -6047,11 +6441,13 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if parsed.path == "/api/code-server/open":
+                    _require_admin_account(state)
                     payload = self._read_json_body()
                     folder = _optional_user_path(payload.get("folder"), state.cwd)
                     self._send_json(state.code_server_open_url(folder))
                     return
                 if parsed.path == "/api/workspace-preview/open":
+                    _require_admin_account(state)
                     payload = self._read_json_body()
                     folder = _optional_user_path(payload.get("folder"), state.cwd)
                     port = int(payload.get("port") or 5173)
@@ -6068,12 +6464,17 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if parsed.path == "/api/code-server/stop":
+                    _require_admin_account(state)
                     self._send_json(state.stop_code_server())
                     return
                 if parsed.path.startswith("/api/jobs/") and parsed.path.endswith(
                     "/stop"
                 ):
                     job_id = parsed.path.split("/")[3]
+                    if not _account_can_access_asset(
+                        state, "study-launch", job_id, write=True
+                    ):
+                        raise RealmNotFound("Study launch was not found.")
                     self._send_json({"job": state.stop_job(job_id)})
                     return
                 self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
@@ -6100,6 +6501,11 @@ def _handler_factory(state: UiState):
                 self._send_json(
                     {"error": str(exc), "type": type(exc).__name__},
                     status=HTTPStatus.BAD_REQUEST,
+                )
+            except PermissionError as exc:
+                self._send_json(
+                    {"error": str(exc), "code": "studio_admin_required"},
+                    status=HTTPStatus.FORBIDDEN,
                 )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -6146,6 +6552,11 @@ def _handler_factory(state: UiState):
                 self._send_json(
                     {"error": str(exc), "type": type(exc).__name__},
                     status=HTTPStatus.CONFLICT,
+                )
+            except PermissionError as exc:
+                self._send_json(
+                    {"error": str(exc), "code": "studio_admin_required"},
+                    status=HTTPStatus.FORBIDDEN,
                 )
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -6566,6 +6977,8 @@ def _handler_factory(state: UiState):
                 )
                 return
             run_id = unquote(parts[3])
+            if not _account_can_access_asset(state, "run", run_id):
+                raise RealmNotFound("Run was not found.")
             runtime = _require_realm_runtime(state)
             ref = RunViewRef(run_id=run_id)
             if len(parts) == 4:
@@ -6700,6 +7113,10 @@ def _handler_factory(state: UiState):
                 )
                 return
             run_id = unquote(parts[3])
+            if not _account_can_access_asset(
+                state, "run", run_id, write=True
+            ):
+                raise RealmNotFound("Run was not found.")
             resource = parts[4]
             if resource == "candidate-comparison" and len(parts) == 5:
                 self._send_json(
@@ -6738,6 +7155,10 @@ def _handler_factory(state: UiState):
                 # process-local threads, remain lifecycle authority.
                 self._send_json(response, status=status)
                 job = response.get("job")
+                if isinstance(job, dict) and job.get("job_id"):
+                    _claim_account_asset(
+                        state, "operator-job", str(job["job_id"])
+                    )
                 if response.get("action") in {
                     "debug_run",
                     "environment_preview",
@@ -6752,6 +7173,8 @@ def _handler_factory(state: UiState):
                         # than attempting an invalid second HTTP response.
                         pass
                 child_run = response.get("child_run")
+                if isinstance(child_run, dict) and child_run.get("run_id"):
+                    _claim_account_asset(state, "run", str(child_run["run_id"]))
                 if response.get("action") == "evaluate_child_run" and isinstance(
                     child_run, dict
                 ):
@@ -6906,6 +7329,10 @@ def _handler_factory(state: UiState):
                 )
                 return
             record = _operator_job_by_public_id(state, job_id=unquote(parts[3]))
+            if not _account_can_access_asset(
+                state, "operator-job", record.job_id
+            ):
+                raise RealmNotFound("Operator Job was not found.")
             self._send_json(
                 _realm_operator_job_detail_payload(
                     state,
@@ -6923,6 +7350,10 @@ def _handler_factory(state: UiState):
             ):
                 payload = self._read_json_body()
                 record = _operator_job_by_public_id(state, job_id=unquote(parts[3]))
+                if not _account_can_access_asset(
+                    state, "operator-job", record.job_id, write=True
+                ):
+                    raise RealmNotFound("Operator Job was not found.")
                 output_id = unquote(parts[5])
                 if parts[6] == "view":
                     request = _exact_json_object(
@@ -6984,6 +7415,10 @@ def _handler_factory(state: UiState):
                 )
                 return
             record = _operator_job_by_public_id(state, job_id=unquote(parts[3]))
+            if not _account_can_access_asset(
+                state, "operator-job", record.job_id, write=True
+            ):
+                raise RealmNotFound("Operator Job was not found.")
             self._send_json(
                 _stop_realm_operator_job(
                     state,
@@ -7022,10 +7457,22 @@ def _handler_factory(state: UiState):
             )
 
         def _shared_authenticated(self) -> bool:
-            return bool(
-                state.shared_auth is None
-                or state.shared_auth.verify_cookie(self.headers.get("Cookie", ""))
-            )
+            return state.shared_auth is None or self._authenticated_principal() is not None
+
+        def _authenticated_principal(self) -> Optional[AuthPrincipal]:
+            if state.shared_auth is None:
+                principal = AuthPrincipal(
+                    account_id="local",
+                    username="local",
+                    display_name="Local user",
+                    role="admin",
+                )
+            else:
+                principal = state.shared_auth.principal_from_cookie(
+                    self.headers.get("Cookie", "")
+                )
+            _REQUEST_PRINCIPAL.set(principal)
+            return principal
 
         def _require_shared_auth(self, path: str) -> bool:
             if self._shared_authenticated():
@@ -7161,6 +7608,99 @@ def _handler_factory(state: UiState):
                     headers={"Set-Cookie": cookie},
                 )
 
+        def _handle_auth_register(self) -> None:
+            if state.shared_auth is None or not isinstance(
+                state.shared_auth, ClassroomAuth
+            ):
+                self._send_json(
+                    {"error": "Classroom registration is not enabled."},
+                    status=HTTPStatus.NOT_FOUND,
+                )
+                return
+            if not state.shared_auth.registration_enabled:
+                self._send_json(
+                    {"error": "Registration is currently closed."},
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return
+            if not self._authorize_login_origin():
+                return
+            form_request = str(self.headers.get("Content-Type") or "").startswith(
+                "application/x-www-form-urlencoded"
+            )
+            next_path = "/"
+            try:
+                payload = self._read_login_payload()
+                next_path = _safe_login_next(payload.get("next"))
+                if form_request and payload.get("password") != payload.get(
+                    "password_confirm"
+                ):
+                    raise ValueError("Passwords do not match.")
+                token = state.shared_auth.register(
+                    username=str(payload.get("username") or ""),
+                    display_name=str(payload.get("display_name") or ""),
+                    password=str(payload.get("password") or ""),
+                    invitation_code=str(payload.get("invitation_code") or ""),
+                    client_key=self._login_client_key(),
+                )
+            except RuntimeError as error:
+                if form_request:
+                    self._send_registration_page(
+                        next_path=next_path,
+                        error=str(error),
+                        status=HTTPStatus.TOO_MANY_REQUESTS,
+                    )
+                else:
+                    self._send_json(
+                        {"error": str(error), "code": "studio_registration_limited"},
+                        status=HTTPStatus.TOO_MANY_REQUESTS,
+                    )
+                return
+            except PermissionError as error:
+                if form_request:
+                    self._send_registration_page(
+                        next_path=next_path,
+                        error=str(error),
+                        status=HTTPStatus.FORBIDDEN,
+                    )
+                else:
+                    self._send_json(
+                        {"error": str(error), "code": "studio_registration_forbidden"},
+                        status=HTTPStatus.FORBIDDEN,
+                    )
+                return
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+                if form_request:
+                    self._send_registration_page(
+                        next_path=next_path,
+                        error=str(error),
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                else:
+                    self._send_json(
+                        {"error": str(error), "code": "studio_registration_invalid"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                return
+            cookie = state.shared_auth.session_cookie(token)
+            if form_request:
+                self._redirect(next_path, set_cookie=cookie)
+            else:
+                principal = state.shared_auth.principal_from_token(token)
+                self._send_json(
+                    {
+                        "authenticated": True,
+                        "account": {
+                            "account_id": principal.account_id,
+                            "username": principal.username,
+                            "display_name": principal.display_name,
+                            "role": principal.role,
+                        },
+                    },
+                    status=HTTPStatus.CREATED,
+                    headers={"Set-Cookie": cookie},
+                )
+
         def _handle_auth_logout(self) -> None:
             if state.shared_auth is None or not self._shared_authenticated():
                 self._send_json(
@@ -7176,7 +7716,8 @@ def _handler_factory(state: UiState):
             )
 
         def _handle_auth_verify(self) -> None:
-            if state.shared_auth is None or not self._shared_authenticated():
+            principal = self._authenticated_principal()
+            if state.shared_auth is None or principal is None:
                 self._send_empty(HTTPStatus.UNAUTHORIZED)
                 return
             try:
@@ -7192,11 +7733,56 @@ def _handler_factory(state: UiState):
                 port = int(self.headers.get("X-OptPilot-Target-Port") or 0)
             except ValueError:
                 port = 0
-            allowed = kind == "studio" or (
-                kind == "code" and state.workspace_runtime.owns_code_server_port(port)
-            ) or (
-                kind == "presentation" and state.presentation_broker.owns_port(port)
-            )
+            allowed = kind == "studio"
+            if kind == "code":
+                workspace_id = state.workspace_runtime.workspace_id_for_code_server_port(
+                    port
+                )
+                allowed = bool(workspace_id) and (
+                    _account_can_access_asset(
+                        state,
+                        "workspace",
+                        workspace_id,
+                        principal=principal,
+                    )
+                    or _account_can_access_asset(
+                        state,
+                        "runtime-workspace",
+                        workspace_id,
+                        principal=principal,
+                    )
+                )
+            elif kind == "presentation":
+                endpoint_owner = state.presentation_broker.owner_for_port(port)
+                allowed = False
+                if endpoint_owner is not None:
+                    owner_kind, owner_id = endpoint_owner
+                    if owner_kind == "workspace-runtime":
+                        allowed = _account_can_access_asset(
+                            state,
+                            "workspace",
+                            owner_id,
+                            principal=principal,
+                        ) or _account_can_access_asset(
+                            state,
+                            "runtime-workspace",
+                            owner_id,
+                            principal=principal,
+                        )
+                    elif owner_kind.startswith("operator-job"):
+                        allowed = _account_can_access_asset(
+                            state,
+                            "operator-job",
+                            owner_id,
+                            principal=principal,
+                        )
+                    elif owner_kind.startswith("child-run"):
+                        allowed = _account_can_access_asset(
+                            state,
+                            "run",
+                            owner_id,
+                            principal=principal,
+                        )
             self._send_empty(HTTPStatus.NO_CONTENT if allowed else HTTPStatus.FORBIDDEN)
 
         def _redirect(self, location: str, *, set_cookie: str = "") -> None:
@@ -7221,7 +7807,31 @@ def _handler_factory(state: UiState):
             error: str = "",
             status: HTTPStatus = HTTPStatus.OK,
         ) -> None:
-            data = _shared_login_page(next_path=next_path, error=error)
+            data = _shared_login_page(
+                next_path=next_path,
+                error=error,
+                registration_enabled=bool(
+                    state.shared_auth is not None
+                    and state.shared_auth.registration_enabled
+                ),
+            )
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send_registration_page(
+            self,
+            *,
+            next_path: str,
+            error: str = "",
+            status: HTTPStatus = HTTPStatus.OK,
+        ) -> None:
+            data = _classroom_registration_page(next_path=next_path, error=error)
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
@@ -11856,6 +12466,20 @@ def _start_resource_action_run(
     if not isinstance(payload, Mapping):
         raise ValueError("Resource action request must be a JSON object.")
     request_id = _canonical_request_uuid(payload.get("request_id"))
+    principal = _current_request_principal()
+    if principal is None and agent_session_id:
+        for session in _read_agent_session_index(state):
+            if str(session.get("id") or "") != str(agent_session_id):
+                continue
+            owner_account_id = str(session.get("owner_account_id") or "")
+            if owner_account_id:
+                principal = AuthPrincipal(
+                    owner_account_id,
+                    owner_account_id,
+                    owner_account_id,
+                    "admin" if owner_account_id == "admin" else "student",
+                )
+            break
     resource_uid = str(payload.get("resource_uid") or "").strip()
     action_id = str(payload.get("action_id") or "").strip()
     inputs = payload.get("inputs")
@@ -11887,10 +12511,20 @@ def _start_resource_action_run(
             "action_contract_digest": expected_contract_digest,
         }
     )
+    _claim_account_asset(
+        state, "resource-action", request_id, principal=principal
+    )
 
     with state._lock:
         existing = state._resource_action_runs.get(request_id)
         if existing is not None:
+            if not _account_can_access_asset(
+                state,
+                "resource-action",
+                request_id,
+                principal=principal,
+            ):
+                raise KeyError(request_id)
             if not secrets.compare_digest(
                 str(existing.get("execution_request_digest") or ""),
                 execution_request_digest,
@@ -11970,6 +12604,7 @@ def _start_resource_action_run(
         "error": None,
         "agent_session_id": str(agent_session_id or ""),
         "agent_conversation_id": str(agent_conversation_id or ""),
+        "owner_account_id": principal.account_id if principal is not None else "",
     }
 
     def execute() -> None:
@@ -12075,6 +12710,8 @@ def _start_resource_action_run(
 
 def _resource_action_run_status(state: UiState, request_id: str) -> JsonDict:
     request_id = _canonical_request_uuid(request_id)
+    if not _account_can_access_asset(state, "resource-action", request_id):
+        raise KeyError(request_id)
     with state._lock:
         record = state._resource_action_runs.get(request_id)
     if record is None:
@@ -13261,6 +13898,7 @@ def _draft_study_serialized(state: UiState, payload: JsonDict) -> JsonDict:
         draft_action_id: Optional[str] = None
         expected_draft_revision: Optional[int] = None
         if persist_draft:
+            _claim_account_asset(state, "study-draft", draft_id)
             draft_action_id = _canonical_request_uuid(payload.get("draft_action_id"))
             expected_draft_revision = payload.get("expected_draft_revision")
             if expected_draft_revision is not None and (
@@ -13630,6 +14268,10 @@ def _list_saved_study_drafts(state: UiState) -> JsonDict:
     }
     drafts = []
     for record in records:
+        if not _account_can_access_asset(
+            state, "study-draft", str(record.draft_id)
+        ):
+            continue
         workspace, availability = _recover_saved_study_draft_workspace(
             state, record, workspaces.get(record.workspace_id)
         )
@@ -13658,6 +14300,10 @@ def _discard_saved_study_draft(
 def _discard_saved_study_draft_serialized(
     state: UiState, draft_id: str, payload: Any
 ) -> JsonDict:
+    if not _account_can_access_asset(
+        state, "study-draft", draft_id, write=True
+    ):
+        raise CoordinationNotFound("Study draft was not found.")
     request = _exact_json_object(
         payload,
         expected={"request_id", "expected_revision"},
@@ -17973,11 +18619,20 @@ def _realm_runs_payload(
 ) -> JsonDict:
     runtime = _require_realm_runtime(state)
     page = runtime.run_reader.list_runs(page_token=page_token, limit=limit)
+    visible_items = [
+        item
+        for item in page.items
+        if _account_can_access_asset(state, "run", item.run_id)
+    ]
     catalog = page.to_dict()
-    entries = {item.run_id: item.to_dict() for item in page.items}
+    if isinstance(catalog.get("items"), list):
+        catalog["items"] = [item.to_dict() for item in visible_items]
+    if isinstance(catalog.get("page"), dict):
+        catalog["page"]["count"] = len(visible_items)
+    entries = {item.run_id: item.to_dict() for item in visible_items}
     rows = []
     diagnostics: List[JsonDict] = []
-    for item in page.items:
+    for item in visible_items:
         try:
             workbench = runtime.run_views.workbench_head(
                 ref=RunViewRef(run_id=item.run_id)
@@ -19195,6 +19850,17 @@ def _study_launch_response(
 def _complete_study_launch_intent(
     state: UiState, intent: ActionIntentRecord, view: StudyLaunchView
 ) -> ActionIntentRecord:
+    owner = _account_asset_owner_principal(
+        state, "study-launch-request", intent.intent_id
+    )
+    _claim_account_asset(
+        state, "study-launch", view.launch_id, principal=owner
+    )
+    _claim_account_asset(
+        state, "operator-job", view.job.job_id, principal=owner
+    )
+    if view.run_id:
+        _claim_account_asset(state, "run", view.run_id, principal=owner)
     return state.coordination.complete_action(
         operation_id=f"studio/study-launch-intent/{intent.intent_id}/complete",
         intent_id=intent.intent_id,
@@ -19369,6 +20035,8 @@ def _study_launch_preparation_status(
     state: UiState, request_id: str
 ) -> JsonDict:
     request_id = _canonical_request_uuid(request_id)
+    if not _account_can_access_asset(state, "study-launch-request", request_id):
+        raise CoordinationNotFound("Study launch preparation was not found.")
     intent = state.coordination.get_action(request_id)
     if (
         intent.actor_id != _studio_actor_id(state)
@@ -19391,6 +20059,9 @@ def _submit_study_launch_request(
     """Persist one launch click and return before package preparation blocks."""
 
     request = _canonical_study_launch_request(payload)
+    _claim_account_asset(
+        state, "study-launch-request", str(request["request_id"])
+    )
     intent = _begin_study_launch_intent(state, request)
     if intent.state is ActionState.FAILED:
         return (
@@ -19424,6 +20095,13 @@ def _execute_study_launch_request(
     state: UiState, payload: Any
 ) -> tuple[JsonDict, HTTPStatus]:
     request = _canonical_study_launch_request(payload)
+    # Assistant launches execute this path directly, while browser launches
+    # normally claim the request in _submit_study_launch_request first.
+    # Claiming here as well is idempotent and keeps both entry points subject
+    # to the same account boundary.
+    _claim_account_asset(
+        state, "study-launch-request", str(request["request_id"])
+    )
     intent = _begin_study_launch_intent(state, request)
     if intent.state is ActionState.FAILED:
         return _study_launch_failure_response(intent), HTTPStatus.BAD_REQUEST
@@ -21947,13 +22625,45 @@ def _execute_agent_tool(
     *,
     execution_context: Optional[ToolExecutionContext] = None,
 ) -> JsonDict:
+    """Run an Assistant tool under the Conversation owner's account scope."""
+
+    principal = _current_request_principal() or _agent_session_owner_principal(
+        state, session_id
+    )
+    principal_token = _REQUEST_PRINCIPAL.set(principal)
+    try:
+        return _execute_agent_tool_as_owner(
+            state,
+            session_id,
+            tool,
+            arguments,
+            execution_context=execution_context,
+        )
+    finally:
+        _REQUEST_PRINCIPAL.reset(principal_token)
+
+
+def _execute_agent_tool_as_owner(
+    state: UiState,
+    session_id: str,
+    tool: str,
+    arguments: Optional[JsonDict] = None,
+    *,
+    execution_context: Optional[ToolExecutionContext] = None,
+) -> JsonDict:
     arguments = arguments or {}
     if tool == "optpilot_conversation_title":
         return _set_agent_conversation_title(
             state, session_id, arguments.get("title")
         )
     if tool == "optpilot_workspace_list":
-        sessions = _read_agent_session_index(state)
+        sessions = [
+            item
+            for item in _read_agent_session_index(state)
+            if _account_can_access_asset(
+                state, "conversation", str(item.get("id") or "")
+            )
+        ]
         session = _require_agent_session(state, session_id)
         attached = set(session.get("attached_workspace_ids", []) or [])
         workspaces = []
@@ -22859,6 +23569,16 @@ def _execute_agent_tool(
                 launch_inputs=launch_inputs,
             )
         )
+        if isinstance(getattr(state, "shared_auth", None), ClassroomAuth):
+            owner = _current_request_principal()
+            _claim_account_asset(
+                state, "study-launch", job.launch_id, principal=owner
+            )
+            _claim_account_asset(
+                state, "operator-job", job.job.job_id, principal=owner
+            )
+            if job.run_id:
+                _claim_account_asset(state, "run", job.run_id, principal=owner)
         return _tool_result(
             tool,
             True,
@@ -23000,6 +23720,7 @@ def _execute_agent_tool(
             kind,
             uid,
             profile_id=str(arguments.get("profile_id") or "") or None,
+            principal=_agent_session_owner_principal(state, session_id),
         )
         launch = launched.get("launch") if isinstance(launched, dict) else {}
         launch_id = str((launch or {}).get("id") or (launch or {}).get("launch_id") or "")
@@ -24427,6 +25148,7 @@ def _append_agent_event_record(
 def _agent_session_payload(state: UiState, session: JsonDict) -> JsonDict:
     payload = dict(session)
     payload.pop("openhands_pending_sync", None)
+    payload.pop("owner_account_id", None)
     session_id = str(session["id"])
     lock = _agent_session_operation_lock(state, session_id)
     lock_acquired = lock.acquire(blocking=False)
@@ -24819,7 +25541,11 @@ def _list_agent_session_summaries(state: UiState) -> List[JsonDict]:
     return [
         _decorate_agent_session_status(state, dict(session))
         for session in _normalized_agent_sessions(state)
-        if not session.get("archived") and not _agent_session_is_untouched(session)
+        if _account_can_access_asset(
+            state, "conversation", str(session.get("id") or "")
+        )
+        and not session.get("archived")
+        and not _agent_session_is_untouched(session)
     ]
 
 
@@ -24827,7 +25553,10 @@ def _list_archived_agent_session_summaries(state: UiState) -> List[JsonDict]:
     archived = [
         _decorate_agent_session_status(state, dict(session))
         for session in _normalized_agent_sessions(state)
-        if session.get("archived")
+        if _account_can_access_asset(
+            state, "conversation", str(session.get("id") or "")
+        )
+        and session.get("archived")
     ]
     return sorted(
         archived,
@@ -24841,32 +25570,79 @@ def _list_agent_sessions(state: UiState) -> List[JsonDict]:
     return [
         _agent_session_payload(state, session)
         for session in normalized
-        if not session.get("archived")
+        if _account_can_access_asset(
+            state, "conversation", str(session.get("id") or "")
+        )
+        and not session.get("archived")
     ]
 
 
 def _agent_session_by_id(state: UiState, session_id: str) -> Optional[JsonDict]:
     for session in _normalized_agent_sessions(state):
-        if session.get("id") == session_id:
+        if session.get("id") == session_id and _account_can_access_asset(
+            state, "conversation", session_id
+        ):
             return _agent_session_payload(state, session)
     return None
 
 
 def _require_agent_session(state: UiState, session_id: str) -> JsonDict:
     for session in _read_agent_session_index(state):
-        if session.get("id") == session_id:
+        if session.get("id") == session_id and _account_can_access_asset(
+            state, "conversation", session_id, write=True
+        ):
             return dict(session)
     raise KeyError(session_id)
 
 
+def _agent_session_owner_principal(
+    state: UiState, session_id: str
+) -> Optional[AuthPrincipal]:
+    if not isinstance(getattr(state, "shared_auth", None), ClassroomAuth):
+        return None
+    claimed = _account_asset_owner_principal(state, "conversation", session_id)
+    if claimed is not None:
+        return claimed
+    for session in _read_agent_session_index(state):
+        if str(session.get("id") or "") != str(session_id):
+            continue
+        owner_account_id = str(session.get("owner_account_id") or "")
+        if not owner_account_id:
+            return None
+        return AuthPrincipal(
+            account_id=owner_account_id,
+            username=owner_account_id,
+            display_name=owner_account_id,
+            role="admin" if owner_account_id == "admin" else "student",
+        )
+    return None
+
+
 def _upsert_agent_session(state: UiState, session: JsonDict) -> JsonDict:
+    session_id = str(session.get("id") or "")
+    if session_id and not _account_can_access_asset(
+        state, "conversation", session_id, write=True
+    ):
+        raise KeyError(session_id)
     with state._agent_session_index_lock:
+        existing_sessions = _read_agent_session_index(state)
+        session = dict(session)
+        if not session.get("owner_account_id"):
+            existing = next(
+                (
+                    item
+                    for item in existing_sessions
+                    if item.get("id") == session.get("id")
+                ),
+                None,
+            )
+            if existing and existing.get("owner_account_id"):
+                session["owner_account_id"] = existing["owner_account_id"]
         sessions = [
             item
-            for item in _read_agent_session_index(state)
+            for item in existing_sessions
             if item.get("id") != session.get("id")
         ]
-        session = dict(session)
         session["updated_at"] = _now_iso()
         sessions.append(session)
         _write_agent_session_index(state, sessions)
@@ -24888,6 +25664,8 @@ def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:
         str(payload.get("id") or f"as_{uuid.uuid4().hex[:10]}"),
         "agent session id",
     )
+    principal = _current_request_principal()
+    _claim_account_asset(state, "conversation", session_id, principal=principal)
     now = _now_iso()
     attached = [str(item) for item in payload.get("attached_workspace_ids", []) or []]
     title = str(payload.get("title") or "Untitled conversation")
@@ -24904,6 +25682,7 @@ def _create_agent_session(state: UiState, payload: JsonDict) -> JsonDict:
         "openhands_conversation_id": str(
             payload.get("openhands_conversation_id") or ""
         ),
+        "owner_account_id": principal.account_id if principal is not None else "",
     }
     _agent_session_dir(state, session_id).mkdir(parents=True, exist_ok=True)
     _append_jsonl(_agent_messages_path(state, session_id), _default_agent_message())
@@ -25308,8 +26087,15 @@ def _append_agent_message(
     # Conversation so a late background note cannot restore a stale session
     # record over a newer user turn. The lock is re-entrant because the HTTP
     # route already holds it while checking pending approvals.
-    with _agent_session_operation_lock(state, session_id):
-        return _append_agent_message_unlocked(state, session_id, payload)
+    principal = _current_request_principal() or _agent_session_owner_principal(
+        state, session_id
+    )
+    principal_token = _REQUEST_PRINCIPAL.set(principal)
+    try:
+        with _agent_session_operation_lock(state, session_id):
+            return _append_agent_message_unlocked(state, session_id, payload)
+    finally:
+        _REQUEST_PRINCIPAL.reset(principal_token)
 
 
 def _append_agent_message_unlocked(
@@ -25582,6 +26368,21 @@ def _append_agent_message_unlocked(
 
 
 def _sync_agent_session(
+    state: UiState, session_id: str, *, poll_seconds: float = 3.0
+) -> JsonDict:
+    principal = _current_request_principal() or _agent_session_owner_principal(
+        state, session_id
+    )
+    principal_token = _REQUEST_PRINCIPAL.set(principal)
+    try:
+        return _sync_agent_session_as_owner(
+            state, session_id, poll_seconds=poll_seconds
+        )
+    finally:
+        _REQUEST_PRINCIPAL.reset(principal_token)
+
+
+def _sync_agent_session_as_owner(
     state: UiState, session_id: str, *, poll_seconds: float = 3.0
 ) -> JsonDict:
     sync_started_at = _now_iso()
@@ -26025,6 +26826,10 @@ def _selection_content_session(
             if record is not None and (record.actor_principal_id != actor_principal_id):
                 raise ValueError("Content session id is invalid or expired.")
             if record is not None:
+                if not _account_can_access_asset(
+                    state, "content-session", requested_session_id
+                ):
+                    raise ValueError("Content session id is invalid or expired.")
                 return record
             # A well-formed id can outlive this process or its short TTL in the
             # browser's tab memory.  It carries no selection authority, so
@@ -26046,6 +26851,7 @@ def _selection_content_session(
             actor_principal_id=actor_principal_id,
             created_at=now,
         )
+        _claim_account_asset(state, "content-session", session_id)
         state.selection_content_sessions[session_id] = record
         return record
 
@@ -26100,6 +26906,7 @@ def _store_selection_content_view(
             total_size_bytes=total_size_bytes,
             created_at=now,
         )
+        _claim_account_asset(state, "content-view", handle)
         state.selection_content_views[handle] = record
         return record
 
@@ -26131,6 +26938,8 @@ def _selection_content_view_record(
     state: UiState, *, handle: Any, session_id: str
 ) -> SelectionContentViewRecord:
     canonical_handle = _canonical_selection_content_view_handle(handle)
+    if not _account_can_access_asset(state, "content-view", canonical_handle):
+        raise RealmNotFound("Content view not found.")
     runtime = _require_realm_runtime(state)
     now = time.monotonic()
     with state._lock:
@@ -26911,7 +27720,9 @@ def _workspace_attachment_map(state: UiState) -> Dict[str, List[str]]:
     attachments: Dict[str, List[str]] = {}
     for session in _read_agent_session_index(state):
         session_id = str(session.get("id") or "")
-        if not session_id:
+        if not session_id or not _account_can_access_asset(
+            state, "conversation", session_id
+        ):
             continue
         for workspace_id in session.get("attached_workspace_ids", []) or []:
             workspace_key = str(workspace_id)
@@ -26922,6 +27733,7 @@ def _workspace_attachment_map(state: UiState) -> Dict[str, List[str]]:
 
 def _decorate_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
     item = dict(workspace)
+    item.pop("owner_account_id", None)
     purpose = _workspace_purpose_record(state, item)
     item["purpose"] = purpose.purpose.value
     item["purpose_revision"] = purpose.revision
@@ -27087,6 +27899,12 @@ def _list_ui_workspaces_unlocked(
     visible_managed: set[str] = set()
     for workspace in _read_workspace_index(state):
         workspace = dict(workspace)
+        workspace_id = str(workspace.get("id") or "")
+        if not _account_can_access_asset(state, "workspace", workspace_id):
+            # Preserve another account's index record verbatim when this
+            # request performs opportunistic Workspace reconciliation.
+            workspaces.append(workspace)
+            continue
         if (
             workspace.get("source_type") == "catalog"
             and isinstance(workspace.get("catalog_origin"), dict)
@@ -27193,6 +28011,8 @@ def _list_ui_workspaces_unlocked(
         for workspace_id, summary in managed.items():
             if workspace_id in visible_managed:
                 continue
+            if not _account_can_access_asset(state, "workspace", workspace_id):
+                continue
             decorated = _decorate_ui_workspace(
                 state,
                 _managed_workspace_placeholder(
@@ -27236,6 +28056,11 @@ def _require_ui_workspace(state: UiState, workspace_id: str) -> JsonDict:
 
 def _upsert_ui_workspace(state: UiState, workspace: JsonDict) -> JsonDict:
     workspace = dict(workspace)
+    workspace_id = str(workspace.get("id") or "")
+    if workspace_id and not _account_can_access_asset(
+        state, "workspace", workspace_id, write=True
+    ):
+        raise KeyError(workspace_id)
     workspace["updated_at"] = _now_iso()
     with state._workspace_index_lock:
         workspaces = [
@@ -27255,6 +28080,8 @@ def _create_ui_workspace(
         str(payload.get("id") or f"ws_{uuid.uuid4().hex[:10]}"),
         "workspace id",
     )
+    principal = _current_request_principal()
+    _claim_account_asset(state, "workspace", workspace_id, principal=principal)
     if len(workspace_id.encode("utf-8")) > 180:
         raise ValueError("workspace id is too long.")
     root_value = payload.get("root")
@@ -27301,6 +28128,7 @@ def _create_ui_workspace(
         "realization_state": str(payload.get("realization_state") or "open"),
         "reopen_required": bool(payload.get("reopen_required", False)),
         "last_commit_status": str(payload.get("last_commit_status") or ""),
+        "owner_account_id": principal.account_id if principal is not None else "",
     }
     if payload.get("purpose"):
         workspace["purpose"] = WorkspacePurpose(
@@ -28464,13 +29292,16 @@ def _catalog_edit_workspace_operation_id(
     """Identify the active editable derivation of an exact Catalog entry."""
 
     return "studio/workspace-create/catalog/" + request_digest(
-        {
-            "actor_id": _studio_actor_id(state),
-            "component_kind": kind,
-            "relative_path": source.relative_path,
-            "schema": "optpilot.catalog-edit-workspace-intent.v1",
-            "selection": source.selection.to_dict(),
-        }
+        _account_scoped_identity(
+            state,
+            {
+                "actor_id": _studio_actor_id(state),
+                "component_kind": kind,
+                "relative_path": source.relative_path,
+                "schema": "optpilot.catalog-edit-workspace-intent.v1",
+                "selection": source.selection.to_dict(),
+            },
+        )
     )
 
 
@@ -28483,14 +29314,17 @@ def _catalog_edit_workspace_replacement_operation_id(
     """Identify one retry-safe replacement after the prior derivation retired."""
 
     return "studio/workspace-create/catalog-replacement/" + request_digest(
-        {
-            "actor_id": _studio_actor_id(state),
-            "component_kind": kind,
-            "relative_path": source.relative_path,
-            "request_id": _canonical_request_uuid(request_id),
-            "schema": "optpilot.catalog-edit-workspace-replacement-intent.v1",
-            "selection": source.selection.to_dict(),
-        }
+        _account_scoped_identity(
+            state,
+            {
+                "actor_id": _studio_actor_id(state),
+                "component_kind": kind,
+                "relative_path": source.relative_path,
+                "request_id": _canonical_request_uuid(request_id),
+                "schema": "optpilot.catalog-edit-workspace-replacement-intent.v1",
+                "selection": source.selection.to_dict(),
+            },
+        )
     )
 
 
@@ -28644,16 +29478,16 @@ def _open_realm_catalog_workspace(
         finally:
             source.close()
 
-    workspace_id = (
-        "ws_catalog_"
-        + request_digest(
+    workspace_id = "ws_catalog_" + request_digest(
+        _account_scoped_identity(
+            state,
             {
                 "selection": source.selection.to_dict(),
                 "component_kind": kind,
                 "config_relative_path": config_relative,
-            }
-        )[:24]
-    )
+            },
+        )
+    )[:24]
     with state._catalog_projection_lock:
         previous = state._catalog_workspace_projections.get(workspace_id)
         state._catalog_workspace_projections[workspace_id] = source
@@ -28794,13 +29628,19 @@ def _open_catalog_workspace(
             "the version you want to reuse."
         )
     uid = _encode_id(resolved_source)
+    account_scope = _account_coordinate_scope(state)
+    account_suffix = (
+        "_" + request_digest({"account_id": account_scope})[:10]
+        if account_scope
+        else ""
+    )
     if kind == "resource":
         resource_root = _decode_id(uid).resolve()
         if not resource_root.exists() or not resource_root.is_dir():
             raise FileNotFoundError(f"resource not found: {resource_root}")
         entry = _resource_catalog_entry(resource_root)
         label = str(entry.get("label") or resource_root.name)
-        workspace_id = f"ws_{slug_path(resource_root)}_resource"
+        workspace_id = f"ws_{slug_path(resource_root)}_resource{account_suffix}"
         root = resource_root
         source_root = resource_root
         mode = "read-only"
@@ -28858,7 +29698,10 @@ def _open_catalog_workspace(
     workspace = _create_ui_workspace(
         state,
         {
-            "id": f"ws_{slug_path(original_source_root)}_{kind}_{slug_path(config_path)}",
+            "id": (
+                f"ws_{slug_path(original_source_root)}_{kind}_"
+                f"{slug_path(config_path)}{account_suffix}"
+            ),
             "title": title,
             "root": str(root),
             "source_root": str(source_root),
@@ -31513,6 +32356,8 @@ def _finalize_transient_interface_launch(
 
 
 def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
+    if not _account_can_access_asset(state, "interface-launch", launch_id):
+        raise KeyError(launch_id)
     with state._lock:
         job = state.interface_launches.get(launch_id)
         snapshot = job.public_snapshot() if job is not None else None
@@ -32443,6 +33288,7 @@ def _start_catalog_interface_launch(
     uid: str,
     *,
     profile_id: Optional[str] = None,
+    principal: Optional[AuthPrincipal] = None,
 ) -> JsonDict:
     if kind == "study":
         raise ValueError("Study configs do not declare launchable interfaces.")
@@ -32505,6 +33351,21 @@ def _start_catalog_interface_launch(
         if source_projection is not None:
             source_projection.close()
         raise
+    owner = principal or _current_request_principal()
+    try:
+        _claim_account_asset(
+            state, "interface-launch", launch_id, principal=owner
+        )
+        _claim_account_asset(
+            state,
+            "runtime-workspace",
+            str(runtime_workspace.get("id") or ""),
+            principal=owner,
+        )
+    except Exception:
+        if source_projection is not None:
+            source_projection.close()
+        raise
     job = UiLaunchJob(
         launch_id=launch_id,
         kind=kind,
@@ -32515,6 +33376,7 @@ def _start_catalog_interface_launch(
         outputs_enabled=profile.outputs,
         interface_profile=profile,
         launch_scope="catalog-transient",
+        owner_account_id=owner.account_id if owner is not None else "",
         runtime_workspace=runtime_workspace,
         source_projection=source_projection,
         public_path_redactions=_interface_launch_public_path_redactions(
@@ -32582,6 +33444,14 @@ def _start_workspace_interface_launch(
     label = profile.label or f"{kind} interface"
     workspace_root = Path(str(workspace["root"])).resolve()
     config_relative = config_path.resolve().relative_to(workspace_root).as_posix()
+    owner = _current_request_principal()
+    _claim_account_asset(state, "interface-launch", launch_id, principal=owner)
+    _claim_account_asset(
+        state,
+        "runtime-workspace",
+        str(runtime_workspace.get("id") or ""),
+        principal=owner,
+    )
     job = UiLaunchJob(
         launch_id=launch_id,
         kind=kind,
@@ -32592,6 +33462,7 @@ def _start_workspace_interface_launch(
         outputs_enabled=profile.outputs,
         interface_profile=profile,
         launch_scope="workspace-transient",
+        owner_account_id=owner.account_id if owner is not None else "",
         source_workspace_id=workspace_id,
         runtime_workspace=runtime_workspace,
         public_path_redactions=_interface_launch_public_path_redactions(

@@ -17,7 +17,8 @@ export OH_WEB_URL="http://${OPENHANDS_HOST}:${OPENHANDS_PORT}"
 export PYTHONPATH="${SOURCE_ROOT}/studio/src:${SOURCE_ROOT}/src"
 # The agent server needs its own secret and model credentials, but not the
 # collector ingest token, TLS private-key path, or shared-login verifier path.
-unset DEVS_COLLECTOR_INGEST_TOKEN TLS_CERTIFICATE_KEY SHARED_AUTH_CREDENTIALS_FILE
+unset DEVS_COLLECTOR_INGEST_TOKEN TLS_CERTIFICATE_KEY \
+  OPTPILOT_ADMIN_PASSWORD OPTPILOT_INVITATION_CODE
 exec "${OPENHANDS_AGENT_SERVER_BIN}" \
   --host "${OPENHANDS_HOST}" \
   --port "${OPENHANDS_PORT}" \

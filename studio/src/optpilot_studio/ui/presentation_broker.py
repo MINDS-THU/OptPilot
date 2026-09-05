@@ -506,17 +506,27 @@ class WebPresentationBroker:
     def owns_port(self, port: int) -> bool:
         """Return whether an active broker lease owns this listener port."""
 
+        return self.owner_for_port(port) is not None
+
+    def owner_for_port(self, port: int) -> tuple[str, str] | None:
+        """Return the exact active endpoint owner behind one listener port."""
+
         try:
             requested = int(port)
         except (TypeError, ValueError):
-            return False
+            return None
         with self._lock:
-            return any(
-                lease.port == requested
-                and lease.running
-                and not lease.stop_event.is_set()
-                for lease in self._leases.values()
-            )
+            for lease in self._leases.values():
+                if (
+                    lease.port == requested
+                    and lease.running
+                    and not lease.stop_event.is_set()
+                ):
+                    return (
+                        lease.endpoint.owner_kind,
+                        lease.endpoint.owner_id,
+                    )
+        return None
 
     def open(self, *, key: str, endpoint: OwnedWebEndpoint) -> WebPresentationLease:
         key = _required_text(key, "presentation key")

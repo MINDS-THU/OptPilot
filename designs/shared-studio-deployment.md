@@ -3,14 +3,15 @@
 Status: implemented on the `deployment/classroom` branch.
 
 This document defines the smallest shared deployment that preserves the new
-upstream Studio's local-runtime isolation while giving students one browser
+upstream Studio's local-runtime isolation while giving each student one browser
 login across Studio, Code Server, and generated web interfaces.
 
 ## Goals
 
-- Publish the current Studio to one class without adding registration or
-  per-student authorization.
-- Ask for one shared login once per browser session, not once per port.
+- Publish the current Studio to one class with invite-only student registration.
+- Ask for one account login, not a separate password on every dynamic port.
+- Keep student Conversations, Workspaces, work records, and dynamic runtime
+  access private to the creating account while allowing the admin to inspect all.
 - Keep Studio, OpenHands, Workspace Code Server, and presentation listeners on
   loopback. Only Nginx may listen on a non-loopback address.
 - Add the latest DEVS generator beside the upstream resource as an explicitly
@@ -22,8 +23,9 @@ login across Studio, Code Server, and generated web interfaces.
 
 ## Non-goals
 
-- User registration, roles, tenant ownership, or private per-student Catalogs.
-- Treating the shared account as an identity for grading or audit attribution.
+- Email verification, password recovery, self-service admin registration, or
+  private per-student Catalog copies.
+- Treating a classroom username as verified legal identity.
 - Making arbitrary Studio deployments safe merely by binding them to
   `0.0.0.0`.
 - Replacing OptPilot's Realm, Workspace, or presentation ownership checks.
@@ -133,7 +135,7 @@ Nginx or Studio:
   `auth_request` to require the same Studio session before forwarding every
   public Studio, Code Server, or presentation request.
 - Nginx logs request methods and normalized paths but omits query strings and
-  Cookies, so launch tokens and shared sessions are not persisted in logs.
+  Cookies, so launch tokens and account sessions are not persisted in logs.
 - Nginx Basic Auth is not used. It has per-origin browser behavior and causes
   repeated prompts across ports.
 - Workspace applications do not implement or receive the outer login secret.
@@ -143,7 +145,7 @@ check alone cannot protect Code Server or presentation processes on their own
 ports. Nginx alone should not own the password database or browser UI because
 Studio needs revocable sessions and explicit logout.
 
-### Session form
+### Account and session form
 
 Use a server-side opaque session, not a JWT.
 
@@ -152,19 +154,41 @@ Use a server-side opaque session, not a JWT.
   `Domain` attribute.
 - The cookie value contains at least 256 random bits.
 - Only a SHA-256 digest of the token is stored server-side.
-- Default absolute lifetime: 12 hours, configurable with a bounded setting.
+- Default absolute lifetime: 7 days, configurable with a bounded setting.
 - Closing a tab does not log the browser out; explicit logout or expiry does.
-- The shared username is informational. Every successful browser login receives
-  a different session, allowing individual session revocation without claiming
-  that it identifies a student.
-- Session storage survives a Studio restart and lives in the private
-  OS-local Studio project state, not in the source checkout.
+- The reserved `admin` account cannot be registered. Its password is read from
+  `OPTPILOT_ADMIN_PASSWORD` at process startup, hashed in memory, removed from
+  Studio's environment, and never stored in the account database. A restart
+  invalidates prior admin sessions.
+- Students register a unique username and password using one class invitation
+  code. `OPTPILOT_REGISTRATION_ENABLED=0` closes registration without disabling
+  existing accounts. The invitation is a random shared secret, not a per-user
+  token, and has no email or redemption table.
+- Student password verifiers, opaque sessions, and asset ownership survive a
+  Studio restart in private `CLASSROOM_AUTH_DB`, not the source checkout.
 - Expired sessions are deleted opportunistically. Last-seen writes are
   throttled so static assets do not create one database write per request.
 
-The configured password is stored as a salted `scrypt` verifier. The plaintext
-password is accepted only in the login request and is never written to logs,
-settings, session storage, or command-line arguments.
+Student passwords are stored as salted `scrypt` verifiers. Plaintext passwords
+and invitation codes are accepted only at the authentication boundary and are
+never written to logs, browser storage, or command-line arguments.
+
+### Account-owned assets
+
+Studio keeps one small ownership registry in `CLASSROOM_AUTH_DB`. Newly created
+Conversations, Workspaces, saved Study drafts, Study launch requests, Runs,
+Operator Jobs, Resource actions, Interface launches, content-view handles, and
+transient runtime Workspaces are claimed by the authenticated account. Student
+list and exact-read/write paths apply the same ownership check. The admin may
+read and manage all records. Unclaimed records from an older deployment are
+admin-only rather than silently assigned to the first student who sees them.
+Student-created blank Workspaces cannot name host paths, and opening the same
+Catalog entry derives a separate Workspace/runtime coordinate for each account.
+
+The same check is used by Nginx authorization for dynamic ports: Studio resolves
+the live Code Server or presentation port to its provider-owned Workspace, Run,
+Operator Job, or Interface runtime and then verifies the requesting account.
+Generated applications still do not receive the outer login Cookie.
 
 ### Code Server authentication
 
@@ -193,9 +217,9 @@ error.
 
 The independent reviews rejected several attractive but unrealistic claims:
 
-- This is access control, not student identity or Workspace privacy. With one
-  shared account, any authenticated student who obtains another active
-  Workspace URL can open it.
+- Registration proves possession of the class invitation, not a student's
+  institutional identity. A student can share credentials or choose a misleading
+  username; grading must not rely on the username alone.
 - The configured port count is routing capacity and a coarse upper bound, not
   proof that the Mac can sustain that many simultaneous model generations.
   Per-container CPU, memory, and PID limits contain one Workspace; measured
@@ -247,13 +271,15 @@ unconfigured origins remain rejected.
 
 ## HTTP endpoints
 
-Shared authentication is disabled unless a complete configuration is supplied.
+Classroom authentication is disabled unless a complete configuration is supplied.
 When enabled, Studio adds:
 
 | Endpoint | Method | Authentication | Purpose |
 | --- | --- | --- | --- |
 | `/login` | `GET` | public | Serve the login page. |
-| `/api/auth/login` | `POST` form or JSON | public, same-origin | Verify the shared credential and create a session. |
+| `/register` | `GET` | public while enabled | Serve invite-only registration. |
+| `/api/auth/register` | `POST` form or JSON | public while enabled, same-origin | Create one student account and session. |
+| `/api/auth/login` | `POST` form or JSON | public, same-origin | Verify an account and create a session. |
 | `/api/auth/session` | `GET` | optional | Report whether the current session is valid. |
 | `/api/auth/logout` | `POST` | required, same-origin | Revoke the current session and expire the cookie. |
 | `/api/auth/verify` | `GET` | session cookie | Return `204` for Nginx `auth_request`, otherwise `401`. |
@@ -263,7 +289,7 @@ redacted from all logs. Login attempts are rate-limited per source address and
 globally. The first implementation uses process-local rate-limit state; Nginx
 source limits remain a second layer.
 
-When shared authentication is enabled, Studio itself also rejects unauthenticated
+When classroom authentication is enabled, Studio itself also rejects unauthenticated
 requests except the login endpoints and a narrowly scoped local health check.
 This protects the main application from an accidental Nginx location omission.
 
@@ -295,10 +321,9 @@ Authentication is not sufficient proof that a dynamic port belongs to
 OptPilot. For Code Server and presentation listeners, `/api/auth/verify` also
 checks that the requested `$server_port` is currently registered to a live
 Workspace Code Server or presentation lease. An authenticated request to an
-unused, stale, or unrelated process in the configured range is denied. Because
-all students use one shared account, this is deliberately service ownership
-validation rather than per-student Workspace authorization: any authenticated
-class participant may open any currently shared OptPilot Workspace URL.
+unused, stale, unrelated, or differently owned process in the configured range
+is denied. Students cannot open another account's active Workspace URL merely
+by learning its port.
 
 Generated applications must also be unable to replace the outer login Cookie
 with a `Set-Cookie` response. The presentation broker treats

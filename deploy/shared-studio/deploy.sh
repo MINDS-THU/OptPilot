@@ -48,15 +48,8 @@ require_listener() {
 }
 
 case "${command}" in
-  init-credentials)
-    require_value OPTPILOT_PRIVATE_ROOT
-    credentials_path="${SHARED_AUTH_CREDENTIALS_FILE:-${OPTPILOT_PRIVATE_ROOT}/shared-login-credentials.json}"
-    uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen \
-      python -m optpilot_studio.ui.shared_auth "${credentials_path}" --username "${2:-students}"
-    ;;
-  reset-password)
-    bash "${DEPLOY_DIR}/deploy.sh" init-credentials "${2:-students}"
-    exec bash "${DEPLOY_DIR}/deploy.sh" restart
+  generate-invitation)
+    python3 -c 'import secrets; print(secrets.token_urlsafe(18))'
     ;;
   install-resource) exec bash "${DEPLOY_DIR}/install_local_resource.sh" ;;
   check) exec bash "${DEPLOY_DIR}/preflight.sh" ;;
@@ -133,7 +126,7 @@ case "${command}" in
     require_listener 'Public Preview gateway' "${PUBLIC_BIND_IP}" "$((WORKSPACE_RUNTIME_PORT_START + PREVIEW_PORT_OFFSET))"
     start_complete=1
     trap - EXIT
-    printf 'Shared Studio is ready at https://%s:%s/.\n' "${PUBLIC_HOST}" "${STUDIO_PORT}"
+    printf 'Classroom Studio is ready at https://%s:%s/.\n' "${PUBLIC_HOST}" "${STUDIO_PORT}"
     ;;
   status)
     require_value OPTPILOT_STATE_ROOT
@@ -157,8 +150,7 @@ case "${command}" in
   help|-h|--help)
     printf '%s\n' \
       'Usage: bash deploy/shared-studio/deploy.sh COMMAND' \
-      '  init-credentials [USERNAME]  Create the private shared login verifier' \
-      '  reset-password [USERNAME]    Set the password, then restart only on success' \
+      '  generate-invitation          Print a random classroom invitation code' \
       '  install-resource             Install DEVS Generator v2 into local_package' \
       '  check                        Run fail-closed deployment preflight' \
       '  start | restart              Start private services and the TLS gateway' \

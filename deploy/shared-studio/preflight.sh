@@ -4,9 +4,26 @@ source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 failed=0
 
 [ -f "${DEPLOY_CONFIG}" ] || { printf 'Missing %s; copy deploy.env.example first.\n' "${DEPLOY_CONFIG}" >&2; failed=1; }
-for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS SHARED_AUTH_CREDENTIALS_FILE SHARED_AUTH_SESSION_DB OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS CLASSROOM_AUTH_DB OPTPILOT_ADMIN_PASSWORD OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
   require_value "${name}" || failed=1
 done
+admin_password_value="${OPTPILOT_ADMIN_PASSWORD:-}"
+if [ "${#admin_password_value}" -lt 12 ]; then
+  printf 'OPTPILOT_ADMIN_PASSWORD must contain at least 12 characters.\n' >&2
+  failed=1
+fi
+case "${OPTPILOT_REGISTRATION_ENABLED}" in
+  0|1) ;;
+  *) printf 'OPTPILOT_REGISTRATION_ENABLED must be 0 or 1.\n' >&2; failed=1 ;;
+esac
+if [ "${OPTPILOT_REGISTRATION_ENABLED}" = "1" ]; then
+  require_value OPTPILOT_INVITATION_CODE || failed=1
+  invitation_code_value="${OPTPILOT_INVITATION_CODE:-}"
+  if [ "${#invitation_code_value}" -lt 12 ]; then
+    printf 'OPTPILOT_INVITATION_CODE must contain at least 12 characters.\n' >&2
+    failed=1
+  fi
+fi
 for command in uv python3 rsync lsof openssl "${WORKSPACE_RUNTIME_BIN}"; do
   command -v "${command}" >/dev/null 2>&1 || { printf 'Missing command: %s\n' "${command}" >&2; failed=1; }
 done
@@ -21,7 +38,6 @@ fi
 [ "${OPENHANDS_HOST}" = "127.0.0.1" ] || { printf 'OPENHANDS_HOST must be 127.0.0.1.\n' >&2; failed=1; }
 [ -r "${TLS_CERTIFICATE:-/missing}" ] || { printf 'TLS certificate is not readable.\n' >&2; failed=1; }
 [ -r "${TLS_CERTIFICATE_KEY:-/missing}" ] || { printf 'TLS private key is not readable.\n' >&2; failed=1; }
-[ -r "${SHARED_AUTH_CREDENTIALS_FILE:-/missing}" ] || { printf 'Shared-login credentials are not readable.\n' >&2; failed=1; }
 for root_name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT; do
   root_path="${!root_name}"
   case "${root_path}" in
@@ -42,11 +58,11 @@ for root_name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT; do
     [ "${root_mode}" = "700" ] || { printf '%s must have mode 700.\n' "${root_name}" >&2; failed=1; }
   fi
 done
-python3 - "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}" "${OPTPILOT_CATALOG_ROOT}" "${OPTPILOT_REALM_ROOT}" "${SHARED_AUTH_CREDENTIALS_FILE}" "${SHARED_AUTH_SESSION_DB}" "${TLS_CERTIFICATE}" "${TLS_CERTIFICATE_KEY}" <<'PY' || failed=1
+python3 - "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}" "${OPTPILOT_CATALOG_ROOT}" "${OPTPILOT_REALM_ROOT}" "${CLASSROOM_AUTH_DB}" "${TLS_CERTIFICATE}" "${TLS_CERTIFICATE_KEY}" <<'PY' || failed=1
 from pathlib import Path
 import sys
 
-state, private, catalog, realm, credentials, sessions, certificate, key = [
+state, private, catalog, realm, auth_db, certificate, key = [
     Path(value).resolve() for value in sys.argv[1:]
 ]
 if private == state or private.is_relative_to(state) or state.is_relative_to(private):
@@ -54,21 +70,16 @@ if private == state or private.is_relative_to(state) or state.is_relative_to(pri
 for label, path in (
     ("OPTPILOT_CATALOG_ROOT", catalog),
     ("OPTPILOT_REALM_ROOT", realm),
-    ("SHARED_AUTH_CREDENTIALS_FILE", credentials),
-    ("SHARED_AUTH_SESSION_DB", sessions),
+    ("CLASSROOM_AUTH_DB", auth_db),
     ("TLS_CERTIFICATE", certificate),
     ("TLS_CERTIFICATE_KEY", key),
 ):
     if not path.is_relative_to(private):
         raise SystemExit(f"{label} must stay under OPTPILOT_PRIVATE_ROOT.")
 PY
-if [ -f "${SHARED_AUTH_CREDENTIALS_FILE:-/missing}" ]; then
-  credential_mode="$(stat -f '%Lp' "${SHARED_AUTH_CREDENTIALS_FILE}" 2>/dev/null || stat -c '%a' "${SHARED_AUTH_CREDENTIALS_FILE}" 2>/dev/null || true)"
-  [ "${credential_mode}" = "600" ] || { printf 'Shared-login credentials must have mode 600.\n' >&2; failed=1; }
-fi
-if [ -f "${SHARED_AUTH_SESSION_DB:-/missing}" ]; then
-  session_mode="$(stat -f '%Lp' "${SHARED_AUTH_SESSION_DB}" 2>/dev/null || stat -c '%a' "${SHARED_AUTH_SESSION_DB}" 2>/dev/null || true)"
-  [ "${session_mode}" = "600" ] || { printf 'Shared-login session database must have mode 600.\n' >&2; failed=1; }
+if [ -f "${CLASSROOM_AUTH_DB:-/missing}" ]; then
+  auth_mode="$(stat -f '%Lp' "${CLASSROOM_AUTH_DB}" 2>/dev/null || stat -c '%a' "${CLASSROOM_AUTH_DB}" 2>/dev/null || true)"
+  [ "${auth_mode}" = "600" ] || { printf 'Classroom account database must have mode 600.\n' >&2; failed=1; }
 fi
 if [ -f "${TLS_CERTIFICATE_KEY:-/missing}" ]; then
   key_mode="$(stat -f '%Lp' "${TLS_CERTIFICATE_KEY}" 2>/dev/null || stat -c '%a' "${TLS_CERTIFICATE_KEY}" 2>/dev/null || true)"
@@ -142,9 +153,6 @@ bash "${DEPLOY_DIR}/install_local_resource.sh"
 cd "${OPTPILOT_STATE_ROOT}"
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui --help >/dev/null
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen python -c \
-  'from pathlib import Path; import sys; from optpilot_studio.ui.shared_auth import SharedLoginCredentials; SharedLoginCredentials.load(Path(sys.argv[1]))' \
-  "${SHARED_AUTH_CREDENTIALS_FILE}"
-uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen python -c \
   'import sys; from optpilot_studio.ui.server import PublicAccessOptions; PublicAccessOptions.from_url(sys.argv[1], trust_loopback_proxy=True)' \
   "https://${PUBLIC_HOST}:${STUDIO_PORT}"
 python3 -c \
@@ -172,4 +180,4 @@ if grep -q 'proxy_pass http://[^1]' "${rendered}"; then
   printf 'Rendered nginx config contains a non-loopback upstream.\n' >&2
   exit 1
 fi
-printf 'Shared Studio deployment preflight passed.\n'
+printf 'Classroom Studio deployment preflight passed.\n'

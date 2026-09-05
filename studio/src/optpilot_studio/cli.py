@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from .ui.server import add_ui_arguments, run_ui
@@ -15,6 +16,11 @@ def add_ui_subcommand(subparsers) -> None:
 
 
 def _run_ui_command(args) -> int:
+    classroom_admin_password = os.environ.pop("OPTPILOT_ADMIN_PASSWORD", None)
+    classroom_invitation_code = os.environ.pop("OPTPILOT_INVITATION_CODE", "")
+    classroom_registration_enabled = str(
+        os.environ.pop("OPTPILOT_REGISTRATION_ENABLED", "0")
+    ).strip().casefold() in {"1", "true", "yes", "on"}
     try:
         run_ui(
             host=args.host,
@@ -46,6 +52,14 @@ def _run_ui_command(args) -> int:
             shared_auth_session_ttl_seconds=(
                 args.shared_auth_session_ttl_seconds
             ),
+            classroom_auth_db=args.classroom_auth_db,
+            classroom_admin_password=classroom_admin_password,
+            classroom_invitation_code=classroom_invitation_code,
+            classroom_registration_enabled=classroom_registration_enabled,
+            classroom_auth_session_ttl_seconds=(
+                args.classroom_auth_session_ttl_seconds
+            ),
+            classroom_auth_max_accounts=args.classroom_auth_max_accounts,
             open_browser=args.open_browser,
         )
     except StudioRuntimeSupervisorBusy as error:

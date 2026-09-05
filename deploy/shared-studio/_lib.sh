@@ -12,6 +12,9 @@ if [ -f "${DEPLOY_CONFIG}" ]; then
   source "${DEPLOY_CONFIG}"
   set +a
 fi
+# Authentication secrets stay shell-local except in studio.sh, which exports
+# them only for the Studio process that consumes and removes them at startup.
+export -n OPTPILOT_ADMIN_PASSWORD OPTPILOT_INVITATION_CODE 2>/dev/null || true
 
 # Deployment commands always target SOURCE_ROOT's uv environment. An unrelated
 # activated virtualenv would only make uv print a misleading mismatch warning.
@@ -24,7 +27,7 @@ unset VIRTUAL_ENV
 : "${OPTPILOT_REALM_ROOT:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/realm}}"
 : "${OPTPILOT_LOCAL_PACKAGE_NAME:=devs_generator_v2}"
 : "${OPTPILOT_SOURCE_CATALOG_EXCLUDES:=}"
-: "${SHARED_AUTH_SESSION_DB:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/shared-auth-sessions.sqlite3}}"
+: "${CLASSROOM_AUTH_DB:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/classroom-auth.sqlite3}}"
 : "${PUBLIC_SERVER_NAME:=${PUBLIC_HOST:-}}"
 : "${STUDIO_HOST:=127.0.0.1}"
 : "${STUDIO_PORT:=28666}"
@@ -35,7 +38,10 @@ unset VIRTUAL_ENV
 : "${WORKSPACE_RUNTIME_PORT_START:=28766}"
 : "${WORKSPACE_RUNTIME_PORT_COUNT:=110}"
 : "${PREVIEW_PORT_OFFSET:=1000}"
-: "${SHARED_AUTH_SESSION_TTL_SECONDS:=43200}"
+: "${CLASSROOM_AUTH_SESSION_TTL_SECONDS:=604800}"
+: "${CLASSROOM_AUTH_MAX_ACCOUNTS:=100}"
+: "${OPTPILOT_REGISTRATION_ENABLED:=0}"
+: "${OPTPILOT_INVITATION_CODE:=}"
 : "${DEVS_COLLECTOR_HEALTHCHECK_URL:=http://127.0.0.1:8010/health}"
 : "${OPTPILOT_OPENHANDS_ENABLED:=1}"
 : "${OPENHANDS_HOST:=127.0.0.1}"

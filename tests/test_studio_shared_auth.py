@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from optpilot_studio.ui.shared_auth import (
     COOKIE_NAME,
+    ClassroomAuth,
     SharedAuth,
     SharedAuthConfigurationError,
     SharedLoginCredentials,
@@ -148,6 +149,196 @@ class SharedAuthTests(unittest.TestCase):
                     password="long-enough-password",
                 )
             self.assertEqual(target.read_text(encoding="utf-8"), "retain me")
+
+
+class ClassroomAuthTests(unittest.TestCase):
+    def _auth(self, root: Path, **overrides):
+        options = {
+            "database_path": root / "classroom.sqlite3",
+            "admin_password": "admin-correct-horse-battery-staple",
+            "invitation_code": "class-invitation-2026",
+            "registration_enabled": True,
+        }
+        options.update(overrides)
+        return ClassroomAuth(**options)
+
+    def test_invited_student_registers_and_recovers_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            auth = self._auth(root)
+            token = auth.register(
+                username="Student One",
+                display_name="Alice",
+                password="student-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-a",
+            )
+            principal = auth.principal_from_token(token)
+            self.assertIsNotNone(principal)
+            self.assertEqual(principal.username, "Student One")
+            self.assertEqual(principal.display_name, "Alice")
+            self.assertEqual(principal.role, "student")
+            self.assertNotIn(token, auth.database_path.read_bytes().decode("latin-1"))
+
+            # Closing registration changes only account creation; existing
+            # students must still be able to return after a restart.
+            restarted = self._auth(root, registration_enabled=False)
+            login_token = restarted.login(
+                username="student one",
+                password="student-password-123",
+                client_key="client-b",
+            )
+            recovered = restarted.principal_from_token(login_token or "")
+            self.assertIsNotNone(recovered)
+            self.assertEqual(recovered.account_id, principal.account_id)
+            self.assertFalse(restarted.registration_enabled)
+
+    def test_registration_requires_enabled_valid_invitation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            disabled = self._auth(root, registration_enabled=False)
+            with self.assertRaisesRegex(PermissionError, "closed"):
+                disabled.register(
+                    username="student",
+                    display_name="",
+                    password="student-password-123",
+                    invitation_code="class-invitation-2026",
+                    client_key="client-a",
+                )
+            enabled = self._auth(root)
+            with self.assertRaisesRegex(PermissionError, "invalid"):
+                enabled.register(
+                    username="student",
+                    display_name="",
+                    password="student-password-123",
+                    invitation_code="wrong-invitation-code",
+                    client_key="client-a",
+                )
+
+    def test_admin_cannot_register_and_uses_startup_password(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            auth = self._auth(root)
+            with self.assertRaisesRegex(ValueError, "reserved"):
+                auth.register(
+                    username="admin",
+                    display_name="",
+                    password="student-password-123",
+                    invitation_code="class-invitation-2026",
+                    client_key="client-a",
+                )
+            token = auth.login(
+                username="admin",
+                password="admin-correct-horse-battery-staple",
+                client_key="client-a",
+            )
+            principal = auth.principal_from_token(token or "")
+            self.assertIsNotNone(principal)
+            self.assertEqual(principal.role, "admin")
+
+            restarted = self._auth(
+                root, admin_password="new-admin-correct-horse-battery-staple"
+            )
+            self.assertIsNone(restarted.principal_from_token(token or ""))
+            self.assertIsNone(
+                restarted.login(
+                    username="admin",
+                    password="admin-correct-horse-battery-staple",
+                    client_key="client-b",
+                )
+            )
+            self.assertTrue(
+                restarted.login(
+                    username="admin",
+                    password="new-admin-correct-horse-battery-staple",
+                    client_key="client-c",
+                )
+            )
+
+    def test_account_limit_and_duplicate_username_are_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            auth = self._auth(root, max_accounts=1)
+            auth.register(
+                username="student-one",
+                display_name="",
+                password="student-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-a",
+            )
+            with self.assertRaisesRegex(RuntimeError, "account limit"):
+                auth.register(
+                    username="student-two",
+                    display_name="",
+                    password="student-password-456",
+                    invitation_code="class-invitation-2026",
+                    client_key="client-b",
+                )
+
+            duplicate_auth = self._auth(root, max_accounts=2)
+            with self.assertRaisesRegex(ValueError, "already registered"):
+                duplicate_auth.register(
+                    username="STUDENT-ONE",
+                    display_name="",
+                    password="student-password-456",
+                    invitation_code="class-invitation-2026",
+                    client_key="client-c",
+                )
+
+    def test_asset_ownership_is_private_and_admin_can_read_legacy_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            auth = self._auth(Path(tmp))
+            first_token = auth.register(
+                username="student-one",
+                display_name="",
+                password="student-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-a",
+            )
+            second_token = auth.register(
+                username="student-two",
+                display_name="",
+                password="student-password-456",
+                invitation_code="class-invitation-2026",
+                client_key="client-b",
+            )
+            first = auth.principal_from_token(first_token)
+            second = auth.principal_from_token(second_token)
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            auth.claim_asset(
+                asset_type="workspace",
+                asset_id="ws-one",
+                principal=first,
+            )
+            self.assertTrue(
+                auth.can_access_asset(
+                    asset_type="workspace", asset_id="ws-one", principal=first
+                )
+            )
+            self.assertFalse(
+                auth.can_access_asset(
+                    asset_type="workspace", asset_id="ws-one", principal=second
+                )
+            )
+            with self.assertRaises(PermissionError):
+                auth.claim_asset(
+                    asset_type="workspace",
+                    asset_id="ws-one",
+                    principal=second,
+                )
+            admin_token = auth.login(
+                username="admin",
+                password="admin-correct-horse-battery-staple",
+                client_key="client-admin",
+            )
+            admin = auth.principal_from_token(admin_token or "")
+            self.assertIsNotNone(admin)
+            self.assertTrue(
+                auth.can_access_asset(
+                    asset_type="workspace", asset_id="legacy-unclaimed", principal=admin
+                )
+            )
 
 
 if __name__ == "__main__":

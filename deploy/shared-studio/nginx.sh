@@ -5,7 +5,8 @@ action="${1:-start}"
 require_value OPTPILOT_STATE_ROOT
 # Nginx needs only paths and routing values. Never leave application secrets in
 # the gateway process environment.
-unset OPENROUTER_API_KEY DEVS_COLLECTOR_INGEST_TOKEN OH_SECRET_KEY SHARED_AUTH_CREDENTIALS_FILE
+unset OPENROUTER_API_KEY DEVS_COLLECTOR_INGEST_TOKEN OH_SECRET_KEY \
+  OPTPILOT_ADMIN_PASSWORD OPTPILOT_INVITATION_CODE
 
 if [ "${action}" = "stop" ]; then
   if [ -f "${NGINX_PID_FILE}" ] && kill -0 "$(<"${NGINX_PID_FILE}")" 2>/dev/null; then

@@ -51,8 +51,10 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         )
         self.assertIn("X-OptPilot-Target-Kind studio", rendered)
         self.assertEqual(
-            rendered.count("limit_req zone=optpilot_login_per_ip"), 1
+            rendered.count("limit_req zone=optpilot_login_per_ip"), 2
         )
+        self.assertIn("location = /register", rendered)
+        self.assertIn("location = /api/auth/register", rendered)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)
         self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 8)
@@ -63,7 +65,7 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertNotIn("auth_basic", rendered)
         self.assertNotIn("28681", rendered)
         self.assertNotIn("0.0.0.0", rendered)
-        self.assertEqual(rendered.count("deny all;"), 11)
+        self.assertEqual(rendered.count("deny all;"), 13)
 
     def test_overlapping_port_ranges_are_rejected(self) -> None:
         root = Path(__file__).resolve().parents[2]
