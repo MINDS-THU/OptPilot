@@ -23767,7 +23767,7 @@ async function loadAccountSession() {
     if (els.accountBar) els.accountBar.hidden = false;
     if (els.accountName) {
       const label = String(payload.account.display_name || payload.account.username || "Account");
-      els.accountName.textContent = `${label} · ${String(payload.account.role || "user")}`;
+      els.accountName.textContent = label;
     }
     const isAdmin = payload.account.role === "admin";
     if (els.studioSettingsButton) els.studioSettingsButton.hidden = !isAdmin;
