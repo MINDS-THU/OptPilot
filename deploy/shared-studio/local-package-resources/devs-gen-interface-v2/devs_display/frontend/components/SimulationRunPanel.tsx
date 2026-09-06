@@ -666,6 +666,7 @@ export const SimulationRunPanel: React.FC<Props> = ({
           ) : (
             <div className="space-y-4 p-4">
               {run.status === 'succeeded' && <div className="flex items-center gap-2 rounded bg-emerald-50 px-3 py-2 text-sm text-emerald-700"><CheckCircle2 size={16} /> Simulation completed successfully.</div>}
+              {run.status === 'succeeded' && (run.stdout_truncated || run.stderr_truncated) && <div className="flex items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"><AlertCircle size={16} /> Console output was truncated. Complete declared result files are still available below.</div>}
               {run.status === 'finalizing' && <div className="flex items-center gap-2 rounded bg-blue-50 px-3 py-2 text-sm text-blue-700"><Loader2 size={16} className="animate-spin" /> Simulation completed. Preparing this exact version so it can be saved…</div>}
               {run.status === 'stopped' && <div className="flex items-center gap-2 rounded bg-slate-50 px-3 py-2 text-sm text-slate-600"><CircleStop size={16} /> Run stopped. You can change the scenario and run this version again.</div>}
               {run.metrics && Object.keys(run.metrics).length > 0 && (

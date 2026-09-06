@@ -2512,21 +2512,30 @@ class SimulationExecutionService:
                 "execution_boundary",
                 f"OptPilot rejected the simulation execution request{detail}.",
             )
-        if result.stdout_truncated or result.stderr_truncated:
-            return (
-                "failed",
-                "output_limit",
-                "Execution exceeded the stdout or stderr limit.",
-            )
         if result.status == "failed":
+            truncation_note = (
+                " Captured stdout or stderr was truncated."
+                if result.stdout_truncated or result.stderr_truncated
+                else ""
+            )
             return (
                 "failed",
                 result.failure_code or "nonzero_exit",
                 (
-                    f"Simulation exited with code {result.exit_code}."
+                    f"Simulation exited with code {result.exit_code}.{truncation_note}"
                     if result.exit_code is not None
-                    else "Simulation failed in the isolated interface runtime."
+                    else (
+                        "Simulation failed in the isolated interface runtime."
+                        f"{truncation_note}"
+                    )
                 ),
+            )
+        if result.stdout_truncated or result.stderr_truncated:
+            return (
+                "succeeded",
+                None,
+                "Simulation completed successfully, but captured stdout or "
+                "stderr was truncated. Complete declared result files were retained.",
             )
         return "succeeded", None, None
 

@@ -377,7 +377,7 @@ class SimulationExecutionTests(unittest.TestCase):
                 staged_run.read_text(encoding="utf-8"),
             )
 
-    def test_output_action_statuses_keep_existing_failure_semantics(self):
+    def test_output_action_statuses_keep_failures_and_warn_on_truncation(self):
         base = dict(
             request_id="exec_0123456789abcdef0123456789abcdef",
             action_id="run-simulation",
@@ -397,9 +397,29 @@ class SimulationExecutionTests(unittest.TestCase):
         self.assertEqual(
             SimulationExecutionService._translate_output_action_result(truncated),
             (
+                "succeeded",
+                None,
+                "Simulation completed successfully, but captured stdout or "
+                "stderr was truncated. Complete declared result files were retained.",
+            ),
+        )
+        failed_truncated = OutputActionResult(
+            **{
+                **base,
+                "status": "failed",
+                "exit_code": 2,
+                "stderr_truncated": True,
+                "failure_code": "nonzero_exit",
+            }
+        )
+        self.assertEqual(
+            SimulationExecutionService._translate_output_action_result(
+                failed_truncated
+            ),
+            (
                 "failed",
-                "output_limit",
-                "Execution exceeded the stdout or stderr limit.",
+                "nonzero_exit",
+                "Simulation exited with code 2. Captured stdout or stderr was truncated.",
             ),
         )
         infrastructure = OutputActionResult(
