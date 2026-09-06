@@ -6221,13 +6221,13 @@ def _auth_brand_markup(*, mobile: bool = False) -> str:
 def _auth_context_markup() -> str:
     return f"""<section class="auth-context" aria-label="About OptPilot">
 {_auth_brand_markup()}
-<div class="auth-intro"><p class="auth-kicker">Orchestration for iterative optimization</p>
-<h2>Your method proposes. Your environment evaluates. OptPilot connects the loop.</h2>
-<p>OptPilot validates candidate trials, coordinates execution, and retains results, artifacts, and recovery state—so each new decision can use recorded evidence.</p>
+<div class="auth-intro"><p class="auth-kicker">Iterative optimization</p>
+<h2>Methods propose. Environments evaluate.</h2>
+<p>OptPilot connects the loop and keeps the evidence.</p>
 <div class="auth-flow" aria-label="OptPilot workflow">
-<div class="auth-flow-item"><span class="auth-flow-number">01</span><span class="auth-flow-copy"><strong>Propose</strong><small>A method supplies candidate solutions</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
-<div class="auth-flow-item"><span class="auth-flow-number">02</span><span class="auth-flow-copy"><strong>Evaluate</strong><small>An environment measures each trial</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
-<div class="auth-flow-item"><span class="auth-flow-number">03</span><span class="auth-flow-copy"><strong>Iterate</strong><small>Recorded evidence informs what comes next</small></span><span class="auth-flow-arrow" aria-hidden="true">✓</span></div>
+<div class="auth-flow-item"><span class="auth-flow-number">01</span><span class="auth-flow-copy"><strong>Method</strong><small>Propose candidates</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
+<div class="auth-flow-item"><span class="auth-flow-number">02</span><span class="auth-flow-copy"><strong>Environment</strong><small>Evaluate trials</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
+<div class="auth-flow-item"><span class="auth-flow-number">03</span><span class="auth-flow-copy"><strong>OptPilot</strong><small>Retain evidence</small></span><span class="auth-flow-arrow" aria-hidden="true">✓</span></div>
 </div></div>
 <div class="auth-context-foot">MINDS · Tsinghua University</div>
 </section>"""
