@@ -6424,6 +6424,11 @@ def _handler_factory(state: UiState):
                         }
                     )
                     return
+                if path == "/api/interface-launches":
+                    self._send_json(
+                        {"launches": _visible_active_interface_launches(state)}
+                    )
+                    return
                 if path.startswith("/api/interface-launches/"):
                     parts = path.split("/")
                     if len(parts) > 3 and not _account_can_access_asset(
@@ -33239,6 +33244,41 @@ def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
             "reason": "Only the account that launched this interface can save its Studio outputs.",
         }
     return payload
+
+
+def _visible_active_interface_launches(state: UiState) -> List[JsonDict]:
+    """List the caller's own and classroom-visible live Interfaces."""
+
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if not isinstance(auth, ClassroomAuth) or principal is None:
+        return []
+    with state._lock:
+        launch_ids = [
+            job.launch_id
+            for job in state.interface_launches.values()
+            if job.status in _ACTIVE_INTERFACE_LAUNCH_STATUSES
+        ]
+    visible: List[JsonDict] = []
+    for launch_id in launch_ids:
+        ownership = auth.asset_ownership(
+            asset_type="interface-launch",
+            asset_id=launch_id,
+        )
+        if ownership is None or (
+            ownership["owner_account_id"] != principal.account_id
+            and ownership["visibility"] != "classroom"
+        ):
+            continue
+        try:
+            visible.append(_interface_launch_by_id(state, launch_id))
+        except KeyError:
+            continue
+    return sorted(
+        visible,
+        key=lambda item: float(item.get("started_at") or 0.0),
+        reverse=True,
+    )
 
 
 def _keep_run_selection_as_ui_workspace(

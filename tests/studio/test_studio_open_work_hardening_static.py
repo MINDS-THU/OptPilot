@@ -47,8 +47,9 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         projection = _function_source(self.source, "buildOpenWorkItems")
         renderer = _function_source(self.source, "renderOpenWork")
 
-        for type_label in ('typeLabel: "Interface"', 'typeLabel: failed ? "Run setup" : "Run setup · preparing"', 'typeLabel: "Run"', 'typeLabel: "Approval"'):
+        for type_label in ('"Interface · Public" : "Interface"', 'typeLabel: failed ? "Run setup" : "Run setup · preparing"', 'typeLabel: "Run"', 'typeLabel: "Approval"'):
             self.assertIn(type_label, projection)
+        self.assertIn("state.visibleInterfaceLaunches", projection)
         # Saved objects stay out. Conversations appear only through their
         # pending-approval affordance (U3), never as conversation cards.
         for saved_collection in ("state.sessions", "state.plans"):

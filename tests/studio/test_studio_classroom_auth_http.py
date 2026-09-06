@@ -382,6 +382,11 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             "GET", f"/api/interface-launches/{launch_id}", cookie=bob
         )
         self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+        status, _headers, body = self._request(
+            "GET", "/api/interface-launches", cookie=bob
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertEqual(json.loads(body)["launches"], [])
 
         visibility_path = f"/api/interface-launches/{launch_id}/visibility"
         status, _headers, body = self._request(
@@ -417,6 +422,13 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(launch["access"]["visibility"], "public")
         self.assertFalse(launch["access"]["can_manage_visibility"])
         self.assertFalse(launch["can_stop"])
+        status, _headers, body = self._request(
+            "GET", "/api/interface-launches", cookie=bob
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        listed = json.loads(body)["launches"]
+        self.assertEqual([item["launch_id"] for item in listed], [launch_id])
+        self.assertFalse(listed[0]["can_stop"])
 
         bob_principal = self.state.shared_auth.principal_from_cookie(bob)
         self.assertIsNotNone(bob_principal)
@@ -481,6 +493,11 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             mutation=True,
         )
         self.assertEqual(status, HTTPStatus.OK, body)
+        status, _headers, body = self._request(
+            "GET", "/api/interface-launches", cookie=bob
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertEqual(json.loads(body)["launches"], [])
         with patch.object(
             self.state.presentation_broker,
             "owner_for_port",

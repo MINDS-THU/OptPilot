@@ -58,6 +58,10 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)
         self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 8)
+        self.assertEqual(
+            rendered.count("error_page 401 = @login_required;"), 7
+        )
+        self.assertEqual(rendered.count("location @login_required"), 7)
         self.assertIn('proxy_set_header Cookie "";', rendered)
         self.assertIn("proxy_hide_header Set-Cookie;", rendered)
         self.assertIn("proxy_set_header X-Forwarded-For $remote_addr;", rendered)

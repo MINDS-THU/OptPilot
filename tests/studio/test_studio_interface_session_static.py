@@ -196,6 +196,7 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertIn("same interface data and state", updater)
         self.assertIn("launch.can_stop !== false", model)
         self.assertIn('eyebrow: shared ? "Shared interface"', model)
+        self.assertIn('shared ? " · Public"', model)
 
     def test_catalog_interface_startup_explains_one_time_runtime_preparation(self) -> None:
         model = _function_source(self.source, "launchInterfaceSessionModel")

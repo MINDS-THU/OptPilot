@@ -253,6 +253,7 @@ const state = {
   embeddedCodeFolder: "",
   workspacePreviews: {},
   interfaceLaunch: null,
+  visibleInterfaceLaunches: [],
   interfaceReturnPending: false,
   interfaceReturnError: "",
   interfaceReturnFallbackUrl: "",
@@ -962,6 +963,7 @@ async function loadAll() {
     loadStudyDrafts(),
     loadAgentSessions(),
     loadRunsAndJobs(),
+    loadVisibleInterfaceLaunches(),
   ]);
   if (generation !== state.loadAllGeneration) return;
   rebuildDerivedState();
@@ -980,9 +982,30 @@ async function loadAll() {
 }
 
 async function refreshPlatformStatus() {
-  await Promise.allSettled([loadRuntimeHealth(), loadCodeServerStatus(), loadAgentSettings()]);
+  await Promise.allSettled([
+    loadRuntimeHealth(),
+    loadCodeServerStatus(),
+    loadAgentSettings(),
+    loadVisibleInterfaceLaunches(),
+  ]);
   renderPlatformStatus();
   renderOpenHandsStatus();
+}
+
+async function loadVisibleInterfaceLaunches() {
+  try {
+    const payload = await getJson("/api/interface-launches", {
+      timeoutMs: PLATFORM_STATUS_TIMEOUT_MS,
+    });
+    state.visibleInterfaceLaunches = requireArrayField(
+      payload,
+      "launches",
+      "Interface list",
+    );
+    renderOpenWork();
+  } catch (_error) {
+    // Keep the last good shelf. Individual launch links remain authoritative.
+  }
 }
 
 async function loadAgentSettings() {
@@ -2345,18 +2368,26 @@ function renderActiveInterfaceIndicator() {
 
 function buildOpenWorkItems() {
   const items = [];
-  const launch = state.interfaceLaunch;
-  const interfaceLaunchStatus = String(launch && launch.status || "");
-  const interfaceLaunchFailed = interfaceLaunchStatus === "failed";
-  const launchOutputs = launch && launch.result && Array.isArray(launch.result.outputs)
-    ? launch.result.outputs
-    : [];
-  // A finished interface session with reported outputs keeps a path back to
-  // its kept outputs from Open work instead of vanishing on stop (U3).
-  const interfaceLaunchFinishedWithOutputs = interfaceLaunchStatus === "stopped" && launchOutputs.length > 0;
-  if (isActiveInterfaceLaunch(launch) || interfaceLaunchFailed || interfaceLaunchFinishedWithOutputs) {
+  const currentLaunchId = String(state.interfaceLaunch && state.interfaceLaunch.launch_id || "");
+  const interfaceLaunches = [
+    state.interfaceLaunch,
+    ...(state.visibleInterfaceLaunches || []).filter((launch) => (
+      String(launch && launch.launch_id || "") !== currentLaunchId
+    )),
+  ].filter(Boolean);
+  interfaceLaunches.forEach((launch) => {
+    const interfaceLaunchStatus = String(launch.status || "");
+    const interfaceLaunchFailed = interfaceLaunchStatus === "failed";
+    const launchOutputs = launch.result && Array.isArray(launch.result.outputs)
+      ? launch.result.outputs
+      : [];
+    // A finished interface session with reported outputs keeps a path back to
+    // its kept outputs from Open work instead of vanishing on stop (U3).
+    const interfaceLaunchFinishedWithOutputs = interfaceLaunchStatus === "stopped" && launchOutputs.length > 0;
+    if (!isActiveInterfaceLaunch(launch) && !interfaceLaunchFailed && !interfaceLaunchFinishedWithOutputs) return;
     const launchStatus = String(launch.status || "running");
     const outputsNeedAttention = interfaceLaunchFinishedWithOutputs && interfaceOutputsNeedAttention(launchOutputs);
+    const publicLaunch = launch.access && launch.access.visibility === "public";
     items.push({
       key: `interface:${launch.launch_id || launch.key || "active"}`,
       kind: "interface",
@@ -2364,7 +2395,7 @@ function buildOpenWorkItems() {
       launch_key: String(launch.key || ""),
       launch_scope: String(launch.launch_scope || ""),
       source_workspace_id: String(launch.source_workspace_id || ""),
-      typeLabel: "Interface",
+      typeLabel: publicLaunch ? "Interface · Public" : "Interface",
       section: ["cleanup_pending", "failed"].includes(launchStatus) || outputsNeedAttention
         ? "Needs attention"
         : interfaceLaunchFinishedWithOutputs
@@ -2383,7 +2414,7 @@ function buildOpenWorkItems() {
       dismissible: interfaceLaunchFailed || interfaceLaunchFinishedWithOutputs,
       actionable: Boolean(launch.launch_id || launch.key || launch.source_workspace_id),
     });
-  }
+  });
 
   const studyLaunch = state.studyLaunch;
   if (studyLaunch) {
@@ -4162,7 +4193,7 @@ function launchInterfaceSessionModel(route = state.interfaceSessionRoute) {
   return {
     ...base,
     eyebrow: shared ? "Shared interface" : base.eyebrow,
-    source: `${base.source}${shared ? " · Shared with signed-in users" : ""}`,
+    source: `${base.source}${shared ? " · Public" : ""}`,
     title: String(launch.label || "Interactive interface"),
     status,
     statusLabel: reconnecting
@@ -23174,7 +23205,7 @@ function entityHeader(item, kind) {
   const visibilityLabel = access
     ? access.visibility === "private"
       ? "Private"
-      : "Public to signed-in users"
+      : "Public"
     : "";
   const visibilityChip = visibilityLabel
     ? `<span class="catalog-visibility-chip catalog-visibility-${escapeHtml(access.visibility)}" title="${escapeHtml(access.visibility === "private" ? "Only the owner and admin can use this Catalog item" : "Every signed-in OptPilot user can use this Catalog item")}">${escapeHtml(visibilityLabel)}</span>`
@@ -23984,11 +24015,17 @@ function validationHtml(result) {
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
-  if (!timeoutMs) return fetch(url, options);
+  if (!timeoutMs) {
+    const response = await fetch(url, options);
+    redirectExpiredSession(response, url);
+    return response;
+  }
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    redirectExpiredSession(response, url);
+    return response;
   } catch (error) {
     if (error && error.name === "AbortError") {
       throw new Error("Studio did not respond in time. Try again.");
@@ -23997,6 +24034,20 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 0) {
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+let expiredSessionRedirectPending = false;
+
+function redirectExpiredSession(response, url) {
+  if (
+    !response
+    || response.status !== 401
+    || String(url || "").startsWith("/api/auth/")
+    || expiredSessionRedirectPending
+  ) return;
+  expiredSessionRedirectPending = true;
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.assign(`/login?next=${encodeURIComponent(next)}`);
 }
 
 // Conditional polling: a poll that passes ``conditionalKey`` sends the last
