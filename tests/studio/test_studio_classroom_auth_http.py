@@ -146,6 +146,12 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertIn(b"invitation code", page)
         self.assertIn(b"Create your account.", page)
         self.assertIn(b'/static/minds-thu.png', page)
+        self.assertIn(b"Orchestration for iterative optimization", page)
+        self.assertIn(
+            b"Your method proposes. Your environment evaluates. OptPilot connects the loop.",
+            page,
+        )
+        self.assertIn(b"Recorded evidence informs what comes next", page)
 
         alice = self._register("alice", "alice-password-123")
         bob = self._register("bob", "bob-password-456")
