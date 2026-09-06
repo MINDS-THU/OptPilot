@@ -6118,6 +6118,13 @@ button, input { font: inherit; }
 }
 .auth-card { width: min(360px, 100%); }
 .auth-card.auth-card-wide { width: min(500px, 100%); }
+.auth-shell-register {
+  grid-template-columns: minmax(290px, .8fr) minmax(420px, 1.15fr);
+  width: min(1020px, 100%);
+  min-height: 640px;
+}
+.auth-main-register { padding: 44px clamp(34px, 5vw, 62px); }
+.auth-card-register { width: min(500px, 100%); }
 .auth-mobile-brand { display: none; }
 .auth-card .auth-kicker { margin-bottom: 9px; }
 .auth-card h1 {
@@ -6138,10 +6145,24 @@ button, input { font: inherit; }
 }
 .auth-form { display: grid; gap: 16px; }
 .auth-form-grid { grid-template-columns: 1fr 1fr; }
+.auth-register-form { gap: 14px; }
+.auth-register-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
 .auth-field { display: grid; gap: 6px; }
 .auth-field-full { grid-column: 1 / -1; }
-.auth-field label { font-size: 12.5px; font-weight: 680; }
+.auth-field label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  font-weight: 680;
+}
 .auth-optional { color: var(--muted); font-weight: 450; }
+.auth-requirement { color: var(--muted); font-size: 10.5px; font-weight: 500; }
 .auth-field input {
   width: 100%;
   height: 43px;
@@ -6159,6 +6180,14 @@ button, input { font: inherit; }
   box-shadow: 0 0 0 3px rgba(99, 51, 111, .12);
 }
 .auth-hint { margin: 0; color: var(--muted); font-size: 11px; }
+.auth-invite-field {
+  margin-top: 2px;
+  padding: 13px 14px 14px;
+  border: 1px solid rgba(99, 51, 111, .16);
+  border-radius: 9px;
+  background: var(--accent-soft);
+}
+.auth-invite-field input { background: rgba(255, 255, 255, .9); }
 .auth-submit {
   display: flex;
   grid-column: 1 / -1;
@@ -6198,6 +6227,7 @@ button, input { font: inherit; }
   .auth-mobile-brand { display: flex; margin-bottom: 54px; }
   .auth-card { width: min(390px, 100%); }
   .auth-form-grid { grid-template-columns: 1fr; }
+  .auth-register-grid { grid-template-columns: 1fr; }
   .auth-field-full, .auth-submit { grid-column: auto; }
 }
 @media (max-width: 420px) {
@@ -6278,15 +6308,17 @@ def _classroom_registration_page(
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Create account · OptPilot</title><style>{_AUTH_PAGE_STYLES}</style></head><body>
-<div class="auth-shell">{_auth_context_markup()}<main class="auth-main"><div class="auth-card auth-card-wide">
-{_auth_brand_markup(mobile=True)}<p class="auth-kicker">Join OptPilot</p><h1>Create your account.</h1>
-<p class="auth-lede">Use the invitation code shared by your administrator.</p>{error_markup}
-<form class="auth-form auth-form-grid" method="post" action="/api/auth/register"><input type="hidden" name="next" value="{safe_next}">
+<div class="auth-shell auth-shell-register">{_auth_context_markup()}<main class="auth-main auth-main-register"><div class="auth-card auth-card-register">
+{_auth_brand_markup(mobile=True)}<p class="auth-kicker">Invitation-only access</p><h1>Create your account.</h1>
+<p class="auth-lede">Choose your sign-in details, then enter the invitation code from your administrator.</p>{error_markup}
+<form class="auth-form auth-register-form" method="post" action="/api/auth/register"><input type="hidden" name="next" value="{safe_next}">
+<div class="auth-register-grid">
 <div class="auth-field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="2" maxlength="64" required autofocus></div>
 <div class="auth-field"><label for="display_name">Display name <span class="auth-optional">(optional)</span></label><input id="display_name" name="display_name" autocomplete="name" maxlength="80"></div>
-<div class="auth-field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required><p class="auth-hint">Use at least 12 characters.</p></div>
+<div class="auth-field"><label for="password">Password <span class="auth-requirement">12+ characters</span></label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required></div>
 <div class="auth-field"><label for="password_confirm">Repeat password</label><input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" required></div>
-<div class="auth-field auth-field-full"><label for="invitation_code">Invitation code</label><input id="invitation_code" name="invitation_code" type="password" autocomplete="off" required></div>
+</div>
+<div class="auth-field auth-invite-field"><label for="invitation_code">Invitation code <span class="auth-requirement">Required</span></label><input id="invitation_code" name="invitation_code" type="password" autocomplete="off" required><p class="auth-hint">Use the code provided for this OptPilot deployment.</p></div>
 <button class="auth-submit" type="submit"><span>Create account</span><span aria-hidden="true">→</span></button></form>
 <p class="auth-secondary">Already have an account? <a href="/login?next={quote(_safe_login_next(next_path), safe='')}">Back to sign in</a></p>
 </div></main></div></body></html>""".encode("utf-8")
