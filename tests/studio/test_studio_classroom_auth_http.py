@@ -21,6 +21,7 @@ from optpilot_studio.ui.server import (
     UiState,
     _catalog_entry_asset_id,
     _catalog_edit_workspace_operation_id,
+    _execute_agent_tool,
     _handler_factory,
     _REQUEST_PRINCIPAL,
     _reserve_catalog_publication_ownership,
@@ -213,6 +214,79 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             alice_session,
             [item["id"] for item in json.loads(body)["sessions"]],
         )
+
+    def test_admin_observes_foreign_conversation_without_becoming_its_actor(
+        self,
+    ) -> None:
+        alice_cookie = self._register("owner-alice", "alice-password-123")
+        alice_principal = self.state.shared_auth.principal_from_cookie(alice_cookie)
+        self.assertIsNotNone(alice_principal)
+        status, _headers, body = self._request(
+            "POST",
+            "/api/agent-sessions",
+            payload={"title": "Alice work"},
+            cookie=alice_cookie,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.CREATED, body)
+        session_id = json.loads(body)["session"]["id"]
+
+        admin_cookie = self._login_admin()
+        status, _headers, body = self._request(
+            "GET", f"/api/agent-sessions/{session_id}", cookie=admin_cookie
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertTrue(json.loads(body)["session"]["read_only"])
+
+        for path, payload in (
+            (f"/api/agent-sessions/{session_id}/message", {"content": "admin"}),
+            (
+                f"/api/agent-sessions/{session_id}/attach-workspace",
+                {"workspace_id": "not-used"},
+            ),
+        ):
+            status, _headers, response = self._request(
+                "POST",
+                path,
+                payload=payload,
+                cookie=admin_cookie,
+                mutation=True,
+            )
+            self.assertEqual(status, HTTPStatus.FORBIDDEN, response)
+
+        status, _headers, body = self._request(
+            "POST",
+            f"/api/agent-sessions/{session_id}/sync",
+            payload={},
+            cookie=admin_cookie,
+            mutation=True,
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertTrue(json.loads(body)["session"]["read_only"])
+
+        admin_principal = self.state.shared_auth.principal_from_cookie(admin_cookie)
+        self.assertIsNotNone(admin_principal)
+        principal_token = _REQUEST_PRINCIPAL.set(admin_principal)
+        try:
+            created = _execute_agent_tool(
+                self.state,
+                session_id,
+                "optpilot_workspace_create",
+                {"title": "Created for Alice"},
+            )
+        finally:
+            _REQUEST_PRINCIPAL.reset(principal_token)
+        workspace_id = created["data"]["workspace"]["id"]
+        ownership = self.state.shared_auth.asset_ownership(
+            asset_type="workspace", asset_id=workspace_id
+        )
+        self.assertEqual(ownership["owner_account_id"], alice_principal.account_id)
+
+        status, _headers, body = self._request(
+            "GET", f"/api/agent-sessions/{session_id}", cookie=alice_cookie
+        )
+        self.assertEqual(status, HTTPStatus.OK, body)
+        self.assertFalse(json.loads(body)["session"]["read_only"])
 
     def test_student_cannot_change_shared_settings_or_open_host_folder(self) -> None:
         student = self._register("student", "student-password-123")

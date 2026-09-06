@@ -7398,6 +7398,28 @@ def _handler_factory(state: UiState):
                 )
                 return
             session_id = parts[3]
+            action = parts[4] if len(parts) >= 5 else ""
+            if action in {
+                "run-selection",
+                "message",
+                "attach-workspace",
+                "detach-workspace",
+                "select-workspace",
+                "archive",
+                "cancel",
+                "sync",
+                "tools",
+                "approvals",
+            }:
+                if action == "sync" and _agent_session_is_read_only_for_current_principal(
+                    state, session_id
+                ):
+                    session = _agent_session_by_id(state, session_id)
+                    if session is None:
+                        raise KeyError(session_id)
+                    self._send_json({"session": session})
+                    return
+                _require_agent_session_mutation_access(state, session_id)
             if len(parts) == 5 and parts[4] == "run-selection":
                 payload = self._read_json_body()
                 self._send_json(
@@ -22687,6 +22709,9 @@ def _session_background_action_runs(state: UiState, session_id: str) -> List[Jso
 
 def _decorate_agent_session_status(state: UiState, payload: JsonDict) -> JsonDict:
     session_id = str(payload.get("id") or "")
+    payload["read_only"] = _agent_session_is_read_only_for_current_principal(
+        state, session_id
+    )
     active_ids = _agent_pending_approval_ids(state, session_id) if session_id else []
     forwarding_failed_ids = (
         _agent_forwarding_failed_approval_ids(state, session_id) if session_id else []
@@ -23605,9 +23630,9 @@ def _execute_agent_tool(
 ) -> JsonDict:
     """Run an Assistant tool under the Conversation owner's account scope."""
 
-    principal = _current_request_principal() or _agent_session_owner_principal(
+    principal = _agent_session_owner_principal(
         state, session_id
-    )
+    ) or _current_request_principal()
     principal_token = _REQUEST_PRINCIPAL.set(principal)
     try:
         return _execute_agent_tool_as_owner(
@@ -26596,6 +26621,32 @@ def _agent_session_owner_principal(
     return None
 
 
+def _agent_session_is_read_only_for_current_principal(
+    state: UiState, session_id: str
+) -> bool:
+    """Keep admin oversight from becoming another account's authoring session."""
+
+    if not isinstance(getattr(state, "shared_auth", None), ClassroomAuth):
+        return False
+    principal = _current_request_principal()
+    owner = _agent_session_owner_principal(state, session_id)
+    return bool(
+        principal is not None
+        and owner is not None
+        and principal.account_id != owner.account_id
+    )
+
+
+def _require_agent_session_mutation_access(
+    state: UiState, session_id: str
+) -> None:
+    _require_agent_session(state, session_id)
+    if _agent_session_is_read_only_for_current_principal(state, session_id):
+        raise PermissionError(
+            "This Conversation belongs to another account and is read-only."
+        )
+
+
 def _upsert_agent_session(state: UiState, session: JsonDict) -> JsonDict:
     session_id = str(session.get("id") or "")
     if session_id and not _account_can_access_asset(
@@ -27065,9 +27116,9 @@ def _append_agent_message(
     # Conversation so a late background note cannot restore a stale session
     # record over a newer user turn. The lock is re-entrant because the HTTP
     # route already holds it while checking pending approvals.
-    principal = _current_request_principal() or _agent_session_owner_principal(
+    principal = _agent_session_owner_principal(
         state, session_id
-    )
+    ) or _current_request_principal()
     principal_token = _REQUEST_PRINCIPAL.set(principal)
     try:
         with _agent_session_operation_lock(state, session_id):
@@ -27348,9 +27399,9 @@ def _append_agent_message_unlocked(
 def _sync_agent_session(
     state: UiState, session_id: str, *, poll_seconds: float = 3.0
 ) -> JsonDict:
-    principal = _current_request_principal() or _agent_session_owner_principal(
+    principal = _agent_session_owner_principal(
         state, session_id
-    )
+    ) or _current_request_principal()
     principal_token = _REQUEST_PRINCIPAL.set(principal)
     try:
         return _sync_agent_session_as_owner(

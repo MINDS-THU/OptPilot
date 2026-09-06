@@ -1756,7 +1756,7 @@ async function syncActiveAgentSession() {
     else renderAssistant();
     const busyStatuses = new Set(["waiting_for_agent", "running", "resuming_after_approval"]);
     const busySessions = (state.agentSessions || [])
-      .filter((session) => session && !session.id.startsWith("agent-session-") && busyStatuses.has(assistantSessionStatus(session)))
+      .filter((session) => session && !session.read_only && !session.id.startsWith("agent-session-") && busyStatuses.has(assistantSessionStatus(session)))
       .sort((left, right) => left.id === state.selectedAgentSessionId ? -1 : right.id === state.selectedAgentSessionId ? 1 : 0)
       .slice(0, 4);
     const busyIds = new Set(busySessions.map((session) => session.id));
@@ -1777,7 +1777,7 @@ async function syncActiveAgentSession() {
 }
 
 async function syncAgentSessionById(session) {
-  if (!session || state.syncingAgentSessionIds.has(session.id)) return;
+  if (!session || session.read_only || state.syncingAgentSessionIds.has(session.id)) return;
   state.syncingAgentSessionIds.add(session.id);
   try {
     const payload = await postJson(
@@ -2033,6 +2033,9 @@ function mergeAgentSessionPayload(session) {
       ? session.active_approval_ids
       : existing && existing.active_approval_ids || [],
     queued_approval_count: Number(session.queued_approval_count ?? (existing && existing.queued_approval_count) ?? 0),
+    read_only: Object.prototype.hasOwnProperty.call(session, "read_only")
+      ? Boolean(session.read_only)
+      : Boolean(existing && existing.read_only),
     createdAt: session.created_at || session.createdAt || existing && existing.createdAt || "",
   };
   state.agentSessions = existing
@@ -5160,6 +5163,7 @@ function assistantTimelineSignature(session, isRegistration = false) {
   }
   return stableJsonStringify({
     sessionId,
+    readOnly: Boolean(session && session.read_only),
     hydration: agentSessionHydrationState(session),
     status: assistantSessionStatus(session),
     conversationCreateError: state.agentSessionCreateError,
@@ -5377,6 +5381,7 @@ function renderConversationOnboarding(session = currentAgentSession()) {
 function conversationWorkspaceCard(workspace, selectedWorkspaceId, duplicateTitles) {
   const current = workspace.id === selectedWorkspaceId;
   const conversation = assistantSessionLabel(currentAgentSession());
+  const readOnly = Boolean(currentAgentSession() && currentAgentSession().read_only);
   return `
     <article class="conversation-workspace-card ${current ? "current" : ""}">
       <div class="conversation-workspace-card-heading">
@@ -5387,8 +5392,8 @@ function conversationWorkspaceCard(workspace, selectedWorkspaceId, duplicateTitl
       ${workspaceDisambiguatorHtml(workspace, duplicateTitles)}
       <div class="conversation-workspace-card-actions">
         <button class="ghost-button compact-action" data-conversation-workspace-action="open" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Open ${escapeHtml(workspace.title)} Workspace">Open Workspace</button>
-        ${current ? "" : `<button class="ghost-button compact-action" data-conversation-workspace-action="current" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Make ${escapeHtml(workspace.title)} the default Workspace for this Conversation">Make default</button>`}
-        <button class="ghost-button compact-action conversation-workspace-remove" data-conversation-workspace-action="remove" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Remove ${escapeHtml(workspace.title)} access from ${escapeHtml(conversation)}">Remove access</button>
+        ${readOnly || current ? "" : `<button class="ghost-button compact-action" data-conversation-workspace-action="current" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Make ${escapeHtml(workspace.title)} the default Workspace for this Conversation">Make default</button>`}
+        ${readOnly ? "" : `<button class="ghost-button compact-action conversation-workspace-remove" data-conversation-workspace-action="remove" data-workspace-id="${escapeHtml(workspace.id)}" type="button" aria-label="Remove ${escapeHtml(workspace.title)} access from ${escapeHtml(conversation)}">Remove access</button>`}
       </div>
     </article>
   `;
@@ -5432,6 +5437,7 @@ function renderConversationWorkspaceAccess() {
   const selectedWorkspaceId = state.selectedWorkspaceByAgentSession[agentSession.id] || "";
   const signature = stableJsonStringify({
     sessionId: agentSession.id,
+    readOnly: Boolean(agentSession.read_only),
     selectedWorkspaceId,
     hydration,
     loaded: state.uiWorkspacesLoaded,
@@ -5459,8 +5465,8 @@ function renderConversationWorkspaceAccess() {
     );
   }
   if (els.conversationWorkspaceAdd) {
-    els.conversationWorkspaceAdd.hidden = hydration.status !== "ready";
-    if (hydration.status !== "ready") els.conversationWorkspaceAdd.open = false;
+    els.conversationWorkspaceAdd.hidden = hydration.status !== "ready" || agentSession.read_only;
+    if (hydration.status !== "ready" || agentSession.read_only) els.conversationWorkspaceAdd.open = false;
   }
   if (els.conversationWorkspaceList) {
     const refreshWarning = state.uiWorkspacesError
@@ -5496,7 +5502,9 @@ function renderConversationWorkspaceAccess() {
     els.conversationWorkspaceList.innerHTML = `${refreshWarning}${actionError}${workspaceList}`;
   }
   if (els.conversationWorkspaceChoices) {
-    els.conversationWorkspaceChoices.innerHTML = hydration.status !== "ready"
+    els.conversationWorkspaceChoices.innerHTML = agentSession.read_only
+      ? '<span class="conversation-workspace-picker-state">This Conversation is read-only.</span>'
+      : hydration.status !== "ready"
       ? '<span class="conversation-workspace-picker-state">Workspaces are available after this Conversation loads.</span>'
       : !state.uiWorkspacesLoaded && !state.uiWorkspacesError
       ? '<span class="conversation-workspace-picker-state">Loading editable projects…</span>'
@@ -5513,6 +5521,7 @@ async function handleConversationWorkspaceAction(event) {
   if (!control || !els.conversationWorkspacePanel || !els.conversationWorkspacePanel.contains(control)) return;
   const action = control.dataset.conversationWorkspaceAction || "";
   const workspaceId = control.dataset.workspaceId || "";
+  if (currentAgentSession() && currentAgentSession().read_only && !["manage", "open", "refresh"].includes(action)) return;
   if (action === "manage") {
     openContentSurface("workspace", { history: "push" });
     return;
@@ -5783,6 +5792,7 @@ function assistantApprovalsHtml() {
   const approvals = currentAssistantApprovals();
   if (!approvals.length) return "";
   const session = currentAgentSession();
+  const readOnly = Boolean(session && session.read_only);
   const queuedCount = Number(session && session.queued_approval_count || 0);
   return `
     <div class="approval-stack">
@@ -5795,10 +5805,10 @@ function assistantApprovalsHtml() {
             ${((approval.display_payload && approval.display_payload.targets) || approval.targets || []).length ? `<small>${escapeHtml(((approval.display_payload && approval.display_payload.targets) || approval.targets || []).join(" - "))}</small>` : ""}
             ${queuedCount ? `<small>${escapeHtml(`${queuedCount} more approval request${queuedCount === 1 ? "" : "s"} queued after this one.`)}</small>` : ""}
           </div>
-          <div class="approval-actions">
+          ${readOnly ? '<small>This Conversation is read-only.</small>' : `<div class="approval-actions">
             <button class="ghost-button" data-reject-approval="${escapeHtml(approval.id)}" type="button">Reject</button>
             <button class="primary-button" data-approve-approval="${escapeHtml(approval.id)}" type="button">Approve</button>
-          </div>
+          </div>`}
         </div>
       `).join("")}
     </div>
@@ -6905,7 +6915,7 @@ function capitalize(value) {
 
 function bindAssistantApprovals() {
   const session = currentAgentSession();
-  if (!session || !session.id || session.id.startsWith("agent-session-")) return;
+  if (!session || session.read_only || !session.id || session.id.startsWith("agent-session-")) return;
   document.querySelectorAll("[data-approve-approval]").forEach((button) => {
     button.addEventListener("click", async () => {
       await resolveAssistantApproval(session.id, button.dataset.approveApproval, "approve");
@@ -7005,11 +7015,14 @@ function updateAssistantComposerState() {
   const busy = assistantIsBusy();
   const awaitingApproval = assistantIsAwaitingApproval();
   const session = currentAgentSession();
+  const readOnly = Boolean(session && session.read_only);
   const cancelling = Boolean(session && state.cancellingAgentSessionIds.has(session.id));
   const creatingConversation = Boolean(state.agentSessionCreatePromise);
   if (els.agentInput) {
-    els.agentInput.disabled = awaitingApproval || creatingConversation;
-    if (creatingConversation) {
+    els.agentInput.disabled = readOnly || awaitingApproval || creatingConversation;
+    if (readOnly) {
+      els.agentInput.placeholder = "This Conversation belongs to another account and is read-only.";
+    } else if (creatingConversation) {
       els.agentInput.placeholder = "Creating the Conversation…";
     } else if (awaitingApproval) {
       els.agentInput.placeholder = "Resolve the pending approval before sending another message.";
@@ -7017,10 +7030,10 @@ function updateAssistantComposerState() {
       updateAssistantInputPlaceholder();
     }
   }
-  els.sendAgentButton.disabled = cancelling || awaitingApproval || creatingConversation;
+  els.sendAgentButton.disabled = readOnly || cancelling || awaitingApproval || creatingConversation;
   els.sendAgentButton.classList.toggle("stopping", busy);
-  els.sendAgentButton.setAttribute("aria-label", creatingConversation ? "Creating Conversation" : awaitingApproval ? "Approval required" : busy ? "Stop assistant" : "Send message");
-  els.sendAgentButton.setAttribute("title", creatingConversation ? "Creating the Conversation" : awaitingApproval ? "Resolve the pending approval first" : busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("aria-label", readOnly ? "Read-only Conversation" : creatingConversation ? "Creating Conversation" : awaitingApproval ? "Approval required" : busy ? "Stop assistant" : "Send message");
+  els.sendAgentButton.setAttribute("title", readOnly ? "This Conversation belongs to another account" : creatingConversation ? "Creating the Conversation" : awaitingApproval ? "Resolve the pending approval first" : busy ? "Stop assistant" : "Send message");
   els.sendAgentButton.innerHTML = busy
     ? `<span aria-hidden="true" class="stop-icon"></span>`
     : `<span aria-hidden="true">&uarr;</span>`;
@@ -7605,6 +7618,7 @@ function renderAssistantSessionList() {
       id: session.id,
       title: session.title,
       status: assistantSessionStatus(session),
+      readOnly: Boolean(session.read_only),
       hydration: agentSessionHydrationState(session).status,
       approvals: Number(session.pending_approval_count || 0),
       workspaces: (state.agentWorkspaceAttachments[session.id] || []).length,
@@ -7673,7 +7687,7 @@ function archivedConversationsSection() {
           ? state.archivedAgentSessions.map((session) => `
               <div class="agent-session-row conversation-archived-row">
                 <span class="conversation-archived-title" title="${escapeHtml(assistantSessionLabel(session))}">${escapeHtml(assistantSessionLabel(session))}</span>
-                <button class="agent-session-archive" type="button" data-restore-agent-session-id="${escapeHtml(session.id)}" title="Restore this Conversation to the list" aria-label="Restore ${escapeHtml(assistantSessionLabel(session))}">Restore</button>
+                ${session.read_only ? '<span class="agent-session-state">Read-only</span>' : `<button class="agent-session-archive" type="button" data-restore-agent-session-id="${escapeHtml(session.id)}" title="Restore this Conversation to the list" aria-label="Restore ${escapeHtml(assistantSessionLabel(session))}">Restore</button>`}
               </div>
             `).join("")
           : `<p class="conversation-archived-state">No archived Conversations.</p>`;
@@ -22435,7 +22449,7 @@ async function handleAgentActionButton() {
 
 async function cancelAgentMessage() {
   const session = currentAgentSession();
-  if (!session || !session.id || session.id.startsWith("agent-session-")) return;
+  if (!session || session.read_only || !session.id || session.id.startsWith("agent-session-")) return;
   if (state.cancellingAgentSessionIds.has(session.id)) return;
   state.cancellingAgentSessionIds.add(session.id);
   updateAssistantComposerState();
@@ -22464,6 +22478,7 @@ async function sendAgentMessage() {
   const message = els.agentInput.value.trim();
   if (!message) return;
   let session = currentAgentSession();
+  if (session && session.read_only) return;
   // A shared deployment may display a server-side fallback from another
   // browser. Do not write into it until this browser chose or created it.
   if (
@@ -23388,17 +23403,20 @@ function agentSessionCard(session) {
   const attachedCount = attachedWorkspaceIds(session.id).length;
   const statusLabel = assistantSessionStatusLabel(session);
   const statusVisible = statusLabel !== "Ready";
+  const readOnly = Boolean(session.read_only);
   const workspaceLabel = attachedCount
     ? `${attachedCount} Workspace${attachedCount === 1 ? "" : "s"}`
     : "";
   const accessibleDescription = [
     session.description && session.description !== "New conversation" ? session.description : "",
     statusVisible ? statusLabel : "",
+    readOnly ? "Read-only" : "",
     workspaceLabel,
   ].filter(Boolean).join(". ");
   const metadata = [
     statusVisible ? `<span class="agent-session-state">${escapeHtml(statusLabel)}</span>` : "",
-    statusVisible && workspaceLabel ? '<span class="agent-session-separator" aria-hidden="true">&middot;</span>' : "",
+    readOnly ? '<span class="agent-session-state">Read-only</span>' : "",
+    (statusVisible || readOnly) && workspaceLabel ? '<span class="agent-session-separator" aria-hidden="true">&middot;</span>' : "",
     workspaceLabel ? `<span class="agent-session-workspaces">${escapeHtml(workspaceLabel)}</span>` : "",
   ].filter(Boolean).join("");
   return `
@@ -23407,7 +23425,7 @@ function agentSessionCard(session) {
         <strong class="agent-session-title">${escapeHtml(assistantSessionLabel(session))}</strong>
         ${metadata ? `<span class="agent-session-meta">${metadata}</span>` : ""}
       </button>
-      <button class="agent-session-archive" type="button" data-archive-agent-session-id="${escapeHtml(session.id)}" title="Archive this Conversation" aria-label="Archive ${escapeHtml(assistantSessionLabel(session))}">Archive</button>
+      ${readOnly ? "" : `<button class="agent-session-archive" type="button" data-archive-agent-session-id="${escapeHtml(session.id)}" title="Archive this Conversation" aria-label="Archive ${escapeHtml(assistantSessionLabel(session))}">Archive</button>`}
     </div>
   `;
 }
