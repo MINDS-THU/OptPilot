@@ -158,6 +158,29 @@ class StudioSharedLoginHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, HTTPStatus.FORBIDDEN)
 
+    def test_login_page_uses_studio_brand_without_exposing_other_static_files(self) -> None:
+        status, headers, body = self._request(
+            "GET", "/login", headers=self._proxy_headers()
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertIn(b"OptPilot Studio", body)
+        self.assertIn(b"Welcome back.", body)
+        self.assertIn(b'/static/minds-thu.png', body)
+        self.assertIn("img-src 'self'", headers["Content-Security-Policy"])
+
+        status, headers, body = self._request(
+            "GET", "/static/minds-thu.png", headers=self._proxy_headers()
+        )
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(headers["Content-Type"], "image/png")
+        self.assertTrue(body.startswith(b"\x89PNG\r\n\x1a\n"))
+
+        status, headers, _body = self._request(
+            "GET", "/static/app.js", headers=self._proxy_headers()
+        )
+        self.assertEqual(status, HTTPStatus.SEE_OTHER)
+        self.assertTrue(headers["Location"].startswith("/login?next="))
+
     def test_login_rejects_spoofed_public_origin(self) -> None:
         payload = json.dumps(
             {

@@ -5990,6 +5990,249 @@ def _safe_login_next(value: Any) -> str:
     return candidate
 
 
+_AUTH_PAGE_STYLES = """
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-soft: #f0f2f4;
+  --text: #20262d;
+  --muted: #65717d;
+  --line: #dbe1e6;
+  --accent: #63336f;
+  --accent-strong: #4f255b;
+  --accent-soft: #f6eff7;
+  --red: #c2413d;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; }
+body {
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 12% 8%, rgba(99, 51, 111, .08), transparent 30%),
+    var(--bg);
+  color: var(--text);
+  font: 13.5px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+button, input { font: inherit; }
+.auth-shell {
+  display: grid;
+  grid-template-columns: minmax(300px, .86fr) minmax(390px, 1fr);
+  width: min(960px, 100%);
+  min-height: 610px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(26, 35, 43, .11);
+}
+.auth-context {
+  display: flex;
+  flex-direction: column;
+  padding: 34px;
+  border-right: 1px solid #e8dfea;
+  background:
+    linear-gradient(150deg, rgba(255, 255, 255, .76), rgba(246, 239, 247, .92)),
+    var(--accent-soft);
+}
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.auth-brand-mark {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  padding: 2px;
+  border: 1px solid #e3d8e7;
+  border-radius: 12px;
+  background: #fff;
+}
+.auth-brand-mark img { display: block; width: 44px; height: 44px; object-fit: contain; }
+.auth-brand-copy { display: grid; gap: 1px; }
+.auth-brand-title { font-size: 16px; font-weight: 750; line-height: 1.2; }
+.auth-brand-subtitle { color: var(--muted); font-size: 11.5px; }
+.auth-intro { margin: auto 0; padding: 44px 0 34px; }
+.auth-kicker {
+  margin: 0 0 14px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+.auth-intro h2 {
+  max-width: 390px;
+  margin: 0;
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.08;
+  letter-spacing: -.035em;
+}
+.auth-intro > p:last-of-type {
+  max-width: 390px;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.auth-flow {
+  display: grid;
+  gap: 8px;
+  margin-top: 34px;
+}
+.auth-flow-item {
+  display: grid;
+  grid-template-columns: 29px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 9px 12px;
+  border: 1px solid rgba(99, 51, 111, .13);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .62);
+}
+.auth-flow-number {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 760;
+  box-shadow: inset 0 0 0 1px rgba(99, 51, 111, .14);
+}
+.auth-flow-copy { display: grid; gap: 1px; }
+.auth-flow-copy strong { font-size: 12.5px; }
+.auth-flow-copy small { color: var(--muted); font-size: 11px; }
+.auth-flow-arrow { color: #a98caf; font-size: 17px; }
+.auth-context-foot { color: var(--muted); font-size: 11px; }
+.auth-main {
+  display: grid;
+  place-items: center;
+  padding: 52px clamp(36px, 6vw, 72px);
+}
+.auth-card { width: min(360px, 100%); }
+.auth-card.auth-card-wide { width: min(500px, 100%); }
+.auth-mobile-brand { display: none; }
+.auth-card .auth-kicker { margin-bottom: 9px; }
+.auth-card h1 {
+  margin: 0;
+  font-size: 27px;
+  line-height: 1.18;
+  letter-spacing: -.025em;
+}
+.auth-lede { margin: 9px 0 26px; color: var(--muted); }
+.auth-error {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1px solid rgba(194, 65, 61, .22);
+  border-radius: 7px;
+  background: #fff5f4;
+  color: #9d302d;
+  font-size: 12.5px;
+}
+.auth-form { display: grid; gap: 16px; }
+.auth-form-grid { grid-template-columns: 1fr 1fr; }
+.auth-field { display: grid; gap: 6px; }
+.auth-field-full { grid-column: 1 / -1; }
+.auth-field label { font-size: 12.5px; font-weight: 680; }
+.auth-optional { color: var(--muted); font-weight: 450; }
+.auth-field input {
+  width: 100%;
+  height: 43px;
+  padding: 0 12px;
+  border: 1px solid #bcc6d0;
+  border-radius: 6px;
+  outline: none;
+  background: #fff;
+  color: var(--text);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.auth-field input:hover { border-color: #9faab5; }
+.auth-field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 51, 111, .12);
+}
+.auth-hint { margin: 0; color: var(--muted); font-size: 11px; }
+.auth-submit {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 43px;
+  margin-top: 4px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .15s ease;
+}
+.auth-submit:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+.auth-submit:active { transform: translateY(1px); }
+.auth-submit:focus-visible { outline: 3px solid rgba(99, 51, 111, .24); outline-offset: 2px; }
+.auth-secondary {
+  margin: 23px 0 0;
+  padding-top: 19px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  text-align: center;
+  font-size: 12.5px;
+}
+.auth-secondary a { color: var(--accent-strong); font-weight: 680; text-decoration: none; }
+.auth-secondary a:hover { text-decoration: underline; }
+.auth-secondary small { display: block; margin-top: 4px; color: #7d8791; }
+@media (max-width: 760px) {
+  body { display: block; padding: 0; background: var(--surface); }
+  .auth-shell { display: block; width: 100%; min-height: 100vh; border: 0; border-radius: 0; box-shadow: none; }
+  .auth-context { display: none; }
+  .auth-main { min-height: 100vh; padding: 34px 24px; }
+  .auth-mobile-brand { display: flex; margin-bottom: 54px; }
+  .auth-card { width: min(390px, 100%); }
+  .auth-form-grid { grid-template-columns: 1fr; }
+  .auth-field-full, .auth-submit { grid-column: auto; }
+}
+@media (max-width: 420px) {
+  .auth-main { place-items: start stretch; padding: 24px 20px 34px; }
+  .auth-mobile-brand { margin-bottom: 42px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-field input, .auth-submit { transition: none; }
+}
+"""
+
+
+def _auth_brand_markup(*, mobile: bool = False) -> str:
+    classes = "auth-brand auth-mobile-brand" if mobile else "auth-brand"
+    return f"""<div class="{classes}">
+<span class="auth-brand-mark"><img src="/static/minds-thu.png" alt="MINDS-THU"></span>
+<span class="auth-brand-copy"><span class="auth-brand-title">OptPilot Studio</span>
+<span class="auth-brand-subtitle">AI-assisted iterative optimization</span></span></div>"""
+
+
+def _auth_context_markup() -> str:
+    return f"""<section class="auth-context" aria-label="About OptPilot">
+{_auth_brand_markup()}
+<div class="auth-intro"><p class="auth-kicker">One connected workspace</p>
+<h2>Turn an idea into something you can run.</h2>
+<p>Work with the Assistant, shape reusable models, and keep every run and interface close at hand.</p>
+<div class="auth-flow" aria-label="OptPilot workflow">
+<div class="auth-flow-item"><span class="auth-flow-number">01</span><span class="auth-flow-copy"><strong>Describe</strong><small>Start with the outcome you need</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
+<div class="auth-flow-item"><span class="auth-flow-number">02</span><span class="auth-flow-copy"><strong>Build</strong><small>Refine models in a Workspace</small></span><span class="auth-flow-arrow" aria-hidden="true">→</span></div>
+<div class="auth-flow-item"><span class="auth-flow-number">03</span><span class="auth-flow-copy"><strong>Run</strong><small>Inspect interfaces and results</small></span><span class="auth-flow-arrow" aria-hidden="true">✓</span></div>
+</div></div>
+<div class="auth-context-foot">MINDS · Tsinghua University</div>
+</section>"""
+
+
 def _shared_login_page(
     *,
     next_path: str = "/",
@@ -5998,32 +6241,29 @@ def _shared_login_page(
 ) -> bytes:
     safe_next = html.escape(_safe_login_next(next_path), quote=True)
     error_markup = (
-        f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+        f'<p class="auth-error" role="alert">{html.escape(error)}</p>'
+        if error
+        else ""
     )
     registration_markup = ""
     if registration_enabled:
         registration_next = quote(_safe_login_next(next_path), safe="")
         registration_markup = (
-            '<p style="margin:18px 0 0;text-align:center">'
-            f'<a href="/register?next={registration_next}">'
-            "Create an account with an invitation code</a></p>"
+            '<p class="auth-secondary">New to OptPilot? '
+            f'<a href="/register?next={registration_next}">Create an account</a>'
+            "<small>An invitation code is required.</small></p>"
         )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · OptPilot</title><style>
-html,body{{height:100%;margin:0}}body{{display:grid;place-items:center;background:#f4f7fb;color:#172033;font:15px system-ui,sans-serif}}
-main{{width:min(360px,calc(100% - 40px));padding:30px;border:1px solid #d9e0ea;border-radius:14px;background:#fff;box-shadow:0 12px 35px #18243b14}}
-h1{{font-size:22px;margin:0 0 8px}}p{{color:#5b6474;margin:0 0 22px}}label{{display:block;font-weight:600;margin:14px 0 6px}}
-input{{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bcc6d5;border-radius:8px;font:inherit}}
-button{{width:100%;margin-top:22px;padding:11px;border:0;border-radius:8px;background:#2458d3;color:#fff;font:600 15px system-ui;cursor:pointer}}
-.error{{padding:10px;border-radius:8px;background:#fff0f0;color:#a22626;margin:14px 0}}
-</style></head><body><main><h1>Sign in to OptPilot</h1><p>Use your OptPilot account.</p>{error_markup}
-<form method="post" action="/api/auth/login"><input type="hidden" name="next" value="{safe_next}">
-<label for="username">Username</label><input id="username" name="username" autocomplete="username" required autofocus>
-<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
-<button type="submit">Sign in</button></form>
-{registration_markup}
-</main></body></html>""".encode("utf-8")
+<title>Sign in · OptPilot</title><style>{_AUTH_PAGE_STYLES}</style></head><body>
+<div class="auth-shell">{_auth_context_markup()}<main class="auth-main"><div class="auth-card">
+{_auth_brand_markup(mobile=True)}<p class="auth-kicker">OptPilot Studio</p><h1>Welcome back.</h1>
+<p class="auth-lede">Sign in to continue to your work.</p>{error_markup}
+<form class="auth-form" method="post" action="/api/auth/login"><input type="hidden" name="next" value="{safe_next}">
+<div class="auth-field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus></div>
+<div class="auth-field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+<button class="auth-submit" type="submit"><span>Sign in</span><span aria-hidden="true">→</span></button></form>
+{registration_markup}</div></main></div></body></html>""".encode("utf-8")
 
 
 def _classroom_registration_page(
@@ -6031,27 +6271,25 @@ def _classroom_registration_page(
 ) -> bytes:
     safe_next = html.escape(_safe_login_next(next_path), quote=True)
     error_markup = (
-        f'<p class="error" role="alert">{html.escape(error)}</p>' if error else ""
+        f'<p class="auth-error" role="alert">{html.escape(error)}</p>'
+        if error
+        else ""
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Create account · OptPilot</title><style>
-html,body{{min-height:100%;margin:0}}body{{display:grid;place-items:center;background:#f4f7fb;color:#172033;font:15px system-ui,sans-serif;padding:24px 0}}
-main{{width:min(390px,calc(100% - 40px));padding:30px;border:1px solid #d9e0ea;border-radius:14px;background:#fff;box-shadow:0 12px 35px #18243b14}}
-h1{{font-size:22px;margin:0 0 8px}}p{{color:#5b6474;margin:0 0 18px}}label{{display:block;font-weight:600;margin:14px 0 6px}}
-input{{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #bcc6d5;border-radius:8px;font:inherit}}
-button{{width:100%;margin-top:22px;padding:11px;border:0;border-radius:8px;background:#2458d3;color:#fff;font:600 15px system-ui;cursor:pointer}}
-.error{{padding:10px;border-radius:8px;background:#fff0f0;color:#a22626;margin:14px 0}}.hint{{font-size:13px;margin-top:6px}}a{{color:#2458d3}}
-</style></head><body><main><h1>Create a classroom account</h1><p>Registration requires the invitation code provided by your instructor.</p>{error_markup}
-<form method="post" action="/api/auth/register"><input type="hidden" name="next" value="{safe_next}">
-<label for="username">Username</label><input id="username" name="username" autocomplete="username" minlength="2" maxlength="64" required autofocus>
-<label for="display_name">Display name <span style="font-weight:400">(optional)</span></label><input id="display_name" name="display_name" autocomplete="name" maxlength="80">
-<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required><p class="hint">Use at least 12 characters.</p>
-<label for="password_confirm">Repeat password</label><input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" required>
-<label for="invitation_code">Invitation code</label><input id="invitation_code" name="invitation_code" type="password" autocomplete="off" required>
-<button type="submit">Create account</button></form>
-<p style="margin:18px 0 0;text-align:center"><a href="/login?next={quote(_safe_login_next(next_path), safe='')}">Back to sign in</a></p>
-</main></body></html>""".encode("utf-8")
+<title>Create account · OptPilot</title><style>{_AUTH_PAGE_STYLES}</style></head><body>
+<div class="auth-shell">{_auth_context_markup()}<main class="auth-main"><div class="auth-card auth-card-wide">
+{_auth_brand_markup(mobile=True)}<p class="auth-kicker">Join OptPilot</p><h1>Create your account.</h1>
+<p class="auth-lede">Use the invitation code shared by your administrator.</p>{error_markup}
+<form class="auth-form auth-form-grid" method="post" action="/api/auth/register"><input type="hidden" name="next" value="{safe_next}">
+<div class="auth-field"><label for="username">Username</label><input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="2" maxlength="64" required autofocus></div>
+<div class="auth-field"><label for="display_name">Display name <span class="auth-optional">(optional)</span></label><input id="display_name" name="display_name" autocomplete="name" maxlength="80"></div>
+<div class="auth-field"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required><p class="auth-hint">Use at least 12 characters.</p></div>
+<div class="auth-field"><label for="password_confirm">Repeat password</label><input id="password_confirm" name="password_confirm" type="password" autocomplete="new-password" minlength="12" required></div>
+<div class="auth-field auth-field-full"><label for="invitation_code">Invitation code</label><input id="invitation_code" name="invitation_code" type="password" autocomplete="off" required></div>
+<button class="auth-submit" type="submit"><span>Create account</span><span aria-hidden="true">→</span></button></form>
+<p class="auth-secondary">Already have an account? <a href="/login?next={quote(_safe_login_next(next_path), safe='')}">Back to sign in</a></p>
+</div></main></div></body></html>""".encode("utf-8")
 
 
 def _handler_factory(state: UiState):
@@ -6143,6 +6381,9 @@ def _handler_factory(state: UiState):
                     return
                 if path == "/api/auth/verify":
                     self._handle_auth_verify()
+                    return
+                if path == "/static/minds-thu.png":
+                    self._send_static_file("minds-thu.png")
                     return
                 if (
                     state.shared_auth is not None
@@ -8278,7 +8519,7 @@ def _handler_factory(state: UiState):
             )
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Content-Length", str(len(data)))
@@ -8295,7 +8536,7 @@ def _handler_factory(state: UiState):
             data = _classroom_registration_page(next_path=next_path, error=error)
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Content-Length", str(len(data)))

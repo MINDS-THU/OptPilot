@@ -143,6 +143,8 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         status, _headers, page = self._request("GET", "/register")
         self.assertEqual(status, HTTPStatus.OK)
         self.assertIn(b"invitation code", page)
+        self.assertIn(b"Create your account.", page)
+        self.assertIn(b'/static/minds-thu.png', page)
 
         alice = self._register("alice", "alice-password-123")
         bob = self._register("bob", "bob-password-456")
