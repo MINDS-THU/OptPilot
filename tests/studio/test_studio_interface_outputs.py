@@ -17,6 +17,7 @@ from optpilot.realm.interface_outputs import INTERFACE_OUTPUT_SCHEMA
 from optpilot.realm.local_runtime import LocalRealmRuntime
 from optpilot_studio.ui import server as studio_server
 from optpilot_studio.ui.runtime_supervisor import StudioRuntimeSupervisorClaim
+from optpilot_studio.ui.shared_auth import AuthPrincipal, ClassroomAuth
 from optpilot_studio.ui.server import (
     UiState,
     _capture_interface_output_tree,
@@ -1561,6 +1562,104 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
         self.assertEqual(
             (Path(reopened["root"]) / "simulator.py").read_text(encoding="utf-8"),
             expected_content,
+        )
+
+    def test_classroom_users_save_shared_output_as_their_own_workspaces(
+        self,
+    ) -> None:
+        auth = ClassroomAuth(
+            database_path=self.root / "private" / "classroom.sqlite3",
+            admin_password="admin-correct-horse-battery-staple",
+            invitation_code="class-invitation-2026",
+            registration_enabled=True,
+        )
+        self.state.shared_auth = auth
+        admin = AuthPrincipal("admin", "admin", "Admin", "admin")
+        students = []
+        for username in ("alice", "bob"):
+            token = auth.register(
+                username=username,
+                display_name=username.title(),
+                password=f"{username}-password-123",
+                invitation_code="class-invitation-2026",
+                client_key=username,
+            )
+            principal = auth.principal_from_token(token)
+            assert principal is not None
+            students.append(principal)
+
+        principal_token = studio_server._REQUEST_PRINCIPAL.set(admin)
+        try:
+            launch_id, _current = self._start_launch()
+            auth.set_asset_visibility(
+                asset_type="interface-launch",
+                asset_id=launch_id,
+                visibility="classroom",
+                principal=admin,
+            )
+            self._publish_output(launch_id, content="MODEL = 'shared'\n")
+            _capture_interface_outputs_once(self.state, launch_id)
+        finally:
+            studio_server._REQUEST_PRINCIPAL.reset(principal_token)
+
+        saved: dict[str, dict[str, Any]] = {}
+        for index, principal in enumerate(students, start=1):
+            principal_token = studio_server._REQUEST_PRINCIPAL.set(principal)
+            try:
+                visible = _interface_launch_by_id(self.state, launch_id)
+                output = visible["result"]["outputs"][0]
+                self.assertEqual(output["keep_state"], "not-started")
+                self.assertTrue(output["actions"]["keep_as_workspace"]["eligible"])
+                kept = _keep_interface_output_as_workspace(
+                    self.state,
+                    launch_id,
+                    "generated-simulator",
+                    request_id=f"00000000-0000-4000-8000-{index:012d}",
+                )
+                repeated = _keep_interface_output_as_workspace(
+                    self.state,
+                    launch_id,
+                    "generated-simulator",
+                    request_id=f"99999999-9999-4999-8999-{index:012d}",
+                )
+                self.assertEqual(
+                    repeated["workspace"]["id"], kept["workspace"]["id"]
+                )
+                saved[principal.account_id] = kept
+                refreshed = _interface_launch_by_id(self.state, launch_id)
+                refreshed_output = refreshed["result"]["outputs"][0]
+                self.assertEqual(refreshed_output["keep_state"], "saved")
+                self.assertEqual(
+                    refreshed_output["kept_workspace_id"],
+                    kept["workspace"]["id"],
+                )
+            finally:
+                studio_server._REQUEST_PRINCIPAL.reset(principal_token)
+
+        workspace_ids = {
+            str(result["workspace"]["id"]) for result in saved.values()
+        }
+        self.assertEqual(len(workspace_ids), 2)
+        self.assertEqual(len(self.realm.editable_workspaces.list_workspaces()), 2)
+        for principal in students:
+            workspace_id = str(saved[principal.account_id]["workspace"]["id"])
+            ownership = auth.asset_ownership(
+                asset_type="workspace", asset_id=workspace_id
+            )
+            self.assertIsNotNone(ownership)
+            assert ownership is not None
+            self.assertEqual(ownership["owner_account_id"], principal.account_id)
+
+        principal_token = studio_server._REQUEST_PRINCIPAL.set(students[0])
+        try:
+            alice_output = _interface_launch_by_id(self.state, launch_id)["result"][
+                "outputs"
+            ][0]
+        finally:
+            studio_server._REQUEST_PRINCIPAL.reset(principal_token)
+        self.assertEqual(
+            alice_output["kept_workspace_id"],
+            saved[students[0].account_id]["workspace"]["id"],
         )
 
     def test_unchanged_output_poll_does_not_claim_new_launch_activity(self) -> None:

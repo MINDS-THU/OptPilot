@@ -471,6 +471,22 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK, body)
         self.assertEqual(json.loads(body)["launches"], [])
 
+        with patch(
+            "optpilot_studio.ui.server._keep_interface_output_as_workspace",
+            return_value={"workspace": {"id": "must-not-be-created"}},
+        ) as keep_private_output:
+            status, _headers, body = self._request(
+                "POST",
+                f"/api/interface-launches/{launch_id}/outputs/generated/keep",
+                payload={
+                    "request_id": "00000000-0000-4000-8000-000000000001"
+                },
+                cookie=bob,
+                mutation=True,
+            )
+        self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+        keep_private_output.assert_not_called()
+
         visibility_path = f"/api/interface-launches/{launch_id}/visibility"
         status, _headers, body = self._request(
             "POST",
@@ -512,6 +528,27 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         listed = json.loads(body)["launches"]
         self.assertEqual([item["launch_id"] for item in listed], [launch_id])
         self.assertFalse(listed[0]["can_stop"])
+
+        with patch(
+            "optpilot_studio.ui.server._keep_interface_output_as_workspace",
+            return_value={"workspace": {"id": "bob-owned-workspace"}},
+        ) as keep_output:
+            status, _headers, body = self._request(
+                "POST",
+                f"/api/interface-launches/{launch_id}/outputs/generated/keep",
+                payload={
+                    "request_id": "11111111-1111-4111-8111-111111111111"
+                },
+                cookie=bob,
+                mutation=True,
+            )
+        self.assertEqual(status, HTTPStatus.CREATED, body)
+        keep_output.assert_called_once_with(
+            self.state,
+            launch_id,
+            "generated",
+            request_id="11111111-1111-4111-8111-111111111111",
+        )
 
         bob_principal = self.state.shared_auth.principal_from_cookie(bob)
         self.assertIsNotNone(bob_principal)

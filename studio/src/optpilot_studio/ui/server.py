@@ -6995,8 +6995,16 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path.startswith("/api/interface-launches/"):
                     parts = parsed.path.split("/")
+                    keeps_visible_output = (
+                        len(parts) == 7
+                        and parts[4] == "outputs"
+                        and parts[6] == "keep"
+                    )
                     if len(parts) > 3 and not _account_can_access_asset(
-                        state, "interface-launch", parts[3], write=True
+                        state,
+                        "interface-launch",
+                        parts[3],
+                        write=not keeps_visible_output,
                     ):
                         raise RealmNotFound("Interface launch was not found.")
                     if (
@@ -31056,11 +31064,12 @@ def _interface_output_workspace_action_request(
 ) -> tuple[str, EntityCoordinate, JsonDict]:
     """Return the stable Studio action identity for saving one exact output.
 
-    The browser request UUID is deliberately not part of this identity.  It is
+    The browser request UUID is deliberately not part of this identity. It is
     a transport retry token, whereas an interface-output generation is already
-    one immutable, authority-revision-anchored source.  A refreshed browser may
-    therefore mint another request UUID and still reconcile the same save.
-    Creating another Workspace would need a separate explicit product action.
+    one immutable, authority-revision-anchored source. A refreshed browser may
+    therefore mint another request UUID and still reconcile the same save. In
+    classroom mode this identity is account-scoped, so each signed-in account
+    may keep its own Workspace from a shared output.
     """
 
     selection = generation.selection
@@ -31085,12 +31094,15 @@ def _interface_output_workspace_action_request(
         "session_id": generation.session_id,
     }
     intent_id = "interface-output-workspace-" + request_digest(
-        {
-            "actor_id": _studio_actor_id(state),
-            "parameters": parameters,
-            "schema": "optpilot.interface-output-workspace-intent.v1",
-            "source": source.to_dict(),
-        }
+        _account_scoped_identity(
+            state,
+            {
+                "actor_id": _studio_actor_id(state),
+                "parameters": parameters,
+                "schema": "optpilot.interface-output-workspace-intent.v1",
+                "source": source.to_dict(),
+            },
+        )
     )
     return intent_id, source, parameters
 
@@ -33552,6 +33564,23 @@ def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
         }
     assert snapshot is not None
     payload = _render_interface_launch_public_snapshot(snapshot)
+    service = _interface_output_service(state)
+    handle = job.output_session
+    if service is not None and handle is not None:
+        try:
+            statuses = service.list_statuses(handle=handle)
+        except (RealmConflict, RealmExpired, RealmNotFound):
+            pass
+        else:
+            result = payload.get("result")
+            if isinstance(result, dict):
+                # Saving one immutable output is account-scoped in classroom
+                # mode. Render these links for the current request instead of
+                # reusing the launch owner's background snapshot.
+                result["outputs"] = [
+                    _public_interface_output_status(state, item, job=job)
+                    for item in statuses
+                ]
     can_write = _account_can_access_asset(
         state, "interface-launch", launch_id, write=True
     )
@@ -33565,7 +33594,7 @@ def _interface_launch_by_id(state: UiState, launch_id: str) -> JsonDict:
             **payload["actions"]["capture_output_tree"],
             "eligible": False,
             "code": "shared_interface_read_only",
-            "reason": "Only the account that launched this interface can save its Studio outputs.",
+            "reason": "Only the account that launched this interface can manually capture its output folder.",
         }
     return payload
 
@@ -33877,6 +33906,8 @@ def _keep_interface_output_as_workspace(
     # This remains part of the strict HTTP request contract, but the immutable
     # output coordinate below is the durable save identity.
     _canonical_request_uuid(request_id)
+    if not _account_can_access_asset(state, "interface-launch", launch_id):
+        raise KeyError(launch_id)
     runtime = _require_realm_runtime(state)
     with state._lock:
         job = state.interface_launches.get(launch_id)
