@@ -137,6 +137,11 @@ def render() -> str:
 {common_headers}
         proxy_pass http://127.0.0.1:{studio_port};
     }}
+    location = /static/minds-thu.png {{
+{allowed}
+{common_headers}
+        proxy_pass http://127.0.0.1:{studio_port};
+    }}
     location = /register {{
 {allowed}
 {common_headers}

@@ -55,6 +55,11 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         )
         self.assertIn("location = /register", rendered)
         self.assertIn("location = /api/auth/register", rendered)
+        brand_location = rendered.split(
+            "location = /static/minds-thu.png {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn("proxy_pass http://127.0.0.1:28666;", brand_location)
+        self.assertNotIn("auth_request", brand_location)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)
         self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 8)
@@ -69,7 +74,7 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertNotIn("auth_basic", rendered)
         self.assertNotIn("28681", rendered)
         self.assertNotIn("0.0.0.0", rendered)
-        self.assertEqual(rendered.count("deny all;"), 13)
+        self.assertEqual(rendered.count("deny all;"), 14)
 
     def test_overlapping_port_ranges_are_rejected(self) -> None:
         root = Path(__file__).resolve().parents[2]
