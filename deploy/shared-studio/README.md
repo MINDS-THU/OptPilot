@@ -114,16 +114,17 @@ class or suspected disclosure.
    bash deploy/shared-studio/deploy.sh start
    ```
 
-The preflight installs the tracked DEVS Generator v2 template into
-`$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. The default source name
-is the stable, version-specific `devs_generator_v2`, avoiding collision with a
+The preflight copies the tracked example packages into
+`$OPTPILOT_CATALOG_ROOT` and installs the DEVS Generator v2 template into
+`$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. Packages named in
+`OPTPILOT_SOURCE_CATALOG_EXCLUDES` are omitted. The default DEVS source name is
+the stable, version-specific `devs_generator_v2`, avoiding collision with a
 previously registered global Realm source named `local_package`. Its category
 remains `local`, so it can create the executable Workspace runtime required by
-the generator. The launcher also treats this private Catalog as its packages
-root, so Studio publishes an immutable first revision instead of leaving a
-non-editable filesystem import. It does not replace the upstream gallery
-version. Runtime state, login sessions, logs, and the editable package remain
-outside the Git checkout.
+the generator. The launcher treats this deployment-owned Catalog as its
+packages root, so Studio publishes immutable first revisions instead of
+showing non-editable filesystem imports. Runtime state, login sessions, logs,
+and all user Workspaces remain outside the Git checkout.
 
 ## Routine operations
 

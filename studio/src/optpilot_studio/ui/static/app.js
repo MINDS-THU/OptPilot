@@ -2284,14 +2284,42 @@ function catalogComponentForActiveLaunch(launch = state.interfaceLaunch, session
   });
 }
 
+function catalogSourceComponentFromOrigin(session) {
+  const origin = session && session.catalogOrigin;
+  const registered = session && Array.isArray(session.registeredEntries)
+    ? session.registeredEntries
+    : [];
+  if (!origin || typeof origin !== "object") return null;
+  const kind = String(origin.component_kind || "");
+  const packageId = String(origin.package_id || "");
+  const revision = Number(origin.revision || 0);
+  const registeredEntry = registered.find((entry) => entry && entry.kind === kind);
+  const entryId = String(registeredEntry && registeredEntry.id || "");
+  if (!kind || !packageId || !Number.isInteger(revision) || revision <= 0 || !entryId) return null;
+  return allComponents().find((component) => {
+    const ref = component && component.entry && component.entry.ref;
+    return component.kind === kind
+      && String(component.entry.id || "") === entryId
+      && ref && ref.source_kind === "realm-catalog"
+      && String(ref.source_id || "") === packageId
+      && Number(ref.source_revision || 0) === revision;
+  }) || null;
+}
+
 function catalogSourceComponent(session = currentSession()) {
   if (!isCatalogSourceView(session)) return null;
   const preferredKey = String(session.catalogComponentKey || "");
-  if (!preferredKey) return null;
-  const preferred = catalogSourceComponentByKey(preferredKey)
-    || catalogComponentForActiveLaunch(state.interfaceLaunch, session);
+  const preferred = preferredKey
+    ? catalogSourceComponentByKey(preferredKey)
+      || catalogComponentForActiveLaunch(state.interfaceLaunch, session)
+    : null;
+  const restored = catalogSourceComponentFromOrigin(session);
   const originKind = String(session.catalogOrigin && session.catalogOrigin.component_kind || "");
-  if (preferred && (!originKind || preferred.kind === originKind)) return preferred;
+  const component = restored || preferred;
+  if (component && (!originKind || component.kind === originKind)) {
+    session.catalogComponentKey = componentLaunchKey(component);
+    return rememberCatalogSourceComponent(component);
+  }
   return null;
 }
 
@@ -2316,6 +2344,11 @@ function isActiveInterfaceLaunch(launch = state.interfaceLaunch) {
     launch
     && !["failed", "stopped"].includes(String(launch.status || "")),
   );
+}
+
+function interfaceLaunchOwnedByCurrentAccount(launch) {
+  const access = launch && launch.access;
+  return !access || access.owned_by_current_account !== false;
 }
 
 function isViewingActiveInterface(launch = state.interfaceLaunch, session = currentSession()) {
@@ -7526,9 +7559,15 @@ function renderWorkspace() {
     });
     const editButton = els.workspaceContextNotice.querySelector(".catalog-inspector-edit");
     if (editButton) {
-      editButton.disabled = !catalogComponent;
+      const capability = catalogComponent
+        ? componentEditableWorkspaceCapability(catalogComponent)
+        : null;
+      editButton.disabled = !capability || capability.eligible !== true;
+      editButton.title = String(capability && capability.reason || "This Catalog source is not available to copy.");
       editButton.addEventListener("click", () => {
-        if (catalogComponent) openCatalogEditableWorkspace(catalogComponent);
+        if (catalogComponent && capability && capability.eligible === true) {
+          openCatalogEditableWorkspace(catalogComponent);
+        }
       });
     }
   }
@@ -10846,16 +10885,19 @@ function renderComponentDetail() {
   const otherInterfaceLaunch = activeLaunch && activeLaunch.key !== componentLaunchKey(component)
     ? activeLaunch
     : null;
+  const blockingInterfaceLaunch = otherInterfaceLaunch
+    && interfaceLaunchOwnedByCurrentAccount(otherInterfaceLaunch)
+    ? otherInterfaceLaunch
+    : null;
   const interfaceFailed = Boolean(failedLaunchState);
-  const interfaceReason = otherInterfaceLaunch
-    ? `${otherInterfaceLaunch.label || "Another interface"} is already running. Return to it here, or stop it from Open work before starting this interface.`
+  const interfaceReason = blockingInterfaceLaunch
+    ? `${blockingInterfaceLaunch.label || "Another interface"} is already running for this account. Open or stop it from Open work before starting this interface.`
     : interfaceUnavailable
     ? String(interfaceCapability.reason || "This interface is unavailable.")
     : "";
-  const interfaceDisabled = interfaceUnavailable && !launchState && !otherInterfaceLaunch;
-  const interfaceLabel = otherInterfaceLaunch
-    ? `Return to ${otherInterfaceLaunch.label || "running interface"}`
-    : launchState && launchState.status === "ready"
+  const interfaceDisabled = Boolean(blockingInterfaceLaunch)
+    || (interfaceUnavailable && !launchState);
+  const interfaceLabel = launchState && launchState.status === "ready"
     ? "Open running interface"
     : interfaceFailed
     ? "Try interface again"
@@ -19912,8 +19954,18 @@ async function openComponentSession(component, mode, options = {}) {
 
 async function openComponentInterface(component) {
   const launch = state.interfaceLaunch;
-  if (isActiveInterfaceLaunch(launch)) {
+  const requestedKey = componentLaunchKey(component);
+  if (isActiveInterfaceLaunch(launch) && launch.key === requestedKey) {
     openLaunchInterfaceSession(launch);
+    return;
+  }
+  if (isActiveInterfaceLaunch(launch) && interfaceLaunchOwnedByCurrentAccount(launch)) {
+    state.catalogComponentActions[requestedKey] = {
+      mode: "interface",
+      pending: false,
+      error: `${launch.label || "Another interface"} is already running for this account. Open or stop it from Open work before starting this interface.`,
+    };
+    renderComponentDetail();
     return;
   }
   const profile = componentSelectedInterfaceProfile(component);

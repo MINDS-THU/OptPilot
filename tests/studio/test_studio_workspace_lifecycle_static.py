@@ -281,6 +281,8 @@ class StudioWorkspaceLifecycleStaticTest(unittest.TestCase):
         self.assertIn("not editable or listed in Workspaces", rendering)
         self.assertIn("Back to item", rendering)
         self.assertIn("Edit in Workspace", rendering)
+        self.assertIn("componentEditableWorkspaceCapability(catalogComponent)", rendering)
+        self.assertIn("capability.eligible !== true", rendering)
         self.assertIn('catalogSourceView ? "Source" : "Code"', workbench)
         self.assertIn('"Read-only Catalog item"', toolbar)
         self.assertIn('"Workspace · Editable"', toolbar)

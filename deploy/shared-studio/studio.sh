@@ -34,20 +34,6 @@ export OPTPILOT_REGISTRATION_ENABLED
 # child workspaces. Keep them out of their inherited environment.
 unset OH_SECRET_KEY TLS_CERTIFICATE_KEY
 
-source_catalog_args=()
-for source_package in "${SOURCE_ROOT}/catalog"/*; do
-  [ -f "${source_package}/optpilot.package.yaml" ] || continue
-  package_name="$(basename "${source_package}")"
-  excluded=0
-  for excluded_name in ${OPTPILOT_SOURCE_CATALOG_EXCLUDES}; do
-    if [ "${package_name}" = "${excluded_name}" ]; then
-      excluded=1
-      break
-    fi
-  done
-  [ "${excluded}" -eq 1 ] || source_catalog_args+=(--catalog "${source_package}")
-done
-
 studio_bin="${SOURCE_ROOT}/.venv/bin/optpilot"
 [ -x "${studio_bin}" ] || {
   printf 'Prepared OptPilot entry point is unavailable: %s\n' "${studio_bin}" >&2
@@ -56,7 +42,6 @@ studio_bin="${SOURCE_ROOT}/.venv/bin/optpilot"
 exec "${studio_bin}" ui \
   --host "${STUDIO_HOST}" \
   --port "${STUDIO_PORT}" \
-  "${source_catalog_args[@]}" \
   --catalog "${OPTPILOT_CATALOG_ROOT}" \
   --public-url "https://${PUBLIC_HOST}:${STUDIO_PORT}" \
   --trust-loopback-proxy \

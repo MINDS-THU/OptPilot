@@ -61,7 +61,23 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
             'export OPTPILOT_PACKAGES_ROOT="${OPTPILOT_CATALOG_ROOT}"', source
         )
         self.assertIn("export OPTPILOT_REALM_ROOT", source)
-        self.assertIn("OPTPILOT_SOURCE_CATALOG_EXCLUDES", source)
+        self.assertNotIn("source_catalog_args", source)
+        self.assertIn('--catalog "${OPTPILOT_CATALOG_ROOT}"', source)
+
+    def test_preflight_installs_bundled_catalog_packages_before_start(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        deployment = root / "deploy" / "shared-studio"
+        preflight = (deployment / "preflight.sh").read_text(encoding="utf-8")
+        installer = (deployment / "install_catalog_packages.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('install_catalog_packages.sh', preflight)
+        self.assertIn('"${SOURCE_ROOT}/catalog"/*', installer)
+        self.assertIn('OPTPILOT_SOURCE_CATALOG_EXCLUDES', installer)
+        self.assertIn('"${OPTPILOT_CATALOG_ROOT}/${package_name}"', installer)
+        self.assertIn('rsync -a --delete --delete-excluded', installer)
+        self.assertIn('optpilot package validate "${target}" --check-source', installer)
 
 
 if __name__ == "__main__":

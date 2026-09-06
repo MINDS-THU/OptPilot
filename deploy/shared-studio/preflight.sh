@@ -149,6 +149,7 @@ if command -v openssl >/dev/null 2>&1 && [ -r "${TLS_CERTIFICATE:-/missing}" ] &
 fi
 [ "${failed}" -eq 0 ] || exit 1
 
+bash "${DEPLOY_DIR}/install_catalog_packages.sh"
 bash "${DEPLOY_DIR}/install_local_resource.sh"
 cd "${OPTPILOT_STATE_ROOT}"
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui --help >/dev/null

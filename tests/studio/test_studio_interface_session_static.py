@@ -230,7 +230,7 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertIn("componentSelectedInterfaceProfile(component)", action)
         self.assertIn("capability.reason", action)
 
-    def test_catalog_interface_action_disables_unavailable_profiles_and_returns_to_active_work(self) -> None:
+    def test_catalog_interface_action_does_not_impersonate_other_active_work(self) -> None:
         detail = _function_source(self.source, "renderComponentDetail")
         action = _function_source(self.source, "openComponentInterface")
         launch = _function_source(self.source, "launchComponentInterface")
@@ -239,8 +239,12 @@ class StudioInterfaceSessionStaticTest(unittest.TestCase):
         self.assertIn("const interfaceDisabled =", detail)
         self.assertIn('disabled aria-disabled="true"', detail)
         self.assertIn('"Interface unavailable"', detail)
-        self.assertIn("`Return to ${otherInterfaceLaunch.label", detail)
-        self.assertIn("if (isActiveInterfaceLaunch(launch))", action)
+        self.assertIn("blockingInterfaceLaunch", detail)
+        self.assertNotIn("`Return to ${otherInterfaceLaunch.label", detail)
+        self.assertIn('"Open interface"', detail)
+        self.assertIn("if (isActiveInterfaceLaunch(launch) && launch.key === requestedKey)", action)
+        self.assertIn("componentLaunchKey(component)", action)
+        self.assertIn("interfaceLaunchOwnedByCurrentAccount(launch)", action)
         self.assertIn("openLaunchInterfaceSession(launch)", action)
         self.assertIn("state.catalogComponentActions", action)
         self.assertIn("capability && capability.reason", action)

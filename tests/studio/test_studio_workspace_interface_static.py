@@ -366,6 +366,11 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         self.assertIn("This published Catalog version could not be opened", separate)
 
     def test_catalog_source_resolution_retains_only_an_exact_launch_owner(self) -> None:
+        origin_resolver = _source_between(
+            self.source,
+            "function catalogSourceComponentFromOrigin(",
+            "function catalogSourceComponent(",
+        )
         resolver = _source_between(
             self.source,
             "function catalogSourceComponent(",
@@ -378,11 +383,16 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         )
 
         self.assertIn("session.catalogComponentKey", resolver)
-        self.assertIn("if (!preferredKey) return null", resolver)
         self.assertIn("catalogSourceComponentByKey(preferredKey)", resolver)
+        self.assertIn("catalogSourceComponentFromOrigin(session)", resolver)
         self.assertIn("catalogComponentForActiveLaunch(state.interfaceLaunch, session)", resolver)
         self.assertNotIn("state.selectedComponentKey", resolver)
-        self.assertNotIn("candidates", resolver)
+        self.assertIn("session.catalogOrigin", origin_resolver)
+        self.assertIn("session.registeredEntries", origin_resolver)
+        self.assertIn('ref.source_kind === "realm-catalog"', origin_resolver)
+        self.assertIn("ref.source_revision", origin_resolver)
+        self.assertIn("component.entry.id", origin_resolver)
+        self.assertNotIn("state.selectedComponentKey", origin_resolver)
         self.assertIn('launch.launch_scope === "workspace-transient"', launch_resolver)
         self.assertIn('new Set(["environment", "method", "resource"])', launch_resolver)
         self.assertIn('launchKey !== `${kind}:${uid}`', launch_resolver)
