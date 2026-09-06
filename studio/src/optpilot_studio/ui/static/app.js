@@ -2392,7 +2392,11 @@ function buildOpenWorkItems() {
       key: `interface:${launch.launch_id || launch.key || "active"}`,
       kind: "interface",
       launch_id: String(launch.launch_id || ""),
-      launch_key: String(launch.key || ""),
+      launch_key: String(launch.key || (
+        launch.launch_scope !== "workspace-transient" && launch.kind && launch.uid
+          ? `${launch.kind}:${launch.uid}`
+          : ""
+      )),
       launch_scope: String(launch.launch_scope || ""),
       source_workspace_id: String(launch.source_workspace_id || ""),
       typeLabel: publicLaunch ? "Interface · Public" : "Interface",
@@ -2744,7 +2748,13 @@ async function openExactOpenWorkInterface(item) {
       status: "failed",
       error: boundedPublicActionError(error, "This interface launch could not be reopened."),
     };
-    openLaunchInterfaceSession(failedSnapshot);
+    if (!openLaunchInterfaceSession(failedSnapshot)) {
+      const itemKey = String(item && item.key || "");
+      if (itemKey) {
+        state.openWorkErrors[itemKey] = failedSnapshot.error;
+        renderOpenWork();
+      }
+    }
   }
 }
 

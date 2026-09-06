@@ -41,6 +41,8 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         )
         self.assertIn("String(launch.launch_id || \"\") !== launchId", exact)
         self.assertIn("openLaunchInterfaceSession(exactLaunch)", exact)
+        self.assertIn("if (!openLaunchInterfaceSession(failedSnapshot))", exact)
+        self.assertIn("state.openWorkErrors[itemKey]", exact)
         self.assertNotIn("openLaunchInterfaceSession(state.interfaceLaunch)", exact)
 
     def test_cards_name_the_process_type_and_exclude_saved_objects(self) -> None:
@@ -50,6 +52,7 @@ class StudioOpenWorkHardeningStaticTest(unittest.TestCase):
         for type_label in ('"Interface · Public" : "Interface"', 'typeLabel: failed ? "Run setup" : "Run setup · preparing"', 'typeLabel: "Run"', 'typeLabel: "Approval"'):
             self.assertIn(type_label, projection)
         self.assertIn("state.visibleInterfaceLaunches", projection)
+        self.assertIn("`${launch.kind}:${launch.uid}`", projection)
         # Saved objects stay out. Conversations appear only through their
         # pending-approval affordance (U3), never as conversation cards.
         for saved_collection in ("state.sessions", "state.plans"):
