@@ -12026,7 +12026,7 @@ function renderInterfaceOutputCard(output) {
           }).join("")}
           ${viewEligible ? `<button class="ghost-button interface-output-view" type="button" data-output-id="${escapeHtml(outputId)}" ${viewPending ? "disabled" : ""}>${viewPending ? "Opening…" : "View result"}</button>` : ""}
           ${keptWorkspaceId
-            ? `<span class="interface-output-kept">Saved as Workspace: ${escapeHtml(output.kept_workspace_title || "Generated output")}.</span><button class="primary-button interface-output-open" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Open Workspace</button><button class="ghost-button interface-output-curate" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Set up for Catalog</button>`
+            ? `<span class="interface-output-kept">Saved to Workspaces: ${escapeHtml(output.kept_workspace_title || "Generated output")}.</span><button class="primary-button interface-output-open" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Open Workspace</button><button class="ghost-button interface-output-curate" type="button" data-workspace-id="${escapeHtml(keptWorkspaceId)}">Set up for Catalog</button>`
             : keepEligible
             ? `<button class="ghost-button interface-output-keep" type="button" data-output-id="${escapeHtml(outputId)}" ${pending ? "disabled" : ""}>${pending ? "Saving..." : "Save as Workspace"}</button>`
             : ""}

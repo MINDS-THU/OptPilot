@@ -166,9 +166,9 @@ class StudioConversationShellStaticTest(unittest.TestCase):
         self.assertIn("statusVisible ? statusLabel", card)
         self.assertIn("metadata ?", card)
 
-    def test_v2_primary_navigation_exposes_the_three_durable_destinations(self) -> None:
+    def test_v2_primary_navigation_exposes_the_four_durable_destinations(self) -> None:
         self.assertEqual(self.html.count('class="nav-button" data-view="catalog"'), 1)
-        for view in ("experiments", "runs"):
+        for view in ("workspace", "experiments", "runs"):
             self.assertEqual(
                 self.html.count(
                     f'class="nav-button shell-primary-destination" data-view="{view}"'
@@ -178,7 +178,7 @@ class StudioConversationShellStaticTest(unittest.TestCase):
         nav_start = self.html.index("shell-primary-navigation")
         nav_end = self.html.index("</nav>", nav_start)
         primary_navigation = self.html[nav_start:nav_end]
-        self.assertNotIn('data-view="workspace"', primary_navigation)
+        self.assertIn('data-view="workspace"', primary_navigation)
         # The legacy navigation was removed with the legacy shell (U7).
         self.assertNotIn("legacy-navigation", self.html)
         self.assertNotIn(">Studies<", self.html)

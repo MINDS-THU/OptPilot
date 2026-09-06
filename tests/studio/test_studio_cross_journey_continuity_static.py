@@ -171,7 +171,7 @@ class StudioCrossJourneyContinuityStaticTest(unittest.TestCase):
         card = _function_source(self.source, "renderInterfaceOutputCard")
 
         self.assertIn('"Saved as Workspace"', card)
-        self.assertIn("Saved as Workspace:", card)
+        self.assertIn("Saved to Workspaces:", card)
         self.assertIn("Open Workspace", card)
         self.assertIn("Set up for Catalog", card)
         self.assertNotIn("Workspace created:", card)

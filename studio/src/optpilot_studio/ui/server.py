@@ -6995,16 +6995,16 @@ def _handler_factory(state: UiState):
                     return
                 if parsed.path.startswith("/api/interface-launches/"):
                     parts = parsed.path.split("/")
-                    keeps_visible_output = (
+                    reads_visible_output = (
                         len(parts) == 7
                         and parts[4] == "outputs"
-                        and parts[6] == "keep"
+                        and parts[6] in {"keep", "view"}
                     )
                     if len(parts) > 3 and not _account_can_access_asset(
                         state,
                         "interface-launch",
                         parts[3],
-                        write=not keeps_visible_output,
+                        write=not reads_visible_output,
                     ):
                         raise RealmNotFound("Interface launch was not found.")
                     if (

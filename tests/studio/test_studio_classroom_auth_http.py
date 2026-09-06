@@ -487,6 +487,23 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
         keep_private_output.assert_not_called()
 
+        with patch(
+            "optpilot_studio.ui.server._view_interface_output",
+            return_value={"content_view": {"handle": "must-not-be-opened"}},
+        ) as view_private_output:
+            status, _headers, body = self._request(
+                "POST",
+                f"/api/interface-launches/{launch_id}/outputs/generated/view",
+                payload={
+                    "schema": "optpilot.interface-output-content-view-request.v1",
+                    "content_session_id": None,
+                },
+                cookie=bob,
+                mutation=True,
+            )
+        self.assertEqual(status, HTTPStatus.NOT_FOUND, body)
+        view_private_output.assert_not_called()
+
         visibility_path = f"/api/interface-launches/{launch_id}/visibility"
         status, _headers, body = self._request(
             "POST",
@@ -548,6 +565,31 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
             launch_id,
             "generated",
             request_id="11111111-1111-4111-8111-111111111111",
+        )
+
+        with patch(
+            "optpilot_studio.ui.server._view_interface_output",
+            return_value={"content_view": {"handle": "bob-content-view"}},
+        ) as view_output:
+            status, _headers, body = self._request(
+                "POST",
+                f"/api/interface-launches/{launch_id}/outputs/generated/view",
+                payload={
+                    "schema": "optpilot.interface-output-content-view-request.v1",
+                    "content_session_id": None,
+                },
+                cookie=bob,
+                mutation=True,
+            )
+        self.assertEqual(status, HTTPStatus.CREATED, body)
+        self.assertEqual(
+            json.loads(body)["content_view"]["handle"], "bob-content-view"
+        )
+        view_output.assert_called_once_with(
+            self.state,
+            launch_id,
+            "generated",
+            requested_session_id=None,
         )
 
         bob_principal = self.state.shared_auth.principal_from_cookie(bob)
