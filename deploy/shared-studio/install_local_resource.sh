@@ -10,10 +10,8 @@ case "${OPTPILOT_LOCAL_PACKAGE_NAME}" in
     exit 1
     ;;
 esac
-template="${DEPLOY_DIR}/local-package-resources/devs-gen-interface-v2"
 package_root="${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}"
 resource_root="${package_root}/resources"
-target="${resource_root}/devs-gen-interface-v2"
 
 mkdir -p "${resource_root}"
 if [ ! -f "${package_root}/optpilot.package.yaml" ]; then
@@ -28,12 +26,16 @@ if [ ! -f "${package_root}/optpilot.package.yaml" ]; then
     > "${package_root}/optpilot.package.yaml"
 fi
 
-mkdir -p "${target}"
-rsync -a --delete --delete-excluded \
-  --exclude node_modules \
-  --exclude dist \
-  --exclude __pycache__ \
-  --exclude '*.pyc' \
-  --exclude .runtime \
-  "${template}/" "${target}/"
-printf 'Installed %s into %s.\n' devs-gen-interface-v2 "${target}"
+for resource_id in devs-gen-interface-v2 devs-gen-interface-v3; do
+  template="${DEPLOY_DIR}/local-package-resources/${resource_id}"
+  target="${resource_root}/${resource_id}"
+  mkdir -p "${target}"
+  rsync -a --delete --delete-excluded \
+    --exclude node_modules \
+    --exclude dist \
+    --exclude __pycache__ \
+    --exclude '*.pyc' \
+    --exclude .runtime \
+    "${template}/" "${target}/"
+  printf 'Installed %s into %s.\n' "${resource_id}" "${target}"
+done

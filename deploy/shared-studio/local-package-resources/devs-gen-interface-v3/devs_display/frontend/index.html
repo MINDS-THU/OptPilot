@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DEVS Generator v3</title>
+    <script>
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'optpilot.presentation.loading', version: 1 }, '*');
+      }
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      /*
+       * This interface is a viewport-sized application, both standalone and
+       * inside OptPilot's preview iframe.  Keep the document itself from
+       * becoming a second scroll container: once an iframe document scrolls
+       * past a 100vh application shell, the remainder is just an empty body.
+       * The conversation, file, and Run panes own scrolling explicitly.
+       */
+      html, body, #root {
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        overscroll-behavior: none;
+      }
+      body { background-color: #f8fafc; }
+      #root { position: fixed; inset: 0; }
+      .node rect { transition: all 0.3s ease; }
+      .port { transition: r 0.2s ease; }
+      .port:hover { r: 6; }
+      /* Custom scrollbar for sidebar */
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.3",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "d3": "https://esm.sh/d3@^7.9.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.560.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

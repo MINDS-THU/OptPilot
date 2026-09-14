@@ -1,0 +1,407 @@
+"""devs.simulation.v2 metrics: static declaration, derivation, validation."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+    declared_metrics,
+)
+
+from . import simulation_execution as se
+
+
+_REFERENCE_RUNNER = (
+    Path(__file__).resolve().parents[2]
+    / "devs_tools"
+    / "devs_construct_recon"
+    / "materials"
+    / "devs_project"
+    / "runner_example.py"
+).read_text(encoding="utf-8")
+
+_CALLSITE_RUNNER = _REFERENCE_RUNNER.replace(
+    "metrics={},",
+    'metrics={"completed_items": completed, "utilization": busy_share},',
+)
+
+_EXPLICIT_RUNNER = (
+    'OPTPILOT_METRICS = {\n'
+    '    "completed_items": {"direction": "maximize",\n'
+    '                        "description": "Items finished in the horizon."},\n'
+    '    "utilization": None,\n'
+    "}\n" + _CALLSITE_RUNNER
+)
+
+
+class DeclaredMetricsTest(unittest.TestCase):
+    def test_explicit_declaration_wins_and_carries_direction(self):
+        declared = declared_metrics(_EXPLICIT_RUNNER)
+        self.assertEqual(
+            declared,
+            (
+                {
+                    "name": "completed_items",
+                    "direction": "maximize",
+                    "description": "Items finished in the horizon.",
+                },
+                {"name": "utilization"},
+            ),
+        )
+
+    def test_call_site_metrics_missing_from_a_stale_declaration_are_retained(self):
+        stale = _EXPLICIT_RUNNER.replace('    "utilization": None,\n', "")
+        self.assertEqual(
+            declared_metrics(stale),
+            (
+                {
+                    "name": "completed_items",
+                    "direction": "maximize",
+                    "description": "Items finished in the horizon.",
+                },
+                {"name": "utilization"},
+            ),
+        )
+
+    def test_call_site_keys_are_reported_names_only(self):
+        self.assertEqual(
+            declared_metrics(_CALLSITE_RUNNER),
+            ({"name": "completed_items"}, {"name": "utilization"}),
+        )
+
+    def test_metric_keys_assigned_to_the_passed_dictionary_are_reported(self):
+        runner = _REFERENCE_RUNNER.replace(
+            "metrics={},",
+            "metrics=metrics,",
+        ).replace(
+            "if __name__ == \"__main__\":",
+            "metrics = {}\n"
+            "metrics['completed_items'] = 4\n"
+            "metrics['utilization'] = 0.5\n\n"
+            "if __name__ == \"__main__\":",
+        )
+        self.assertEqual(
+            declared_metrics(runner),
+            ({"name": "completed_items"}, {"name": "utilization"}),
+        )
+
+    def test_malformed_declaration_falls_back_to_call_site(self):
+        malformed = _EXPLICIT_RUNNER.replace('"maximize"', '"upward"')
+        self.assertEqual(
+            declared_metrics(malformed),
+            ({"name": "completed_items"}, {"name": "utilization"}),
+        )
+
+    def test_without_summary_contract_nothing_is_declared(self):
+        self.assertEqual(declared_metrics("OPTPILOT_METRICS = {'x': None}\n"), ())
+
+
+class DerivedManifestMetricsTest(unittest.TestCase):
+    def _bundle(self, tmp_path: Path, runner: str) -> Path:
+        root = tmp_path / "bundle"
+        (root / "devs_project").mkdir(parents=True)
+        (root / "devs_project" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "devs_project" / "runner_gen.py").write_text(
+            runner, encoding="utf-8"
+        )
+        (root / "run.py").write_text(
+            'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+        )
+        return root
+
+    def test_derive_metrics_builds_the_v2_block(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = self._bundle(Path(tmp_dir), _EXPLICIT_RUNNER)
+            self.assertEqual(
+                se._derive_metrics(root),
+                {
+                    "keys": ["completed_items", "utilization"],
+                    "descriptions": {
+                        "completed_items": "Items finished in the horizon."
+                    },
+                    "objective": {
+                        "metric": "completed_items",
+                        "direction": "maximize",
+                    },
+                },
+            )
+
+    def test_derive_metrics_is_none_without_declarations(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = self._bundle(Path(tmp_dir), _REFERENCE_RUNNER)
+            self.assertIsNone(se._derive_metrics(root))
+
+    def test_refresh_replaces_stale_generated_manifest_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            stale_runner = _EXPLICIT_RUNNER.replace('    "utilization": None,\n', "")
+            root = self._bundle(Path(tmp_dir), stale_runner)
+            (root / "simulation.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": se.SIMULATION_SCHEMA,
+                        "entrypoint": "run.py",
+                        "timeout_seconds": 30,
+                        "arguments": [],
+                        "result_files": ["summary.json"],
+                        "metrics": {"keys": ["completed_items"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            se.ensure_simulation_manifest(root, refresh_derived_metadata=True)
+            manifest = json.loads((root / "simulation.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["metrics"]["keys"], ["completed_items", "utilization"])
+
+
+class ManifestMetricsValidationTest(unittest.TestCase):
+    def _write_manifest(self, tmp_path: Path, document: dict) -> Path:
+        path = tmp_path / "simulation.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return path
+
+    def _base_document(self, **overrides):
+        document = {
+            "schema_version": se.SIMULATION_SCHEMA,
+            "entrypoint": "run.py",
+            "timeout_seconds": 30,
+            "arguments": [],
+            "result_files": ["summary.json"],
+        }
+        document.update(overrides)
+        return document
+
+    def test_v2_manifest_with_metrics_loads(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(
+                Path(tmp_dir),
+                self._base_document(
+                    metrics={
+                        "keys": ["throughput"],
+                        "objective": {
+                            "metric": "throughput",
+                            "direction": "maximize",
+                        },
+                    }
+                ),
+            )
+            parsed = se._load_manifest(path, maximum_timeout_seconds=86400, validate_runtime_files=False)
+            self.assertEqual(parsed.schema_version, se.SIMULATION_SCHEMA)
+            self.assertEqual(parsed.metrics["keys"], ["throughput"])
+
+    def test_v1_manifest_still_loads_without_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(
+                Path(tmp_dir),
+                self._base_document(schema_version=se.SIMULATION_SCHEMA_V1),
+            )
+            parsed = se._load_manifest(path, maximum_timeout_seconds=86400, validate_runtime_files=False)
+            self.assertEqual(parsed.schema_version, se.SIMULATION_SCHEMA_V1)
+            self.assertIsNone(parsed.metrics)
+
+    def test_metrics_on_v1_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(
+                Path(tmp_dir),
+                self._base_document(
+                    schema_version=se.SIMULATION_SCHEMA_V1,
+                    metrics={"keys": ["throughput"]},
+                ),
+            )
+            with self.assertRaises(se.SimulationManifestError):
+                se._load_manifest(path, maximum_timeout_seconds=86400, validate_runtime_files=False)
+
+    def test_objective_must_name_a_declared_metric(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = self._write_manifest(
+                Path(tmp_dir),
+                self._base_document(
+                    metrics={
+                        "keys": ["throughput"],
+                        "objective": {
+                            "metric": "latency",
+                            "direction": "minimize",
+                        },
+                    }
+                ),
+            )
+            with self.assertRaises(se.SimulationManifestError):
+                se._load_manifest(path, maximum_timeout_seconds=86400, validate_runtime_files=False)
+
+
+
+
+class PolicyContractTest(unittest.TestCase):
+    def test_declared_policy_extracts_the_literal(self):
+        from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+            declared_policy,
+        )
+
+        runner = (
+            'OPTPILOT_POLICY = {"file": "devs_project/policy.py",\n'
+            '                   "entrypoint": "create_policy",\n'
+            '                   "description": "Dispatch decisions."}\n'
+        )
+        self.assertEqual(
+            declared_policy(runner),
+            {
+                "file": "devs_project/policy.py",
+                "entrypoint": "create_policy",
+                "description": "Dispatch decisions.",
+            },
+        )
+        self.assertIsNone(
+            declared_policy('OPTPILOT_POLICY = {"file": "../x.py", "entrypoint": "p"}')
+        )
+
+    def test_derive_policy_requires_the_file_to_exist(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            (root / "devs_project").mkdir(parents=True)
+            (root / "devs_project" / "__init__.py").write_text("", encoding="utf-8")
+            runner = (
+                'OPTPILOT_POLICY = {"file": "devs_project/policy.py", '
+                '"entrypoint": "create_policy"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            self.assertIsNone(se._derive_policy(root))
+            # A file that exists but never defines the declared entrypoint
+            # is a declared-but-unwired hook: discarded whole.
+            (root / "devs_project" / "policy.py").write_text(
+                "def something_else():\n    return None\n", encoding="utf-8"
+            )
+            self.assertIsNone(se._derive_policy(root))
+            (root / "devs_project" / "policy.py").write_text(
+                "def create_policy():\n    return None\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {"file": "devs_project/policy.py", "entrypoint": "create_policy"},
+            )
+
+    def test_derive_policy_accepts_a_deciding_component_class(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            component_dir = root / "devs_project" / "System_libs"
+            component_dir.mkdir(parents=True)
+            runner = (
+                'OPTPILOT_POLICY = {"file": "devs_project/System_libs/Decider.py", '
+                '"entrypoint": "Decider"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            (component_dir / "Decider.py").write_text(
+                "class Decider:\n    pass\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {
+                    "file": "devs_project/System_libs/Decider.py",
+                    "entrypoint": "Decider",
+                },
+            )
+
+    def test_derive_policy_normalizes_workspace_prefixed_paths(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir) / "bundle"
+            component_dir = root / "devs_project" / "System_libs"
+            component_dir.mkdir(parents=True)
+            # LLM declarations sometimes anchor at a build-workspace parent;
+            # the manifest builder re-anchors at the devs_project/ segment.
+            runner = (
+                'OPTPILOT_POLICY = {"file": '
+                '"generated_simulator/devs_project/System_libs/Decider.py", '
+                '"entrypoint": "Decider"}\n' + _REFERENCE_RUNNER
+            )
+            (root / "devs_project" / "runner_gen.py").write_text(
+                runner, encoding="utf-8"
+            )
+            (root / "run.py").write_text(
+                'SIM_MODULE = "devs_project.runner_gen"\n', encoding="utf-8"
+            )
+            (component_dir / "Decider.py").write_text(
+                "class Decider:\n    pass\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                se._derive_policy(root),
+                {
+                    "file": "devs_project/System_libs/Decider.py",
+                    "entrypoint": "Decider",
+                },
+            )
+
+    def test_declared_entrypoint_kind_classifies_definitions(self):
+        from devs_tools.devs_construct_recon.tools.simulation.result_summary_contract import (
+            declared_entrypoint_kind,
+        )
+
+        self.assertEqual(
+            declared_entrypoint_kind("def create_policy():\n    pass\n", "create_policy"),
+            "function",
+        )
+        self.assertEqual(
+            declared_entrypoint_kind("class Decider:\n    pass\n", "Decider"),
+            "class",
+        )
+        self.assertIsNone(
+            declared_entrypoint_kind("def other():\n    pass\n", "create_policy")
+        )
+        self.assertIsNone(declared_entrypoint_kind("not python(", "create_policy"))
+        # Nested definitions do not satisfy the top-level requirement.
+        self.assertIsNone(
+            declared_entrypoint_kind(
+                "class Holder:\n    def create_policy(self):\n        pass\n",
+                "create_policy",
+            )
+        )
+
+    def test_manifest_policy_validation(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "simulation.json"
+            document = {
+                "schema_version": se.SIMULATION_SCHEMA,
+                "entrypoint": "run.py",
+                "timeout_seconds": 30,
+                "arguments": [],
+                "result_files": [],
+                "policy": {
+                    "file": "devs_project/policy.py",
+                    "entrypoint": "create_policy",
+                },
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            parsed = se._load_manifest(
+                path, maximum_timeout_seconds=86400, validate_runtime_files=False
+            )
+            self.assertEqual(parsed.policy["entrypoint"], "create_policy")
+            document["schema_version"] = se.SIMULATION_SCHEMA_V1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(se.SimulationManifestError):
+                se._load_manifest(
+                    path, maximum_timeout_seconds=86400, validate_runtime_files=False
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()
