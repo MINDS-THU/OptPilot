@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from devs_tools.devs_construct_recon.base_types import (
     StructurePlanArtifact,
@@ -20,6 +20,7 @@ from .base_types import (
     StandardContextModel,
 )
 from .llm_call_logger import log_llm_call, reset_llm_logger
+from .devs_construct_dyn_fast import DEVSConstructTreeFastConcur
 from .tools.model_creator_fast.model_create_flow import ModelCreateFlow
 from .tools.model_creator_fast.unified_model_creator import (
     require_public_child_bindings,
@@ -67,6 +68,16 @@ def _adapter(working_directory: Path):
 
 
 class AdapterTests(unittest.TestCase):
+    @patch.object(DEVSConstructTreeFastConcur, "__init__", return_value=None)
+    def test_adapter_keeps_plan_detail_and_allows_bounded_interface_replan(
+        self, engine_init
+    ):
+        DEVSConstructRecon(file_tools={}, model_id={})
+
+        options = engine_init.call_args.kwargs
+        self.assertFalse(options["summarize_after_generation"])
+        self.assertFalse(options["continue_with_locked_interfaces"])
+
     def test_prepare_plan_is_reviewable_and_does_not_write_project(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

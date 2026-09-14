@@ -89,8 +89,9 @@ class DEVSConstructRecon(DEVSConstructTreeFastConcur):
             enable_alignment_critic=False,
             root_plan_draft_count=0,
             parent_use_raw_child_code=False,
-            summarize_after_generation=True,
+            summarize_after_generation=False,
             rich_alignment_context=False,
+            continue_with_locked_interfaces=False,
         )
         self.progress_reporter = progress_reporter
 
