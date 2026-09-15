@@ -4,6 +4,7 @@ Saves organized log files per phase per model for analysis.
 """
 import json
 import os
+import shutil
 import time
 import threading
 from contextvars import ContextVar
@@ -47,6 +48,18 @@ class LLMCallLogger:
         with self._lock:
             self._call_counter += 1
             return self._call_counter
+
+    def relocate(self, log_dir: str | Path) -> None:
+        """Move an idle request logger to its durable generation directory."""
+
+        destination = Path(log_dir)
+        with self._lock:
+            if destination.resolve() == self.log_dir.resolve():
+                return
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(self.log_dir, destination, dirs_exist_ok=True)
+            self.log_dir = destination
+            self._summary_path = destination / "llm_calls_summary.jsonl"
 
     def log_call(
         self,
@@ -206,6 +219,13 @@ def get_llm_logger(log_dir: Optional[str] = None) -> LLMCallLogger:
 
 def reset_llm_logger(log_dir: Optional[str] = None) -> LLMCallLogger:
     logger = LLMCallLogger(log_dir)
+    _llm_logger.set(logger)
+    return logger
+
+
+def set_llm_logger(logger: LLMCallLogger) -> LLMCallLogger:
+    """Bind an existing request logger in the current execution context."""
+
     _llm_logger.set(logger)
     return logger
 

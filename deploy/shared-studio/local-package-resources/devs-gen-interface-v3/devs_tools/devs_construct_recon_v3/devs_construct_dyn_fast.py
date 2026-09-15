@@ -20,7 +20,12 @@ import ast
 import time
 import shlex
 
-from .llm_call_logger import reset_llm_logger, get_llm_logger
+from .llm_call_logger import (
+    LLMCallLogger,
+    get_llm_logger,
+    reset_llm_logger,
+    set_llm_logger,
+)
 
 original_parse_code_blobs = smolagents.utils.parse_code_blobs
 
@@ -567,6 +572,7 @@ class DEVSConstructTreeFastConcur(Tool):
         *,
         global_plan_override: Optional[list[GlobalPlanNode]] = None,
         requirement_ledger_override: RequirementLedger | None = None,
+        prepared_llm_logger: LLMCallLogger | None = None,
     ) -> str:
         required_cli_options = required_cli_options or []
         if (
@@ -596,7 +602,11 @@ class DEVSConstructTreeFastConcur(Tool):
 
         # Initialize LLM call logger (use absolute path)
         llm_log_dir = str((self.working_directory / self.log_dir_path / "llm_calls").resolve())
-        reset_llm_logger(llm_log_dir)
+        if prepared_llm_logger is None:
+            reset_llm_logger(llm_log_dir)
+        else:
+            prepared_llm_logger.relocate(llm_log_dir)
+            set_llm_logger(prepared_llm_logger)
 
         # Initialize build logger
         self.build_logger = BuildLogger((self.working_directory / self.log_dir_path).resolve())

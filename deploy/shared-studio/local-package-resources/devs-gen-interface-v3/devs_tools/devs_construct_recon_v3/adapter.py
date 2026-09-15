@@ -9,7 +9,9 @@ actual detailed planning and bottom-up construction to the v3 implementation.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import tempfile
+import threading
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,7 +31,7 @@ from .base_types import (
     StandardContextModel,
 )
 from .devs_construct_dyn_fast import DEVSConstructTreeFastConcur
-from .llm_call_logger import reset_llm_logger
+from .llm_call_logger import LLMCallLogger, reset_llm_logger
 
 
 class DEVSConstructRecon(DEVSConstructTreeFastConcur):
@@ -94,6 +96,34 @@ class DEVSConstructRecon(DEVSConstructTreeFastConcur):
             continue_with_locked_interfaces=False,
         )
         self.progress_reporter = progress_reporter
+        self._prepared_plan_log_lock = threading.Lock()
+        self._prepared_plan_logs: OrderedDict[
+            str, tuple[LLMCallLogger, tempfile.TemporaryDirectory]
+        ] = OrderedDict()
+
+    def _remember_plan_logger(
+        self,
+        digest: str,
+        logger: LLMCallLogger,
+        owner: tempfile.TemporaryDirectory,
+    ) -> None:
+        stale: list[tempfile.TemporaryDirectory] = []
+        with self._prepared_plan_log_lock:
+            previous = self._prepared_plan_logs.pop(digest, None)
+            if previous is not None:
+                stale.append(previous[1])
+            self._prepared_plan_logs[digest] = (logger, owner)
+            while len(self._prepared_plan_logs) > 16:
+                _, (_, expired_owner) = self._prepared_plan_logs.popitem(last=False)
+                stale.append(expired_owner)
+        for expired_owner in stale:
+            expired_owner.cleanup()
+
+    def _take_plan_logger(
+        self, digest: str
+    ) -> tuple[LLMCallLogger, tempfile.TemporaryDirectory] | None:
+        with self._prepared_plan_log_lock:
+            return self._prepared_plan_logs.pop(digest, None)
 
     @staticmethod
     def _canonical_project_folder(base_folder: str | Path) -> Path:
@@ -182,16 +212,18 @@ class DEVSConstructRecon(DEVSConstructTreeFastConcur):
             title="Planning the model structure",
             detail="Extracting requirements and defining the component hierarchy.",
         )
+        plan_log_owner = tempfile.TemporaryDirectory(prefix="devs-v3-plan-")
         try:
-            with tempfile.TemporaryDirectory(prefix="devs-v3-plan-") as temporary:
-                reset_llm_logger(str(Path(temporary) / "llm_calls"))
-                ledger = self.requirement_ledger_gen.forward(requirements, retry=3)
-                global_plan = self.global_plan_gen.forward(
-                    root_info.class_name,
-                    requirements,
-                    retry=3,
-                    requirement_ledger=ledger,
-                )
+            logger = reset_llm_logger(
+                str(Path(plan_log_owner.name) / "llm_calls")
+            )
+            ledger = self.requirement_ledger_gen.forward(requirements, retry=3)
+            global_plan = self.global_plan_gen.forward(
+                root_info.class_name,
+                requirements,
+                retry=3,
+                requirement_ledger=ledger,
+            )
             review_plan = self._review_plan(global_plan)
             artifact = StructurePlanArtifact(
                 root_model_name=root_model_name,
@@ -211,8 +243,10 @@ class DEVSConstructRecon(DEVSConstructTreeFastConcur):
                 current=component_count,
                 total=component_count,
             )
+            self._remember_plan_logger(artifact.digest(), logger, plan_log_owner)
             return artifact
         except Exception:
+            plan_log_owner.cleanup()
             self._report_progress(
                 activity_key="plan_structure",
                 state="failed",
@@ -255,15 +289,21 @@ class DEVSConstructRecon(DEVSConstructTreeFastConcur):
             title="Building the simulation",
             detail="Generating the approved hierarchy with the v3 engine.",
         )
-        result = self._forward_impl(
-            root_model_name=artifact.root_model_name,
-            requirements=artifact.requirements,
-            base_folder=str(artifact.project_folder),
-            skip_simulation_check=skip_simulation_check,
-            only_ensure_executable=only_ensure_executable,
-            global_plan_override=self._engine_plan(artifact.global_plan),
-            requirement_ledger_override=ledger,
-        )
+        prepared_logs = self._take_plan_logger(actual_digest)
+        try:
+            result = self._forward_impl(
+                root_model_name=artifact.root_model_name,
+                requirements=artifact.requirements,
+                base_folder=str(artifact.project_folder),
+                skip_simulation_check=skip_simulation_check,
+                only_ensure_executable=only_ensure_executable,
+                global_plan_override=self._engine_plan(artifact.global_plan),
+                requirement_ledger_override=ledger,
+                prepared_llm_logger=(prepared_logs[0] if prepared_logs else None),
+            )
+        finally:
+            if prepared_logs is not None:
+                prepared_logs[1].cleanup()
         failed = result.startswith("Critical Error") or result.startswith(
             "Build Aborted"
         )

@@ -1,5 +1,7 @@
+from collections import OrderedDict
 import json
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,7 +23,7 @@ from .base_types import (
     SimpleDetailedPlan,
     StandardContextModel,
 )
-from .llm_call_logger import log_llm_call, reset_llm_logger
+from .llm_call_logger import LLMCallLogger, log_llm_call, reset_llm_logger
 from .devs_construct_dyn_fast import BuildLogger, DEVSConstructTreeFastConcur
 from .tools.plan_gen.detailed_plan_generator import (
     InterfaceChangeIssue,
@@ -73,6 +75,8 @@ def _adapter(working_directory: Path):
     adapter = object.__new__(DEVSConstructRecon)
     adapter.working_directory = working_directory
     adapter.progress_reporter = None
+    adapter._prepared_plan_log_lock = threading.Lock()
+    adapter._prepared_plan_logs = OrderedDict()
     return adapter
 
 
@@ -269,6 +273,7 @@ class AdapterTests(unittest.TestCase):
                 artifact.graph.model_dump(mode="json"),
                 build_structure_graph(artifact.global_plan).model_dump(mode="json"),
             )
+            adapter._take_plan_logger(artifact.digest())[1].cleanup()
 
     def test_build_uses_the_approved_plan_and_ledger(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -293,6 +298,60 @@ class AdapterTests(unittest.TestCase):
             call = adapter._forward_impl.call_args.kwargs
             self.assertEqual(call["global_plan_override"], _engine_plan())
             self.assertEqual(call["requirement_ledger_override"], _ledger())
+
+    def test_prepare_phase_llm_logs_continue_into_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            adapter = _adapter(Path(temporary))
+            adapter.requirement_ledger_gen = Mock()
+            adapter.global_plan_gen = Mock()
+
+            def generate_ledger(*_args, **_kwargs):
+                log_llm_call("requirements", "offline", "ledger", "in", "out", 0)
+                return _ledger()
+
+            def generate_plan(*_args, **_kwargs):
+                log_llm_call("global_plan", "offline", "plan", "in", "out", 0)
+                return _engine_plan()
+
+            adapter.requirement_ledger_gen.forward.side_effect = generate_ledger
+            adapter.global_plan_gen.forward.side_effect = generate_plan
+            observed = {}
+
+            def build(**kwargs):
+                logger = kwargs["prepared_llm_logger"]
+                observed.update(logger.get_summary())
+                return "Build completed"
+
+            adapter._forward_impl = Mock(side_effect=build)
+            artifact = adapter.prepare_plan(
+                "DemoSystem", "Process jobs", "demo_project"
+            )
+
+            self.assertEqual(
+                adapter.build_from_plan(artifact, expected_digest=artifact.digest()),
+                "Build completed",
+            )
+            self.assertEqual(observed["total_calls"], 2)
+            self.assertEqual(
+                [call["phase"] for call in observed["calls"]],
+                ["requirements", "global_plan"],
+            )
+
+    def test_llm_logger_relocation_preserves_call_sequence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            logger = LLMCallLogger(root / "temporary")
+            logger.log_call("requirements", "offline", "ledger", "in", "out", 0)
+            logger.relocate(root / "durable")
+            logger.log_call("code", "offline", "worker", "in", "out", 0)
+
+            summary = logger.get_summary()
+            self.assertEqual(summary["total_calls"], 2)
+            self.assertEqual(
+                [call["call_id"] for call in summary["calls"]], [1, 2]
+            )
+            self.assertTrue((root / "durable" / "requirements").is_dir())
+            self.assertTrue((root / "durable" / "code").is_dir())
 
     def test_rejects_noncanonical_project_folders(self):
         for value in ("", ".", "../escape", "/tmp/escape", "nested/../escape"):

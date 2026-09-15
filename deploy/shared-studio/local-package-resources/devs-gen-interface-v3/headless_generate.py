@@ -446,7 +446,11 @@ def main() -> int:
     metadata = simulation_metadata(bundle)
 
     destination = output_root / "simulator"
-    shutil.copytree(bundle, destination)
+    shutil.copytree(
+        bundle,
+        destination,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
     (output_root / "generation_report.txt").write_text(
         str(report), encoding="utf-8"
     )
