@@ -19,7 +19,7 @@ from headless_generate import (
 class HeadlessAutomaticCheckTests(unittest.TestCase):
     def test_disabled_check_does_not_require_host_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir, patch.dict(
-            os.environ, {"DEVS_HEADLESS_CODEX_FINALIZER": "0"}, clear=False
+            os.environ, {"DEVS_HEADLESS_AUTOMATIC_CHECK": "0"}, clear=True
         ):
             self.assertIsNone(
                 _run_automatic_check(Path(tmp_dir), "generated_simulator")
@@ -53,11 +53,11 @@ class HeadlessAutomaticCheckTests(unittest.TestCase):
             with patch.dict(
                 os.environ,
                 {
-                    "DEVS_HEADLESS_CODEX_FINALIZER": "1",
-                    "DEVS_HEADLESS_CODEX_FINALIZER_URL": "http://127.0.0.1/finalize",
-                    "DEVS_COLLECTOR_INGEST_TOKEN": "test-token",
+                    "DEVS_HEADLESS_AUTOMATIC_CHECK": "1",
+                    "DEVS_HEADLESS_REMOTE_FINALIZER_URL": "http://127.0.0.1/finalize",
+                    "DEVS_HEADLESS_REMOTE_FINALIZER_TOKEN": "test-token",
                 },
-                clear=False,
+                clear=True,
             ), patch.object(RemoteCodexFinalizerClient, "run", fake_run):
                 result = _run_automatic_check(bundle, "generated_simulator")
 

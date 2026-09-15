@@ -36,11 +36,13 @@ actions:
         valueType: bool
         default: false
         description: >-
-          Also run the generator's internal verification stages. The normal
-          automatic check still runs when this is false.
+          Also run the generator's internal verification stages. This does
+          not enable an external automatic-check service.
     env:
-      DEVS_HEADLESS_CODEX_FINALIZER: "1"
-      DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS: "900"
+      # Headless actions remain portable and do not require a host-side agent.
+      # A deployment may explicitly configure an independent remote check.
+      DEVS_HEADLESS_AUTOMATIC_CHECK: "0"
+      DEVS_HEADLESS_AUTOMATIC_CHECK_TIMEOUT_SECONDS: "900"
       DEVS_COLLECTOR_SOURCE: devs-gen-interface-v3-headless
     grants:
       # Generation calls the configured model through OpenRouter, and setup
@@ -64,11 +66,13 @@ actions:
             ID. OpenRouter models need the "openrouter/" prefix, e.g.
             "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
             the OpenRouter key is the granted credential).
-        - DEVS_HEADLESS_CODEX_FINALIZER_URL
         - name: DEVS_HEADLESS_COLLECTOR_URL
-          default: http://127.0.0.1:8010
-          description: Collector origin reachable from the host Resource Action.
-      secretsFromHost: [OPENROUTER_API_KEY, DEVS_COLLECTOR_INGEST_TOKEN]
+          default: ""
+          description: Optional collector origin reachable from the host action.
+        - name: DEVS_COLLECTOR_INGEST_TOKEN
+          default: ""
+          description: Optional collector credential; leave empty to disable collection.
+      secretsFromHost: [OPENROUTER_API_KEY]
     runtime:
       sandbox: process
       setup:
@@ -116,10 +120,13 @@ interface:
     DEVS_DISPLAY_MAX_ACTIVE_GENERATIONS: "3"
     DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS: "240"
     DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS: "6"
-    DEVS_DISPLAY_CODEX_FINALIZER: "1"
-    DEVS_DISPLAY_CODEX_FINALIZER_DRIVER: remote_codex_cli
-    DEVS_DISPLAY_CODEX_FINALIZER_MAX_ATTEMPTS: "1"
-    DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS: "900"
+    DEVS_DISPLAY_AUTOMATIC_CHECK: "1"
+    DEVS_DISPLAY_AUTOMATIC_CHECK_DRIVER: pi_cli
+    DEVS_DISPLAY_AUTOMATIC_CHECK_MAX_ATTEMPTS: "1"
+    DEVS_DISPLAY_AUTOMATIC_CHECK_TIMEOUT_SECONDS: "900"
+    DEVS_DISPLAY_PI_PROVIDER: openrouter
+    DEVS_DISPLAY_PI_MODEL: deepseek/deepseek-v4.1-flash
+    DEVS_DISPLAY_PI_THINKING: "off"
     DEVS_COLLECTOR_SOURCE: devs-gen-interface-v3
     # Standalone launches use this no-network container fallback. Managed
     # Studio launches use the run-simulation action in the originating
@@ -160,12 +167,14 @@ interface:
           model ID. OpenRouter models need the "openrouter/" prefix, e.g.
           "openrouter/moonshotai/kimi-k3" (bare IDs are auto-prefixed while
           the OpenRouter key is the granted credential).
-      # Required host value: durable session collection and the remote Codex
-      # finalizer share this host service endpoint.
-      - DEVS_COLLECTOR_URL
+      - name: DEVS_COLLECTOR_URL
+        default: ""
+        description: Optional durable-session collector origin.
+      - name: DEVS_COLLECTOR_INGEST_TOKEN
+        default: ""
+        description: Optional collector credential; leave empty to disable collection.
     secretsFromHost:
       - OPENROUTER_API_KEY
-      - DEVS_COLLECTOR_INGEST_TOKEN
   resources:
     cpu: 2
     memoryMiB: 4096

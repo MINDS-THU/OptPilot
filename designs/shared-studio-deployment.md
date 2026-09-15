@@ -124,6 +124,13 @@ must be assumed able to recover a Workspace process environment, that ingest
 token is a bounded class capability rather than a per-student secret and should
 be rotated after the class.
 
+The v3 resource removes that deployment coupling. Its automatic check runs Pi
+with DeepSeek V4.1 Flash inside the prepared Interface runtime. Collector URL
+and ingest token are optional and are used only for asynchronous durable
+reporting; preflight accepts both values absent. A remote finalizer remains an
+explicit compatibility driver with separate finalizer credentials and never
+derives its endpoint or token from collector settings.
+
 ### Authentication division of responsibility
 
 Authentication is deliberately split rather than assigned exclusively to

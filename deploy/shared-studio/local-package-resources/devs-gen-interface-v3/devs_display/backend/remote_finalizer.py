@@ -138,7 +138,7 @@ class RemoteCodexFinalizerClient:
             data=body,
             headers={
                 "Content-Type": "application/json",
-                "X-DEVS-Collector-Token": self.token,
+                "Authorization": f"Bearer {self.token}",
             },
             method="POST",
         )
@@ -150,22 +150,22 @@ class RemoteCodexFinalizerClient:
         except urllib.error.HTTPError as exc:
             detail = _bounded_error_body(exc)
             raise RemoteFinalizerError(
-                f"Host Codex finalizer returned HTTP {exc.code}: {detail}"
+                f"Remote automatic check returned HTTP {exc.code}: {detail}"
             ) from exc
         except urllib.error.URLError as exc:
             raise RemoteFinalizerError(
-                f"Host Codex finalizer is unavailable: {exc.reason}"
+                f"Remote automatic check is unavailable: {exc.reason}"
             ) from exc
         if len(raw) > MAX_RESPONSE_BYTES:
-            raise RemoteFinalizerError("Host Codex finalizer response is too large")
+            raise RemoteFinalizerError("Remote automatic-check response is too large")
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise RemoteFinalizerError(
-                "Host Codex finalizer returned invalid JSON"
+                "Remote automatic check returned invalid JSON"
             ) from exc
         if not isinstance(payload, dict) or payload.get("review_id") != review_id:
-            raise RemoteFinalizerError("Host Codex finalizer response is mismatched")
+            raise RemoteFinalizerError("Remote automatic-check response is mismatched")
         self._apply_changes(bundle_root=bundle_root, payload=payload)
         return payload
 
@@ -175,14 +175,14 @@ class RemoteCodexFinalizerClient:
         changed = payload.get("changed_files")
         deleted = payload.get("deleted_paths")
         if not isinstance(changed, list) or not isinstance(deleted, list):
-            raise RemoteFinalizerError("Host Codex finalizer changes are malformed")
+            raise RemoteFinalizerError("Remote automatic-check changes are malformed")
         if len(changed) + len(deleted) > MAX_ARCHIVE_FILES:
-            raise RemoteFinalizerError("Host Codex finalizer changed too many files")
+            raise RemoteFinalizerError("Remote automatic check changed too many files")
         decoded: list[tuple[PurePosixPath, bytes]] = []
         total_bytes = 0
         for item in changed:
             if not isinstance(item, dict):
-                raise RemoteFinalizerError("Host Codex finalizer file is malformed")
+                raise RemoteFinalizerError("Remote automatic-check file is malformed")
             relative = _canonical_relative_path(str(item.get("path") or ""), "changed path")
             try:
                 content = base64.b64decode(
@@ -190,11 +190,11 @@ class RemoteCodexFinalizerClient:
                 )
             except Exception as exc:
                 raise RemoteFinalizerError(
-                    "Host Codex finalizer file content is invalid"
+                    "Remote automatic-check file content is invalid"
                 ) from exc
             total_bytes += len(content)
             if len(content) > MAX_ARCHIVE_FILE_BYTES or total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
-                raise RemoteFinalizerError("Host Codex finalizer changes are too large")
+                raise RemoteFinalizerError("Remote automatic-check changes are too large")
             decoded.append((relative, content))
         deletion_paths = [
             _canonical_relative_path(str(value), "deleted path") for value in deleted
@@ -206,12 +206,12 @@ class RemoteCodexFinalizerClient:
                 current = current / part
                 if current.is_symlink():
                     raise RemoteFinalizerError(
-                        "Host Codex finalizer path crosses a symlink"
+                        "Remote automatic-check path crosses a symlink"
                     )
             target = root.joinpath(*relative.parts)
             if target.is_symlink():
                 raise RemoteFinalizerError(
-                    "Host Codex finalizer cannot replace a symlink"
+                    "Remote automatic check cannot replace a symlink"
                 )
             return target
 

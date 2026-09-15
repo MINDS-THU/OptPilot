@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import socket
@@ -188,6 +189,67 @@ print("bundle generated")
                 self.state,
                 {**request, "inputs": {"name": "Grace"}},
             )
+
+    def test_optional_token_grant_is_redacted_from_action_progress(self) -> None:
+        config = (
+            self.package
+            / "resources"
+            / "demo-generator"
+            / "optpilot.resource.yaml"
+        )
+        raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        raw["actions"][0]["grants"]["envFromHost"] = [
+            {"name": "OPTIONAL_API_TOKEN", "default": ""}
+        ]
+        config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        secret = "optional-action-token-value"
+        entry = next(
+            item
+            for item in _catalog_payload(self.state)["resources"]
+            if item["id"] == "demo-generator"
+        )
+        request = {
+            "request_id": "87345678-1234-4234-8234-123456789abc",
+            "resource_uid": entry["uid"],
+            "action_id": "generate",
+            "inputs": {"name": "Ada"},
+            "_approved_action_contract_digest": self._action_digest(entry["uid"]),
+        }
+
+        def report_secret_progress(*_args, **kwargs):
+            kwargs["progress_callback"](
+                {
+                    "activity_key": "generating",
+                    "activity_state": "progress",
+                    "title": f"provider token={secret}",
+                    "detail": "still running",
+                }
+            )
+            return {
+                "ok": True,
+                "returncode": 0,
+                "timed_out": False,
+                "duration_seconds": 0.0,
+                "outputs": [],
+                "output_root": str(kwargs["output_root"]),
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "error": None,
+            }
+
+        with mock.patch.dict(
+            os.environ, {"OPTIONAL_API_TOKEN": secret}
+        ), mock.patch.object(
+            studio_server,
+            "run_resource_action",
+            side_effect=report_secret_progress,
+        ):
+            _start_resource_action_run(self.state, request)
+            settled = self._await_run(request["request_id"])
+
+        serialized = json.dumps(settled, sort_keys=True)
+        self.assertNotIn(secret, serialized)
+        self.assertIn("[REDACTED]", serialized)
 
     def test_invalid_inputs_are_rejected_before_a_run_starts(self) -> None:
         resources = _catalog_payload(self.state)["resources"]

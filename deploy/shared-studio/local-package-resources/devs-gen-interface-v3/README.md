@@ -214,9 +214,12 @@ interface:
         default: openrouter/openai/gpt-5.4
       - name: DEVS_DISPLAY_MODEL_ID
         default: openrouter/openai/gpt-5.4
+      - name: DEVS_COLLECTOR_URL
+        default: ""
+      - name: DEVS_COLLECTOR_INGEST_TOKEN
+        default: ""
     secretsFromHost:
       - OPENROUTER_API_KEY
-      - DEVS_COLLECTOR_INGEST_TOKEN
 ```
 
 The variables have these roles:
@@ -236,6 +239,11 @@ interface:
     DEVS_INTERFACE_CONCURRENCY: "8"
     DEVS_DISPLAY_GRAPH_PARSE_TIMEOUT_SECONDS: "240"
     DEVS_DISPLAY_GRAPH_PARSE_MAX_WORKERS: "6"
+    DEVS_DISPLAY_AUTOMATIC_CHECK: "1"
+    DEVS_DISPLAY_AUTOMATIC_CHECK_DRIVER: pi_cli
+    DEVS_DISPLAY_PI_PROVIDER: openrouter
+    DEVS_DISPLAY_PI_MODEL: deepseek/deepseek-v4.1-flash
+    DEVS_DISPLAY_PI_THINKING: "off"
     DEVS_GENERATED_EXECUTION_MODE: container
     DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:latest
 ```
@@ -304,6 +312,12 @@ If either required value is absent, reporting is disabled and the Interface
 behaves exactly as before. Public example publication remains an administrator
 action in the separate collector service; an Interface never makes a student's
 model public by itself.
+
+The automatic check is independent of this collector configuration. Managed v3
+installs Pi in its prepared runtime and uses DeepSeek V4.1 Flash through the
+same `OPENROUTER_API_KEY` already required for generation. An explicitly
+configured remote finalizer uses its own URL and token rather than collector
+credentials.
 
 ## Launching Manually
 

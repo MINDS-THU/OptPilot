@@ -4,9 +4,21 @@ source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 failed=0
 
 [ -f "${DEPLOY_CONFIG}" ] || { printf 'Missing %s; copy deploy.env.example first.\n' "${DEPLOY_CONFIG}" >&2; failed=1; }
-for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS CLASSROOM_AUTH_DB OPTPILOT_ADMIN_PASSWORD OPENROUTER_API_KEY DEVS_COLLECTOR_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS CLASSROOM_AUTH_DB OPTPILOT_ADMIN_PASSWORD OPENROUTER_API_KEY; do
   require_value "${name}" || failed=1
 done
+collector_values=0
+for name in DEVS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+  [ -n "${!name:-}" ] && collector_values=$((collector_values + 1))
+done
+if [ "${collector_values}" -ne 0 ] && [ "${collector_values}" -ne 3 ]; then
+  printf 'Set all collector values or leave all three empty to disable collection.\n' >&2
+  failed=1
+elif [ "${collector_values}" -eq 3 ]; then
+  for name in DEVS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+    require_value "${name}" || failed=1
+  done
+fi
 admin_password_value="${OPTPILOT_ADMIN_PASSWORD:-}"
 if [ "${#admin_password_value}" -lt 12 ]; then
   printf 'OPTPILOT_ADMIN_PASSWORD must contain at least 12 characters.\n' >&2
@@ -156,9 +168,11 @@ uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen python -c \
   'import sys; from optpilot_studio.ui.server import PublicAccessOptions; PublicAccessOptions.from_url(sys.argv[1], trust_loopback_proxy=True)' \
   "https://${PUBLIC_HOST}:${STUDIO_PORT}"
-python3 -c \
-  'import json, sys, urllib.request; payload=json.load(urllib.request.urlopen(sys.argv[1], timeout=5)); assert payload.get("status") == "ok"' \
-  "${DEVS_COLLECTOR_HEALTHCHECK_URL}"
+if [ -n "${DEVS_COLLECTOR_HEALTHCHECK_URL}" ]; then
+  python3 -c \
+    'import json, sys, urllib.request; payload=json.load(urllib.request.urlopen(sys.argv[1], timeout=5)); assert payload.get("status") == "ok"' \
+    "${DEVS_COLLECTOR_HEALTHCHECK_URL}"
+fi
 validation_output="$(uv run --project "${SOURCE_ROOT}" --frozen optpilot package validate \
   "${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}" --check-source 2>&1)"
 printf '%s\n' "${validation_output}"

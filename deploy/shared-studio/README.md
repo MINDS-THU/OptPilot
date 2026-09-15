@@ -44,20 +44,22 @@ so Studio does not idle-suspend it. A second launch is rejected with the
 account's live Interface list and explicit Stop actions. Ordinary Workspace
 runtimes keep their separate idle timeout and active-container limit.
 
-## Collector prerequisite
+## Optional collector integration
 
 This deployment reuses the separate trusted `devs-gen-collector`; it does not
 start or publish that administrative service. Keep the collector and `/admin`
-on `127.0.0.1:8010`. The Docker-host URL in `DEVS_COLLECTOR_URL` lets the v2
-interface submit records and bounded finalizer bundles, while
+on `127.0.0.1:8010`. The Docker-host URL in `DEVS_COLLECTOR_URL` lets the
+interface submit durable records, while
 `DEVS_COLLECTOR_HEALTHCHECK_URL` lets preflight verify the host-loopback service.
+Set the collector URL, healthcheck URL, and ingest token together, or leave all
+three empty. Generation and the v3 Pi automatic check do not depend on it.
 Only the ingest token belongs in `deploy.env`; never grant the collector admin
 token to Studio, OpenHands, or a Workspace. Rotate the ingest token after a
 class or suspected disclosure.
 
 ## First setup
 
-1. Copy `deploy.env.example` to `deploy.env`, fill every placeholder, and run
+1. Copy `deploy.env.example` to `deploy.env`, fill the required values, and run
    `chmod 600 deploy.env`. Use a certificate valid for `PUBLIC_HOST`. Keep
    `OPTPILOT_STATE_ROOT` (the mountable Studio working tree) disjoint from
    `OPTPILOT_PRIVATE_ROOT` (credentials, TLS keys, Catalog templates, runtime

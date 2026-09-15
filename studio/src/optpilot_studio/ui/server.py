@@ -11526,6 +11526,20 @@ def _interface_launch_env_requirements(
     ]
 
 
+def _secret_like_interface_values(
+    profile: InterfaceLaunchProfile, resolved: Mapping[str, str]
+) -> set[str]:
+    """Values to redact even when an optional secret uses an empty default."""
+
+    names = set(profile.grants.secrets_from_host)
+    names.update(
+        name
+        for name in profile.grants.env_from_host
+        if _looks_like_required_secret(name)
+    )
+    return {resolved[name] for name in names if resolved.get(name)}
+
+
 def _resource_action_env_requirements(action: ResourceActionSpec) -> List[Any]:
     """Return action declarations in the resolver's name-or-default shape."""
 
@@ -13560,8 +13574,9 @@ def _start_resource_action_run(
 
     secret_progress_values = tuple(
         value
-        for name in action.secrets_from_host
-        if (value := str(action_host_env.get(name) or ""))
+        for name in (*action.secrets_from_host, *action.env_from_host)
+        if (name in action.secrets_from_host or _looks_like_required_secret(name))
+        and (value := str(action_host_env.get(name) or ""))
     )
 
     def update_progress(progress: Mapping[str, Any]) -> None:
@@ -34706,11 +34721,9 @@ def _start_catalog_interface_launch(
         public_path_redactions=_interface_launch_public_path_redactions(
             state, runtime_workspace
         ),
-        public_secret_redactions={
-            declared_host_env[name]
-            for name in profile.grants.secrets_from_host
-            if declared_host_env.get(name)
-        },
+        public_secret_redactions=_secret_like_interface_values(
+            profile, declared_host_env
+        ),
     )
     job.steps.append(
         {
@@ -34806,11 +34819,9 @@ def _start_workspace_interface_launch(
         public_path_redactions=_interface_launch_public_path_redactions(
             state, runtime_workspace
         ),
-        public_secret_redactions={
-            declared_host_env[name]
-            for name in profile.grants.secrets_from_host
-            if declared_host_env.get(name)
-        },
+        public_secret_redactions=_secret_like_interface_values(
+            profile, declared_host_env
+        ),
     )
     job.steps.append(
         {

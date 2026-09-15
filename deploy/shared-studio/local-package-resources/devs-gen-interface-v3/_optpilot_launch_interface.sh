@@ -212,6 +212,14 @@ optpilot_require_prepared_marker \
 # deliberately read-only and catch incomplete/corrupt cache entries early.
 "$PYTHON" -c 'import dotenv'
 
+PI_CLI_BIN="${DEVS_DISPLAY_PI_CLI_BIN:-$FRONTEND_RUNTIME_ROOT/node_modules/.bin/pi}"
+if [ ! -x "$PI_CLI_BIN" ]; then
+  echo "Prepared automatic-check runtime is incomplete: Pi CLI is missing." >&2
+  echo "Rebuild the prepared-runtime cache before launching." >&2
+  exit 1
+fi
+export DEVS_DISPLAY_PI_CLI_BIN="$PI_CLI_BIN"
+
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 ./_start_backend.sh > "$BACKEND_LOG" 2>&1 &

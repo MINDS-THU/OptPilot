@@ -3461,7 +3461,10 @@ class DEVSBackendService:
 
     @staticmethod
     def _codex_finalizer_enabled() -> bool:
-        return os.getenv("DEVS_DISPLAY_CODEX_FINALIZER", "0").strip() not in {
+        value = os.getenv("DEVS_DISPLAY_AUTOMATIC_CHECK")
+        if value is None:
+            value = os.getenv("DEVS_DISPLAY_CODEX_FINALIZER", "0")
+        return value.strip() not in {
             "0",
             "false",
             "False",
@@ -3470,7 +3473,12 @@ class DEVSBackendService:
     @staticmethod
     def _codex_finalizer_attempt_limit() -> int:
         try:
-            value = int(os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_MAX_ATTEMPTS", "2"))
+            value = int(
+                os.getenv(
+                    "DEVS_DISPLAY_AUTOMATIC_CHECK_MAX_ATTEMPTS",
+                    os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_MAX_ATTEMPTS", "2"),
+                )
+            )
         except ValueError:
             value = 2
         return max(1, min(value, 3))
@@ -3478,14 +3486,22 @@ class DEVSBackendService:
     @staticmethod
     def _codex_finalizer_max_steps() -> int:
         try:
-            value = int(os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_MAX_STEPS", "14"))
+            value = int(
+                os.getenv(
+                    "DEVS_DISPLAY_AUTOMATIC_CHECK_MAX_STEPS",
+                    os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_MAX_STEPS", "14"),
+                )
+            )
         except ValueError:
             value = 14
         return max(8, min(value, 28))
 
     @staticmethod
     def _codex_finalizer_driver() -> str:
-        value = os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_DRIVER", "agent")
+        value = os.getenv(
+            "DEVS_DISPLAY_AUTOMATIC_CHECK_DRIVER",
+            os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_DRIVER", "agent"),
+        )
         return value.strip().lower() or "agent"
 
     @staticmethod
@@ -3496,7 +3512,12 @@ class DEVSBackendService:
     @staticmethod
     def _codex_finalizer_timeout_seconds() -> int:
         try:
-            value = int(os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS", "900"))
+            value = int(
+                os.getenv(
+                    "DEVS_DISPLAY_AUTOMATIC_CHECK_TIMEOUT_SECONDS",
+                    os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS", "900"),
+                )
+            )
         except ValueError:
             value = 900
         return max(120, min(value, 3600))
@@ -3507,6 +3528,13 @@ class DEVSBackendService:
         if not codex_bin:
             raise RuntimeError("Codex CLI is not available on PATH.")
         return codex_bin
+
+    @staticmethod
+    def _pi_cli_bin() -> str:
+        pi_bin = os.getenv("DEVS_DISPLAY_PI_CLI_BIN") or shutil.which("pi")
+        if not pi_bin:
+            raise RuntimeError("Pi CLI is not available on PATH.")
+        return pi_bin
 
     @staticmethod
     def _codex_cli_run_instruction(project_rel: str) -> str:
@@ -3545,11 +3573,11 @@ class DEVSBackendService:
         project_rel: str,
         review_id: str,
     ) -> None:
-        endpoint = os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_URL", "").strip()
-        if not endpoint:
-            collector_url = os.getenv("DEVS_COLLECTOR_URL", "").strip().rstrip("/")
-            endpoint = f"{collector_url}/api/v1/finalize/bundle" if collector_url else ""
-        token = os.getenv("DEVS_COLLECTOR_INGEST_TOKEN", "").strip()
+        endpoint = os.getenv(
+            "DEVS_DISPLAY_REMOTE_FINALIZER_URL",
+            os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_URL", ""),
+        ).strip()
+        token = os.getenv("DEVS_DISPLAY_REMOTE_FINALIZER_TOKEN", "").strip()
         client = RemoteCodexFinalizerClient(
             endpoint=endpoint,
             token=token,
@@ -3562,12 +3590,12 @@ class DEVSBackendService:
             bundle_root=bundle_root,
         )
         if bool(result.get("timed_out")):
-            raise RuntimeError("Host Codex CLI finalizer timed out.")
+            raise RuntimeError("Remote automatic check timed out.")
         if int(result.get("returncode", -1)) != 0 and not bool(
             result.get("result_present")
         ):
             raise RuntimeError(
-                "Host Codex CLI finalizer exited with code "
+                "Remote automatic check exited with code "
                 f"{result.get('returncode')} without a result."
             )
 
@@ -3583,13 +3611,13 @@ class DEVSBackendService:
             return {
                 "verdict": "inconclusive",
                 "issues": [
-                    "Codex finalizer did not write a valid codex_finalizer_result.json."
+                    "Automatic check did not write a valid result file."
                 ],
             }
         if not isinstance(payload, dict):
             return {
                 "verdict": "inconclusive",
-                "issues": ["Codex finalizer result was not a JSON object."],
+                "issues": ["Automatic-check result was not a JSON object."],
             }
         if str(payload.get("review_id") or "") != review_id:
             return {
@@ -3601,7 +3629,7 @@ class DEVSBackendService:
                         if isinstance(payload.get("issues"), list)
                         else []
                     ),
-                    "Codex finalizer result did not match the current review id.",
+                    "Automatic-check result did not match the current review id.",
                 ],
             }
         verdict = str(payload.get("verdict") or "").strip().lower()
@@ -3613,7 +3641,7 @@ class DEVSBackendService:
                     if isinstance(payload.get("issues"), list)
                     else []
                 ),
-                "Codex finalizer returned an unsupported verdict.",
+                "Automatic check returned an unsupported verdict.",
             ]
         else:
             payload["verdict"] = verdict
@@ -3761,6 +3789,83 @@ class DEVSBackendService:
                 f"{completed.returncode}. See {stderr_path.name}."
             )
 
+    def _run_pi_cli_finalizer(
+        self,
+        *,
+        prompt: str,
+        workspace_root: Path,
+        bundle_root: Path,
+        review_id: str,
+    ) -> None:
+        """Run the self-contained Pi automatic check inside the Interface runtime."""
+
+        pi_bin = self._pi_cli_bin()
+        log_dir = bundle_root / "devs_project" / "_analysis_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        safe_review_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", review_id)[-160:]
+        stdout_path = log_dir / f"pi_finalizer_{safe_review_id}.jsonl"
+        stderr_path = log_dir / f"pi_finalizer_{safe_review_id}.stderr.txt"
+        command = [
+            pi_bin,
+            "--provider",
+            os.getenv("DEVS_DISPLAY_PI_PROVIDER", "openrouter").strip()
+            or "openrouter",
+            "--model",
+            os.getenv(
+                "DEVS_DISPLAY_PI_MODEL", "deepseek/deepseek-v4.1-flash"
+            ).strip()
+            or "deepseek/deepseek-v4.1-flash",
+            "--thinking",
+            os.getenv("DEVS_DISPLAY_PI_THINKING", "off").strip() or "off",
+            "--mode",
+            "json",
+            "--print",
+            "--no-session",
+            "--no-extensions",
+            "--no-skills",
+            "--no-context-files",
+            "--no-approve",
+            "--tools",
+            "read,bash,edit,write",
+            "--",
+            prompt,
+        ]
+        process_env = dict(os.environ)
+        pi_state_root = Path(
+            os.getenv("OPTPILOT_INTERFACE_EPHEMERAL_ROOT", "").strip()
+            or log_dir
+        )
+        process_env["PI_CODING_AGENT_DIR"] = str(
+            pi_state_root / "pi-finalizer" / safe_review_id
+        )
+        process_env["PI_TELEMETRY"] = "0"
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(workspace_root),
+                text=True,
+                capture_output=True,
+                timeout=self._codex_finalizer_timeout_seconds(),
+                check=False,
+                env=process_env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout_path.write_text(str(exc.stdout or "")[-12000:], encoding="utf-8")
+            stderr_path.write_text(str(exc.stderr or "")[-12000:], encoding="utf-8")
+            raise RuntimeError(
+                f"Pi automatic check timed out after {exc.timeout} seconds."
+            ) from exc
+
+        stdout_path.write_text(str(completed.stdout or "")[-12000:], encoding="utf-8")
+        stderr_path.write_text(str(completed.stderr or "")[-12000:], encoding="utf-8")
+        if completed.returncode != 0 and not self._codex_finalizer_result_path(
+            bundle_root
+        ).exists():
+            raise RuntimeError(
+                "Pi automatic check exited with code "
+                f"{completed.returncode}. See {stderr_path.name}."
+            )
+
     def _run_codex_cli_repair(
         self,
         *,
@@ -3893,10 +3998,10 @@ class DEVSBackendService:
                 run_instruction=(
                     f"Use the devs_execute tool exactly as "
                     f"devs_execute(project_path={project_rel!r}, main_file='run.py')."
-                    if driver not in {"codex_cli", "remote_codex_cli"}
+                    if driver not in {"codex_cli", "pi_cli", "remote_codex_cli"}
                     else (
                         self._codex_cli_run_instruction(project_rel)
-                        if driver == "codex_cli"
+                        if driver in {"codex_cli", "pi_cli"}
                         else self._remote_codex_run_instruction(project_rel)
                     )
                 ),
@@ -3930,6 +4035,13 @@ class DEVSBackendService:
                         bundle_root=bundle_root,
                         review_id=review_id,
                     )
+                elif driver == "pi_cli":
+                    self._run_pi_cli_finalizer(
+                        prompt=prompt,
+                        workspace_root=workspace_root,
+                        bundle_root=bundle_root,
+                        review_id=review_id,
+                    )
                 elif driver == "remote_codex_cli":
                     self._run_remote_codex_finalizer(
                         prompt=prompt,
@@ -3942,8 +4054,9 @@ class DEVSBackendService:
                         agent.run(prompt, reset=True, max_steps=max_steps)
                 else:
                     raise RuntimeError(
-                        "Unsupported Codex finalizer driver "
-                        f"{driver!r}; use 'codex_cli', 'remote_codex_cli', or 'agent'."
+                        "Unsupported automatic-check driver "
+                        f"{driver!r}; use 'pi_cli', 'codex_cli', "
+                        "'remote_codex_cli', or 'agent'."
                     )
                 if (bundle_root / "devs_project" / "system_model_info.json").is_file():
                     refresh_generated_interface_registry(bundle_root)
@@ -3953,7 +4066,7 @@ class DEVSBackendService:
             except Exception as exc:
                 finalizer_exception = exc
                 print(
-                    "[Backend] Codex finalizer stopped "
+                    "[Backend] Automatic check stopped "
                     f"({type(exc).__name__}): {exc}"
                 )
                 traceback.print_exc()
@@ -3998,7 +4111,7 @@ class DEVSBackendService:
                             else []
                         ),
                         (
-                            "Codex finalizer stopped before completing: "
+                            "Automatic check stopped before completing: "
                             f"{type(finalizer_exception).__name__}: "
                             f"{finalizer_exception}"
                         ),

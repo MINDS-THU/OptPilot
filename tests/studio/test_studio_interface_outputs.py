@@ -2697,6 +2697,7 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
 
     def test_public_failure_and_logs_redact_source_paths_and_secrets(self) -> None:
         secret = "q7"
+        optional_secret = "optional-sensitive-value"
         nonsecret = "a"
         config = self.catalog_root / "resources" / "generated_tool" / "optpilot.resource.yaml"
         config.write_text(
@@ -2710,14 +2711,16 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
                     "  label: Generated Tool UI",
                     "  command: [python, -m, http.server, '5173']",
                     "  runtime: {sandbox: process}",
-                    "  grants: {envFromHost: [PUBLIC_MODE], secretsFromHost: [PRIVATE_INTERFACE_TOKEN]}",
+                    "  grants: {envFromHost: [PUBLIC_MODE, OPTIONAL_API_TOKEN], secretsFromHost: [PRIVATE_INTERFACE_TOKEN]}",
                     "  presentation: {kind: web, port: 5173, readyTimeoutSeconds: 0}",
                     "",
                 ]
             ),
             encoding="utf-8",
         )
-        raw_error = f"provider failed at {self.root} using {secret}"
+        raw_error = (
+            f"provider failed at {self.root} using {secret} and {optional_secret}"
+        )
         self.fake_runtime.on_exec = lambda _workspace: (_ for _ in ()).throw(
             RuntimeError(raw_error)
         )
@@ -2726,6 +2729,7 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
                 os.environ,
                 {
                     "PRIVATE_INTERFACE_TOKEN": secret,
+                    "OPTIONAL_API_TOKEN": optional_secret,
                     "PUBLIC_MODE": nonsecret,
                 },
             ),
@@ -2758,6 +2762,7 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
         public = _interface_launch_by_id(self.state, launch_id)
         serialized = json.dumps(public, sort_keys=True)
         self.assertNotIn(secret, serialized)
+        self.assertNotIn(optional_secret, serialized)
         self.assertNotIn(str(self.root), serialized)
         self.assertNotIn(raw_error, serialized)
         self.assertEqual(public["error_code"], "interface_launch_failed")
@@ -2765,7 +2770,9 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
         self.assertEqual(public["logs"]["stderr"], "")
         with self.state._lock:
             job = self.state.interface_launches[launch_id]
-            self.assertEqual(job.public_secret_redactions, {secret})
+            self.assertEqual(
+                job.public_secret_redactions, {secret, optional_secret}
+            )
 
     def test_public_log_reader_refuses_a_container_writable_symlink(self) -> None:
         log_dir = self.root / "mutable-logs"

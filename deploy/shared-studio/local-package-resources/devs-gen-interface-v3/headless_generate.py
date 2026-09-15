@@ -112,23 +112,33 @@ def _dependency_failure(error: BaseException) -> str:
 
 
 def _run_automatic_check(bundle: Path, bundle_folder: str) -> dict[str, object] | None:
-    """Run the same host Codex finalizer used by the managed web interface."""
+    """Run an explicitly configured remote check for a headless action."""
 
-    if os.getenv("DEVS_HEADLESS_CODEX_FINALIZER", "0").strip() in {
+    enabled = os.getenv(
+        "DEVS_HEADLESS_AUTOMATIC_CHECK",
+        os.getenv("DEVS_HEADLESS_CODEX_FINALIZER", "0"),
+    )
+    if enabled.strip() in {
         "0",
         "false",
         "False",
     }:
         return None
-    endpoint = os.getenv("DEVS_HEADLESS_CODEX_FINALIZER_URL", "").strip()
-    token = os.getenv("DEVS_COLLECTOR_INGEST_TOKEN", "").strip()
+    endpoint = os.getenv(
+        "DEVS_HEADLESS_REMOTE_FINALIZER_URL",
+        os.getenv("DEVS_HEADLESS_CODEX_FINALIZER_URL", ""),
+    ).strip()
+    token = os.getenv("DEVS_HEADLESS_REMOTE_FINALIZER_TOKEN", "").strip()
     if not endpoint or not token:
         raise RuntimeError(
-            "Automatic check is enabled, but its host endpoint or token is missing."
+            "Remote automatic check is enabled, but its endpoint or token is missing."
         )
     try:
         timeout_seconds = int(
-            os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS", "900")
+            os.getenv(
+                "DEVS_HEADLESS_AUTOMATIC_CHECK_TIMEOUT_SECONDS",
+                os.getenv("DEVS_DISPLAY_CODEX_FINALIZER_TIMEOUT_SECONDS", "900"),
+            )
         )
     except ValueError:
         timeout_seconds = 900

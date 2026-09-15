@@ -2393,6 +2393,53 @@ class BackendServiceTests(unittest.TestCase):
         self.assertIn("OPTPILOT_INTERFACE_PYTHON is not set", instruction)
         self.assertIn("cd demo && python3 run.py", instruction)
 
+    def test_pi_finalizer_uses_v41_without_collector_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "test-openrouter-key",
+                "DEVS_DISPLAY_PI_CLI_BIN": "/prepared/bin/pi",
+            },
+            clear=True,
+        ), patch("devs_display.backend.server.subprocess.run") as run:
+            root = Path(tmp)
+            bundle = root / "generated"
+            (bundle / "devs_project").mkdir(parents=True)
+            run.return_value = SimpleNamespace(returncode=0, stdout="{}\n", stderr="")
+            service = DEVSBackendService(DummyAgent(), str(root), start_worker=False)
+
+            service._run_pi_cli_finalizer(
+                prompt="Review this bundle",
+                workspace_root=root,
+                bundle_root=bundle,
+                review_id="review-1",
+            )
+
+        command = run.call_args.args[0]
+        process_env = run.call_args.kwargs["env"]
+        self.assertIn("/prepared/bin/pi", command)
+        self.assertIn("deepseek/deepseek-v4.1-flash", command)
+        self.assertIn("off", command)
+        self.assertEqual(process_env["OPENROUTER_API_KEY"], "test-openrouter-key")
+        self.assertNotIn("DEVS_COLLECTOR_URL", process_env)
+        self.assertNotIn("DEVS_COLLECTOR_INGEST_TOKEN", process_env)
+
+    def test_generic_automatic_check_configuration_precedes_legacy_names(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DEVS_DISPLAY_AUTOMATIC_CHECK": "1",
+                "DEVS_DISPLAY_AUTOMATIC_CHECK_DRIVER": "pi_cli",
+                "DEVS_DISPLAY_AUTOMATIC_CHECK_TIMEOUT_SECONDS": "321",
+                "DEVS_DISPLAY_CODEX_FINALIZER": "0",
+                "DEVS_DISPLAY_CODEX_FINALIZER_DRIVER": "remote_codex_cli",
+            },
+            clear=True,
+        ):
+            self.assertTrue(DEVSBackendService._codex_finalizer_enabled())
+            self.assertEqual(DEVSBackendService._codex_finalizer_driver(), "pi_cli")
+            self.assertEqual(DEVSBackendService._codex_finalizer_timeout_seconds(), 321)
+
     def test_finalizer_changed_source_files_ignore_internal_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = DEVSBackendService(DummyAgent(), tmp, start_worker=False)
