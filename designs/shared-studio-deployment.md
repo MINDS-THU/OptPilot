@@ -68,7 +68,7 @@ mounting deployment authority.
 
 Create the new resource from the upstream `devs-gen-interface` at OptPilot
 commit `5094231`, then selectively merge the committed changes from
-`/Users/minds/MINDS/devs-gen-interface-persistence-dev` commit `a2a3cd8` into
+`devs-gen-interface-persistence-dev` commit `a2a3cd8` into
 the tracked deployment template:
 
 ```text

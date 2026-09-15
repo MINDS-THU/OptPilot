@@ -6,7 +6,7 @@ selectively merges the persistence, participant identity, feedback, collector,
 telemetry, and remote-finalizer work from:
 
 ```text
-/Users/minds/MINDS/devs-gen-interface-persistence-dev
+devs-gen-interface-persistence-dev
 commit a2a3cd8
 ```
 
