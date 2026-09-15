@@ -865,6 +865,20 @@ def simulation_metadata(
     return metadata
 
 
+def simulation_command_arguments(
+    bundle_root: str | Path,
+    arguments: Mapping[str, Any] | None = None,
+    *,
+    maximum_timeout_seconds: int = 24 * 60 * 60,
+) -> tuple[str, ...]:
+    """Render the validated CLI arguments used for one simulation run."""
+
+    path = ensure_simulation_manifest(bundle_root)
+    parsed = _load_manifest(path, maximum_timeout_seconds=maximum_timeout_seconds)
+    _resolved, rendered = _render_arguments(parsed, arguments)
+    return rendered
+
+
 def _read_behavior_text(path: Path, maximum_bytes: int) -> str:
     """Read one already-retained regular file through a small fixed bound."""
 
@@ -2784,5 +2798,6 @@ __all__ = [
     "SimulationExecutionService",
     "SimulationManifestError",
     "ensure_simulation_manifest",
+    "simulation_command_arguments",
     "simulation_metadata",
 ]

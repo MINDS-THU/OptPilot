@@ -2393,6 +2393,29 @@ class BackendServiceTests(unittest.TestCase):
         self.assertIn("OPTPILOT_INTERFACE_PYTHON is not set", instruction)
         self.assertIn("cd demo && python3 run.py", instruction)
 
+    def test_pi_run_instruction_includes_resolved_command_and_tool_parameters(self):
+        with patch.dict(
+            os.environ,
+            {"OPTPILOT_INTERFACE_PYTHON": "/runtime/bin/python"},
+            clear=False,
+        ), patch(
+            "devs_display.backend.server.simulation_command_arguments",
+            return_value=("--seed", "7", "--fast-mode"),
+        ):
+            instruction = DEVSBackendService._pi_cli_run_instruction(
+                "generated bundle",
+                bundle_root=Path("/unused"),
+                arguments={"fast_mode": True, "seed": 7},
+            )
+
+        self.assertIn(
+            "cd 'generated bundle' && /runtime/bin/python -u run.py --seed 7 --fast-mode",
+            instruction,
+        )
+        self.assertIn('parameters={"fast_mode": true, "seed": 7}', instruction)
+        self.assertIn("use the devs_run tool", instruction)
+        self.assertIn("Do not run the simulator directly through bash", instruction)
+
     def test_pi_finalizer_uses_v41_without_collector_configuration(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             os.environ,
@@ -2420,9 +2443,93 @@ class BackendServiceTests(unittest.TestCase):
         self.assertIn("/prepared/bin/pi", command)
         self.assertIn("deepseek/deepseek-v4.1-flash", command)
         self.assertIn("off", command)
+        self.assertIn("--extension", command)
+        self.assertTrue(
+            command[command.index("--extension") + 1].endswith("pi_devs_run.ts")
+        )
+        self.assertIn("devs_run", command[command.index("--tools") + 1])
         self.assertEqual(process_env["OPENROUTER_API_KEY"], "test-openrouter-key")
+        self.assertEqual(process_env["PI_DEVS_WORKSPACE_ROOT"], str(root))
+        self.assertEqual(process_env["PI_DEVS_PROJECT_PATH"], "generated")
+        self.assertTrue(process_env["PI_DEVS_RUNNER"].endswith("pi_finalizer_run.py"))
+        self.assertEqual(process_env["PI_DEVS_PYTHON"], os.sys.executable)
+        self.assertIn("pi-finalizer-runs/review-1", process_env["PI_DEVS_RUN_ROOT"])
+        self.assertFalse(
+            Path(process_env["PI_DEVS_RUN_ROOT"]).is_relative_to(bundle)
+        )
+        self.assertEqual(run.call_args.kwargs["timeout"], 900)
         self.assertNotIn("DEVS_COLLECTOR_URL", process_env)
         self.assertNotIn("DEVS_COLLECTOR_INGEST_TOKEN", process_env)
+
+    def test_pi_finalizer_evidence_keeps_raw_output_and_retained_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "generated"
+            (bundle / "devs_project").mkdir(parents=True)
+            service = DEVSBackendService(DummyAgent(), str(root), start_worker=False)
+            execution_id = "exec_" + "a" * 32
+            result_root = (
+                service.simulation_execution_service.execution_root
+                / execution_id
+                / "results"
+            )
+            result_root.mkdir(parents=True)
+            retained = result_root / "summary.json"
+            retained.write_text('{"metrics":{"done":3}}\n', encoding="utf-8")
+
+            evidence = service._write_pi_finalizer_evidence(
+                bundle_root=bundle,
+                review_id="review/unsafe",
+                record={
+                    "execution_id": execution_id,
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "duration_seconds": 1.25,
+                    "stdout": "raw success output\n",
+                    "stderr": "raw warning\n",
+                    "stdout_truncated": False,
+                    "stderr_truncated": False,
+                    "result_files": [{"path": "summary.json"}],
+                },
+            )
+
+            self.assertEqual(
+                Path(evidence["stdout_path"]).read_text(encoding="utf-8"),
+                "raw success output\n",
+            )
+            self.assertEqual(
+                Path(evidence["stderr_path"]).read_text(encoding="utf-8"),
+                "raw warning\n",
+            )
+            self.assertEqual(evidence["result_paths"], [str(retained)])
+            self.assertNotIn("event_counts", evidence)
+            self.assertNotIn("diagnostic", evidence)
+
+    def test_pi_finalizer_prompt_points_to_raw_success_evidence(self):
+        prompt = DEVSBackendService._codex_finalizer_prompt(
+            review_id="review-1",
+            project_rel="generated",
+            validation_record={"status": "succeeded"},
+            diagnostic="must not appear",
+            run_instruction="use devs_run",
+            execution_evidence={
+                "status": "succeeded",
+                "exit_code": 0,
+                "duration_seconds": 2.5,
+                "stdout_path": "/tmp/default.stdout.txt",
+                "stderr_path": "/tmp/default.stderr.txt",
+                "stdout_truncated": False,
+                "stderr_truncated": False,
+                "result_paths": ["/tmp/summary.json"],
+            },
+        )
+
+        self.assertIn("Read its raw output whether the process succeeded or failed", prompt)
+        self.assertIn("/tmp/default.stdout.txt", prompt)
+        self.assertIn("/tmp/summary.json", prompt)
+        self.assertIn("generated/devs_project/system_model_info.json", prompt)
+        self.assertNotIn("must not appear", prompt)
+        self.assertNotIn("event_counts", prompt)
 
     def test_generic_automatic_check_configuration_precedes_legacy_names(self):
         with patch.dict(

@@ -48,6 +48,7 @@ from .simulation_execution import (
     SimulationExecutionService,
     SimulationManifestError,
     ensure_simulation_manifest,
+    simulation_command_arguments,
     simulation_metadata,
 )
 from devs_tools.devs_construct_recon.tools.model_creator_fast.generated_interface import (
@@ -3557,6 +3558,86 @@ class DEVSBackendService:
         )
 
     @staticmethod
+    def _pi_cli_run_instruction(
+        project_rel: str,
+        *,
+        bundle_root: Path,
+        arguments: Dict[str, Any],
+    ) -> str:
+        prepared_python = os.getenv("OPTPILOT_INTERFACE_PYTHON", "").strip()
+        command = shlex.join(
+            [
+                prepared_python or "python3",
+                "-u",
+                "run.py",
+                *simulation_command_arguments(bundle_root, arguments),
+            ]
+        )
+        return (
+            f"The resolved top-level command is `cd {shlex.quote(project_rel)} && "
+            f"{command}`. For every execution, use the devs_run tool with "
+            f"project_path={project_rel!r} and parameters="
+            f"{json.dumps(arguments, ensure_ascii=False, sort_keys=True)}. The tool "
+            "uses that prepared runtime and retains the raw output. Do not run the "
+            "simulator directly through bash."
+        )
+
+    def _write_pi_finalizer_evidence(
+        self,
+        *,
+        bundle_root: Path,
+        review_id: str,
+        record: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        safe_review_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", review_id)[-160:]
+        log_dir = bundle_root / "devs_project" / "_analysis_logs"
+        evidence_base = Path(
+            os.getenv("OPTPILOT_INTERFACE_EPHEMERAL_ROOT", "").strip()
+            or log_dir
+        )
+        evidence_root = evidence_base / "pi-finalizer-evidence" / safe_review_id
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        stdout_path = evidence_root / "default.stdout.txt"
+        stderr_path = evidence_root / "default.stderr.txt"
+        stdout_path.write_text(str(record.get("stdout") or ""), encoding="utf-8")
+        stderr_path.write_text(str(record.get("stderr") or ""), encoding="utf-8")
+
+        retained_results: List[str] = []
+        execution_id = str(record.get("execution_id") or "")
+        if re.fullmatch(r"exec_[A-Za-z0-9_-]+", execution_id):
+            result_root = (
+                self.simulation_execution_service.execution_root
+                / execution_id
+                / "results"
+            )
+            for item in record.get("result_files") or []:
+                if not isinstance(item, dict):
+                    continue
+                relative = item.get("path")
+                if not isinstance(relative, str):
+                    continue
+                try:
+                    result_path = contained_path(result_root, relative)
+                    metadata = result_path.lstat()
+                except (FileNotFoundError, OSError, ValueError):
+                    continue
+                if stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(
+                    metadata.st_mode
+                ):
+                    retained_results.append(str(result_path))
+
+        return {
+            "status": str(record.get("status") or "unknown"),
+            "exit_code": record.get("exit_code"),
+            "duration_seconds": record.get("duration_seconds"),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "stdout_truncated": bool(record.get("stdout_truncated")),
+            "stderr_truncated": bool(record.get("stderr_truncated")),
+            "result_paths": retained_results,
+        }
+
+    @staticmethod
     def _remote_codex_run_instruction(project_rel: str) -> str:
         command = f"cd {shlex.quote(project_rel)} && python run.py"
         return (
@@ -3655,6 +3736,7 @@ class DEVSBackendService:
         validation_record: Dict[str, Any],
         diagnostic: str,
         run_instruction: str,
+        execution_evidence: Optional[Dict[str, Any]] = None,
     ) -> str:
         result_rel = (
             f"{project_rel}/devs_project/_analysis_logs/"
@@ -3663,6 +3745,56 @@ class DEVSBackendService:
         smoke_status = str(validation_record.get("status") or "unknown")
         failure_kind = str(validation_record.get("failure_kind") or "")
         message = str(validation_record.get("message") or "")[:1000]
+        if execution_evidence is None:
+            evidence_section = (
+                "Initial backend smoke-test status:\n"
+                f"status={smoke_status}\n"
+                f"failure_kind={failure_kind}\n"
+                f"message={message}\n"
+                f"diagnostic:\n{diagnostic}"
+            )
+        else:
+            result_paths = execution_evidence.get("result_paths") or []
+            evidence_section = (
+                "The backend already ran the exact default command. Read its raw "
+                "output whether the process succeeded or failed; no behavioral "
+                "interpretation has been added.\n"
+                f"status={execution_evidence.get('status')}\n"
+                f"exit_code={execution_evidence.get('exit_code')}\n"
+                f"duration_seconds={execution_evidence.get('duration_seconds')}\n"
+                f"stdout={execution_evidence.get('stdout_path')}\n"
+                f"stdout_truncated={execution_evidence.get('stdout_truncated')}\n"
+                f"stderr={execution_evidence.get('stderr_path')}\n"
+                f"stderr_truncated={execution_evidence.get('stderr_truncated')}\n"
+                "result_files="
+                + json.dumps(result_paths, ensure_ascii=False)
+            )
+        if execution_evidence is not None:
+            review_instruction = (
+                "Your job is to decide whether the generated simulation really "
+                "implements its own requirements and plan, not merely whether it "
+                f"exits with code 0. First read {project_rel}/README.md, "
+                f"{project_rel}/simulation.json, and "
+                f"{project_rel}/devs_project/system_model_info.json if present, "
+                "then the relevant generated Python files. Avoid reading full "
+                "llm_calls logs. Read the supplied raw stdout and stderr, then "
+                "inspect only the generated source files relevant to the requirements "
+                "and observed behavior. If it is wrong, make the smallest coherent "
+                "code fix and rerun the exact bundle. "
+                f"Execution instruction: {run_instruction}"
+            )
+        else:
+            review_instruction = (
+                "Your job is to decide whether the generated simulation really "
+                "implements its own requirements and plan, not merely whether it "
+                "exits with code 0. First read README.md, simulation.json, "
+                "approved_structure_plan.json or system_model_info.json if needed, "
+                "and the relevant generated Python files. Avoid reading full llm_calls "
+                "logs or full raw stdout/stderr; inspect compact snippets, counts, and "
+                "targeted matching lines only. If it is wrong, make the smallest "
+                "coherent code fix and rerun the exact bundle. "
+                f"Execution instruction: {run_instruction}"
+            )
         return "\n\n".join(
             (
                 "You are the final reviewer and repairer for one generated xDEVS simulation.",
@@ -3677,17 +3809,7 @@ class DEVSBackendService:
                     "bundle, and rerun this exact bundle using the execution "
                     "instruction below."
                 ),
-                (
-                    "Your job is to decide whether the generated simulation really "
-                    "implements its own requirements and plan, not merely whether it "
-                    "exits with code 0. First read README.md, simulation.json, "
-                    "approved_structure_plan.json or system_model_info.json if "
-                    "needed, and the relevant generated Python files. Avoid reading "
-                    "full llm_calls logs or full raw stdout/stderr; inspect compact "
-                    "snippets, counts, and targeted matching lines only. If it is "
-                    "wrong, make the smallest coherent code fix and rerun the exact "
-                    f"bundle. Execution instruction: {run_instruction}"
-                ),
+                review_instruction,
                 (
                     "Use a generous but bounded effort. If the issue is unclear, "
                     "inspect the directly relevant code rather than guessing. Do "
@@ -3695,13 +3817,7 @@ class DEVSBackendService:
                     "If you cannot fix it confidently, report fail or inconclusive "
                     "instead of passing it."
                 ),
-                (
-                    "Initial backend smoke-test status:\n"
-                    f"status={smoke_status}\n"
-                    f"failure_kind={failure_kind}\n"
-                    f"message={message}\n"
-                    f"diagnostic:\n{diagnostic}"
-                ),
+                evidence_section,
                 (
                     "At the very end, write this JSON file exactly:\n"
                     f"{result_rel}\n\n"
@@ -3805,6 +3921,8 @@ class DEVSBackendService:
         safe_review_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", review_id)[-160:]
         stdout_path = log_dir / f"pi_finalizer_{safe_review_id}.jsonl"
         stderr_path = log_dir / f"pi_finalizer_{safe_review_id}.stderr.txt"
+        extension_path = Path(__file__).with_name("pi_devs_run.ts").resolve(strict=True)
+        runner_path = Path(__file__).with_name("pi_finalizer_run.py").resolve(strict=True)
         command = [
             pi_bin,
             "--provider",
@@ -3822,23 +3940,36 @@ class DEVSBackendService:
             "--print",
             "--no-session",
             "--no-extensions",
+            "--extension",
+            str(extension_path),
             "--no-skills",
             "--no-context-files",
             "--no-approve",
             "--tools",
-            "read,bash,edit,write",
+            "read,bash,edit,write,devs_run",
             "--",
             prompt,
         ]
         process_env = dict(os.environ)
         pi_state_root = Path(
             os.getenv("OPTPILOT_INTERFACE_EPHEMERAL_ROOT", "").strip()
-            or log_dir
+            or (Path(self.registry_path).parent / "pi-finalizer-runtime")
         )
         process_env["PI_CODING_AGENT_DIR"] = str(
             pi_state_root / "pi-finalizer" / safe_review_id
         )
         process_env["PI_TELEMETRY"] = "0"
+        process_env["PI_DEVS_PYTHON"] = sys.executable
+        process_env["PI_DEVS_RUNNER"] = str(runner_path)
+        process_env["PI_DEVS_WORKSPACE_ROOT"] = str(workspace_root)
+        process_env["PI_DEVS_PROJECT_PATH"] = (
+            bundle_root.resolve(strict=True)
+            .relative_to(workspace_root.resolve(strict=True))
+            .as_posix()
+        )
+        process_env["PI_DEVS_RUN_ROOT"] = str(
+            pi_state_root / "pi-finalizer-runs" / safe_review_id
+        )
         try:
             completed = subprocess.run(
                 command,
@@ -3987,24 +4118,46 @@ class DEVSBackendService:
         for attempt in range(1, attempt_limit + 1):
             review_id = f"{request_id}-{project_id}-{attempt}-{uuid.uuid4().hex[:8]}"
             result_path = self._codex_finalizer_result_path(bundle_root)
-            diagnostic = self._codex_finalizer_diagnostic_for_model(
-                current_record, session_workspace
-            )
+            run_arguments = current_record.get("arguments")
+            if not isinstance(run_arguments, dict):
+                run_arguments = {}
+            execution_evidence: Optional[Dict[str, Any]] = None
+            if driver == "pi_cli":
+                diagnostic = (
+                    "No backend behavioral interpretation is supplied; inspect the "
+                    "requirements, design, code, and raw execution evidence."
+                )
+                execution_evidence = self._write_pi_finalizer_evidence(
+                    bundle_root=bundle_root,
+                    review_id=review_id,
+                    record=current_record,
+                )
+                run_instruction = self._pi_cli_run_instruction(
+                    project_rel,
+                    bundle_root=bundle_root,
+                    arguments=run_arguments,
+                )
+            else:
+                diagnostic = self._codex_finalizer_diagnostic_for_model(
+                    current_record, session_workspace
+                )
+                run_instruction = (
+                    f"Use the devs_execute tool exactly as "
+                    f"devs_execute(project_path={project_rel!r}, main_file='run.py')."
+                    if driver not in {"codex_cli", "remote_codex_cli"}
+                    else (
+                        self._codex_cli_run_instruction(project_rel)
+                        if driver == "codex_cli"
+                        else self._remote_codex_run_instruction(project_rel)
+                    )
+                )
             prompt = self._codex_finalizer_prompt(
                 review_id=review_id,
                 project_rel=project_rel,
                 validation_record=current_record,
                 diagnostic=diagnostic,
-                run_instruction=(
-                    f"Use the devs_execute tool exactly as "
-                    f"devs_execute(project_path={project_rel!r}, main_file='run.py')."
-                    if driver not in {"codex_cli", "pi_cli", "remote_codex_cli"}
-                    else (
-                        self._codex_cli_run_instruction(project_rel)
-                        if driver in {"codex_cli", "pi_cli"}
-                        else self._remote_codex_run_instruction(project_rel)
-                    )
-                ),
+                run_instruction=run_instruction,
+                execution_evidence=execution_evidence,
             )
             activity_key = f"codex_finalizer:{project_id}"
             self._add_activity(

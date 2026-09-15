@@ -35,6 +35,7 @@ from devs_display.backend.simulation_execution import (
     SimulationManifestError,
     assess_behavior_smoke,
     ensure_simulation_manifest,
+    simulation_command_arguments,
     simulation_metadata,
 )
 
@@ -1176,6 +1177,38 @@ class SimulationExecutionTests(unittest.TestCase):
                 (root / "executions" / record["execution_id"] / "execution.json").read_text(encoding="utf-8")
             )
             self.assertEqual(persisted["status"], "succeeded")
+
+    def test_simulation_command_arguments_use_resolved_typed_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = write_bundle(
+                root,
+                "print('not executed')\n",
+                arguments=[
+                    {"name": "seed", "type": "integer", "required": True},
+                    {"name": "rate", "type": "number", "default": 1.5},
+                    {
+                        "name": "fast_mode",
+                        "flag": "--fast-mode",
+                        "type": "boolean",
+                        "default": False,
+                        "action": "store_true",
+                    },
+                ],
+            )
+            with patch(
+                "devs_display.backend.simulation_execution._package_xdevs_runtime",
+                self._package_minimal_runtime,
+            ):
+                rendered = simulation_command_arguments(
+                    bundle,
+                    {"seed": 9, "rate": 0.25, "fast_mode": True},
+                )
+
+            self.assertEqual(
+                rendered,
+                ("--seed", "9", "--rate", "0.25", "--fast-mode"),
+            )
 
     def test_invalid_argument_is_rejected_before_execution(self):
         with tempfile.TemporaryDirectory() as tmp:
