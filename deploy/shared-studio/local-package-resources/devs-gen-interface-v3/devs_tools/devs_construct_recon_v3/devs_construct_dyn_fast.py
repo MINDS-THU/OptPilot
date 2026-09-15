@@ -74,6 +74,8 @@ smolagents.utils.parse_code_blobs = patched_parse_code_blobs
 from .tools.plan_gen.global_plan_generator import GlobalPlanGenerator
 from .tools.plan_gen.detailed_plan_generator import (
     DetailedPlanGenerator,
+    InterfaceChangeIssue,
+    InterfaceChangeRequired,
     PlanGenResult,
     _requirements_explicitly_require_stream,
 )
@@ -615,6 +617,7 @@ class DEVSConstructTreeFastConcur(Tool):
             self.build_logger.log_stage("Stage 1: Fast Hierarchical Planning", "Global plan + level-by-level detailed plans")
             t_start = time.time()
             plan_repair_feedback = ""
+            preserved_root_plan: PlanGenResult | None = None
             preserved_global_plan = (
                 [node.model_copy(deep=True) for node in global_plan_override]
                 if global_plan_override is not None
@@ -628,14 +631,17 @@ class DEVSConstructTreeFastConcur(Tool):
                         requirements,
                         global_plan_override=preserved_global_plan,
                         plan_repair_feedback=plan_repair_feedback,
+                        root_plan_override=preserved_root_plan,
                     )
                 except ValueError as exc:
-                    repairable_plan_contract_error = any(
-                        marker in str(exc)
-                        for marker in (
-                            "no atomic model that performs a stdout operation",
-                            "process input stream must have exactly one consumer",
-                            "Interface change requested",
+                    repairable_plan_contract_error = (
+                        isinstance(exc, InterfaceChangeRequired)
+                        or any(
+                            marker in str(exc)
+                            for marker in (
+                                "no atomic model that performs a stdout operation",
+                                "process input stream must have exactly one consumer",
+                            )
                         )
                     )
                     if (
@@ -647,11 +653,24 @@ class DEVSConstructTreeFastConcur(Tool):
                             node.model_copy(deep=True)
                             for node in self._last_global_plan
                         ]
+                        preserved_root_plan = self._last_root_plan
+                        self.build_logger.save_stage_result(
+                            "plan_repair_attempt_1",
+                            {
+                                "failure": plan_repair_feedback,
+                                "previous_root_plan": (
+                                    self.detailed_plan_gen.root_candidate_payload(
+                                        preserved_root_plan
+                                    )
+                                ),
+                            },
+                            "plan_repair_attempt_1.json",
+                        )
                         self.full_log_registry = {}
                         self.build_logger.log(
-                            "Planning violated a deterministic external-I/O contract; "
-                            "reusing the hierarchy and regenerating detailed plans "
-                            "once with the failure context.",
+                            "Planning produced repairable contract failures; "
+                            "reusing the hierarchy and revising the previous root "
+                            "plan once with the complete failure evidence.",
                             level="WARNING",
                         )
                         continue
@@ -684,6 +703,7 @@ class DEVSConstructTreeFastConcur(Tool):
                         node.model_copy(deep=True)
                         for node in self._last_global_plan
                     ]
+                    preserved_root_plan = self._last_root_plan
                     self.full_log_registry = {}
                     self.build_logger.log(
                         "Alignment review found critical interface defects; "
@@ -1217,6 +1237,7 @@ class DEVSConstructTreeFastConcur(Tool):
         requirements: str,
         global_plan_override: Optional[list[GlobalPlanNode]] = None,
         plan_repair_feedback: str = "",
+        root_plan_override: PlanGenResult | None = None,
     ) -> PlanTreeNode:
         bl = self.build_logger
         assert bl is not None
@@ -1292,7 +1313,19 @@ class DEVSConstructTreeFastConcur(Tool):
             "plan_repair_feedback": plan_repair_feedback,
         }
         root_plan_draft_count = getattr(self, "root_plan_draft_count", 0)
-        if root_plan_draft_count > 0 and root_node.children_names:
+        if root_plan_override is not None and root_node.children_names:
+            bl.log("Revising the previous complete root plan from repair evidence.")
+            root_res = self.detailed_plan_gen.reconcile_root_candidates(
+                target_name=root_node.name,
+                requirements=requirements,
+                global_plan=global_plan,
+                children_names=root_node.children_names,
+                candidates=[root_plan_override],
+                requirement_ledger=requirement_ledger,
+                retry=2,
+                repair_feedback=plan_repair_feedback,
+            )
+        elif root_plan_draft_count > 0 and root_node.children_names:
             bl.log(
                 f"Generating {root_plan_draft_count} root detailed-plan draft(s) "
                 "before one complete final revision."
@@ -1370,6 +1403,7 @@ class DEVSConstructTreeFastConcur(Tool):
             root_res = self.detailed_plan_gen.generate(**root_generate_kwargs)
         bl.log_timing("RootPlanGen", t0, time.time())
         root_node.detailed_plan = root_res.detailed_plan
+        self._last_root_plan = root_res
         for sp in root_res.children_plans:
             child = tree.find(sp.class_name)
             if child is None:
@@ -1384,7 +1418,9 @@ class DEVSConstructTreeFastConcur(Tool):
 
         # -- BFS level by level --
         queue = list(tree.root.children)
+        level_number = 0
         while queue:
+            level_number += 1
             level_nodes = queue[:]
             queue = [c for n in level_nodes for c in n.children]
 
@@ -1401,7 +1437,12 @@ class DEVSConstructTreeFastConcur(Tool):
 
             t0 = time.time()
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.concur_num, self.max_workers)) as executor:
+            completed_results: dict[str, PlanGenResult] = {}
+            interface_issues: list[InterfaceChangeIssue] = []
+            hard_errors: list[Exception] = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(self.concur_num, self.max_workers)
+            ) as executor:
                 future_to_name = {}
                 for node in tasks:
                     sibling_simple_plans = [
@@ -1427,18 +1468,51 @@ class DEVSConstructTreeFastConcur(Tool):
 
                 for future in concurrent.futures.as_completed(future_to_name):
                     node_name = future_to_name[future]
-                    res = future.result()
-                    assert isinstance(res, PlanGenResult)
-                    node = tree.find(node_name)
-                    assert node is not None
-                    node.detailed_plan = res.detailed_plan
-                    for sp in res.children_plans:
-                        child = tree.find(sp.class_name)
-                        if child is None:
-                            raise ValueError(f"Global plan has no node '{sp.class_name}' from '{node_name}' response")
-                        child.simple_plan = sp
-                        self._merge_detail_requirement_links(global_plan, sp)
-                    bl.log(f"  OK {node_name}: type={res.detailed_plan.model_type}, {len(res.children_plans)} children")
+                    try:
+                        result = future.result()
+                    except InterfaceChangeRequired as exc:
+                        interface_issues.extend(exc.issues)
+                    except Exception as exc:
+                        hard_errors.append(exc)
+                    else:
+                        assert isinstance(result, PlanGenResult)
+                        completed_results[node_name] = result
+
+            if hard_errors:
+                raise hard_errors[0]
+
+            for node_name, result in completed_results.items():
+                node = tree.find(node_name)
+                assert node is not None
+                node.detailed_plan = result.detailed_plan
+                for child_plan in result.children_plans:
+                    child = tree.find(child_plan.class_name)
+                    if child is None:
+                        raise ValueError(
+                            f"Global plan has no node '{child_plan.class_name}' "
+                            f"from '{node_name}' response"
+                        )
+                    child.simple_plan = child_plan
+                    self._merge_detail_requirement_links(global_plan, child_plan)
+                bl.log(
+                    f"  OK {node_name}: type={result.detailed_plan.model_type}, "
+                    f"{len(result.children_plans)} children"
+                )
+
+            if interface_issues:
+                unique_issues = {
+                    issue.model_dump_json(): issue for issue in interface_issues
+                }
+                interface_issues = list(unique_issues.values())
+                bl.save_stage_result(
+                    f"interface_requests_level_{level_number}",
+                    [
+                        issue.model_dump(mode="json")
+                        for issue in interface_issues
+                    ],
+                    f"interface_requests_level_{level_number}.json",
+                )
+                raise InterfaceChangeRequired(interface_issues)
 
             bl.log_timing("LevelPlan", t0, time.time())
 

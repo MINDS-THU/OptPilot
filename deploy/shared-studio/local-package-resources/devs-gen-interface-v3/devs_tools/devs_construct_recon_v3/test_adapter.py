@@ -12,15 +12,24 @@ from devs_tools.devs_construct_recon.base_types import (
 
 from .adapter import DEVSConstructRecon
 from .base_types import (
+    DetailedPlan,
     GlobalPlanNode,
     ModelSpecification,
     RequirementItem,
     RequirementLedger,
     RequirementSource,
+    SimpleDetailedPlan,
     StandardContextModel,
 )
 from .llm_call_logger import log_llm_call, reset_llm_logger
-from .devs_construct_dyn_fast import DEVSConstructTreeFastConcur
+from .devs_construct_dyn_fast import BuildLogger, DEVSConstructTreeFastConcur
+from .tools.plan_gen.detailed_plan_generator import (
+    InterfaceChangeIssue,
+    InterfaceChangeRequest,
+    InterfaceChangeRequired,
+    PlanGenResult,
+    _build_root_reconciliation_prompt,
+)
 from .tools.model_creator_fast.model_create_flow import ModelCreateFlow
 from .tools.model_creator_fast.unified_model_creator import (
     require_public_child_bindings,
@@ -67,6 +76,27 @@ def _adapter(working_directory: Path):
     return adapter
 
 
+def _simple_plan(name: str):
+    return SimpleDetailedPlan(
+        class_name=name,
+        model_type="atomic",
+        function=f"Run {name}",
+        related_requirement_ids=["R001"],
+    )
+
+
+def _root_plan(children):
+    return PlanGenResult(
+        detailed_plan=DetailedPlan(
+            class_name="DemoSystem",
+            model_type="coupled",
+            specification=ModelSpecification(function="Coordinate workers"),
+            coupling_rules=[],
+        ),
+        children_plans=list(children),
+    )
+
+
 class AdapterTests(unittest.TestCase):
     @patch.object(DEVSConstructTreeFastConcur, "__init__", return_value=None)
     def test_adapter_keeps_plan_detail_and_allows_bounded_interface_replan(
@@ -77,6 +107,147 @@ class AdapterTests(unittest.TestCase):
         options = engine_init.call_args.kwargs
         self.assertFalse(options["summarize_after_generation"])
         self.assertFalse(options["continue_with_locked_interfaces"])
+
+    def test_root_repair_prompt_contains_previous_plan_and_failure_evidence(self):
+        prompt = _build_root_reconciliation_prompt(
+            target_name="DemoSystem",
+            requirements="Generate and queue work.",
+            requirement_focus_str="R001",
+            requirement_flow_str="Source -> Queue",
+            global_plan_str="DemoSystem -> Source, Queue",
+            children_names=["Source", "Queue"],
+            candidate_payloads=[{"children_plans": ["old-plan"]}],
+            repair_feedback=(
+                "Source cannot send generated work. Add work_out and connect it "
+                "to Queue.work_in."
+            ),
+        )
+
+        self.assertIn("old-plan", prompt)
+        self.assertIn("Source cannot send generated work", prompt)
+        self.assertIn("repair evidence", prompt)
+
+    def test_level_planning_batches_child_requests_before_parent_repair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            constructor = object.__new__(DEVSConstructTreeFastConcur)
+            constructor.build_logger = BuildLogger(root / "logs")
+            constructor.requirement_ledger = _ledger()
+            constructor.root_plan_draft_count = 0
+            constructor.concur_num = 2
+            constructor.max_workers = 2
+            constructor._global_concurrency_limit = 2
+            constructor.full_log_registry = {}
+
+            global_plan = [
+                GlobalPlanNode(
+                    name="DemoSystem",
+                    description="Root",
+                    children_names=["Source", "Queue", "Observer"],
+                    related_requirement_ids=["R001"],
+                ),
+                GlobalPlanNode(
+                    name="Source",
+                    description="Source",
+                    related_requirement_ids=["R001"],
+                ),
+                GlobalPlanNode(
+                    name="Queue",
+                    description="Queue",
+                    related_requirement_ids=["R001"],
+                ),
+                GlobalPlanNode(
+                    name="Observer",
+                    description="Observer",
+                    related_requirement_ids=["R001"],
+                ),
+            ]
+            initial_root = _root_plan(
+                [
+                    _simple_plan("Source"),
+                    _simple_plan("Queue"),
+                    _simple_plan("Observer"),
+                ]
+            )
+            attempts = {"Source": 0, "Queue": 0, "Observer": 0}
+            repair_started = False
+            planner = Mock()
+
+            def generate(*args, **kwargs):
+                nonlocal repair_started
+                target = kwargs.get("target_name") or args[0]
+                if target == "DemoSystem":
+                    return initial_root
+                attempts[target] += 1
+                if target != "Observer" and not repair_started:
+                    raise InterfaceChangeRequired(
+                        [
+                            InterfaceChangeIssue(
+                                target_name=target,
+                                request=InterfaceChangeRequest(
+                                    field="external_io",
+                                    reason=f"{target} inherited an incomplete contract.",
+                                    requested_change=f"Repair {target}.",
+                                ),
+                            )
+                        ]
+                    )
+                inherited = args[4]
+                return PlanGenResult(
+                    detailed_plan=DetailedPlan(
+                        class_name=target,
+                        model_type="atomic",
+                        specification=ModelSpecification(
+                            function=inherited.function,
+                            external_io=inherited.external_io,
+                        ),
+                    ),
+                    children_plans=[],
+                )
+
+            def reconcile(**_kwargs):
+                nonlocal repair_started
+                repair_started = True
+                return initial_root
+
+            planner.generate.side_effect = generate
+            planner.reconcile_root_candidates.side_effect = reconcile
+            constructor.detailed_plan_gen = planner
+            root_info = StandardContextModel(
+                class_name="DemoSystem",
+                file_path=Path("demo_project/devs_project/DemoSystem.py"),
+                logic_path="DemoSystem",
+                specification=ModelSpecification(),
+            )
+
+            with self.assertRaises(InterfaceChangeRequired) as raised:
+                constructor._execute_stage_1_planning(
+                    root_info,
+                    "Process work.",
+                    global_plan_override=global_plan,
+                )
+
+            self.assertEqual(
+                {issue.target_name for issue in raised.exception.issues},
+                {"Source", "Queue"},
+            )
+            self.assertEqual(attempts, {"Source": 1, "Queue": 1, "Observer": 1})
+            self.assertTrue(
+                (root / "logs" / "interface_requests_level_1.json").is_file()
+            )
+
+            result = constructor._execute_stage_1_planning(
+                root_info,
+                "Process work.",
+                global_plan_override=global_plan,
+                plan_repair_feedback=str(raised.exception),
+                root_plan_override=initial_root,
+            )
+
+            repair_call = planner.reconcile_root_candidates.call_args.kwargs
+            self.assertEqual(repair_call["candidates"], [initial_root])
+            self.assertIn("Source", repair_call["repair_feedback"])
+            self.assertEqual(result.plan.type, "coupled")
 
     def test_prepare_plan_is_reviewable_and_does_not_write_project(self):
         with tempfile.TemporaryDirectory() as temporary:

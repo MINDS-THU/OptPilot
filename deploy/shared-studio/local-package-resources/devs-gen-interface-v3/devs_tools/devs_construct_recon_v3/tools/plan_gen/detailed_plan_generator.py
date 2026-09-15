@@ -258,14 +258,22 @@ file that code generation will receive; no source code is shown at this stage.
 """
     repair_context = ""
     if plan_repair_feedback:
+        if is_root:
+            repair_guidance = (
+                "Apply the correction to the current hierarchy's child contracts "
+                "and coupling rules. Preserve every compatible decision."
+            )
+        else:
+            repair_guidance = (
+                "The current `<LockedInheritedContract>` may already contain the "
+                "correction. Treat it as authoritative and do not repeat a request "
+                "for a deficiency it has resolved."
+            )
         repair_context = f"""
 <PlanRepairFeedback>
 This is the historical reason a previous complete plan was regenerated, not an
-additional user requirement. The current `<LockedInheritedContract>` may
-already contain the correction. Treat that current contract as authoritative;
-do not repeat an interface-change request for a deficiency it has resolved.
-Correct only any part that is still unresolved while preserving the original
-behavior and every compatible architecture choice.
+additional user requirement. {repair_guidance} Correct only any part that is
+still unresolved while preserving the original behavior.
 {plan_repair_feedback}
 </PlanRepairFeedback>
 """
@@ -374,6 +382,7 @@ def _build_root_reconciliation_prompt(
     children_names: list[str],
     candidate_payloads: list[dict],
     include_endpoint_audit_example: bool = False,
+    repair_feedback: str = "",
 ) -> str:
     """Ask for one canonical plan, not prose criticism or a vote."""
 
@@ -501,6 +510,18 @@ Apply this same source-output/destination-input check to the current draft.
 </EndpointAuditExample>
 """.strip()
 
+    repair_context = ""
+    if repair_feedback:
+        repair_context = f"""
+<RequiredRepairs>
+The previous candidate failed child or deterministic validation for the reasons
+below. This is repair evidence, not an additional user requirement. Apply every
+compatible requested change to the candidate, including matching peer ports and
+coupling rules, while preserving unaffected decisions.
+{repair_feedback}
+</RequiredRepairs>
+""".strip()
+
     return f"""
 <SystemRole>
 {role}
@@ -532,6 +553,8 @@ Required direct children: {json.dumps(children_names, ensure_ascii=False)}
 </ExplicitInterModelFlowIndex>
 
 {endpoint_audit_example}
+
+{repair_context}
 
 <TaskInstruction>
 Produce one complete replacement plan in the required response schema. Do not
@@ -644,8 +667,27 @@ class InterfaceChangeRequest(BaseModel):
     requested_change: str = Field(description="Minimal parent-level change requested.")
 
 
+class InterfaceChangeIssue(BaseModel):
+    """One child request that must be applied by its direct parent plan."""
+
+    target_name: str = Field(
+        description="Child model whose inherited contract is insufficient."
+    )
+    request: InterfaceChangeRequest
+
+
 class InterfaceChangeRequired(ValueError):
     """Raised when a child cannot legally implement its inherited contract."""
+
+    def __init__(self, issues: list[InterfaceChangeIssue]):
+        if not issues:
+            raise ValueError("InterfaceChangeRequired needs at least one issue")
+        self.issues = tuple(issues)
+        payload = [issue.model_dump(mode="json") for issue in self.issues]
+        super().__init__(
+            "Interface changes requested: "
+            + json.dumps(payload, ensure_ascii=False)
+        )
 
 
 class _RawInheritedAtomicExpansion(BaseModel):
@@ -1535,6 +1577,7 @@ class DetailedPlanGenerator:
         candidates: list[PlanGenResult],
         requirement_ledger: Optional[RequirementLedger] = None,
         retry: int = 2,
+        repair_feedback: str = "",
     ) -> PlanGenResult:
         """Reconcile independently valid root drafts in one bounded LLM pass."""
 
@@ -1562,6 +1605,7 @@ class DetailedPlanGenerator:
             children_names=children_names,
             candidate_payloads=candidate_payloads,
             include_endpoint_audit_example=self.root_endpoint_audit_example,
+            repair_feedback=repair_feedback,
         )
         model = self._get_model()
         max_attempts = max(1, min(retry, 2))
@@ -1807,11 +1851,14 @@ class DetailedPlanGenerator:
                     parent_simple_plan,
                 )
                 if interface_requests:
-                    request_text = json.dumps(
-                        [item.model_dump(mode="json") for item in interface_requests],
-                        ensure_ascii=False,
-                    )
                     if self.continue_with_locked_interfaces:
+                        request_text = json.dumps(
+                            [
+                                item.model_dump(mode="json")
+                                for item in interface_requests
+                            ],
+                            ensure_ascii=False,
+                        )
                         print(
                             f"[DetailedPlan] Continuing '{target_name}' with its "
                             "locked inherited interface; unapplied requests: "
@@ -1819,7 +1866,12 @@ class DetailedPlanGenerator:
                         )
                     else:
                         raise InterfaceChangeRequired(
-                            f"Interface change requested by '{target_name}': {request_text}"
+                            [
+                                InterfaceChangeIssue(
+                                    target_name=target_name, request=request
+                                )
+                                for request in interface_requests
+                            ]
                         )
 
                 if is_root and is_coupled:
