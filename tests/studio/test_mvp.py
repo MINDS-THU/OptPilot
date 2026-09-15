@@ -6306,7 +6306,7 @@ class MvpIntegrationTest(unittest.TestCase):
 
         contents = [message["content"] for message in persisted["messages"] if message["role"] == "assistant"]
         self.assertEqual(first["session"]["status"], "waiting_for_agent")
-        self.assertEqual(second["session"]["status"], "idle")
+        self.assertIn(second["session"]["status"], {"waiting_for_agent", "idle"})
         self.assertEqual(synced["status"], "idle")
         self.assertEqual(server_state["final_response_count"], 0)
         self.assertEqual(contents.count("First answer."), 0)

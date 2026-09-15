@@ -743,6 +743,10 @@ resource; **Check files**; run the optional or required test when shown; and
 generated source is already an Environment. Only a complete folder can become
 a Workspace; a file output is temporary and read-only.
 
+For a shared live Interface, each signed-in account may save the same immutable
+output once. Each saved Workspace belongs to the account that saved it; sharing
+the Interface does not grant permission to stop it or manually capture folders.
+
 For a generated simulator that declares `devs.simulation.v1`, choosing
 **Environment** creates
 `optpilot_configs/environment.template.yaml.disabled` and

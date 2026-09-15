@@ -675,7 +675,7 @@ class StudioWorkspaceInterfaceStaticTest(unittest.TestCase):
         stop = _source_between(
             self.source,
             "function unsavedReadyInterfaceOutputs(",
-            "function applyWorkspacePreviewPayload(",
+            "async function stopCapacityInterfaceLaunch(",
         )
 
         self.assertIn('output.status === "ready"', stop)

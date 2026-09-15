@@ -14119,6 +14119,14 @@ def _compatibility_payload(state: UiState) -> JsonDict:
             with state._catalog_projection_lock:
                 state._compatibility_cache = (catalog, time.monotonic(), payload)
 
+    # Without account-scoped Catalog policy every entry is visible. Preserve
+    # the cached object itself, including its identity, as the original cache
+    # contract promises.
+    if not isinstance(getattr(state, "shared_auth", None), ClassroomAuth) or (
+        _current_request_principal() is None
+    ):
+        return payload
+
     visible_environments = {
         str(entry.get("uid") or "")
         for entry in catalog["environments"]
@@ -27136,7 +27144,15 @@ def _clear_openhands_runtime_binding(session: JsonDict) -> None:
 def _openhands_runtime_binding(state: UiState) -> str:
     """Non-secret identity of the runtime configuration owning a conversation."""
 
-    config = state.agent_adapter.config
+    config = getattr(state.agent_adapter, "config", None)
+    if config is None:
+        # Small test or extension adapters may implement only the dispatch
+        # protocol. They have no mutable runtime configuration to invalidate.
+        return json.dumps(
+            {"adapter": type(state.agent_adapter).__qualname__},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     return json.dumps(
         {
             "base_url": config.base_url,
@@ -27228,10 +27244,11 @@ def _append_agent_message_unlocked(
         existing_conversation_id = str(
             session.get("openhands_conversation_id") or ""
         )
+        stored_runtime_binding = str(session.get("openhands_runtime_binding") or "")
         runtime_binding_changed = bool(
             existing_conversation_id
-            and session.get("openhands_runtime_binding")
-            != _openhands_runtime_binding(state)
+            and stored_runtime_binding
+            and stored_runtime_binding != _openhands_runtime_binding(state)
         )
         if runtime_binding_changed:
             _clear_openhands_runtime_binding(session)
@@ -27423,6 +27440,7 @@ def _append_agent_message_unlocked(
             "status",
             "openhands_conversation_id",
             "openhands_workspace_id",
+            "openhands_runtime_binding",
             "active_turn_id",
             "active_turn_started_at",
             "openhands_pending_sync",
