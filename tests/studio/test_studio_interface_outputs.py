@@ -2881,6 +2881,8 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
         self.assertEqual(pending["error_code"], "interface_cleanup_pending")
         with self.state._lock:
             job = self.state.interface_launches[launch_id]
+        self.assertTrue(job.worker_done.wait(timeout=5))
+        with self.state._lock:
             self.assertTrue(job.worker_done.is_set())
             self.assertEqual(job.terminal_error_code, "interface_launch_failed")
             self.assertIn("cleanup provider unavailable", job.private_error)
