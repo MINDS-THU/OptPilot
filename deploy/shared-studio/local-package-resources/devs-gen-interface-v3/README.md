@@ -141,6 +141,11 @@ shared deployment, the finished bundle goes through the same host Codex
 automatic check as the web interface. Setting `thorough=true` additionally
 runs the generator's internal verification and simulation-check stages.
 
+`DEVS_HEADLESS_COLLECTOR_URL` and `DEVS_COLLECTOR_INGEST_TOKEN` optionally
+mirror the generated snapshot and progress to a collector. If either is
+absent or the collector is unavailable, generation behaves the same and does
+not add a warning to the action output.
+
 ### The Action's Python Runtime
 
 `headless_generate.py` drives the same generation pipeline as the backend, so

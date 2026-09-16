@@ -17,6 +17,12 @@ from headless_generate import (
 
 
 class HeadlessAutomaticCheckTests(unittest.TestCase):
+    def test_action_summary_does_not_expose_optional_collection_state(self) -> None:
+        source = Path(__file__).with_name("headless_generate.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("Collector:", source)
+
     def test_disabled_check_does_not_require_host_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir, patch.dict(
             os.environ, {"DEVS_HEADLESS_AUTOMATIC_CHECK": "0"}, clear=True
@@ -143,6 +149,63 @@ class HeadlessAutomaticCheckTests(unittest.TestCase):
             "workspace-8",
         )
         self.assertEqual(payload["messages"], [])
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 3)
+
+    def test_collection_is_silent_when_unconfigured_or_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            bundle = Path(tmp_dir)
+            progress_path = bundle / "progress.json"
+            with patch.dict(
+                os.environ,
+                {"OPTPILOT_RESOURCE_ACTION_PROGRESS_FILE": str(progress_path)},
+                clear=True,
+            ), patch(
+                "headless_generate.urllib.request.urlopen"
+            ) as urlopen, patch("builtins.print") as output:
+                progress = _HeadlessProgress()
+                self.assertFalse(
+                    _report_headless_collection(
+                        bundle=bundle,
+                        specification="A queue.",
+                        root_model_name="QueueSystem",
+                        metadata={},
+                        finalizer_result=None,
+                        progress=progress,
+                    )
+                )
+                urlopen.assert_not_called()
+                output.assert_not_called()
+
+            with patch.dict(
+                os.environ,
+                {
+                    "OPTPILOT_RESOURCE_ACTION_PROGRESS_FILE": str(progress_path),
+                    "DEVS_HEADLESS_COLLECTOR_URL": "http://127.0.0.1:1",
+                    "DEVS_COLLECTOR_INGEST_TOKEN": "test-token",
+                },
+                clear=True,
+            ), patch.object(
+                DEVSBackendService,
+                "_collector_project_archive",
+                return_value=b"snapshot",
+            ), patch.object(
+                DEVSBackendService, "_collector_llm_usage", return_value=None
+            ), patch(
+                "headless_generate.urllib.request.urlopen",
+                side_effect=ConnectionRefusedError("offline"),
+            ), patch("builtins.print") as output:
+                progress = _HeadlessProgress()
+                self.assertFalse(
+                    _report_headless_collection(
+                        bundle=bundle,
+                        specification="A queue.",
+                        root_model_name="QueueSystem",
+                        metadata={},
+                        finalizer_result=None,
+                        progress=progress,
+                    )
+                )
+                output.assert_not_called()
 
 
 if __name__ == "__main__":

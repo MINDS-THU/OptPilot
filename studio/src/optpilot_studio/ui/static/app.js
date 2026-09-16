@@ -14,6 +14,7 @@ const SELECTION_CONTENT_PREVIEW_LIMIT = 128 * 1024;
 const ASSISTANT_UI_CARD_SCHEMA = "optpilot.studio-ui-card.v1";
 const STUDIO_SECURITY_CONTEXT_SCHEMA = "optpilot.studio-security-context.v1";
 const RESOURCE_ACTION_REVIEW_SCHEMA = "optpilot.studio-resource-action-review.v1";
+const RESOURCE_ACTION_EVALUATION_SCHEMA = "optpilot.studio-resource-action-evaluation.v1";
 const ASSISTANT_UI_CARD_KINDS = new Set(["catalog-use", "interface", "run-setup", "run"]);
 const ASSISTANT_UI_CARD_OPERATIONS = new Set([
   "configure-run",
@@ -123,6 +124,10 @@ const state = {
   conversationWorkspaceError: "",
   agentApprovalsBySession: {},
   agentBackgroundActionsBySession: {},
+  resourceActionRatingExpanded: new Set(),
+  resourceActionRatingDrafts: new Map(),
+  resourceActionRatingErrors: new Map(),
+  resourceActionRatingSaving: new Set(),
   assistantApprovalKeysBySession: {},
   agentEventsBySession: {},
   handledPreviewEventIds: new Set(),
@@ -1368,6 +1373,7 @@ function forgetAgentSessionLocalState(sessionId) {
   delete state.assistantDisclosureBySession[sessionId];
   delete state.assistantTimelineSignatures[sessionId];
   delete state.agentApprovalsBySession[sessionId];
+  delete state.agentBackgroundActionsBySession[sessionId];
   delete state.assistantApprovalKeysBySession[sessionId];
   delete state.agentEventsBySession[sessionId];
   delete state.agentSessionHydrationErrors[sessionId];
@@ -1377,6 +1383,18 @@ function forgetAgentSessionLocalState(sessionId) {
   state.hydratedAgentSessionIds.delete(sessionId);
   state.agentSessionHydrationRequests.delete(sessionId);
   state.agentSessionTranscriptVersions.delete(sessionId);
+  for (const key of [...state.resourceActionRatingExpanded]) {
+    if (key.startsWith(`${sessionId}:`)) state.resourceActionRatingExpanded.delete(key);
+  }
+  for (const store of [
+    state.resourceActionRatingDrafts,
+    state.resourceActionRatingErrors,
+    state.resourceActionRatingSaving,
+  ]) {
+    for (const key of [...store.keys()]) {
+      if (key.startsWith(`${sessionId}:`)) store.delete(key);
+    }
+  }
   if (state.workspaceNotice && state.workspaceNotice.assistantSessionId === sessionId) {
     state.workspaceNotice = null;
   }
@@ -5217,10 +5235,15 @@ function assistantTimelineSignature(session, isRegistration = false) {
       status: approval && approval.status || "",
       key: approvalDisplayKey(approval),
     })),
-    backgroundActions: currentAssistantBackgroundActions(session).map((item) => ({
+    backgroundActions: (state.agentBackgroundActionsBySession[sessionId] || []).map((item) => ({
       id: item && item.request_id || "",
       status: item && item.status || "",
       progress: item && item.progress || null,
+      evaluation: item && item.evaluation || null,
+      evaluationCount: Number(item && item.evaluation_count || 0),
+      ratingExpanded: state.resourceActionRatingExpanded.has(`${sessionId}:${item && item.request_id || ""}`),
+      ratingError: state.resourceActionRatingErrors.get(`${sessionId}:${item && item.request_id || ""}`) || "",
+      ratingSaving: state.resourceActionRatingSaving.has(`${sessionId}:${item && item.request_id || ""}`),
     })),
   });
 }
@@ -5706,6 +5729,7 @@ function renderAssistant() {
   if (timelineChanged) {
     bindAssistantApprovals();
     bindAssistantUiCards();
+    bindAssistantResourceActionRatings();
     bindRegistrationMenu();
     bindAgentSessionHydrationActions();
   }
@@ -5807,6 +5831,191 @@ function assistantBackgroundActionsHtml(session) {
     </div>`;
 }
 
+function assistantCompletedResourceActions(session = currentAgentSession()) {
+  if (!session) return [];
+  return (state.agentBackgroundActionsBySession[session.id] || [])
+    .filter((item) => item && ["succeeded", "failed"].includes(item.status))
+    .slice(0, 3);
+}
+
+function resourceActionRatingKey(sessionId, requestId) {
+  return `${String(sessionId || "")}:${String(requestId || "")}`;
+}
+
+function resourceActionScoreOptions(selected) {
+  const value = Number(selected || 0);
+  return [
+    `<option value="">Not rated</option>`,
+    ...[1, 2, 3, 4, 5].map((score) => (
+      `<option value="${score}" ${score === value ? "selected" : ""}>${score}</option>`
+    )),
+  ].join("");
+}
+
+function assistantResourceActionRatingForm(session, action) {
+  const requestId = String(action.request_id || "");
+  const key = resourceActionRatingKey(session.id, requestId);
+  if (!state.resourceActionRatingExpanded.has(key) || session.read_only) return "";
+  const previous = action.evaluation && typeof action.evaluation === "object"
+    ? action.evaluation
+    : {};
+  const draft = state.resourceActionRatingDrafts.get(key) || {
+    scores: previous.scores && typeof previous.scores === "object" ? previous.scores : {},
+    comments: String(previous.comments || ""),
+  };
+  const scores = draft.scores || {};
+  const saving = state.resourceActionRatingSaving.has(key);
+  const error = String(state.resourceActionRatingErrors.get(key) || "");
+  return `
+    <form class="resource-action-rating-form" data-resource-action-rating-form data-session-id="${escapeHtml(session.id)}" data-request-id="${escapeHtml(requestId)}">
+      <label class="resource-action-rating-overall">
+        <span>Overall</span>
+        <select name="overall" ${saving ? "disabled" : ""}>${resourceActionScoreOptions(scores.overall)}</select>
+        <small>1–5</small>
+      </label>
+      <details class="resource-action-rating-more" ${["correctness", "completeness", "runnability", "clarity"].some((name) => scores[name]) ? "open" : ""}>
+        <summary>More feedback</summary>
+        <div class="resource-action-rating-grid">
+          ${[
+            ["correctness", "Correctness"],
+            ["completeness", "Completeness"],
+            ["runnability", "Runnability"],
+            ["clarity", "Clarity"],
+          ].map(([name, label]) => `
+            <label><span>${label}</span><select name="${name}" ${saving ? "disabled" : ""}>${resourceActionScoreOptions(scores[name])}</select></label>
+          `).join("")}
+        </div>
+      </details>
+      <label class="resource-action-rating-comment">
+        <span>Comment <small>optional</small></span>
+        <textarea name="comments" maxlength="4000" rows="2" placeholder="What worked, or what should improve?" ${saving ? "disabled" : ""}>${escapeHtml(draft.comments || "")}</textarea>
+      </label>
+      ${error ? `<p class="error-text" role="alert">${escapeHtml(error)}</p>` : ""}
+      <div class="resource-action-rating-actions">
+        <button class="ghost-button" type="button" data-resource-action-rating-cancel ${saving ? "disabled" : ""}>Cancel</button>
+        <button class="primary-button" type="submit" ${saving ? "disabled" : ""}>${saving ? "Saving…" : "Save feedback"}</button>
+      </div>
+    </form>`;
+}
+
+function assistantResourceActionResultsHtml(session) {
+  const completed = assistantCompletedResourceActions(session);
+  if (!completed.length) return "";
+  return `
+    <div class="resource-action-result-list" aria-label="Recent Assistant action results">
+      ${completed.map((action) => {
+        const requestId = String(action.request_id || "");
+        const key = resourceActionRatingKey(session.id, requestId);
+        const evaluation = action.evaluation && typeof action.evaluation === "object"
+          ? action.evaluation
+          : null;
+        const overall = Number(evaluation && evaluation.scores && evaluation.scores.overall || 0);
+        const expanded = state.resourceActionRatingExpanded.has(key);
+        return `
+          <article class="resource-action-result-card ${escapeHtml(action.status || "")}">
+            <div class="resource-action-result-summary">
+              <div>
+                <strong>${escapeHtml(action.action_id || "Action result")}</strong>
+                <small>${action.status === "succeeded" ? "Completed" : "Failed"}${action.workspace_id ? ` · saved to Workspace` : ""}</small>
+              </div>
+              <span class="status-pill status-${escapeHtml(action.status || "failed")}">${escapeHtml(action.status || "failed")}</span>
+            </div>
+            <div class="resource-action-rating-summary">
+              ${evaluation ? `<span>${overall ? `Your rating: ${overall}/5` : "Feedback saved"}${Number(action.evaluation_count || 0) > 1 ? ` · ${Number(action.evaluation_count)} submissions` : ""}</span>` : `<span>How was this result?</span>`}
+              ${session.read_only ? "" : `<button class="ghost-button compact" type="button" data-resource-action-rating-toggle data-session-id="${escapeHtml(session.id)}" data-request-id="${escapeHtml(requestId)}">${expanded ? "Close" : evaluation ? "Update feedback" : "Rate result"}</button>`}
+            </div>
+            ${assistantResourceActionRatingForm(session, action)}
+          </article>`;
+      }).join("")}
+    </div>`;
+}
+
+function updateResourceActionEvaluationInState(sessionId, requestId, payload) {
+  const actions = state.agentBackgroundActionsBySession[sessionId] || [];
+  state.agentBackgroundActionsBySession[sessionId] = actions.map((action) => (
+    String(action && action.request_id || "") === requestId
+      ? {
+          ...action,
+          evaluation: payload.evaluation || null,
+          evaluation_count: Number(payload.evaluation_count || 0),
+        }
+      : action
+  ));
+}
+
+function bindAssistantResourceActionRatings() {
+  if (!els.agentTimeline) return;
+  els.agentTimeline.querySelectorAll("[data-resource-action-rating-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const key = resourceActionRatingKey(button.dataset.sessionId, button.dataset.requestId);
+      if (state.resourceActionRatingExpanded.has(key)) {
+        state.resourceActionRatingExpanded.delete(key);
+        state.resourceActionRatingDrafts.delete(key);
+        state.resourceActionRatingErrors.delete(key);
+      } else {
+        state.resourceActionRatingExpanded.add(key);
+      }
+      renderAssistant();
+    });
+  });
+  els.agentTimeline.querySelectorAll("[data-resource-action-rating-cancel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const form = button.closest("[data-resource-action-rating-form]");
+      if (!form) return;
+      const key = resourceActionRatingKey(form.dataset.sessionId, form.dataset.requestId);
+      state.resourceActionRatingExpanded.delete(key);
+      state.resourceActionRatingDrafts.delete(key);
+      state.resourceActionRatingErrors.delete(key);
+      renderAssistant();
+    });
+  });
+  els.agentTimeline.querySelectorAll("[data-resource-action-rating-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const sessionId = String(form.dataset.sessionId || "");
+      const requestId = String(form.dataset.requestId || "");
+      const key = resourceActionRatingKey(sessionId, requestId);
+      const formData = new FormData(form);
+      const scores = {};
+      ["overall", "correctness", "completeness", "runnability", "clarity"].forEach((name) => {
+        const value = Number(formData.get(name) || 0);
+        if (value) scores[name] = value;
+      });
+      const draft = { scores, comments: String(formData.get("comments") || "").trim() };
+      state.resourceActionRatingDrafts.set(key, draft);
+      state.resourceActionRatingErrors.delete(key);
+      state.resourceActionRatingSaving.add(key);
+      renderAssistant();
+      try {
+        const idempotencyKey = window.crypto && typeof window.crypto.randomUUID === "function"
+          ? window.crypto.randomUUID()
+          : `feedback-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const payload = await postJson(
+          `/api/agent-sessions/${encodeURIComponent(sessionId)}/resource-actions/${encodeURIComponent(requestId)}/evaluation`,
+          {
+            schema: RESOURCE_ACTION_EVALUATION_SCHEMA,
+            idempotency_key: idempotencyKey,
+            scores,
+            comments: draft.comments,
+          },
+          { timeoutMs: 15000 },
+        );
+        updateResourceActionEvaluationInState(sessionId, requestId, payload);
+        state.resourceActionRatingExpanded.delete(key);
+        state.resourceActionRatingDrafts.delete(key);
+      } catch (error) {
+        state.resourceActionRatingErrors.set(
+          key,
+          boundedPublicActionError(error, "Feedback could not be saved."),
+        );
+      } finally {
+        state.resourceActionRatingSaving.delete(key);
+        renderAssistant();
+      }
+    });
+  });
+}
+
 function refreshBackgroundActionElapsed() {
   document.querySelectorAll("[data-background-action-elapsed]").forEach((node) => {
     const label = backgroundActionElapsedLabel(node.dataset.startedAt);
@@ -5818,7 +6027,7 @@ function assistantTimelineHtml(session) {
   const createError = state.agentSessionCreateError
     ? `<p class="error-text onboarding-conversation-error" role="alert">${escapeHtml(state.agentSessionCreateError)}</p>`
     : "";
-  return `${assistantInterleavedTimelineHtml(session)}${assistantBackgroundActionsHtml(session)}${assistantApprovalsHtml()}${createError}`;
+  return `${assistantInterleavedTimelineHtml(session)}${assistantBackgroundActionsHtml(session)}${assistantResourceActionResultsHtml(session)}${assistantApprovalsHtml()}${createError}`;
 }
 
 function assistantApprovalsHtml() {

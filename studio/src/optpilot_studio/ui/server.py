@@ -421,6 +421,12 @@ _MAX_BROWSER_INTERFACE_OUTPUT_ACTION_RESULT_FILE_BYTES = 16 * 1024 * 1024
 _STUDIO_MUTATION_TOKEN_HEADER = "X-OptPilot-CSRF-Token"
 _STUDIO_SECURITY_CONTEXT_SCHEMA = "optpilot.studio-security-context.v1"
 _RESOURCE_ACTION_REVIEW_SCHEMA = "optpilot.studio-resource-action-review.v1"
+_RESOURCE_ACTION_EVALUATION_SCHEMA = (
+    "optpilot.studio-resource-action-evaluation.v1"
+)
+_RESOURCE_ACTION_EVALUATION_DIMENSIONS = frozenset(
+    {"overall", "correctness", "completeness", "runnability", "clarity"}
+)
 
 
 def _public_studio_payload(value: Any) -> Any:
@@ -7439,6 +7445,25 @@ def _handler_factory(state: UiState):
                 return
             session_id = parts[3]
             action = parts[4] if len(parts) >= 5 else ""
+            if (
+                len(parts) == 7
+                and parts[4] == "resource-actions"
+                and parts[6] == "evaluation"
+            ):
+                _require_agent_session_mutation_access(state, session_id)
+                try:
+                    response = _submit_agent_resource_action_evaluation(
+                        state,
+                        session_id=session_id,
+                        request_id=unquote(parts[5]),
+                        payload=self._read_json_body(),
+                    )
+                except KeyError as error:
+                    raise RealmNotFound(
+                        "Resource action result was not found."
+                    ) from error
+                self._send_json(response, status=HTTPStatus.CREATED)
+                return
             if action in {
                 "run-selection",
                 "message",
@@ -12973,7 +12998,11 @@ def _report_assistant_resource_action(
     started_at = float(record.get("started_at") or time.time())
     finished_at = float(record.get("finished_at") or time.time())
     status = str(record.get("status") or "unknown")
-    summary = record.get("summary") if isinstance(record.get("summary"), Mapping) else {}
+    summary = (
+        record.get("summary")
+        if isinstance(record.get("summary"), Mapping)
+        else {}
+    )
     payload = {
         "source": "optpilot-assistant",
         "participant_id": re.sub(r"[^A-Za-z0-9_.:-]+", "-", owner)[:256],
@@ -13636,6 +13665,13 @@ def _start_resource_action_run(
                     is threading.current_thread()
                 ):
                     state._resource_action_threads.pop(request_id, None)
+            try:
+                _persist_agent_resource_action_result(state, record)
+            except Exception:
+                # The action result remains available in memory and in the
+                # transcript even if this optional durable timeline index
+                # cannot be written.
+                pass
             # Success or failure alike: a conversation waiting on this must
             # hear the outcome either way, or a failed generation looks like
             # the stall it was built to prevent.
@@ -21660,6 +21696,16 @@ def _agent_events_path(state: UiState, session_id: str) -> Path:
     return _agent_session_dir(state, session_id) / "events.jsonl"
 
 
+def _agent_resource_action_results_path(state: UiState, session_id: str) -> Path:
+    return _agent_session_dir(state, session_id) / "resource_action_results.jsonl"
+
+
+def _agent_resource_action_evaluations_path(
+    state: UiState, session_id: str
+) -> Path:
+    return _agent_session_dir(state, session_id) / "resource_action_evaluations.jsonl"
+
+
 def _read_agent_session_index(state: UiState) -> List[JsonDict]:
     with state._agent_session_index_lock:
         path = _agent_session_index_path(state)
@@ -22733,28 +22779,334 @@ def _agent_effective_status(state: UiState, session: JsonDict) -> str:
     return str(session.get("status") or "idle")
 
 
+def _read_agent_resource_action_results(
+    state: UiState, session_id: str
+) -> List[JsonDict]:
+    """Read the durable, bounded summaries used by the Assistant timeline."""
+
+    latest: dict[str, JsonDict] = {}
+    for row in _read_jsonl(_agent_resource_action_results_path(state, session_id)):
+        request_id = str(row.get("request_id") or "")
+        if request_id and not row.get("_parse_error"):
+            latest[request_id] = row
+    return sorted(
+        latest.values(),
+        key=lambda item: float(item.get("started_at") or 0.0),
+        reverse=True,
+    )
+
+
+def _read_agent_resource_action_evaluations(
+    state: UiState, session_id: str
+) -> List[JsonDict]:
+    return [
+        row
+        for row in _read_jsonl(
+            _agent_resource_action_evaluations_path(state, session_id)
+        )
+        if not row.get("_parse_error") and row.get("evaluation_id")
+    ]
+
+
+def _resource_action_artifact_digest(record: Mapping[str, Any]) -> str:
+    summary = (
+        record.get("summary")
+        if isinstance(record.get("summary"), Mapping)
+        else {}
+    )
+    output_value = str(summary.get("output_root") or "").strip()
+    if record.get("status") != "succeeded" or not output_value:
+        return ""
+    output_root = Path(output_value)
+    if not output_root.is_dir():
+        return ""
+    try:
+        return _resource_action_tree_digest(output_root)
+    except (OSError, PermissionError):
+        # A result remains rateable by its immutable request id even when an
+        # unusual output tree cannot be hashed (for example, a broken link).
+        return ""
+
+
+def _persist_agent_resource_action_result(state: UiState, record: JsonDict) -> None:
+    session_id = str(record.get("agent_session_id") or "")
+    request_id = str(record.get("request_id") or "")
+    if not session_id or not request_id:
+        return
+    summary = record.get("summary") if isinstance(record.get("summary"), Mapping) else {}
+    artifact_digest = _resource_action_artifact_digest(record)
+    record["artifact_digest"] = artifact_digest
+    durable = {
+        "schema": _RESOURCE_ACTION_RUN_SCHEMA,
+        "request_id": request_id,
+        "resource_uid": str(record.get("resource_uid") or ""),
+        "resource_id": str(record.get("resource_id") or ""),
+        "action_id": str(record.get("action_id") or ""),
+        "workspace_id": str(record.get("workspace_id") or ""),
+        "status": str(record.get("status") or "failed"),
+        "started_at": record.get("started_at"),
+        "finished_at": record.get("finished_at"),
+        "error": str(record.get("error") or "")[:300],
+        "artifact_digest": artifact_digest,
+        "result": {
+            "ok": summary.get("ok"),
+            "returncode": summary.get("returncode"),
+            "timed_out": summary.get("timed_out"),
+            "duration_seconds": summary.get("duration_seconds"),
+        },
+    }
+    with _agent_session_operation_lock(state, session_id):
+        _append_jsonl(
+            _agent_resource_action_results_path(state, session_id), durable
+        )
+
+
+def _public_resource_action_evaluation(row: Mapping[str, Any]) -> JsonDict:
+    return {
+        "schema": _RESOURCE_ACTION_EVALUATION_SCHEMA,
+        "evaluation_id": str(row.get("evaluation_id") or ""),
+        "request_id": str(row.get("request_id") or ""),
+        "artifact_digest": str(row.get("artifact_digest") or ""),
+        "scores": deepcopy(dict(row.get("scores") or {})),
+        "comments": str(row.get("comments") or ""),
+        "created_at": str(row.get("created_at") or ""),
+    }
+
+
+def _resource_action_result_with_evaluation(
+    result: Mapping[str, Any], evaluations: Iterable[Mapping[str, Any]]
+) -> JsonDict:
+    public = deepcopy(dict(result))
+    matching = [
+        row
+        for row in evaluations
+        if str(row.get("request_id") or "") == str(result.get("request_id") or "")
+    ]
+    public["evaluation_count"] = len(matching)
+    public["evaluation"] = (
+        _public_resource_action_evaluation(matching[-1]) if matching else None
+    )
+    return public
+
+
+def _normalize_resource_action_evaluation(payload: Any) -> JsonDict:
+    request = _exact_json_object(
+        payload,
+        expected={"schema", "idempotency_key", "scores", "comments"},
+        label="Resource action evaluation",
+    )
+    if request.get("schema") != _RESOURCE_ACTION_EVALUATION_SCHEMA:
+        raise ValueError("Resource action evaluation schema is unsupported.")
+    idempotency_key = str(request.get("idempotency_key") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", idempotency_key):
+        raise ValueError("Resource action evaluation idempotency_key is invalid.")
+    raw_scores = request.get("scores")
+    if not isinstance(raw_scores, Mapping):
+        raise ValueError("Resource action evaluation scores must be an object.")
+    unexpected = set(raw_scores) - _RESOURCE_ACTION_EVALUATION_DIMENSIONS
+    if unexpected:
+        raise ValueError(
+            "Unknown Resource action evaluation score: "
+            + ", ".join(sorted(str(item) for item in unexpected))
+        )
+    scores: JsonDict = {}
+    for name, value in raw_scores.items():
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 5:
+            raise ValueError(
+                f"Resource action evaluation score {name!r} must be an integer "
+                "from 1 to 5."
+            )
+        scores[str(name)] = value
+    comments = str(request.get("comments") or "").strip()
+    if len(comments) > 4000:
+        raise ValueError("Resource action evaluation comments are too long.")
+    if not scores and not comments:
+        raise ValueError("Choose a score or write a comment before saving feedback.")
+    return {
+        "idempotency_key": idempotency_key,
+        "scores": scores,
+        "comments": comments,
+    }
+
+
+def _report_assistant_resource_action_evaluation(
+    state: UiState,
+    result: Mapping[str, Any],
+    evaluation: Mapping[str, Any],
+    *,
+    session_id: str,
+) -> bool:
+    """Best-effort mirror; local JSONL remains the authoritative save."""
+
+    configured, _missing = _resolve_declared_env_from_host(
+        state,
+        (
+            "DEVS_HEADLESS_COLLECTOR_URL",
+            "DEVS_COLLECTOR_URL",
+            "DEVS_COLLECTOR_INGEST_TOKEN",
+        ),
+    )
+    endpoint = str(
+        configured.get("DEVS_HEADLESS_COLLECTOR_URL")
+        or configured.get("DEVS_COLLECTOR_URL")
+        or ""
+    ).strip().rstrip("/")
+    token = str(configured.get("DEVS_COLLECTOR_INGEST_TOKEN") or "").strip()
+    if not endpoint or not token:
+        return False
+    owner = _agent_session_owner_principal(state, session_id)
+    participant_id = owner.account_id if owner is not None else f"session-{session_id}"
+    payload = {
+        "source": "optpilot-assistant",
+        "participant_id": re.sub(r"[^A-Za-z0-9_.:-]+", "-", participant_id)[:256],
+        "session": {
+            "session_id": re.sub(r"[^A-Za-z0-9_.:-]+", "-", session_id)[:256],
+            "title": "OptPilot Assistant activity",
+            "status": "completed",
+            "created_at": datetime.fromtimestamp(
+                float(result.get("started_at") or time.time()), tz=timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+            "updated_at": evaluation.get("created_at"),
+        },
+        "messages": [],
+        "requests": [],
+        "events": [],
+        "trace": [],
+        "evaluations": [dict(evaluation)],
+        "projects": [],
+    }
+    body = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    request = Request(
+        endpoint + "/api/v1/ingest/session",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-DEVS-Collector-Token": token,
+        },
+    )
+    try:
+        with urlopen(request, timeout=3) as response:
+            return 200 <= response.status < 300
+    except Exception:
+        return False
+
+
+def _submit_agent_resource_action_evaluation(
+    state: UiState,
+    *,
+    session_id: str,
+    request_id: str,
+    payload: Any,
+) -> JsonDict:
+    _require_agent_session_mutation_access(state, session_id)
+    request_id = _canonical_request_uuid(request_id)
+    normalized = _normalize_resource_action_evaluation(payload)
+    with _agent_session_operation_lock(state, session_id):
+        results = _read_agent_resource_action_results(state, session_id)
+        result = next(
+            (item for item in results if item.get("request_id") == request_id), None
+        )
+        if result is None:
+            raise KeyError(request_id)
+        evaluations = _read_agent_resource_action_evaluations(state, session_id)
+        existing = next(
+            (
+                item
+                for item in evaluations
+                if item.get("idempotency_key") == normalized["idempotency_key"]
+            ),
+            None,
+        )
+        if existing is not None:
+            semantic = {
+                "scores": existing.get("scores") or {},
+                "comments": str(existing.get("comments") or ""),
+            }
+            if semantic != {
+                "scores": normalized["scores"],
+                "comments": normalized["comments"],
+            } or str(existing.get("request_id") or "") != request_id:
+                raise RealmConflict(
+                    "Resource action evaluation idempotency_key was already used."
+                )
+            return {
+                "evaluation": _public_resource_action_evaluation(existing),
+                "evaluation_count": len(
+                    [
+                        item
+                        for item in evaluations
+                        if item.get("request_id") == request_id
+                    ]
+                ),
+            }
+        evaluation = {
+            "schema": _RESOURCE_ACTION_EVALUATION_SCHEMA,
+            "evaluation_id": f"evaluation-{uuid.uuid4().hex}",
+            "idempotency_key": normalized["idempotency_key"],
+            "request_id": request_id,
+            "resource_uid": str(result.get("resource_uid") or ""),
+            "resource_id": str(result.get("resource_id") or ""),
+            "action_id": str(result.get("action_id") or ""),
+            "workspace_id": str(result.get("workspace_id") or ""),
+            "artifact_digest": str(result.get("artifact_digest") or ""),
+            "scores": normalized["scores"],
+            "comments": normalized["comments"],
+            "created_at": _now_iso(),
+        }
+        _append_jsonl(
+            _agent_resource_action_evaluations_path(state, session_id), evaluation
+        )
+        evaluation_count = 1 + len(
+            [item for item in evaluations if item.get("request_id") == request_id]
+        )
+    # Return the local save immediately. The collector is an optional mirror,
+    # so even its short network timeout must not hold the feedback response.
+    threading.Thread(
+        target=_report_assistant_resource_action_evaluation,
+        args=(state, result, evaluation),
+        kwargs={"session_id": session_id},
+        name=f"optpilot-action-evaluation-{request_id[:8]}",
+        daemon=True,
+    ).start()
+    return {
+        "evaluation": _public_resource_action_evaluation(evaluation),
+        "evaluation_count": evaluation_count,
+    }
+
+
 def _session_background_action_runs(state: UiState, session_id: str) -> List[JsonDict]:
-    """Slim live projections of this conversation's background action runs.
+    """Slim durable projections of this conversation's background action runs.
 
     Rides every session payload (full and summary) so the transcript can
     show a live running/succeeded/failed indicator and the Open Work shelf
     can list running jobs, without a per-request polling fan-out. Slim on
     purpose: the stdout/stderr tails stay on GET /api/resource-actions/<id>.
-    Records live in memory only -- after a Studio restart the list is empty
-    and the static transcript notes remain the history.
+    Terminal records and their optional evaluations survive a Studio restart;
+    the live in-memory record wins while an action is still changing.
     """
 
     if not session_id:
         return []
+    records_by_id = {
+        str(record.get("request_id") or ""): record
+        for record in _read_agent_resource_action_results(state, session_id)
+    }
     with state._lock:
-        records = [
+        live_records = [
             dict(record)
             for record in state._resource_action_runs.values()
             if str(record.get("agent_session_id") or "") == session_id
         ]
+    for record in live_records:
+        records_by_id[str(record.get("request_id") or "")] = record
+    records = list(records_by_id.values())
     records.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
+    evaluations = _read_agent_resource_action_evaluations(state, session_id)
     return [
-        {
+        _resource_action_result_with_evaluation({
             "request_id": record.get("request_id"),
             "resource_uid": record.get("resource_uid"),
             "resource_id": record.get("resource_id"),
@@ -22765,7 +23117,8 @@ def _session_background_action_runs(state: UiState, session_id: str) -> List[Jso
             "finished_at": record.get("finished_at"),
             "error": str(record.get("error") or "")[:300],
             "progress": deepcopy(record.get("progress")),
-        }
+            "artifact_digest": str(record.get("artifact_digest") or ""),
+        }, evaluations)
         for record in records[:8]
     ]
 

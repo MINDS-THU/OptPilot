@@ -6686,6 +6686,130 @@ body.assistant-open .agent-panel {
   .background-action-dot { animation: none; }
 }
 
+.resource-action-result-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.resource-action-result-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #dbe4e8;
+  border-radius: 9px;
+  background: #fbfcfc;
+}
+
+.resource-action-result-card.failed {
+  border-color: #ead4d2;
+}
+
+.resource-action-result-summary,
+.resource-action-rating-summary,
+.resource-action-rating-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.resource-action-result-summary > div {
+  display: grid;
+  min-width: 0;
+}
+
+.resource-action-result-summary strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-action-result-summary small,
+.resource-action-rating-summary > span {
+  color: #65747f;
+  font-size: 11px;
+}
+
+.resource-action-rating-summary .ghost-button.compact {
+  flex: none;
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 11px;
+}
+
+.resource-action-rating-form {
+  display: grid;
+  gap: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #e6ecef;
+}
+
+.resource-action-rating-form label,
+.resource-action-rating-overall {
+  display: grid;
+  gap: 4px;
+  color: #3f4d57;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.resource-action-rating-overall {
+  grid-template-columns: 1fr minmax(76px, 100px) auto;
+  align-items: center;
+}
+
+.resource-action-rating-form select,
+.resource-action-rating-form textarea {
+  width: 100%;
+  border: 1px solid #ccd8de;
+  border-radius: 7px;
+  background: #fff;
+  color: #26333b;
+  font: inherit;
+}
+
+.resource-action-rating-form select {
+  min-height: 30px;
+  padding: 4px 7px;
+}
+
+.resource-action-rating-form textarea {
+  resize: vertical;
+  padding: 7px 9px;
+  line-height: 1.4;
+}
+
+.resource-action-rating-more > summary {
+  cursor: pointer;
+  color: #52636e;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.resource-action-rating-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 8px;
+}
+
+.resource-action-rating-comment small {
+  color: #78858e;
+  font-weight: 500;
+}
+
+.resource-action-rating-actions {
+  justify-content: flex-end;
+}
+
+.resource-action-rating-actions button {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
 .approval-stack {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

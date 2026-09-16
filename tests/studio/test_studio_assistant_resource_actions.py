@@ -16,6 +16,7 @@ and write its results inside it, ready to register in place.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import time
@@ -38,11 +39,14 @@ from optpilot_studio.ui.server import (
     _create_agent_session,
     _create_ui_workspace,
     _execute_agent_tool,
+    _normalize_resource_action_evaluation,
     _read_agent_approvals,
     _read_agent_messages,
+    _report_assistant_resource_action_evaluation,
     _resource_action_review,
     _resource_action_run_status,
     _session_background_action_runs,
+    _submit_agent_resource_action_evaluation,
     _update_agent_settings,
 )
 
@@ -532,6 +536,159 @@ class AssistantResourceActionTest(unittest.TestCase):
         finally:
             with self.state._lock:
                 self.state._resource_action_runs.pop("fake-run", None)
+
+    def test_completed_action_and_feedback_survive_memory_reset(self) -> None:
+        requested = _execute_agent_tool(
+            self.state,
+            self.session["id"],
+            "optpilot_resource_action_run",
+            {
+                "resource_uid": self.resource_uid,
+                "action_id": "generate",
+                "inputs": {"name": "durable"},
+            },
+        )
+        self.assertFalse(requested["ok"])
+        approval = _read_agent_approvals(self.state, self.session["id"])[0]
+        approved = _approve_agent_action(
+            self.state, self.session["id"], approval["id"]
+        )
+        request_id = approved["result"]["data"]["request_id"]
+        final = self._await(request_id)
+        self.assertEqual(final["status"], "succeeded")
+
+        deadline = time.monotonic() + 2
+        durable = []
+        while time.monotonic() < deadline:
+            durable = _session_background_action_runs(
+                self.state, self.session["id"]
+            )
+            if durable and durable[0].get("artifact_digest"):
+                break
+            time.sleep(0.01)
+        self.assertEqual(durable[0]["request_id"], request_id)
+        self.assertRegex(durable[0]["artifact_digest"], r"^[0-9a-f]{64}$")
+
+        # Simulate the part of a Studio restart that used to erase every
+        # completed action: the durable per-Conversation index must win.
+        with self.state._lock:
+            self.state._resource_action_runs.clear()
+        restored = _session_background_action_runs(self.state, self.session["id"])
+        self.assertEqual([item["request_id"] for item in restored], [request_id])
+        self.assertIsNone(restored[0]["evaluation"])
+
+        evaluation_payload = {
+            "schema": "optpilot.studio-resource-action-evaluation.v1",
+            "idempotency_key": "feedback-request-0001",
+            "scores": {"overall": 4, "runnability": 5},
+            "comments": "Useful result.",
+        }
+        report_started = threading.Event()
+        release_report = threading.Event()
+
+        def slow_unavailable_report(*_args, **_kwargs):
+            report_started.set()
+            release_report.wait(timeout=1)
+            return False
+
+        with mock.patch(
+            "optpilot_studio.ui.server._report_assistant_resource_action_evaluation",
+            side_effect=slow_unavailable_report,
+        ) as report:
+            started_at = time.monotonic()
+            saved = _submit_agent_resource_action_evaluation(
+                self.state,
+                session_id=self.session["id"],
+                request_id=request_id,
+                payload=evaluation_payload,
+            )
+            self.assertLess(time.monotonic() - started_at, 0.2)
+            self.assertTrue(report_started.wait(timeout=1))
+            release_report.set()
+            report.assert_called_once()
+        self.assertEqual(saved["evaluation"]["scores"]["overall"], 4)
+        self.assertEqual(saved["evaluation_count"], 1)
+
+        restored = _session_background_action_runs(self.state, self.session["id"])
+        self.assertEqual(restored[0]["evaluation"]["comments"], "Useful result.")
+        self.assertEqual(restored[0]["evaluation_count"], 1)
+
+        # Retrying the same browser submission is idempotent and does not
+        # invoke the optional collector a second time.
+        with mock.patch(
+            "optpilot_studio.ui.server._report_assistant_resource_action_evaluation"
+        ) as report:
+            replay = _submit_agent_resource_action_evaluation(
+                self.state,
+                session_id=self.session["id"],
+                request_id=request_id,
+                payload=evaluation_payload,
+            )
+        self.assertEqual(replay["evaluation_count"], 1)
+        report.assert_not_called()
+
+    def test_resource_action_feedback_rejects_empty_or_unknown_scores(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Choose a score"):
+            _normalize_resource_action_evaluation(
+                {
+                    "schema": "optpilot.studio-resource-action-evaluation.v1",
+                    "idempotency_key": "feedback-request-0002",
+                    "scores": {},
+                    "comments": "",
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "Unknown Resource action"):
+            _normalize_resource_action_evaluation(
+                {
+                    "schema": "optpilot.studio-resource-action-evaluation.v1",
+                    "idempotency_key": "feedback-request-0003",
+                    "scores": {"speed": 5},
+                    "comments": "",
+                }
+            )
+
+    def test_feedback_collector_payload_links_the_exact_action(self) -> None:
+        request_id = str(uuid.uuid4())
+        result = {
+            "request_id": request_id,
+            "resource_id": "demo-generator",
+            "action_id": "generate",
+            "workspace_id": "workspace-1",
+            "started_at": time.time() - 1,
+        }
+        evaluation = {
+            "evaluation_id": "evaluation-test-1",
+            "request_id": request_id,
+            "artifact_digest": "a" * 64,
+            "scores": {"overall": 5},
+            "comments": "Good result.",
+            "created_at": "2026-09-16T00:00:00Z",
+        }
+        response = mock.MagicMock(status=200)
+        response.__enter__.return_value = response
+        with mock.patch.dict(
+            os.environ,
+            {
+                "DEVS_HEADLESS_COLLECTOR_URL": "http://127.0.0.1:8010",
+                "DEVS_COLLECTOR_INGEST_TOKEN": "collector-test-token",
+            },
+            clear=False,
+        ), mock.patch(
+            "optpilot_studio.ui.server.urlopen", return_value=response
+        ) as urlopen:
+            saved = _report_assistant_resource_action_evaluation(
+                self.state,
+                result,
+                evaluation,
+                session_id=self.session["id"],
+            )
+        self.assertTrue(saved)
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertEqual(payload["source"], "optpilot-assistant")
+        self.assertEqual(payload["evaluations"][0]["request_id"], request_id)
+        self.assertEqual(payload["evaluations"][0]["artifact_digest"], "a" * 64)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 3)
 
     def test_two_sessions_run_into_separate_workspaces_without_cross_talk(self) -> None:
         """One shared login may drive independent Conversations concurrently."""

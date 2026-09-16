@@ -49,10 +49,12 @@ runtimes keep their separate idle timeout and active-container limit.
 This deployment reuses the separate trusted `devs-gen-collector`; it does not
 start or publish that administrative service. Keep the collector and `/admin`
 on `127.0.0.1:8010`. The Docker-host URL in `DEVS_COLLECTOR_URL` lets the
-interface submit durable records, while
+interface submit durable records; the host-loopback URL in
+`DEVS_HEADLESS_COLLECTOR_URL` does the same for Assistant actions, while
 `DEVS_COLLECTOR_HEALTHCHECK_URL` lets preflight verify the host-loopback service.
-Set the collector URL, healthcheck URL, and ingest token together, or leave all
-three empty. Generation and the v3 Pi automatic check do not depend on it.
+Set both collector URLs, the healthcheck URL, and ingest token together, or
+leave all four empty. Generation and the v3 Pi automatic check do not depend
+on it; optional reporting failures stay out of user-facing action output.
 Only the ingest token belongs in `deploy.env`; never grant the collector admin
 token to Studio, OpenHands, or a Workspace. Rotate the ingest token after a
 class or suspected disclosure.

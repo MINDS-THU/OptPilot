@@ -18,7 +18,6 @@ import shutil
 import sys
 import tempfile
 import threading
-import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -326,17 +325,13 @@ def _report_headless_collection(
                 "X-DEVS-Collector-Token": token,
             },
         )
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=3) as response:
             if not 200 <= response.status < 300:
                 raise RuntimeError(f"collector returned HTTP {response.status}")
-    except urllib.error.HTTPError as error:
-        print(f"[Collector] Headless generation sync failed (HTTP {error.code})")
-        return False
-    except Exception as error:
-        print(
-            "[Collector] Headless generation sync failed "
-            f"({type(error).__name__}): {error}"
-        )
+    except Exception:
+        # Collection is an optional side channel.  A missing or temporarily
+        # unavailable collector must not change the action's output contract
+        # or look like a generation warning to the person using Assistant.
         return False
     return True
 
@@ -469,7 +464,7 @@ def main() -> int:
     )
     progress.emit("save_output", "Saved the generated simulator", state="completed")
     try:
-        collector_reported = _report_headless_collection(
+        _report_headless_collection(
             bundle=bundle,
             specification=specification,
             root_model_name=root_model_name,
@@ -477,12 +472,9 @@ def main() -> int:
             finalizer_result=finalizer_result,
             progress=progress,
         )
-    except Exception as error:
-        print(
-            "[Collector] Headless generation sync failed "
-            f"({type(error).__name__}): {error}"
-        )
-        collector_reported = False
+    except Exception:
+        # Snapshot/serialization errors are optional telemetry failures too.
+        pass
     summary_lines = [
         f"Generated bundle: simulator/ (schema {metadata.get('schema_version')})",
         f"Parameters: {len(metadata.get('parameters') or [])}",
@@ -494,11 +486,6 @@ def main() -> int:
             "Automatic check: passed"
             + (" (repaired)" if finalizer_result.get("fixed") else "")
         )
-    summary_lines.append(
-        "Collector: saved"
-        if collector_reported
-        else "Collector: not configured or unavailable"
-    )
     if metrics.get("keys"):
         summary_lines.append("Declared metrics: " + ", ".join(metrics["keys"]))
         if metrics.get("objective"):

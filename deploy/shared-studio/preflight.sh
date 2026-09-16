@@ -8,14 +8,14 @@ for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTP
   require_value "${name}" || failed=1
 done
 collector_values=0
-for name in DEVS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+for name in DEVS_COLLECTOR_URL DEVS_HEADLESS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
   [ -n "${!name:-}" ] && collector_values=$((collector_values + 1))
 done
-if [ "${collector_values}" -ne 0 ] && [ "${collector_values}" -ne 3 ]; then
-  printf 'Set all collector values or leave all three empty to disable collection.\n' >&2
+if [ "${collector_values}" -ne 0 ] && [ "${collector_values}" -ne 4 ]; then
+  printf 'Set all collector values or leave all four empty to disable collection.\n' >&2
   failed=1
-elif [ "${collector_values}" -eq 3 ]; then
-  for name in DEVS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
+elif [ "${collector_values}" -eq 4 ]; then
+  for name in DEVS_COLLECTOR_URL DEVS_HEADLESS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
     require_value "${name}" || failed=1
   done
 fi
