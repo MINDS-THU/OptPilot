@@ -26,16 +26,25 @@ if [ ! -f "${package_root}/optpilot.package.yaml" ]; then
     > "${package_root}/optpilot.package.yaml"
 fi
 
-for resource_id in devs-gen-interface-v2 devs-gen-interface-v3; do
-  template="${DEPLOY_DIR}/local-package-resources/${resource_id}"
-  target="${resource_root}/${resource_id}"
-  mkdir -p "${target}"
-  rsync -a --delete --delete-excluded \
-    --exclude node_modules \
-    --exclude dist \
-    --exclude __pycache__ \
-    --exclude '*.pyc' \
-    --exclude .runtime \
-    "${template}/" "${target}/"
-  printf 'Installed %s into %s.\n' "${resource_id}" "${target}"
-done
+legacy_target="${resource_root}/devs-gen-interface-v2"
+if [ -L "${legacy_target}" ]; then
+  printf 'Refusing to remove legacy resource symlink: %s\n' "${legacy_target}" >&2
+  exit 1
+fi
+if [ -e "${legacy_target}" ]; then
+  rm -rf -- "${legacy_target}"
+  printf 'Removed retired devs-gen-interface-v2 from %s.\n' "${resource_root}"
+fi
+
+resource_id="devs-gen-interface-v3"
+template="${DEPLOY_DIR}/local-package-resources/${resource_id}"
+target="${resource_root}/${resource_id}"
+mkdir -p "${target}"
+rsync -a --delete --delete-excluded \
+  --exclude node_modules \
+  --exclude dist \
+  --exclude __pycache__ \
+  --exclude '*.pyc' \
+  --exclude .runtime \
+  "${template}/" "${target}/"
+printf 'Installed %s into %s.\n' "${resource_id}" "${target}"

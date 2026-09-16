@@ -151,7 +151,7 @@ case "${command}" in
     printf '%s\n' \
       'Usage: bash deploy/shared-studio/deploy.sh COMMAND' \
       '  generate-invitation          Print a random classroom invitation code' \
-      '  install-resource             Install DEVS Generator v2 and v3 into local_package' \
+      '  install-resource             Install DEVS Generator v3 into the local package' \
       '  check                        Run fail-closed deployment preflight' \
       '  start | restart              Start private services and the TLS gateway' \
       '  stop                         Stop only processes managed by this deployment' \

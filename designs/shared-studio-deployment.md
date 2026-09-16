@@ -66,70 +66,50 @@ mounting deployment authority.
 
 ### Versioned DEVS generator
 
-Create the new resource from the upstream `devs-gen-interface` at OptPilot
-commit `5094231`, then selectively merge the committed changes from
-`devs-gen-interface-persistence-dev` commit `a2a3cd8` into
-the tracked deployment template:
+The shared deployment ships one tracked generator template:
 
 ```text
-deploy/shared-studio/local-package-resources/devs-gen-interface-v2/
+deploy/shared-studio/local-package-resources/devs-gen-interface-v3/
 ```
 
 Deployment copies that template to
-`<private-root>/catalog/devs_generator_v2/resources/devs-gen-interface-v2/` and
-creates the private package metadata when absent. The launcher exports that
-Catalog directory as `OPTPILOT_PACKAGES_ROOT`, so Studio publishes the first
-immutable revision at startup and enables editable Workspace creation. The
-interface then receives the Workspace runtime needed to execute generated
-simulations. The template path is never indexed alongside the installed copy.
+`<private-root>/catalog/<package-name>/resources/devs-gen-interface-v3/`,
+removes the retired v2 source template from that deployment-owned package, and
+creates package metadata when absent. It does not remove immutable Realm
+revisions or user Workspaces. The launcher exports the Catalog directory as
+`OPTPILOT_PACKAGES_ROOT`, so Studio publishes the first immutable revision at
+startup and enables editable Workspace creation. The interface then receives
+the Workspace runtime needed to execute generated simulations. The template
+path in the source checkout is never indexed alongside the installed copy.
 
-The version-specific source name avoids aliasing an older globally retained
-Realm source called `local_package`; the package still declares category
+The default package name remains `devs_generator_v2` as a deployment identity
+for compatibility with existing Catalog and Realm records. It is not the
+resource version. Renaming it would create a distinct source and therefore
+requires an explicit data migration. The package still declares category
 `local`, preserving editable Workspace and runtime behavior.
 
 Its public identifiers are:
 
 ```yaml
-id: devs-gen-interface-v2
-name: DEVS Simulation Generator Interface v2
+id: devs-gen-interface-v3
+name: DEVS Simulation Generator Interface v3
 interface:
-  label: DEVS Generator v2
+  label: DEVS Generator v3
 ```
 
-The existing upstream `devs-gen-interface` remains unchanged. A short
-`SOURCE_SNAPSHOT.md` records the source repository and exact commit. The word
-"Classroom" is not part of the new resource's ID, display name, or label.
+A short `SOURCE_SNAPSHOT.md` records the source history. The v3 template retains
+the `devs.simulation.v2` manifest, metrics and policy outputs, event-trace
+conformance, headless `generate` action, participant identity, ratings,
+telemetry, and output repair contracts. Its default automatic check runs Pi
+with DeepSeek V4.1 Flash inside the prepared Interface runtime.
 
-The persistence source must not be copied wholesale over the upstream resource.
-The upstream resource already carries newer OptPilot contracts that the
-standalone development repository does not contain, including the
-`devs.simulation.v2` manifest, metrics and policy outputs, event-trace
-conformance, the `generate` resource action, and `headless_generate.py`. Those
-remain authoritative. The v2 merge adds the persistence, participant identity,
-collector, rating, telemetry, output repair, and remote-finalizer behavior
-without regressing those contracts.
-
-This managed v2 resource deliberately requires `DEVS_COLLECTOR_URL` and
-`DEVS_COLLECTOR_INGEST_TOKEN`. That makes durable classroom records and the
-remote Codex finalizer part of this deployment contract rather than silently
-optional behavior. Preflight rejects their absence. The unchanged upstream
-gallery resource does not inherit this requirement.
-
-The collector remains a separate host-loopback service and is not published by
-this Nginx configuration. Its administrator token is never granted to Studio or
-a Workspace. The interface receives only the lower-privilege ingest/finalizer
-token; the host finalizer runs Codex in its existing temporary, network-disabled,
-environment-cleared filesystem sandbox. Because students with terminal access
-must be assumed able to recover a Workspace process environment, that ingest
-token is a bounded class capability rather than a per-student secret and should
-be rotated after the class.
-
-The v3 resource removes that deployment coupling. Its automatic check runs Pi
-with DeepSeek V4.1 Flash inside the prepared Interface runtime. Collector URL
-and ingest token are optional and are used only for asynchronous durable
-reporting; preflight accepts both values absent. A remote finalizer remains an
-explicit compatibility driver with separate finalizer credentials and never
-derives its endpoint or token from collector settings.
+The collector is a separate host-loopback data service and is not published by
+this Nginx configuration. Collector URL and ingest token are optional and used
+only for asynchronous durable reporting; preflight accepts all collector values
+being absent. Its administrator token is never granted to Studio or a
+Workspace. The ingest token cannot administer or publish records and should be
+rotated after a class or suspected disclosure. Model checking is not a
+collector responsibility and does not depend on collector availability.
 
 ### Authentication division of responsibility
 
@@ -240,8 +220,8 @@ The independent reviews rejected several attractive but unrealistic claims:
   blocks all new requests immediately; an operator must stop the Workspace or
   reload Nginx to terminate an existing Code Server WebSocket immediately.
 - The collector ingest token is visible to authorized Workspace code by design.
-  It cannot administer or publish records, and the finalizer is sandboxed, but
-  it must be treated as a class-scoped capability and rotated accordingly.
+  It can submit records but cannot inspect, administer, publish, or execute
+  model code. Treat it as a class-scoped capability and rotate it accordingly.
 
 ## Public and private addressing
 
@@ -453,17 +433,17 @@ Automated tests must cover:
 - WebSocket handshake succeeds with a valid session and fails without it;
 - every runtime port published by Docker is loopback-only.
 
-Resource tests must additionally validate `devs-gen-interface-v2`, launch its
+Resource tests must additionally validate `devs-gen-interface-v3`, launch its
 prepared runtime, generate a small model, run the generated output using the
 declared originating runtime action, open its presentation, and confirm
-collector/finalizer configuration is passed only through declared grants. They
-also verify the merged resource retains `devs.simulation.v2`, metrics, policy,
-event-trace conformance, and the headless `generate` action.
+collector configuration is passed only through declared grants. They also
+verify the resource retains `devs.simulation.v2`, metrics, policy, event-trace
+conformance, and the headless `generate` action.
 
 ## Rollout and rollback
 
-1. Install and validate `devs-gen-interface-v2` in the deployment's private
-   `catalog/devs_generator_v2` without changing the existing gallery resource.
+1. Install and validate `devs-gen-interface-v3` in the deployment's private
+   local Catalog package without changing the existing gallery resource.
 2. Implement shared auth disabled by default and run upstream tests.
 3. Start Studio, Code Server, and presentations on loopback only.
 4. test Nginx on a separate local/public port set with Code Server password
@@ -476,4 +456,4 @@ event-trace conformance, and the headless `generate` action.
 Rollback stops the new Nginx instance first. Because all upstream services are
 loopback-only, stopping Nginx removes remote reachability immediately. The
 previous deployment is not overwritten, and the upstream `devs-gen-interface`
-remains available independently of v2.
+remains available independently of v3.

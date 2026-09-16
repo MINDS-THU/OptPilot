@@ -136,10 +136,10 @@ optpilot resource run \
 The action requires `OPENROUTER_API_KEY`; its two generation model ids have
 package defaults and may be overridden through its own `grants` block.
 `DEVS_DISPLAY_MODEL_ID` is interface-only. The action also needs network access
-because generation calls the provider and setup installs from PyPI. In the
-shared deployment, the finished bundle goes through the same host Codex
-automatic check as the web interface. Setting `thorough=true` additionally
-runs the generator's internal verification and simulation-check stages.
+because generation calls the provider and setup installs from PyPI. Headless
+generation does not depend on the interactive Interface's Pi automatic check.
+Setting `thorough=true` runs the generator's internal verification and
+simulation-check stages before returning the bundle.
 
 `DEVS_HEADLESS_COLLECTOR_URL` and `DEVS_COLLECTOR_INGEST_TOKEN` optionally
 mirror the generated snapshot and progress to a collector. If either is
@@ -319,10 +319,10 @@ action in the separate collector service; an Interface never makes a student's
 model public by itself.
 
 The automatic check is independent of this collector configuration. Managed v3
-installs Pi in its prepared runtime and uses DeepSeek V4.1 Flash through the
-same `OPENROUTER_API_KEY` already required for generation. An explicitly
-configured remote finalizer uses its own URL and token rather than collector
-credentials.
+interactive launches install Pi in their prepared runtime and use DeepSeek V4.1
+Flash through the same `OPENROUTER_API_KEY` already required for generation.
+The collector stores data only; it does not run a finalizer or execute submitted
+model code.
 
 ## Launching Manually
 

@@ -119,16 +119,19 @@ class or suspected disclosure.
    ```
 
 The preflight copies the tracked example packages into
-`$OPTPILOT_CATALOG_ROOT` and installs the DEVS Generator v2 template into
-`$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. Packages named in
-`OPTPILOT_SOURCE_CATALOG_EXCLUDES` are omitted. The default DEVS source name is
-the stable, version-specific `devs_generator_v2`, avoiding collision with a
-previously registered global Realm source named `local_package`. Its category
-remains `local`, so it can create the executable Workspace runtime required by
-the generator. The launcher treats this deployment-owned Catalog as its
-packages root, so Studio publishes immutable first revisions instead of
-showing non-editable filesystem imports. Runtime state, login sessions, logs,
-and all user Workspaces remain outside the Git checkout.
+`$OPTPILOT_CATALOG_ROOT` and installs only the DEVS Generator v3 template into
+`$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. It also removes the
+retired v2 template from that deployment-owned source directory; already saved
+Workspaces and immutable Realm revisions are not modified. Packages named in
+`OPTPILOT_SOURCE_CATALOG_EXCLUDES` are omitted. The default source name remains
+`devs_generator_v2` solely as a compatibility identity for existing Realm and
+Catalog records; it does not mean the v2 resource is installed. Changing that
+name creates a distinct source and must be handled as a separate migration.
+The package category remains `local`, so it can create the executable Workspace
+runtime required by the generator. The launcher treats this deployment-owned
+Catalog as its packages root, so Studio publishes immutable first revisions
+instead of showing non-editable filesystem imports. Runtime state, login
+sessions, logs, and all user Workspaces remain outside the Git checkout.
 
 ## Routine operations
 
