@@ -145,6 +145,35 @@ ALLOWED_EXECUTABLE_PATHS = {
     "scripts/start_services.sh",
 }
 
+# Executable entry points that belong to the source checkout but are not
+# shipped in either Python distribution.  Keep this separate from
+# ``ALLOWED_EXECUTABLE_PATHS`` so adding a deployment command cannot silently
+# broaden the executable-file boundary of a wheel or source distribution.
+SOURCE_ONLY_EXECUTABLE_PATHS = {
+    "deploy/shared-studio/_lib.sh",
+    "deploy/shared-studio/deploy.sh",
+    "deploy/shared-studio/duckdns_hook.py",
+    "deploy/shared-studio/install_catalog_packages.sh",
+    "deploy/shared-studio/install_local_resource.sh",
+    "deploy/shared-studio/issue_certificate.sh",
+    "deploy/shared-studio/launchd.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v2/_optpilot_launch_interface.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v2/_start_backend.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v2/_start_frontend.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v3/_optpilot_launch_interface.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v3/_start_backend.sh",
+    "deploy/shared-studio/local-package-resources/devs-gen-interface-v3/_start_frontend.sh",
+    "deploy/shared-studio/nginx.sh",
+    "deploy/shared-studio/openhands.sh",
+    "deploy/shared-studio/preflight.sh",
+    "deploy/shared-studio/render_launchd.py",
+    "deploy/shared-studio/render_nginx.py",
+    "deploy/shared-studio/renew_certificate.sh",
+    "deploy/shared-studio/studio.sh",
+}
+
+SOURCE_EXECUTABLE_PATHS = ALLOWED_EXECUTABLE_PATHS | SOURCE_ONLY_EXECUTABLE_PATHS
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
@@ -466,12 +495,12 @@ def _check_source_modes(root: Path) -> list[str]:
         if mode == "120000":  # a symlink records its own mode; not our concern
             continue
         executable = mode == "100755"
-        expected = relative in ALLOWED_EXECUTABLE_PATHS
+        expected = relative in SOURCE_EXECUTABLE_PATHS
         if executable and not expected:
             errors.append(f"Tracked non-script file is executable: {relative}")
         elif expected and not executable:
             errors.append(f"Tracked launch script is not executable: {relative}")
-    missing = sorted(ALLOWED_EXECUTABLE_PATHS - set(recorded))
+    missing = sorted(SOURCE_EXECUTABLE_PATHS - set(recorded))
     for relative in missing:
         errors.append(f"Expected tracked launch script is missing: {relative}")
     return errors
