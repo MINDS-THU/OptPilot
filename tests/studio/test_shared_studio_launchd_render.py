@@ -10,6 +10,48 @@ from pathlib import Path
 
 
 class SharedStudioLaunchdRenderTests(unittest.TestCase):
+    def test_minimal_config_derives_private_paths_and_tool_locations(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        library = root / "deploy" / "shared-studio" / "_lib.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            private = Path(temporary) / "private"
+            config = Path(temporary) / "deploy.env"
+            config.write_text(
+                f'OPTPILOT_PRIVATE_ROOT="{private}"\n'
+                'PUBLIC_HOST="studio.example.edu"\n'
+                'WORKSPACE_RUNTIME_IMAGE="optpilot/workspace-dev:latest"\n',
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    'source "$1"; printf "%s\\n" '
+                    '"$OPTPILOT_CATALOG_ROOT" "$OPTPILOT_REALM_ROOT" '
+                    '"$CLASSROOM_AUTH_DB" "$TLS_CERTIFICATE" '
+                    '"$PUBLIC_SERVER_NAME" "$WORKSPACE_RUNTIME_IMAGE" '
+                    '"$OPENHANDS_AGENT_SERVER_BIN"',
+                    "test",
+                    str(library),
+                ],
+                env={**os.environ, "OPTPILOT_DEPLOY_CONFIG": str(config)},
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+
+        values = completed.stdout.splitlines()
+        self.assertEqual(values[0], str(private / "catalog"))
+        self.assertEqual(values[1], str(private / "realm"))
+        self.assertEqual(values[2], str(private / "classroom-auth.sqlite3"))
+        self.assertEqual(values[3], str(private / "tls" / "fullchain.pem"))
+        self.assertEqual(values[4], "studio.example.edu")
+        self.assertEqual(
+            values[5],
+            "optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15",
+        )
+        self.assertTrue(values[6].endswith("/openhands-venv-1.40.1/bin/agent-server"))
+
     def test_job_contains_only_paths_and_a_bounded_environment(self) -> None:
         root = Path(__file__).resolve().parents[2]
         renderer = root / "deploy" / "shared-studio" / "render_launchd.py"

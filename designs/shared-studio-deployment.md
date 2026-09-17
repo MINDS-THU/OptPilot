@@ -1,6 +1,6 @@
 # Shared OptPilot Studio deployment
 
-Status: implemented on the `deployment/classroom` branch.
+Status: implemented by the shared Studio deployment profile.
 
 This document defines the smallest shared deployment that preserves the new
 upstream Studio's local-runtime isolation while giving each student one browser
@@ -110,6 +110,31 @@ being absent. Its administrator token is never granted to Studio or a
 Workspace. The ingest token cannot administer or publish records and should be
 rotated after a class or suspected disclosure. Model checking is not a
 collector responsibility and does not depend on collector availability.
+
+### Reproducible inputs and lifecycle
+
+The shared profile fixes the inputs that run student code. The Workspace image
+uses an exact code-server release and multi-architecture image digest. Node and
+uv are exact versions with checked SHA-256 downloads, and the built image carries
+a revision label derived from the Dockerfile and base image. V3 keeps reviewed
+direct requirements separately from a fully pinned universal Python 3.10+
+closure. OpenHands uses its own exact requirements file and virtual environment.
+
+Deployment has three distinct phases:
+
+1. source preflight validates configuration and copies Catalog sources only to
+   a temporary directory;
+2. activation copies those sources into the deployment-owned Catalog after the
+   current Studio has stopped;
+3. deployed preflight checks the installed package, prepared image, certificate,
+   and a temporary nginx rendering before services start.
+
+The public `check` command runs only the third, non-mutating validation. The
+public `prepare` command refuses to activate while Studio is running. `start`
+and `restart` do slow image preparation before stop, then activate and check.
+An image build or source validation failure therefore leaves the current service
+running, while the live Catalog and nginx configuration are never rewritten as
+a side effect of `check`.
 
 ### Authentication division of responsibility
 

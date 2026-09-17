@@ -74,12 +74,16 @@ class or suspected disclosure.
      -r deploy/shared-studio/requirements-openhands.txt
    ```
 
-   Set `OPENHANDS_AGENT_SERVER_BIN` to the resulting `agent-server` executable.
+   That default location is discovered automatically. Override
+   `OPENHANDS_AGENT_SERVER_BIN` only if the environment is installed elsewhere.
    Install nginx and a working Docker-compatible runtime before continuing;
    preflight checks both rather than installing host software itself.
 
-2. Copy `deploy.env.example` to `deploy.env`, fill the required values, and run
-   `chmod 600 deploy.env`. Use a certificate valid for `PUBLIC_HOST`. Keep
+2. Copy `deploy.env.example` to `deploy.env`, fill the small required section,
+   and run `chmod 600 deploy.env`. Catalog, Realm, account database, TLS, log,
+   and gateway paths are derived from `OPTPILOT_PRIVATE_ROOT`; tested model,
+   image, port, and OpenHands defaults do not need to be repeated. Use a
+   certificate valid for `PUBLIC_HOST`. Keep
    `OPTPILOT_STATE_ROOT` (the mountable Studio working tree) disjoint from
    `OPTPILOT_PRIVATE_ROOT` (credentials, TLS keys, Catalog templates, runtime
    ownership records, logs, and nginx configuration). Preflight rejects nested
@@ -128,14 +132,22 @@ class or suspected disclosure.
    enables DNS-01, which needs outbound HTTPS only. Do not weaken the shared
    session Cookie or publish the service over plaintext HTTP as a workaround.
 
-5. Run the complete preflight, then start:
+5. Prepare, verify, and start:
 
    ```bash
+   bash deploy/shared-studio/deploy.sh prepare
    bash deploy/shared-studio/deploy.sh check
    bash deploy/shared-studio/deploy.sh start
    ```
 
-The preflight copies the tracked example packages into
+`prepare` refuses to modify Catalog files while Studio is running. `check`
+validates the prepared deployment and renders nginx only in a temporary
+directory; it does not copy packages, rebuild images, or rewrite the live
+gateway configuration. `start` and `restart` validate source and finish slow
+image preparation before stopping the current service. They activate the
+Catalog only after stop, check the deployed state, and then start.
+
+Activation copies the tracked example packages into
 `$OPTPILOT_CATALOG_ROOT` and installs only the DEVS Generator v3 template into
 `$OPTPILOT_CATALOG_ROOT/$OPTPILOT_LOCAL_PACKAGE_NAME`. It also removes the
 retired v2 template from that deployment-owned source directory; already saved
@@ -150,11 +162,18 @@ Catalog as its packages root, so Studio publishes immutable first revisions
 instead of showing non-editable filesystem imports. Runtime state, login
 sessions, logs, and all user Workspaces remain outside the Git checkout.
 
+The Workspace image is built locally from the packaged Dockerfile. Its
+code-server base is pinned by multi-architecture digest; Node and uv downloads
+are pinned by version and SHA-256. A content label lets `check` reject a stale
+image even when its local tag exists. V3's `requirements-interface.txt` is a
+fully pinned cross-platform Python 3.10+ closure.
+
 ## Routine operations
 
 ```bash
 bash deploy/shared-studio/deploy.sh status
 bash deploy/shared-studio/deploy.sh logs 100
+bash deploy/shared-studio/deploy.sh check
 bash deploy/shared-studio/deploy.sh restart
 bash deploy/shared-studio/deploy.sh stop
 ```

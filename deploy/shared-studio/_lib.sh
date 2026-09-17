@@ -26,9 +26,11 @@ unset VIRTUAL_ENV
 : "${OPTPILOT_CATALOG_ROOT:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/catalog}}"
 : "${OPTPILOT_REALM_ROOT:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/realm}}"
 : "${OPTPILOT_LOCAL_PACKAGE_NAME:=devs_generator_v2}"
-: "${OPTPILOT_SOURCE_CATALOG_EXCLUDES:=}"
+: "${OPTPILOT_SOURCE_CATALOG_EXCLUDES:=devs_gallery}"
 : "${CLASSROOM_AUTH_DB:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/classroom-auth.sqlite3}}"
 : "${PUBLIC_SERVER_NAME:=${PUBLIC_HOST:-}}"
+: "${TLS_CERTIFICATE:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/tls/fullchain.pem}}"
+: "${TLS_CERTIFICATE_KEY:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/tls/privkey.pem}}"
 : "${STUDIO_HOST:=127.0.0.1}"
 : "${STUDIO_PORT:=28666}"
 : "${WORKSPACE_RUNTIME_BIN:=docker}"
@@ -60,8 +62,22 @@ fi
 : "${OPTPILOT_OPENHANDS_ENABLED:=1}"
 : "${OPENHANDS_HOST:=127.0.0.1}"
 : "${OPENHANDS_PORT:=28681}"
+: "${OPENHANDS_AGENT_SERVER_BIN:=${HOME}/.local/share/optpilot/openhands-venv-1.40.1/bin/agent-server}"
+: "${OPTPILOT_OPENHANDS_SESSION_ENDPOINT:=/api/conversations}"
+: "${OPTPILOT_OPENHANDS_MODEL:=openrouter/deepseek/deepseek-v4-pro}"
+: "${DEVS_INTERFACE_MODEL_ID:=openrouter/deepseek/deepseek-v4-flash}"
+: "${DEVS_INTERFACE_STRONG_MODEL_ID:=openrouter/deepseek/deepseek-v4-flash}"
+: "${DEVS_DISPLAY_MODEL_ID:=openrouter/deepseek/deepseek-v4-flash}"
 : "${START_TIMEOUT_SECONDS:=180}"
-: "${NGINX_BIN:=/opt/homebrew/opt/nginx/bin/nginx}"
+if [ -z "${NGINX_BIN:-}" ]; then
+  if command -v nginx >/dev/null 2>&1; then
+    NGINX_BIN="$(command -v nginx)"
+  elif [ -x /opt/homebrew/opt/nginx/bin/nginx ]; then
+    NGINX_BIN=/opt/homebrew/opt/nginx/bin/nginx
+  else
+    NGINX_BIN=/usr/local/opt/nginx/bin/nginx
+  fi
+fi
 : "${CERTBOT_CHALLENGE_MODE:=http}"
 : "${DUCKDNS_TOKEN_FILE:=${OPTPILOT_PRIVATE_ROOT:+${OPTPILOT_PRIVATE_ROOT}/credentials/duckdns-token}}"
 : "${DUCKDNS_PROPAGATION_SECONDS:=60}"
