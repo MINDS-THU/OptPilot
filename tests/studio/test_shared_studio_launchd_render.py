@@ -105,6 +105,7 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
         self.assertIn("export OPTPILOT_REALM_ROOT", source)
         self.assertNotIn("source_catalog_args", source)
         self.assertIn('--catalog "${OPTPILOT_CATALOG_ROOT}"', source)
+        self.assertIn("export OPTPILOT_REFRESH_CONFIGURED_PACKAGES=1", source)
 
     def test_catalog_install_is_an_explicit_activation_step(self) -> None:
         root = Path(__file__).resolve().parents[2]

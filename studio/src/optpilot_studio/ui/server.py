@@ -43901,18 +43901,30 @@ def _register_user_packages(state: UiState) -> List[str]:
     from optpilot.realm.content import AllowedTreeSource
 
     registered: List[str] = []
+    refresh_configured = _ui_env_flag(
+        "OPTPILOT_REFRESH_CONFIGURED_PACKAGES", False
+    )
     for root in roots:
         package_id = _package_plan_package_id(root.name)
+        published_head = None
         try:
-            if runtime.catalog.read_head(package_id=package_id) is not None:
+            published_head = runtime.catalog.read_head(package_id=package_id)
+            if published_head is not None and not refresh_configured:
                 continue
         except Exception:
             # Never published, or unreadable: try to publish and let that
             # attempt report the real problem.
             pass
         try:
+            operation_id = f"studio/first-start/{package_id}"
+            if published_head is not None:
+                source_digest = _configured_package_source_tree_digest(root)
+                operation_id = (
+                    f"studio/configured-refresh/{package_id}/"
+                    f"{published_head.revision}/{source_digest}"
+                )
             receipt = runtime.configured_package_ingress.publish(
-                operation_id=f"studio/first-start/{package_id}",
+                operation_id=operation_id,
                 package_id=package_id,
                 source_identity_digest=_configured_package_source_identity_digest(root),
                 validation_policy_digest=_configured_package_validation_policy_digest(),
@@ -43936,6 +43948,41 @@ def _register_user_packages(state: UiState) -> List[str]:
         if receipt.outcome is ConfiguredPackageIngressOutcome.PUBLISHED:
             registered.append(package_id)
     return registered
+
+
+def _configured_package_source_tree_digest(root: Path) -> str:
+    """Name one exact configured source state for idempotent refresh."""
+
+    source = root.resolve()
+    digest = hashlib.sha256(b"optpilot/configured-package-source-tree/v1\0")
+    excluded = set(CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS)
+    for directory, directory_names, file_names in os.walk(
+        source, topdown=True, followlinks=False
+    ):
+        directory_path = Path(directory)
+        directory_names[:] = sorted(
+            name for name in directory_names if name not in excluded
+        )
+        file_names.sort()
+        for name in directory_names:
+            if (directory_path / name).is_symlink():
+                raise PermissionError(
+                    "Configured package source must not contain symlinks."
+                )
+        for name in file_names:
+            path = directory_path / name
+            if path.is_symlink() or not path.is_file():
+                raise PermissionError(
+                    "Configured package source must contain only regular files."
+                )
+            relative = path.relative_to(source).as_posix().encode("utf-8")
+            digest.update(len(relative).to_bytes(8, "big"))
+            digest.update(relative)
+            digest.update(b"\1" if path.stat().st_mode & 0o111 else b"\0")
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _configured_package_source_identity_digest(root: Path) -> str:

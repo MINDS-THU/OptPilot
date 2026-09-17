@@ -8,6 +8,7 @@ cloning the repository.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +120,49 @@ class FirstStartRegistrationTest(unittest.TestCase):
                 )
             self.assertEqual(result, [])
             self.assertEqual(calls, [], "a published package was published again")
+
+    def test_managed_deployment_refreshes_a_changed_configured_package(self) -> None:
+        from optpilot.realm.configured_package_ingress import (
+            ConfiguredPackageIngressOutcome,
+        )
+        from optpilot_studio.ui.server import _register_user_packages
+
+        with tempfile.TemporaryDirectory() as tmp:
+            packages = Path(tmp) / "packages"
+            _make_package(packages, "managed")
+            published = SimpleNamespace(revision=6)
+            calls = []
+            runtime = SimpleNamespace(
+                catalog=SimpleNamespace(read_head=lambda **_k: published),
+                configured_package_ingress=SimpleNamespace(
+                    publish=lambda **kwargs: (
+                        calls.append(kwargs)
+                        or SimpleNamespace(
+                            outcome=ConfiguredPackageIngressOutcome.UNCHANGED
+                        )
+                    )
+                ),
+            )
+            with (
+                patch(
+                    "optpilot.realm.config.default_packages_root",
+                    return_value=packages,
+                ),
+                patch.dict(
+                    os.environ,
+                    {"OPTPILOT_REFRESH_CONFIGURED_PACKAGES": "1"},
+                ),
+            ):
+                result = _register_user_packages(
+                    SimpleNamespace(realm_runtime=runtime, catalog_roots=[])
+                )
+
+        self.assertEqual(result, [])
+        self.assertEqual(len(calls), 1)
+        self.assertRegex(
+            calls[0]["operation_id"],
+            r"^studio/configured-refresh/managed/6/[0-9a-f]{64}$",
+        )
 
     def test_one_bad_package_does_not_stop_the_others(self) -> None:
         from optpilot.realm.configured_package_ingress import (
