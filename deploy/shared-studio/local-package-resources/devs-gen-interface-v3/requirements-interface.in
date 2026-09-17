@@ -1,0 +1,18 @@
+# Direct dependencies for the interface and headless action.
+# Regenerate requirements-interface.txt with the command in README.md.
+fastapi
+uvicorn
+python-dotenv
+PyYAML
+requests
+rich
+smolagents==1.16.1
+litellm==1.77.0
+markitdown==0.1.7
+tenacity==9.1.4
+pandas
+pillow
+networkx
+numpy
+scipy
+xdevs==3.0.0

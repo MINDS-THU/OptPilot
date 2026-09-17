@@ -128,7 +128,12 @@ class ParticipantIdentityTests(unittest.TestCase):
                 )
                 self.assertEqual(created.status_code, 200, created.text)
                 token = client.cookies.get(PARTICIPANT_COOKIE_NAME)
-                client.cookies.set(PARTICIPANT_COOKIE_NAME, f"{token}tampered")
+                client.cookies.set(
+                    PARTICIPANT_COOKIE_NAME,
+                    f"{token}tampered",
+                    domain="testserver.local",
+                    path="/",
+                )
                 self.assertEqual(client.get("/sessions").json()["sessions"], [])
 
     def test_launch_identity_uses_the_runtime_root_without_setting_cookies(self):

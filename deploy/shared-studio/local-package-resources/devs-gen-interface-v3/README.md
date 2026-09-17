@@ -25,7 +25,8 @@ Preview. Launching does not copy or modify the catalog resource.
 - `default_tools/file_editing/`: Minimal file operations used by the generation agent.
 - `devs_settings.py`: Shared defaults for model ids, graph parsing, and concurrency.
 - `headless_generate.py`: Entry point of the headless `generate` resource action.
-- `requirements-interface.txt`: Python dependency closure shared by the interface and the `generate` action.
+- `requirements-interface.in`: reviewed direct Python dependencies.
+- `requirements-interface.txt`: fully pinned Python dependency closure shared by the interface and the `generate` action.
 - `src/monitoring.py`: Lightweight logger used by the backend agent.
 
 ## Automatic And Interactive Generation
@@ -175,6 +176,17 @@ This venv is deliberately separate from the interface's prepared runtime at
 `.runtime/prepared/python-venv`. Both are built from
 `requirements-interface.txt`, but keeping them independent means the action
 never silently depends on whether anyone launched the interface first.
+
+After changing `requirements-interface.in`, regenerate the cross-platform lock
+from this resource directory and run the Python tests on both 3.10 and 3.12:
+
+```bash
+uv pip compile requirements-interface.in \
+  --python-version 3.10 \
+  --universal \
+  --exclude-newer 2026-09-17T00:00:00Z \
+  --output-file requirements-interface.txt
+```
 
 **Why not an offline pure-wheel lock.** Generated simulator bundles ship a
 vendored, SHA-256-locked xDEVS wheel and run fully offline. The generation
