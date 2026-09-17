@@ -477,6 +477,7 @@ class ClassroomAuth:
             secrets.token_urlsafe(24), self._dummy_salt
         )
         self._asset_ownership_cache: dict[tuple[str, str], tuple[str, str]] = {}
+        self._asset_policy_version = 0
         self._initialize_database()
         os.chmod(self.database_path, 0o600)
 
@@ -612,6 +613,7 @@ class ClassroomAuth:
                 principal.account_id,
                 normalized_visibility,
             )
+            self._asset_policy_version += 1
 
     def can_access_asset(
         self,
@@ -665,6 +667,7 @@ class ClassroomAuth:
                 current[0],
                 normalized_visibility,
             )
+            self._asset_policy_version += 1
 
     def asset_ownership(
         self, *, asset_type: str, asset_id: str
@@ -680,6 +683,31 @@ class ClassroomAuth:
             "owner_account_id": str(row[0]),
             "visibility": str(row[1]),
         }
+
+    def asset_access_cache_key(
+        self, *, asset_type: str, principal: AuthPrincipal
+    ) -> tuple[object, ...]:
+        """Identify one account's effective read view without exposing policy."""
+
+        kind = str(asset_type or "").strip()
+        if not kind:
+            raise ValueError("Asset type is required.")
+        with self._lock:
+            version = self._asset_policy_version
+            if principal.role == "admin":
+                return (kind, version, "admin")
+            owned = tuple(
+                sorted(
+                    (asset_id, visibility)
+                    for (row_kind, asset_id), (owner, visibility) in (
+                        self._asset_ownership_cache.items()
+                    )
+                    if row_kind == kind and owner == principal.account_id
+                )
+            )
+        # Students who own no item of this kind have the same public view and
+        # deliberately share one response cache entry.
+        return (kind, version, "student", owned)
 
     def set_catalog_entry_visibility(
         self,
@@ -755,6 +783,7 @@ class ClassroomAuth:
                 owner_account_id,
                 normalized_visibility,
             )
+            self._asset_policy_version += 1
 
     def asset_visibility_events(
         self, *, asset_type: str, asset_id: str, limit: int = 100

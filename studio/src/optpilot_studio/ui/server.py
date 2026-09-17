@@ -493,6 +493,17 @@ def _public_studio_payload(value: Any) -> Any:
     return sanitize(value)
 
 
+def _public_json_bytes(payload: JsonDict) -> bytes:
+    """Encode one browser payload in the compact API wire format."""
+
+    return json.dumps(
+        _public_studio_payload(payload),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
 class CatalogWorkspaceCreationUnsupported(RealmConflict):
     """Stable public capability failure for mutable catalog import sources."""
 
@@ -4261,6 +4272,12 @@ class UiState:
         # access flags and Workspace links are added to shallow copies below.
         self._catalog_public_entry_lock = threading.Lock()
         self._catalog_public_entry_cache: Dict[tuple[Any, ...], JsonDict] = {}
+        # Large Catalog responses are identical for accounts with the same
+        # effective visibility and editable-Workspace links. Cache their
+        # already-sanitized JSON bytes so classroom requests do not repeat a
+        # full recursive copy and encoding pass under the GIL.
+        self._catalog_http_response_lock = threading.Lock()
+        self._catalog_http_response_cache: Dict[tuple[Any, ...], bytes] = {}
         # Read-path debounce state, guarded by _catalog_projection_lock: the
         # monotonic stamp of the last complete projection refresh and the last
         # built catalog index payload.  Both stay unused while the TTL is 0.
@@ -6586,7 +6603,7 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if path == "/api/catalog":
-                    self._send_json(_catalog_payload(state))
+                    self._send_json_bytes(_catalog_http_response_bytes(state))
                     return
                 if path == "/api/environments":
                     self._send_json(
@@ -6615,7 +6632,7 @@ def _handler_factory(state: UiState):
                     )
                     return
                 if path == "/api/compatibility":
-                    self._send_json(_compatibility_payload(state))
+                    self._send_json_bytes(_compatibility_http_response_bytes(state))
                     return
                 if path.startswith("/api/studies/launches/"):
                     parts = path.split("/")
@@ -8797,12 +8814,7 @@ def _handler_factory(state: UiState):
             # API responses are machine-consumed. Compact encoding avoids
             # repeatedly formatting and transferring hundreds of kilobytes of
             # Catalog whitespace when a classroom opens Studio together.
-            data = json.dumps(
-                _public_studio_payload(payload),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
+            data = _public_json_bytes(payload)
             self._send_json_bytes(data, status=status, headers=headers)
 
         def _send_json_bytes(
@@ -9440,13 +9452,22 @@ def _build_catalog_index_payload(
             state._catalog_index_cache = (time.monotonic(), payload)
         with state._catalog_public_entry_lock:
             state._catalog_public_entry_cache.clear()
+        with state._catalog_http_response_lock:
+            state._catalog_http_response_cache.clear()
     return payload
 
 
-def _catalog_payload(state: UiState) -> JsonDict:
+def _catalog_payload(
+    state: UiState,
+    *,
+    index: Optional[JsonDict] = None,
+    workspace_links: Optional[
+        Mapping[tuple[str, str, int, str], JsonDict]
+    ] = None,
+) -> JsonDict:
     """Return the public catalog index with no provider-local coordinates."""
 
-    index = _catalog_index_payload(state)
+    index = index or _catalog_index_payload(state)
     visible = {
         key: [
             item
@@ -9461,11 +9482,12 @@ def _catalog_payload(state: UiState) -> JsonDict:
         *visible["studies"],
         *visible["resources"],
     ]
-    workspace_links = (
-        _catalog_workspace_link_lookup(_list_ui_workspaces(state))
-        if any(_realm_catalog_entry_link_key(item) is not None for item in entries)
-        else {}
-    )
+    if workspace_links is None:
+        workspace_links = (
+            _catalog_workspace_link_lookup(_list_ui_workspaces(state))
+            if any(_realm_catalog_entry_link_key(item) is not None for item in entries)
+            else {}
+        )
     filter_roots = isinstance(state.shared_auth, ClassroomAuth) and (
         _current_request_principal() is not None
     )
@@ -9516,6 +9538,80 @@ def _catalog_payload(state: UiState) -> JsonDict:
             for item in visible["resources"]
         ],
     }
+
+
+def _catalog_access_response_key(state: UiState) -> tuple[object, ...]:
+    auth = getattr(state, "shared_auth", None)
+    principal = _current_request_principal()
+    if isinstance(auth, ClassroomAuth) and principal is not None:
+        return auth.asset_access_cache_key(
+            asset_type="catalog-entry", principal=principal
+        )
+    return ("catalog-entry", "unscoped")
+
+
+def _catalog_http_response_bytes(state: UiState) -> bytes:
+    index = _catalog_index_payload(state)
+    entries = [
+        *index["environments"],
+        *index["methods"],
+        *index["studies"],
+        *index["resources"],
+    ]
+    workspace_links = (
+        _catalog_workspace_link_lookup(_list_ui_workspaces(state))
+        if any(_realm_catalog_entry_link_key(item) is not None for item in entries)
+        else {}
+    )
+    workspace_key = tuple(
+        sorted(
+            (
+                *key,
+                str(link.get("workspace_id") or ""),
+                str(link.get("workspace_title") or ""),
+            )
+            for key, link in workspace_links.items()
+        )
+    )
+    cache_key = (
+        "catalog",
+        id(index),
+        _catalog_access_response_key(state),
+        workspace_key,
+    )
+    with state._catalog_http_response_lock:
+        cached = state._catalog_http_response_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        data = _public_json_bytes(
+            _catalog_payload(
+                state,
+                index=index,
+                workspace_links=workspace_links,
+            )
+        )
+        if len(state._catalog_http_response_cache) >= 64:
+            state._catalog_http_response_cache.clear()
+        state._catalog_http_response_cache[cache_key] = data
+        return data
+
+
+def _compatibility_http_response_bytes(state: UiState) -> bytes:
+    catalog = _catalog_index_payload(state)
+    cache_key = (
+        "compatibility",
+        id(catalog),
+        _catalog_access_response_key(state),
+    )
+    with state._catalog_http_response_lock:
+        cached = state._catalog_http_response_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        data = _public_json_bytes(_compatibility_payload(state))
+        if len(state._catalog_http_response_cache) >= 64:
+            state._catalog_http_response_cache.clear()
+        state._catalog_http_response_cache[cache_key] = data
+        return data
 
 
 def _catalog_search_tags(raw: Any) -> tuple[str, ...]:

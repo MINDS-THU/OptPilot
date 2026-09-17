@@ -140,6 +140,30 @@ class StudioClassroomAuthHttpTests(unittest.TestCase):
         self.assertEqual(status, HTTPStatus.OK, body)
         return headers["Set-Cookie"].split(";", 1)[0]
 
+    def test_students_with_the_same_catalog_view_share_encoded_response(self) -> None:
+        alice = self._register("cache-alice", "cache-alice-password-123")
+        bob = self._register("cache-bob", "cache-bob-password-456")
+        index = {
+            "roots": [],
+            "environments": [],
+            "methods": [],
+            "studies": [],
+            "resources": [],
+            "sources": [],
+            "builtins": {},
+        }
+        with patch(
+            "optpilot_studio.ui.server._catalog_index_payload",
+            return_value=index,
+        ):
+            first = self._request("GET", "/api/catalog", cookie=alice)
+            second = self._request("GET", "/api/catalog", cookie=bob)
+
+        self.assertEqual(first[0], HTTPStatus.OK)
+        self.assertEqual(second[0], HTTPStatus.OK)
+        self.assertEqual(first[2], second[2])
+        self.assertEqual(len(self.state._catalog_http_response_cache), 1)
+
     def test_registration_and_private_conversation_workspace_scope(self) -> None:
         status, _headers, page = self._request("GET", "/register")
         self.assertEqual(status, HTTPStatus.OK)
