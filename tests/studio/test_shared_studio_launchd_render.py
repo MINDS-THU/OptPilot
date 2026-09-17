@@ -79,6 +79,26 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
         self.assertIn('rsync -a --delete --delete-excluded', installer)
         self.assertIn('optpilot package validate "${target}" --check-source', installer)
 
+    def test_preflight_checks_the_pinned_openhands_environment(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        deployment = root / "deploy" / "shared-studio"
+        requirements = (
+            deployment / "requirements-openhands.txt"
+        ).read_text(encoding="utf-8").splitlines()
+        preflight = (deployment / "preflight.sh").read_text(encoding="utf-8")
+
+        self.assertEqual(
+            requirements,
+            [
+                "openhands-agent-server==1.40.1",
+                "openhands-sdk==1.40.1",
+                "openhands-tools==1.40.1",
+                "openhands-workspace==1.40.1",
+            ],
+        )
+        self.assertIn('requirements-openhands.txt', preflight)
+        self.assertIn('OpenHands package version mismatch', preflight)
+
 
 if __name__ == "__main__":
     unittest.main()

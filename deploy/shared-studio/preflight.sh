@@ -44,6 +44,36 @@ if [ "${OPTPILOT_OPENHANDS_ENABLED}" = "1" ]; then
   require_value OPENHANDS_AGENT_SERVER_BIN || failed=1
   require_value OH_SECRET_KEY || failed=1
   [ -x "${OPENHANDS_AGENT_SERVER_BIN:-/missing}" ] || { printf 'OpenHands agent-server is not executable.\n' >&2; failed=1; }
+  openhands_python="$(dirname "${OPENHANDS_AGENT_SERVER_BIN:-/missing}")/python"
+  [ -x "${openhands_python}" ] || { printf 'OpenHands must use a dedicated virtual environment with a sibling Python executable.\n' >&2; failed=1; }
+  if [ -x "${openhands_python}" ]; then
+    "${openhands_python}" - "${DEPLOY_DIR}/requirements-openhands.txt" <<'PY' || failed=1
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+import sys
+
+errors = []
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    requirement = line.strip()
+    if not requirement or requirement.startswith("#"):
+        continue
+    if requirement.count("==") != 1:
+        errors.append(f"OpenHands requirement must use an exact version: {requirement}")
+        continue
+    distribution, expected = requirement.split("==", 1)
+    try:
+        actual = version(distribution)
+    except PackageNotFoundError:
+        errors.append(f"Missing OpenHands package: {distribution}=={expected}")
+        continue
+    if actual != expected:
+        errors.append(
+            f"OpenHands package version mismatch: {distribution}=={actual}; expected {expected}"
+        )
+if errors:
+    raise SystemExit("\n".join(errors))
+PY
+  fi
 fi
 [ "${STUDIO_HOST}" = "127.0.0.1" ] || { printf 'STUDIO_HOST must be 127.0.0.1 for the isolated gateway.\n' >&2; failed=1; }
 [ "${WORKSPACE_RUNTIME_HOST}" = "127.0.0.1" ] || { printf 'WORKSPACE_RUNTIME_HOST must be 127.0.0.1 for the isolated gateway.\n' >&2; failed=1; }

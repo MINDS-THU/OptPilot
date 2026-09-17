@@ -61,7 +61,24 @@ class or suspected disclosure.
 
 ## First setup
 
-1. Copy `deploy.env.example` to `deploy.env`, fill the required values, and run
+1. Prepare the source checkout and the dedicated OpenHands environment. The
+   deployment uses the repository `.venv` for Studio and a separate pinned
+   environment for OpenHands so upgrading either one cannot silently change
+   the other:
+
+   ```bash
+   uv sync --all-packages --frozen
+   uv venv --python 3.12 ~/.local/share/optpilot/openhands-venv-1.40.1
+   uv pip install \
+     --python ~/.local/share/optpilot/openhands-venv-1.40.1/bin/python \
+     -r deploy/shared-studio/requirements-openhands.txt
+   ```
+
+   Set `OPENHANDS_AGENT_SERVER_BIN` to the resulting `agent-server` executable.
+   Install nginx and a working Docker-compatible runtime before continuing;
+   preflight checks both rather than installing host software itself.
+
+2. Copy `deploy.env.example` to `deploy.env`, fill the required values, and run
    `chmod 600 deploy.env`. Use a certificate valid for `PUBLIC_HOST`. Keep
    `OPTPILOT_STATE_ROOT` (the mountable Studio working tree) disjoint from
    `OPTPILOT_PRIVATE_ROOT` (credentials, TLS keys, Catalog templates, runtime
@@ -72,9 +89,9 @@ class or suspected disclosure.
    not be `0.0.0.0` or the `127.0.0.1` address used by private backends.
    Keep the certificate and state paths free of whitespace because they are
    rendered into an isolated nginx configuration.
-2. Confirm `ALLOWED_CIDRS` with the campus network operator. The example ranges
+3. Confirm `ALLOWED_CIDRS` with the campus network operator. The example ranges
    are configuration examples, not an authoritative current network list.
-3. Set a strong `OPTPILOT_ADMIN_PASSWORD` in `deploy.env`. To open student
+4. Set a strong `OPTPILOT_ADMIN_PASSWORD` in `deploy.env`. To open student
    registration, generate one random class invitation code:
 
    ```bash
@@ -111,7 +128,7 @@ class or suspected disclosure.
    enables DNS-01, which needs outbound HTTPS only. Do not weaken the shared
    session Cookie or publish the service over plaintext HTTP as a workaround.
 
-4. Run the complete preflight, then start:
+5. Run the complete preflight, then start:
 
    ```bash
    bash deploy/shared-studio/deploy.sh check
