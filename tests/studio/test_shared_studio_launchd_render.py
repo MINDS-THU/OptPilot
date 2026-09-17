@@ -93,6 +93,12 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
         self.assertNotIn("OPENROUTER_API_KEY", environment)
         self.assertEqual(payload["Umask"], 0o077)
         self.assertEqual(payload["KeepAlive"], {"SuccessfulExit": False})
+        self.assertEqual(
+            payload["SoftResourceLimits"], {"NumberOfFiles": 16_384}
+        )
+        self.assertEqual(
+            payload["HardResourceLimits"], {"NumberOfFiles": 32_768}
+        )
 
     def test_studio_launcher_uses_the_private_catalog_as_packages_root(self) -> None:
         root = Path(__file__).resolve().parents[2]

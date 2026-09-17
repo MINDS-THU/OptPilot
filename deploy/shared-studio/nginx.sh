@@ -37,6 +37,7 @@ python3 "${DEPLOY_DIR}/render_nginx.py" > "${render_root}/servers.conf"
 {
   printf '%s\n' \
     'worker_processes 1;' \
+    'worker_rlimit_nofile 16384;' \
     "pid ${render_pid_file};" \
     "error_log ${render_root}/error.log warn;" \
     'events { worker_connections 4096; }' \

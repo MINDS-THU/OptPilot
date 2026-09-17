@@ -2035,6 +2035,7 @@ class SimulationExecutionService:
         self._slots = threading.BoundedSemaphore(max_concurrency)
         self._lock = threading.RLock()
         self._executions: dict[str, _PreparedExecution] = {}
+        self._preparing_execution_ids: set[str] = set()
         with self._lock:
             self._prune_storage_unlocked(reserve=0)
 
@@ -2059,10 +2060,15 @@ class SimulationExecutionService:
                 execution.record.status not in _TERMINAL_STATUSES
                 for execution in self._executions.values()
             )
-            if pending >= self.max_pending:
+            if pending + len(self._preparing_execution_ids) >= self.max_pending:
                 raise SimulationCapacityError("Too many simulator executions are queued or running.")
-            if execution_id in self._executions or (self.execution_root / execution_id).exists():
+            if (
+                execution_id in self._executions
+                or execution_id in self._preparing_execution_ids
+                or (self.execution_root / execution_id).exists()
+            ):
                 raise ExecutionStateError(f"Execution {execution_id!r} already exists.")
+            self._preparing_execution_ids.add(execution_id)
             job_dir = self.execution_root / execution_id
             bundle_dir = job_dir / "bundle"
             results_dir = job_dir / "results"
@@ -2119,10 +2125,13 @@ class SimulationExecutionService:
                 expected_results=manifest.result_files,
             )
             with self._lock:
-                self._executions[execution_id] = prepared
                 self._persist(prepared)
+                self._executions[execution_id] = prepared
+                self._preparing_execution_ids.discard(execution_id)
             return copy.deepcopy(record.to_dict())
         except Exception:
+            with self._lock:
+                self._preparing_execution_ids.discard(execution_id)
             shutil.rmtree(job_dir, ignore_errors=True)
             raise
 

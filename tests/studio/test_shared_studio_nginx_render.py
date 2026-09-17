@@ -18,6 +18,7 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertNotIn(r"\$http_cookie", launcher)
         self.assertIn("access.log optpilot_safe", launcher)
         self.assertIn("limit_req_zone $binary_remote_addr", launcher)
+        self.assertIn("worker_rlimit_nofile 16384", launcher)
 
     def test_every_listener_is_tls_allowlisted_and_fail_closed(self) -> None:
         root = Path(__file__).resolve().parents[2]

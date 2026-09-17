@@ -49,6 +49,8 @@ def main() -> None:
             "OPTPILOT_DEPLOY_CONFIG": str(paths["deployment config"]),
         },
         "ProcessType": "Background",
+        "SoftResourceLimits": {"NumberOfFiles": 16_384},
+        "HardResourceLimits": {"NumberOfFiles": 32_768},
         "ThrottleInterval": 10,
         "Umask": 0o077,
         "StandardOutPath": str(paths["log"]),

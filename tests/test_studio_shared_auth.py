@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -19,6 +20,48 @@ from optpilot_studio.ui.shared_auth import (
 
 
 class SharedAuthTests(unittest.TestCase):
+    def test_database_connections_are_closed_after_each_operation(self):
+        real_connect = sqlite3.connect
+        opened = []
+
+        class TrackingConnection(sqlite3.Connection):
+            closed = False
+
+            def close(self):
+                self.closed = True
+                return super().close()
+
+        def tracked_connect(*args, **kwargs):
+            kwargs["factory"] = TrackingConnection
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "optpilot_studio.ui.shared_auth.sqlite3.connect",
+            side_effect=tracked_connect,
+        ):
+            root = Path(tmp)
+            credentials_path = root / "credentials.json"
+            write_credentials(
+                credentials_path,
+                username="students",
+                password="correct horse battery staple",
+            )
+            auth = SharedAuth.from_files(
+                credentials_path=credentials_path,
+                database_path=root / "sessions.sqlite3",
+            )
+            token = auth.login(
+                username="students",
+                password="correct horse battery staple",
+                client_key="client-a",
+            )
+            self.assertTrue(auth.verify_token(token or ""))
+
+        self.assertTrue(opened)
+        self.assertTrue(all(connection.closed for connection in opened))
+
     def test_cli_rejects_short_password_without_traceback_or_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             credentials_path = Path(tmp) / "credentials.json"
@@ -161,6 +204,40 @@ class ClassroomAuthTests(unittest.TestCase):
         }
         options.update(overrides)
         return ClassroomAuth(**options)
+
+    def test_database_connections_are_closed_after_each_operation(self):
+        real_connect = sqlite3.connect
+        opened = []
+
+        class TrackingConnection(sqlite3.Connection):
+            closed = False
+
+            def close(self):
+                self.closed = True
+                return super().close()
+
+        def tracked_connect(*args, **kwargs):
+            kwargs["factory"] = TrackingConnection
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        with tempfile.TemporaryDirectory() as tmp, patch(
+            "optpilot_studio.ui.shared_auth.sqlite3.connect",
+            side_effect=tracked_connect,
+        ):
+            auth = self._auth(Path(tmp))
+            token = auth.register(
+                username="student",
+                display_name="Student",
+                password="student-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-a",
+            )
+            self.assertIsNotNone(auth.principal_from_token(token))
+
+        self.assertTrue(opened)
+        self.assertTrue(all(connection.closed for connection in opened))
 
     def test_invited_student_registers_and_recovers_after_restart(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import devs_display.backend.simulation_execution as simulation_execution
 from default_tools.interface_output_action import (
     OutputActionResult,
     OutputActionUnavailable,
@@ -224,6 +225,54 @@ class SimulationExecutionTests(unittest.TestCase):
             sys.executable,
             **settings,
         )
+
+    def test_concurrent_prepare_reserves_pending_capacity_atomically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundles = root / "bundles"
+            bundles.mkdir()
+            bundle = write_bundle(bundles, "print('ok')\n")
+            service = self.make_service(root, max_pending=4)
+            original_copy = simulation_execution._copy_snapshot
+            release = threading.Event()
+            entered_lock = threading.Lock()
+            entered = 0
+
+            def blocked_copy(*args, **kwargs):
+                nonlocal entered
+                with entered_lock:
+                    entered += 1
+                    if entered == 4:
+                        release.set()
+                self.assertTrue(release.wait(timeout=2))
+                return original_copy(*args, **kwargs)
+
+            outcomes = []
+            outcomes_lock = threading.Lock()
+
+            def prepare_one():
+                try:
+                    service.prepare(bundle)
+                    outcome = "accepted"
+                except Exception as error:
+                    outcome = type(error).__name__
+                with outcomes_lock:
+                    outcomes.append(outcome)
+
+            with patch.object(
+                simulation_execution,
+                "_copy_snapshot",
+                side_effect=blocked_copy,
+            ):
+                threads = [threading.Thread(target=prepare_one) for _ in range(12)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=5)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(outcomes.count("accepted"), 4)
+            self.assertEqual(outcomes.count("SimulationCapacityError"), 8)
 
     @staticmethod
     def _package_minimal_runtime(bundle: Path) -> None:
