@@ -8033,6 +8033,23 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(gc.call_count, 1)
         self.assertEqual(first, second)
 
+    def test_runtime_health_reuses_one_container_runtime_probe(self) -> None:
+        from optpilot_studio.ui.server import _runtime_health
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            with patch.object(
+                type(state.workspace_runtime),
+                "global_status",
+                return_value={"runtime": {"status": "ready"}},
+            ) as status:
+                first = _runtime_health(state)
+                second = _runtime_health(state)
+
+        self.assertEqual(status.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertIsNot(first, second)
+
     def test_ui_workspace_runtime_marks_old_image_container_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

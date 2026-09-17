@@ -4350,6 +4350,12 @@ class UiState:
         self._runs_mutation_generation = 0
         self._runtime_gc_lock = threading.Lock()
         self._runtime_gc_last: Optional[tuple[float, JsonDict]] = None
+        # The browser asks for runtime health during every page hydration.
+        # That snapshot shells out to the container runtime, so a classroom
+        # arriving together must share one recent probe instead of launching
+        # one identical subprocess tree per account.
+        self._runtime_health_lock = threading.Lock()
+        self._runtime_health_last: Optional[tuple[float, JsonDict]] = None
         self.code_server_dir = self.cwd / ".optpilot-ui" / "code-server"
         self.code_server_dir.mkdir(parents=True, exist_ok=True)
         self.settings_path = self.cwd / ".optpilot-ui" / "settings.json"
@@ -8778,8 +8784,14 @@ def _handler_factory(state: UiState):
             *,
             headers: Optional[Mapping[str, str]] = None,
         ) -> None:
+            # API responses are machine-consumed. Compact encoding avoids
+            # repeatedly formatting and transferring hundreds of kilobytes of
+            # Catalog whitespace when a classroom opens Studio together.
             data = json.dumps(
-                _public_studio_payload(payload), indent=2, sort_keys=True
+                _public_studio_payload(payload),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
             ).encode("utf-8")
             self._send_json_bytes(data, status=status, headers=headers)
 
@@ -12290,7 +12302,23 @@ def _update_agent_settings_unlocked(state: UiState, payload: JsonDict) -> JsonDi
     return saved
 
 
+_RUNTIME_HEALTH_TTL_SECONDS = 2.0
+
+
 def _runtime_health(state: Optional[UiState] = None) -> JsonDict:
+    if state is not None:
+        now = time.monotonic()
+        with state._runtime_health_lock:
+            cached = state._runtime_health_last
+            if cached is not None and now - cached[0] < _RUNTIME_HEALTH_TTL_SECONDS:
+                return deepcopy(cached[1])
+            result = _build_runtime_health(state)
+            state._runtime_health_last = (time.monotonic(), result)
+            return deepcopy(result)
+    return _build_runtime_health(None)
+
+
+def _build_runtime_health(state: Optional[UiState]) -> JsonDict:
     docker = _cached_executable_health("docker", ["docker", "--version"])
     podman = _cached_executable_health("podman", ["podman", "--version"])
     code_server = _cached_executable_health(
