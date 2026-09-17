@@ -1299,6 +1299,44 @@ class BackendServiceTests(unittest.TestCase):
                         {unsafe_path: "unsafe\n"},
                     )
 
+    def test_upload_project_archive_strips_common_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = DEVSBackendService(DummyAgent(), tmp, start_worker=False)
+            session_id = current_session_id(service)
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("pulse-model/run.py", "print('ok')\n")
+                archive.writestr("pulse-model/devs_project/model.py", "class Model:\n    pass\n")
+
+            project = service.upload_project_archive(
+                session_id,
+                "downloaded.zip",
+                buffer.getvalue(),
+            )
+
+            self.assertEqual(project["display_name"], "pulse-model")
+            files = service.get_project_files(session_id, project["project_id"])["files"]
+            self.assertEqual(files["run.py"], "print('ok')\n")
+            self.assertIn("devs_project/model.py", files)
+
+    def test_upload_project_archive_rejects_unsafe_and_invalid_archives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = DEVSBackendService(DummyAgent(), tmp, start_worker=False)
+            session_id = current_session_id(service)
+
+            with self.assertRaisesRegex(ValueError, "valid ZIP"):
+                service.upload_project_archive(session_id, "bad", b"not a zip")
+
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as archive:
+                archive.writestr("../escaped.py", "unsafe\n")
+            with self.assertRaisesRegex(ValueError, "not canonical"):
+                service.upload_project_archive(
+                    session_id,
+                    "unsafe",
+                    buffer.getvalue(),
+                )
+
     def test_registry_lists_sessions_from_previous_workspaces(self):
         with tempfile.TemporaryDirectory() as tmp:
             registry_path = os.path.join(tmp, "registry.json")

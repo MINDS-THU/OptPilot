@@ -442,6 +442,42 @@ export const uploadSessionProject = async (
     return data.project;
 };
 
+export const uploadSessionProjectArchive = async (
+    sessionId: string,
+    archive: File
+): Promise<ProjectInfo> => {
+    const token = getStoredAuthToken();
+    const displayName = archive.name.replace(/\.zip$/i, '') || 'Uploaded simulation';
+    const response = await fetch(
+        `${AGENT_API_URL}/sessions/${encodeURIComponent(sessionId)}/projects:upload-archive?display_name=${encodeURIComponent(displayName)}`,
+        {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/zip',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
+            body: archive
+        }
+    );
+    if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+            const data = await response.json();
+            detail = data.detail || detail;
+        } catch {
+            // Keep HTTP status text.
+        }
+        if (response.status === 401) clearStoredAuthToken();
+        const error = new Error(detail) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+    }
+    const data = await response.json() as { project: ProjectInfo };
+    return data.project;
+};
+
 export const getSessionMessages = async (sessionId: string, limit = 20): Promise<BackendMessage[]> => {
     const data = await jsonFetch<{ messages: BackendMessage[] }>(
         `/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}&order=asc`

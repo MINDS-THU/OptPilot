@@ -37,7 +37,8 @@ import {
   recordSessionTrace,
   renameSession,
   submitSessionEvaluation,
-  uploadSessionProject
+  uploadSessionProject,
+  uploadSessionProjectArchive
 } from './services/agentService';
 import { ActivityFilePreview, SystemModelInfo, EvaluationRecord, FileMap, FrontendConfig, GraphNode, GraphLink, ParsedStructure, PendingInteraction, ProjectInfo, SessionInfo, ProjectGraph, ProjectGraphResponse } from './types';
 
@@ -1117,6 +1118,35 @@ const App: React.FC = () => {
     setLoading(false);
   };
 
+  const handleArchiveUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const archive = event.target.files?.[0];
+    if (!archive) return;
+    event.target.value = '';
+    if (!currentSessionId) {
+      setError("Start or select a design before uploading a simulation.");
+      return;
+    }
+    if (!archive.name.toLowerCase().endsWith('.zip')) {
+      setError('Choose a ZIP archive.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const project = await uploadSessionProjectArchive(currentSessionId, archive);
+      const cleanFiles = await getSessionProjectFiles(currentSessionId, project.project_id);
+      setRemoteProjects(prev => Array.from(new Map([...prev, project].map(p => [p.project_id, p])).values()));
+      setProjectCache(prev => ({ ...prev, [project.project_id]: cleanFiles }));
+      loadFilesIntoState(cleanFiles, project);
+      await refreshProjectList();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The ZIP archive could not be uploaded.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDownloadProject = async () => {
     if (!currentSessionId || !currentProjectId || currentProjectId.startsWith('local-')) {
       setError('Choose a saved backend simulation before downloading.');
@@ -2180,8 +2210,12 @@ const App: React.FC = () => {
               </div>
               <button onClick={() => refreshProjectList()} disabled={!currentSessionId} className="rounded border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-blue-600 disabled:opacity-40" title="Refresh simulations"><RefreshCw size={15} /></button>
               <label className={`flex h-9 cursor-pointer items-center gap-2 rounded border border-slate-200 px-3 text-xs font-medium text-slate-600 hover:bg-slate-50 ${!currentSessionId ? 'pointer-events-none opacity-40' : ''}`} title="Upload an existing simulation folder">
-                <Upload size={14} /><span className="hidden md:inline">Upload</span>
+                <Upload size={14} /><span className="hidden md:inline">Folder</span>
                 <input type="file" multiple {...({ webkitdirectory: '', directory: '' } as any)} className="hidden" onChange={handleFileUpload} disabled={!currentSessionId} />
+              </label>
+              <label className={`flex h-9 cursor-pointer items-center gap-2 rounded border border-slate-200 px-3 text-xs font-medium text-slate-600 hover:bg-slate-50 ${!currentSessionId ? 'pointer-events-none opacity-40' : ''}`} title="Upload an existing simulation ZIP archive">
+                <Upload size={14} /><span className="hidden md:inline">ZIP</span>
+                <input type="file" accept=".zip,application/zip" className="hidden" onChange={handleArchiveUpload} disabled={!currentSessionId} />
               </label>
               <button
                 onClick={handleDownloadProject}

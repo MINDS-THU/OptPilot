@@ -43,6 +43,7 @@ from .schemas import (
 
 AUTH_PASSWORD_ENV_NAMES = ("DEVS_DISPLAY_PASSWORD",)
 AUTH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
+MAX_ARCHIVE_UPLOAD_BYTES = 128 * 1024 * 1024
 
 
 def _auth_password() -> str:
@@ -327,6 +328,32 @@ def create_app(service) -> FastAPI:
     def upload_project_route(session_id: str, request: UploadProjectRequest):
         try:
             return {"project": service.upload_project(session_id, request.display_name, request.files)}
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Session not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.post("/sessions/{session_id}/projects:upload-archive")
+    async def upload_project_archive_route(
+        session_id: str,
+        http_request: Request,
+        display_name: str = "Uploaded simulation",
+    ):
+        archive = bytearray()
+        async for chunk in http_request.stream():
+            archive.extend(chunk)
+            if len(archive) > MAX_ARCHIVE_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="ZIP archive is too large.")
+        try:
+            return {
+                "project": service.upload_project_archive(
+                    session_id,
+                    display_name,
+                    bytes(archive),
+                )
+            }
         except KeyError:
             raise HTTPException(status_code=404, detail="Session not found")
         except ValueError as exc:

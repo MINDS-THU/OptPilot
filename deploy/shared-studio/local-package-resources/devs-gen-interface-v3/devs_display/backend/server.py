@@ -2449,6 +2449,106 @@ class DEVSBackendService:
             )
             return project
 
+    def upload_project_archive(
+        self,
+        session_id: str,
+        display_name: str,
+        archive_bytes: bytes,
+    ):
+        """Import one bounded, text-only simulation ZIP through normal upload validation."""
+
+        if not archive_bytes:
+            raise ValueError("Choose a ZIP archive to upload.")
+        if len(archive_bytes) > MAX_UPLOAD_TOTAL_BYTES:
+            raise ValueError("ZIP archive is too large.")
+
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
+        except (OSError, zipfile.BadZipFile):
+            raise ValueError("The selected file is not a valid ZIP archive.") from None
+
+        with archive:
+            members: List[tuple[zipfile.ZipInfo, PurePosixPath]] = []
+            total_bytes = 0
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                normalized_name = info.filename.replace("\\", "/")
+                raw_parts = PurePosixPath(normalized_name).parts
+                if "__MACOSX" in raw_parts or raw_parts[-1:] == (".DS_Store",):
+                    continue
+                safe_path = canonical_relative_file_path(normalized_name)
+                unix_mode = info.external_attr >> 16
+                if stat.S_ISLNK(unix_mode):
+                    raise ValueError(
+                        f"ZIP archive may not contain symbolic links: {info.filename!r}"
+                    )
+                if info.flag_bits & 0x1:
+                    raise ValueError("Encrypted ZIP archives are not supported.")
+                if info.file_size > MAX_UPLOAD_FILE_BYTES:
+                    raise ValueError(
+                        f"Archived file exceeds {MAX_UPLOAD_FILE_BYTES} bytes: {info.filename!r}"
+                    )
+                total_bytes += info.file_size
+                if total_bytes > MAX_UPLOAD_TOTAL_BYTES:
+                    raise ValueError(
+                        f"ZIP contents exceed {MAX_UPLOAD_TOTAL_BYTES} bytes."
+                    )
+                members.append((info, safe_path))
+                if len(members) > MAX_UPLOAD_FILES:
+                    raise ValueError(
+                        f"A ZIP simulation may contain at most {MAX_UPLOAD_FILES} files."
+                    )
+
+            if not members:
+                raise ValueError("ZIP archive does not contain any importable files.")
+
+            first_parts = members[0][1].parts
+            common_root = (
+                first_parts[0]
+                if len(first_parts) > 1
+                and all(
+                    len(path.parts) > 1 and path.parts[0] == first_parts[0]
+                    for _, path in members
+                )
+                else ""
+            )
+            files: Dict[str, str] = {}
+            canonical_names: set[str] = set()
+            for info, safe_path in members:
+                relative_path = PurePosixPath(*safe_path.parts[1:]) if common_root else safe_path
+                canonical_name = relative_path.as_posix().casefold()
+                if canonical_name in canonical_names:
+                    raise ValueError(
+                        f"ZIP file paths collide after normalization: {info.filename!r}"
+                    )
+                canonical_names.add(canonical_name)
+                try:
+                    raw_content = archive.read(info)
+                except (RuntimeError, zipfile.BadZipFile):
+                    raise ValueError(
+                        f"Could not read archived file: {info.filename!r}"
+                    ) from None
+                if len(raw_content) != info.file_size:
+                    raise ValueError(
+                        f"Archived file size changed while reading: {info.filename!r}"
+                    )
+                try:
+                    files[relative_path.as_posix()] = raw_content.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise ValueError(
+                        f"Archived simulations must contain UTF-8 text files: {info.filename!r}"
+                    ) from None
+
+        inferred_name = common_root or str(display_name or "").strip()
+        if inferred_name.lower().endswith(".zip"):
+            inferred_name = inferred_name[:-4]
+        return self.upload_project(
+            session_id,
+            inferred_name or "Uploaded simulation",
+            files,
+        )
+
     def _unique_project_id(self, projects: List[Dict[str, Any]], project_id: str) -> str:
         existing_ids = {p["project_id"] for p in projects}
         suffix = 2
