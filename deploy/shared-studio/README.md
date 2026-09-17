@@ -159,8 +159,11 @@ name creates a distinct source and must be handled as a separate migration.
 The package category remains `local`, so it can create the executable Workspace
 runtime required by the generator. The launcher treats this deployment-owned
 Catalog as its packages root, so Studio publishes immutable first revisions
-instead of showing non-editable filesystem imports. Runtime state, login
-sessions, logs, and all user Workspaces remain outside the Git checkout.
+instead of showing non-editable filesystem imports. On later starts, Studio
+publishes a new immutable revision only when that one deployment-managed package
+has changed; it does not refresh user-created packages in the same Catalog.
+Runtime state, login sessions, logs, and all user Workspaces remain outside the
+Git checkout.
 
 The Workspace image is built locally from the packaged Dockerfile. Its
 code-server base is pinned by multi-architecture digest; Node and uv downloads
