@@ -4246,6 +4246,11 @@ class UiState:
         # perform the expensive package walk; followers reuse its completed
         # cache instead of duplicating the same filesystem scan.
         self._catalog_index_build_lock = threading.Lock()
+        # Public Catalog decoration is independent of the signed-in account.
+        # Cache that immutable base once per indexed entry; request-specific
+        # access flags and Workspace links are added to shallow copies below.
+        self._catalog_public_entry_lock = threading.Lock()
+        self._catalog_public_entry_cache: Dict[tuple[Any, ...], JsonDict] = {}
         # Read-path debounce state, guarded by _catalog_projection_lock: the
         # monotonic stamp of the last complete projection refresh and the last
         # built catalog index payload.  Both stay unused while the TTL is 0.
@@ -4887,6 +4892,8 @@ class UiState:
             self._catalog_workspace_projections.clear()
             self._catalog_projections_refreshed_monotonic = None
             self._catalog_index_cache = None
+        with self._catalog_public_entry_lock:
+            self._catalog_public_entry_cache.clear()
         for record in records:
             projection = record.get("projection")
             if projection is not None:
@@ -8850,6 +8857,7 @@ def _refresh_realm_catalog_projections(
             break
 
     retired_records: tuple[JsonDict, ...] = ()
+    catalog_changed = False
     with state._catalog_projection_lock:
         previous_records = dict(state._realm_catalog_projections)
         current_records: Dict[str, JsonDict] = {}
@@ -8950,9 +8958,13 @@ def _refresh_realm_catalog_projections(
         state._realm_catalog_package_ids = current_ids
         state._catalog_projections_refreshed_monotonic = time.monotonic()
         if created_projections or retired_records:
+            catalog_changed = True
             # Catalog heads changed; a cached index payload would keep
             # serving superseded projection roots until its TTL expired.
             state._catalog_index_cache = None
+    if catalog_changed:
+        with state._catalog_public_entry_lock:
+            state._catalog_public_entry_cache.clear()
     for record in retired_records:
         projection = record.get("projection")
         if projection is not None:
@@ -9404,6 +9416,8 @@ def _build_catalog_index_payload(
     if ttl_seconds > 0:
         with state._catalog_projection_lock:
             state._catalog_index_cache = (time.monotonic(), payload)
+        with state._catalog_public_entry_lock:
+            state._catalog_public_entry_cache.clear()
     return payload
 
 
@@ -9640,7 +9654,7 @@ def _public_catalog_entry_with_workspace(
 ) -> JsonDict:
     """Expose only the durable editable result linked to one exact entry."""
 
-    result = _public_catalog_entry(entry)
+    result = _cached_public_catalog_entry(state, entry)
     if isinstance(state.shared_auth, ClassroomAuth) and (
         _current_request_principal() is not None
     ):
@@ -9653,28 +9667,6 @@ def _public_catalog_entry_with_workspace(
                 "owned_by_current_account",
             )
         }
-    interface = result.get("interface")
-    raw_config = entry.get("raw_config")
-    if isinstance(interface, Mapping) and interface and isinstance(
-        raw_config, Mapping
-    ):
-        try:
-            profiles = _compile_component_interface_profiles(
-                raw_config.get("interface"),
-                component_kind=str(result.get("config") or result.get("kind") or ""),
-            )
-        except (TypeError, ValueError):
-            profiles = []
-        if profiles:
-            decorated_interface = _interface_summary_with_launch_capabilities(
-                state, interface, profiles
-            )
-            result["interface"] = decorated_interface
-            summary = result.get("summary")
-            if isinstance(summary, dict) and isinstance(
-                summary.get("interface"), Mapping
-            ):
-                summary["interface"] = deepcopy(decorated_interface)
     link_key = _realm_catalog_entry_link_key(result)
     if link_key is None:
         return result
@@ -9684,12 +9676,64 @@ def _public_catalog_entry_with_workspace(
         )
     linked = workspace_links.get(link_key)
     if linked is not None:
+        result["actions"] = dict(result["actions"])
         capability = dict(result["actions"]["create_editable_workspace"])
         capability.update(linked)
         capability["code"] = "workspace_exists"
         capability["reason"] = "Open the editable Workspace created from this version."
         result["actions"]["create_editable_workspace"] = capability
     return result
+
+
+def _catalog_public_entry_cache_key(entry: Mapping[str, Any]) -> tuple[Any, ...]:
+    raw_ref = entry.get("ref")
+    ref = raw_ref if isinstance(raw_ref, Mapping) else {}
+    return (
+        ref.get("source_kind"),
+        ref.get("source_id"),
+        ref.get("source_revision"),
+        ref.get("source_digest"),
+        ref.get("ref_digest"),
+        entry.get("config"),
+        entry.get("id"),
+        entry.get("uid"),
+    )
+
+
+def _cached_public_catalog_entry(state: UiState, entry: JsonDict) -> JsonDict:
+    """Return a shallow request copy of one immutable decorated Catalog entry."""
+
+    key = _catalog_public_entry_cache_key(entry)
+    with state._catalog_public_entry_lock:
+        cached = state._catalog_public_entry_cache.get(key)
+        if cached is None:
+            cached = _public_catalog_entry(entry)
+            interface = cached.get("interface")
+            raw_config = entry.get("raw_config")
+            if isinstance(interface, Mapping) and interface and isinstance(
+                raw_config, Mapping
+            ):
+                try:
+                    profiles = _compile_component_interface_profiles(
+                        raw_config.get("interface"),
+                        component_kind=str(
+                            cached.get("config") or cached.get("kind") or ""
+                        ),
+                    )
+                except (TypeError, ValueError):
+                    profiles = []
+                if profiles:
+                    decorated_interface = _interface_summary_with_launch_capabilities(
+                        state, interface, profiles
+                    )
+                    cached["interface"] = decorated_interface
+                    summary = cached.get("summary")
+                    if isinstance(summary, dict) and isinstance(
+                        summary.get("interface"), Mapping
+                    ):
+                        summary["interface"] = deepcopy(decorated_interface)
+            state._catalog_public_entry_cache[key] = cached
+        return dict(cached)
 
 
 def _public_catalog_entry(entry: JsonDict) -> JsonDict:
