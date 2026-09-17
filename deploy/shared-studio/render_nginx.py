@@ -166,19 +166,13 @@ def render() -> str:
     }}
     location /api/ {{
 {allowed}
-        auth_request /__optpilot_auth;
 {common_headers}
         proxy_pass http://127.0.0.1:{studio_port};
     }}
     location / {{
 {allowed}
-        auth_request /__optpilot_auth;
-        error_page 401 = @login_required;
 {common_headers}
         proxy_pass http://127.0.0.1:{studio_port};
-    }}
-    location @login_required {{
-        return 303 https://{public_host}:{studio_port}/login;
     }}
 }}"""
     )

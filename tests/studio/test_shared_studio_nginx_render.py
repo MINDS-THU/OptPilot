@@ -63,11 +63,13 @@ class SharedStudioNginxRenderTests(unittest.TestCase):
         self.assertNotIn("auth_request", brand_location)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind code"), 3)
         self.assertEqual(rendered.count("X-OptPilot-Target-Kind presentation"), 3)
-        self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 8)
+        # Studio validates its own session once. Only the separately exposed
+        # Code Server and presentation ports need nginx's auth subrequest.
+        self.assertEqual(rendered.count("auth_request /__optpilot_auth;"), 6)
         self.assertEqual(
-            rendered.count("error_page 401 = @login_required;"), 7
+            rendered.count("error_page 401 = @login_required;"), 6
         )
-        self.assertEqual(rendered.count("location @login_required"), 7)
+        self.assertEqual(rendered.count("location @login_required"), 6)
         self.assertIn('proxy_set_header Cookie "";', rendered)
         self.assertIn("proxy_hide_header Set-Cookie;", rendered)
         self.assertIn("proxy_set_header X-Forwarded-For $remote_addr;", rendered)
