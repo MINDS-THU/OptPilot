@@ -417,6 +417,49 @@ class ClassroomAuthTests(unittest.TestCase):
                 )
             )
 
+    def test_asset_authorization_reads_use_the_loaded_ownership_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            auth = self._auth(Path(tmp))
+            token = auth.register(
+                username="cache-owner",
+                display_name="",
+                password="cache-owner-password-123",
+                invitation_code="class-invitation-2026",
+                client_key="client-cache",
+            )
+            principal = auth.principal_from_token(token)
+            self.assertIsNotNone(principal)
+            auth.claim_asset(
+                asset_type="workspace",
+                asset_id="cached-workspace",
+                principal=principal,
+            )
+
+            with patch.object(
+                auth,
+                "_connect",
+                side_effect=AssertionError("authorization read reopened SQLite"),
+            ):
+                self.assertTrue(
+                    auth.can_access_asset(
+                        asset_type="workspace",
+                        asset_id="cached-workspace",
+                        principal=principal,
+                    )
+                )
+                self.assertEqual(
+                    auth.asset_owner_account_id(
+                        asset_type="workspace", asset_id="cached-workspace"
+                    ),
+                    principal.account_id,
+                )
+                self.assertEqual(
+                    auth.asset_ownership(
+                        asset_type="workspace", asset_id="cached-workspace"
+                    )["visibility"],
+                    "private",
+                )
+
     def test_catalog_visibility_is_controlled_by_owner_or_admin_and_audited(self):
         with tempfile.TemporaryDirectory() as tmp:
             auth = self._auth(Path(tmp))

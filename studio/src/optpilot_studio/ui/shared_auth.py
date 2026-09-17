@@ -211,6 +211,7 @@ class SharedAuth:
                 "Session database must be a private regular file."
             )
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS metadata (
@@ -257,7 +258,6 @@ class SharedAuth:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=5)
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA busy_timeout=5000")
             with connection:
                 yield connection
@@ -476,6 +476,7 @@ class ClassroomAuth:
         self._dummy_password_hash = _password_digest(
             secrets.token_urlsafe(24), self._dummy_salt
         )
+        self._asset_ownership_cache: dict[tuple[str, str], tuple[str, str]] = {}
         self._initialize_database()
         os.chmod(self.database_path, 0o600)
 
@@ -483,7 +484,6 @@ class ClassroomAuth:
     def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=5)
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA busy_timeout=5000")
             with connection:
                 yield connection
@@ -492,6 +492,7 @@ class ClassroomAuth:
 
     def _initialize_database(self) -> None:
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS metadata (
@@ -558,6 +559,13 @@ class ClassroomAuth:
             # An admin password is supplied anew at process startup. Do not let
             # a session issued under an older environment value survive it.
             connection.execute("DELETE FROM sessions WHERE role = 'admin'")
+            self._asset_ownership_cache = {
+                (str(row[0]), str(row[1])): (str(row[2]), str(row[3]))
+                for row in connection.execute(
+                    "SELECT asset_type, asset_id, owner_account_id, visibility "
+                    "FROM asset_ownership"
+                ).fetchall()
+            }
 
     @staticmethod
     def _asset_coordinate(asset_type: str, asset_id: str) -> tuple[str, str]:
@@ -581,26 +589,28 @@ class ClassroomAuth:
         normalized_visibility = str(visibility or "private").casefold()
         if normalized_visibility not in {"private", "classroom"}:
             raise ValueError("Asset visibility must be private or classroom.")
-        with self._lock, self._connect() as connection:
-            existing = connection.execute(
-                "SELECT owner_account_id FROM asset_ownership "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (kind, identifier),
-            ).fetchone()
+        coordinate = (kind, identifier)
+        with self._lock:
+            existing = self._asset_ownership_cache.get(coordinate)
             if existing is not None:
                 if str(existing[0]) != principal.account_id:
                     raise PermissionError("This asset belongs to another account.")
                 return
-            connection.execute(
-                "INSERT INTO asset_ownership(asset_type, asset_id, owner_account_id, visibility, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    kind,
-                    identifier,
-                    principal.account_id,
-                    normalized_visibility,
-                    self._clock(),
-                ),
+            with self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO asset_ownership(asset_type, asset_id, owner_account_id, visibility, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        kind,
+                        identifier,
+                        principal.account_id,
+                        normalized_visibility,
+                        self._clock(),
+                    ),
+                )
+            self._asset_ownership_cache[coordinate] = (
+                principal.account_id,
+                normalized_visibility,
             )
 
     def can_access_asset(
@@ -616,12 +626,8 @@ class ClassroomAuth:
         if principal.role == "admin":
             return True
         kind, identifier = self._asset_coordinate(asset_type, asset_id)
-        with self._lock, self._connect() as connection:
-            row = connection.execute(
-                "SELECT owner_account_id, visibility FROM asset_ownership "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (kind, identifier),
-            ).fetchone()
+        with self._lock:
+            row = self._asset_ownership_cache.get((kind, identifier))
         if row is None:
             return False
         if str(row[0]) == principal.account_id:
@@ -644,14 +650,21 @@ class ClassroomAuth:
         normalized_visibility = str(visibility or "").casefold()
         if normalized_visibility not in {"private", "classroom"}:
             raise ValueError("Asset visibility must be private or classroom.")
-        with self._lock, self._connect() as connection:
-            updated = connection.execute(
-                "UPDATE asset_ownership SET visibility = ? "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (normalized_visibility, kind, identifier),
-            ).rowcount
-        if not updated:
-            raise KeyError(identifier)
+        coordinate = (kind, identifier)
+        with self._lock:
+            current = self._asset_ownership_cache.get(coordinate)
+            if current is None:
+                raise KeyError(identifier)
+            with self._connect() as connection:
+                connection.execute(
+                    "UPDATE asset_ownership SET visibility = ? "
+                    "WHERE asset_type = ? AND asset_id = ?",
+                    (normalized_visibility, kind, identifier),
+                )
+            self._asset_ownership_cache[coordinate] = (
+                current[0],
+                normalized_visibility,
+            )
 
     def asset_ownership(
         self, *, asset_type: str, asset_id: str
@@ -659,12 +672,8 @@ class ClassroomAuth:
         """Return one ownership policy without treating absence as access denial."""
 
         kind, identifier = self._asset_coordinate(asset_type, asset_id)
-        with self._lock, self._connect() as connection:
-            row = connection.execute(
-                "SELECT owner_account_id, visibility FROM asset_ownership "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (kind, identifier),
-            ).fetchone()
+        with self._lock:
+            row = self._asset_ownership_cache.get((kind, identifier))
         if row is None:
             return None
         return {
@@ -686,12 +695,9 @@ class ClassroomAuth:
         if normalized_visibility not in {"private", "classroom"}:
             raise ValueError("Catalog visibility must be private or classroom.")
         now = self._clock()
-        with self._lock, self._connect() as connection:
-            row = connection.execute(
-                "SELECT owner_account_id, visibility FROM asset_ownership "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (kind, identifier),
-            ).fetchone()
+        coordinate = (kind, identifier)
+        with self._lock:
+            row = self._asset_ownership_cache.get(coordinate)
             if row is None:
                 # Catalog entries that predate per-account ownership stay
                 # classroom-visible.  Only the admin may adopt one in order to
@@ -702,17 +708,6 @@ class ClassroomAuth:
                     )
                 owner_account_id = principal.account_id
                 previous_visibility = "classroom"
-                connection.execute(
-                    "INSERT INTO asset_ownership(asset_type, asset_id, owner_account_id, visibility, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (
-                        kind,
-                        identifier,
-                        owner_account_id,
-                        normalized_visibility,
-                        now,
-                    ),
-                )
             else:
                 owner_account_id = str(row[0])
                 previous_visibility = str(row[1])
@@ -723,25 +718,43 @@ class ClassroomAuth:
                     raise PermissionError(
                         "Only the Catalog item owner or admin may change visibility."
                     )
-                connection.execute(
-                    "UPDATE asset_ownership SET visibility = ? "
-                    "WHERE asset_type = ? AND asset_id = ?",
-                    (normalized_visibility, kind, identifier),
-                )
-            if previous_visibility != normalized_visibility:
-                connection.execute(
-                    "INSERT INTO asset_visibility_events("
-                    "asset_type, asset_id, actor_account_id, previous_visibility, visibility, changed_at"
-                    ") VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        kind,
-                        identifier,
-                        principal.account_id,
-                        previous_visibility,
-                        normalized_visibility,
-                        now,
-                    ),
-                )
+            with self._connect() as connection:
+                if row is None:
+                    connection.execute(
+                        "INSERT INTO asset_ownership(asset_type, asset_id, owner_account_id, visibility, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            kind,
+                            identifier,
+                            owner_account_id,
+                            normalized_visibility,
+                            now,
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE asset_ownership SET visibility = ? "
+                        "WHERE asset_type = ? AND asset_id = ?",
+                        (normalized_visibility, kind, identifier),
+                    )
+                if previous_visibility != normalized_visibility:
+                    connection.execute(
+                        "INSERT INTO asset_visibility_events("
+                        "asset_type, asset_id, actor_account_id, previous_visibility, visibility, changed_at"
+                        ") VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            kind,
+                            identifier,
+                            principal.account_id,
+                            previous_visibility,
+                            normalized_visibility,
+                            now,
+                        ),
+                    )
+            self._asset_ownership_cache[coordinate] = (
+                owner_account_id,
+                normalized_visibility,
+            )
 
     def asset_visibility_events(
         self, *, asset_type: str, asset_id: str, limit: int = 100
@@ -772,12 +785,8 @@ class ClassroomAuth:
         """Return a claimed asset's stable owner id, or an empty string."""
 
         kind, identifier = self._asset_coordinate(asset_type, asset_id)
-        with self._lock, self._connect() as connection:
-            row = connection.execute(
-                "SELECT owner_account_id FROM asset_ownership "
-                "WHERE asset_type = ? AND asset_id = ?",
-                (kind, identifier),
-            ).fetchone()
+        with self._lock:
+            row = self._asset_ownership_cache.get((kind, identifier))
         return "" if row is None else str(row[0])
 
     @property
