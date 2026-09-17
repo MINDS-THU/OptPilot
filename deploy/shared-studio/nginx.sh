@@ -22,26 +22,44 @@ fi
 
 require_value TLS_CERTIFICATE
 require_value TLS_CERTIFICATE_KEY
-mkdir -p "${NGINX_ROOT}"
-python3 "${DEPLOY_DIR}/render_nginx.py" > "${NGINX_ROOT}/servers.conf"
+render_root="${NGINX_ROOT}"
+render_pid_file="${NGINX_PID_FILE}"
+if [ "${action}" = "check" ]; then
+  render_root="$(mktemp -d "${TMPDIR:-/tmp}/optpilot-nginx-check.XXXXXX")"
+  render_pid_file="${render_root}/nginx.pid"
+  cleanup_check_root() {
+    rm -rf -- "${render_root}"
+  }
+  trap cleanup_check_root EXIT
+fi
+mkdir -p "${render_root}"
+python3 "${DEPLOY_DIR}/render_nginx.py" > "${render_root}/servers.conf"
 {
   printf '%s\n' \
     'worker_processes 1;' \
-    "pid ${NGINX_PID_FILE};" \
-    "error_log ${NGINX_ROOT}/error.log warn;" \
+    "pid ${render_pid_file};" \
+    "error_log ${render_root}/error.log warn;" \
     'events { worker_connections 4096; }' \
     'http {' \
     '    map $http_upgrade $connection_upgrade { default upgrade; "" close; }' \
     '    limit_req_zone $binary_remote_addr zone=optpilot_login_per_ip:10m rate=20r/m;' \
     '    limit_req_status 429;' \
     "    log_format optpilot_safe '\$remote_addr [\$time_local] \"\$request_method \$uri \$server_protocol\" \$status \$body_bytes_sent rt=\$request_time urt=\$upstream_response_time';" \
-    "    access_log ${NGINX_ROOT}/access.log optpilot_safe;" \
+    "    access_log ${render_root}/access.log optpilot_safe;" \
     '    client_max_body_size 256m;' \
     '    server_tokens off;' \
-    "    include ${NGINX_ROOT}/servers.conf;" \
+    "    include ${render_root}/servers.conf;" \
     '}'
-} > "${NGINX_CONF}"
-"${NGINX_BIN}" -t -p "${NGINX_ROOT}/" -c "${NGINX_CONF}"
+} > "${render_root}/nginx.conf"
+"${NGINX_BIN}" -t -p "${render_root}/" -c "${render_root}/nginx.conf"
+rendered="${render_root}/servers.conf"
+grep -q 'X-OptPilot-Target-Kind code' "${rendered}"
+grep -q 'X-OptPilot-Target-Kind presentation' "${rendered}"
+grep -q 'proxy_set_header Cookie ""' "${rendered}"
+if grep -q 'proxy_pass http://[^1]' "${rendered}"; then
+  printf 'Rendered nginx config contains a non-loopback upstream.\n' >&2
+  exit 1
+fi
 if [ "${action}" = "check" ]; then
   exit 0
 fi

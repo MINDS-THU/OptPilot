@@ -10,7 +10,8 @@ case "${OPTPILOT_LOCAL_PACKAGE_NAME}" in
     exit 1
     ;;
 esac
-package_root="${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}"
+install_root="${OPTPILOT_INSTALL_TARGET_ROOT:-${OPTPILOT_CATALOG_ROOT}}"
+package_root="${install_root}/${OPTPILOT_LOCAL_PACKAGE_NAME}"
 resource_root="${package_root}/resources"
 
 mkdir -p "${resource_root}"

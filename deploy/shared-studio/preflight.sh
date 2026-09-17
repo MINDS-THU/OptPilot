@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
+mode="${1:-deployed}"
 failed=0
+
+case "${mode}" in
+  source|deployed) ;;
+  *) printf 'Usage: %s [source|deployed]\n' "$0" >&2; exit 2 ;;
+esac
 
 [ -f "${DEPLOY_CONFIG}" ] || { printf 'Missing %s; copy deploy.env.example first.\n' "${DEPLOY_CONFIG}" >&2; failed=1; }
 for name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT OPTPILOT_CATALOG_ROOT OPTPILOT_REALM_ROOT OPTPILOT_LOCAL_PACKAGE_NAME PUBLIC_HOST PUBLIC_BIND_IP TLS_CERTIFICATE TLS_CERTIFICATE_KEY ALLOWED_CIDRS CLASSROOM_AUTH_DB OPTPILOT_ADMIN_PASSWORD OPENROUTER_API_KEY; do
   require_value "${name}" || failed=1
 done
+if [ "${WORKSPACE_RUNTIME_IMAGE}" != "${PINNED_WORKSPACE_RUNTIME_IMAGE}" ]; then
+  printf 'WORKSPACE_RUNTIME_IMAGE must use the pinned deployment image: %s\n' \
+    "${PINNED_WORKSPACE_RUNTIME_IMAGE}" >&2
+  failed=1
+fi
+if [ "${WORKSPACE_RUNTIME_BASE_IMAGE}" != "${PINNED_WORKSPACE_RUNTIME_BASE_IMAGE}" ]; then
+  printf 'WORKSPACE_RUNTIME_BASE_IMAGE must use the pinned deployment digest.\n' >&2
+  failed=1
+fi
 collector_values=0
 for name in DEVS_COLLECTOR_URL DEVS_HEADLESS_COLLECTOR_URL DEVS_COLLECTOR_HEALTHCHECK_URL DEVS_COLLECTOR_INGEST_TOKEN; do
   [ -n "${!name:-}" ] && collector_values=$((collector_values + 1))
@@ -89,12 +104,14 @@ for root_name in OPTPILOT_STATE_ROOT OPTPILOT_PRIVATE_ROOT; do
   if [ -L "${root_path}" ]; then
     printf '%s must not be a symlink.\n' "${root_name}" >&2
     failed=1
-  elif ! mkdir -p -m 700 "${root_path}"; then
-    printf '%s could not be created.\n' "${root_name}" >&2
-    failed=1
-  elif [ ! -d "${root_path}" ]; then
+  elif [ -e "${root_path}" ] && [ ! -d "${root_path}" ]; then
     printf '%s must be a directory.\n' "${root_name}" >&2
     failed=1
+  elif [ ! -d "${root_path}" ]; then
+    if [ "${mode}" = "deployed" ]; then
+      printf '%s is not prepared; run deploy.sh prepare.\n' "${root_name}" >&2
+      failed=1
+    fi
   else
     root_mode="$(stat -f '%Lp' "${root_path}" 2>/dev/null || stat -c '%a' "${root_path}" 2>/dev/null || true)"
     [ "${root_mode}" = "700" ] || { printf '%s must have mode 700.\n' "${root_name}" >&2; failed=1; }
@@ -191,9 +208,11 @@ if command -v openssl >/dev/null 2>&1 && [ -r "${TLS_CERTIFICATE:-/missing}" ] &
 fi
 [ "${failed}" -eq 0 ] || exit 1
 
-bash "${DEPLOY_DIR}/install_catalog_packages.sh"
-bash "${DEPLOY_DIR}/install_local_resource.sh"
-cd "${OPTPILOT_STATE_ROOT}"
+if [ -d "${OPTPILOT_STATE_ROOT}" ]; then
+  cd "${OPTPILOT_STATE_ROOT}"
+else
+  cd "${SOURCE_ROOT}"
+fi
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen optpilot ui --help >/dev/null
 uv run --project "${SOURCE_ROOT}" --package optpilot-studio --frozen python -c \
   'import sys; from optpilot_studio.ui.server import PublicAccessOptions; PublicAccessOptions.from_url(sys.argv[1], trust_loopback_proxy=True)' \
@@ -203,8 +222,26 @@ if [ -n "${DEVS_COLLECTOR_HEALTHCHECK_URL}" ]; then
     'import json, sys, urllib.request; payload=json.load(urllib.request.urlopen(sys.argv[1], timeout=5)); assert payload.get("status") == "ok"' \
     "${DEVS_COLLECTOR_HEALTHCHECK_URL}"
 fi
+validation_root=""
+cleanup_validation_root() {
+  if [ -n "${validation_root}" ] && [ -d "${validation_root}" ]; then
+    rm -rf -- "${validation_root}"
+  fi
+}
+trap cleanup_validation_root EXIT
+if [ "${mode}" = "source" ]; then
+  validation_root="$(mktemp -d "${TMPDIR:-/tmp}/optpilot-catalog-check.XXXXXX")"
+  OPTPILOT_INSTALL_TARGET_ROOT="${validation_root}/catalog" \
+    bash "${DEPLOY_DIR}/install_catalog_packages.sh"
+  OPTPILOT_INSTALL_TARGET_ROOT="${validation_root}/catalog" \
+    bash "${DEPLOY_DIR}/install_local_resource.sh"
+  package_to_validate="${validation_root}/catalog/${OPTPILOT_LOCAL_PACKAGE_NAME}"
+else
+  bash "${DEPLOY_DIR}/workspace_image.sh" check
+  package_to_validate="${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}"
+fi
 validation_output="$(uv run --project "${SOURCE_ROOT}" --frozen optpilot package validate \
-  "${OPTPILOT_CATALOG_ROOT}/${OPTPILOT_LOCAL_PACKAGE_NAME}" --check-source 2>&1)"
+  "${package_to_validate}" --check-source 2>&1)"
 printf '%s\n' "${validation_output}"
 printf '%s\n' "${validation_output}" | grep -q '^Valid package:' || {
   printf 'Local package validation did not report success.\n' >&2
@@ -217,12 +254,4 @@ printf '%s\n' "${validation_output}" | grep -q '^Valid package:' || {
 }
 bash -n "${DEPLOY_DIR}"/*.sh
 bash "${DEPLOY_DIR}/nginx.sh" check
-rendered="${NGINX_ROOT}/servers.conf"
-grep -q 'X-OptPilot-Target-Kind code' "${rendered}"
-grep -q 'X-OptPilot-Target-Kind presentation' "${rendered}"
-grep -q 'proxy_set_header Cookie ""' "${rendered}"
-if grep -q 'proxy_pass http://[^1]' "${rendered}"; then
-  printf 'Rendered nginx config contains a non-loopback upstream.\n' >&2
-  exit 1
-fi
-printf 'Classroom Studio deployment preflight passed.\n'
+printf 'Classroom Studio %s preflight passed.\n' "${mode}"

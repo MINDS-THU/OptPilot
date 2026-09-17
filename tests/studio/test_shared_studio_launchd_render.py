@@ -64,20 +64,51 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
         self.assertNotIn("source_catalog_args", source)
         self.assertIn('--catalog "${OPTPILOT_CATALOG_ROOT}"', source)
 
-    def test_preflight_installs_bundled_catalog_packages_before_start(self) -> None:
+    def test_catalog_install_is_an_explicit_activation_step(self) -> None:
         root = Path(__file__).resolve().parents[2]
         deployment = root / "deploy" / "shared-studio"
         preflight = (deployment / "preflight.sh").read_text(encoding="utf-8")
+        launcher = (deployment / "deploy.sh").read_text(encoding="utf-8")
         installer = (deployment / "install_catalog_packages.sh").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn('install_catalog_packages.sh', preflight)
+        source_validation = preflight.split(
+            'if [ "${mode}" = "source" ]; then', 1
+        )[1].split("\nelse\n", 1)[0]
+        self.assertIn("OPTPILOT_INSTALL_TARGET_ROOT", source_validation)
+        self.assertIn("install_catalog_packages.sh", source_validation)
+        self.assertIn('activate_prepared_sources()', launcher)
+        self.assertIn('bash "${DEPLOY_DIR}/install_catalog_packages.sh"', launcher)
+        self.assertLess(
+            launcher.index('"$0" stop'),
+            launcher.index("activate_prepared_sources", launcher.index('"$0" stop')),
+        )
         self.assertIn('"${SOURCE_ROOT}/catalog"/*', installer)
         self.assertIn('OPTPILOT_SOURCE_CATALOG_EXCLUDES', installer)
-        self.assertIn('"${OPTPILOT_CATALOG_ROOT}/${package_name}"', installer)
+        self.assertIn('"${install_root}/${package_name}"', installer)
         self.assertIn('rsync -a --delete --delete-excluded', installer)
         self.assertIn('optpilot package validate "${target}" --check-source', installer)
+
+    def test_check_uses_temporary_nginx_configuration(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        deployment = root / "deploy" / "shared-studio"
+        gateway = (deployment / "nginx.sh").read_text(encoding="utf-8")
+
+        self.assertIn("optpilot-nginx-check.XXXXXX", gateway)
+        self.assertIn('render_root="${NGINX_ROOT}"', gateway)
+        self.assertIn('if [ "${action}" = "check" ]', gateway)
+
+    def test_workspace_image_is_pinned_and_content_checked(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        deployment = root / "deploy" / "shared-studio"
+        library = (deployment / "_lib.sh").read_text(encoding="utf-8")
+        image = (deployment / "workspace_image.sh").read_text(encoding="utf-8")
+
+        self.assertIn("code-server-4.137.0-node-22.19.0-uv-0.12.15", library)
+        self.assertIn("@sha256:", library)
+        self.assertIn("io.optpilot.workspace-runtime.revision", image)
+        self.assertIn('"${WORKSPACE_RUNTIME_BIN}" build --pull', image)
 
     def test_preflight_checks_the_pinned_openhands_environment(self) -> None:
         root = Path(__file__).resolve().parents[2]

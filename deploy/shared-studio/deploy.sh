@@ -47,12 +47,35 @@ require_listener() {
   fi
 }
 
+prepare_inputs() {
+  bash "${DEPLOY_DIR}/preflight.sh" source
+  mkdir -p -m 700 "${OPTPILOT_STATE_ROOT}" "${OPTPILOT_PRIVATE_ROOT}"
+  bash "${DEPLOY_DIR}/workspace_image.sh" prepare
+}
+
+activate_prepared_sources() {
+  bash "${DEPLOY_DIR}/install_catalog_packages.sh"
+  bash "${DEPLOY_DIR}/install_local_resource.sh"
+  bash "${DEPLOY_DIR}/preflight.sh" deployed
+}
+
 case "${command}" in
   generate-invitation)
     python3 -c 'import secrets; print(secrets.token_urlsafe(18))'
     ;;
-  install-resource) exec bash "${DEPLOY_DIR}/install_local_resource.sh" ;;
-  check) exec bash "${DEPLOY_DIR}/preflight.sh" ;;
+  install-resource) exec bash "$0" prepare ;;
+  check) exec bash "${DEPLOY_DIR}/preflight.sh" deployed ;;
+  prepare)
+    existing_studio_pid="$(listener_pid "${STUDIO_HOST}" "${STUDIO_PORT}" || true)"
+    if [ -n "${existing_studio_pid}" ]; then
+      printf 'Studio is running (pid %s); use deploy.sh restart to prepare and activate safely.\n' \
+        "${existing_studio_pid}" >&2
+      exit 1
+    fi
+    prepare_inputs
+    activate_prepared_sources
+    printf 'Shared Studio deployment is prepared.\n'
+    ;;
   studio) exec bash "${DEPLOY_DIR}/studio.sh" ;;
   openhands) exec bash "${DEPLOY_DIR}/openhands.sh" ;;
   nginx) exec bash "${DEPLOY_DIR}/nginx.sh" start ;;
@@ -68,8 +91,11 @@ case "${command}" in
     bash "${DEPLOY_DIR}/nginx.sh" stop
     ;;
   start|restart)
-    bash "${DEPLOY_DIR}/preflight.sh"
+    # Slow and failure-prone work happens before the running service is
+    # stopped. Catalog mutation is deferred until after stop.
+    prepare_inputs
     "$0" stop
+    activate_prepared_sources
     start_complete=0
     cleanup_failed_start() {
       exit_code=$?
@@ -151,9 +177,10 @@ case "${command}" in
     printf '%s\n' \
       'Usage: bash deploy/shared-studio/deploy.sh COMMAND' \
       '  generate-invitation          Print a random classroom invitation code' \
-      '  install-resource             Install DEVS Generator v3 into the local package' \
-      '  check                        Run fail-closed deployment preflight' \
-      '  start | restart              Start private services and the TLS gateway' \
+      '  prepare                      Prepare a stopped deployment without starting it' \
+      '  install-resource             Compatibility alias for prepare' \
+      '  check                        Validate the prepared deployment without changing it' \
+      '  start | restart              Prepare, activate, and start the deployment' \
       '  stop                         Stop only processes managed by this deployment' \
       '  status                       Show listener status' \
       '  logs [LINES]                 Show bounded service logs' \

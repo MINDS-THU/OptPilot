@@ -3,7 +3,8 @@ set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/_lib.sh"
 
 require_value OPTPILOT_CATALOG_ROOT
-mkdir -p "${OPTPILOT_CATALOG_ROOT}"
+install_root="${OPTPILOT_INSTALL_TARGET_ROOT:-${OPTPILOT_CATALOG_ROOT}}"
+mkdir -p "${install_root}"
 
 for source_package in "${SOURCE_ROOT}/catalog"/*; do
   [ -f "${source_package}/optpilot.package.yaml" ] || continue
@@ -17,7 +18,7 @@ for source_package in "${SOURCE_ROOT}/catalog"/*; do
   done
   [ "${excluded}" -eq 1 ] && continue
 
-  target="${OPTPILOT_CATALOG_ROOT}/${package_name}"
+  target="${install_root}/${package_name}"
   mkdir -p "${target}"
   rsync -a --delete --delete-excluded \
     --exclude .git \
