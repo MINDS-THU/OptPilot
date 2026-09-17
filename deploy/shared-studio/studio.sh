@@ -22,10 +22,10 @@ export OPTPILOT_PRESENTATION_PORT_OFFSET="${PREVIEW_PORT_OFFSET}"
 # root. Studio publishes a first immutable revision at startup, which enables
 # Edit in Workspace and exact prepared-runtime execution.
 export OPTPILOT_PACKAGES_ROOT="${OPTPILOT_CATALOG_ROOT}"
-# This directory is managed by the deployment. Publish a new immutable Catalog
-# revision when its validated source changes; ordinary Studio keeps the
+# This package is managed by the deployment. Publish a new immutable Catalog
+# revision when its validated source changes; every other package keeps the
 # first-publication-only default.
-export OPTPILOT_REFRESH_CONFIGURED_PACKAGES=1
+export OPTPILOT_REFRESH_CONFIGURED_PACKAGE_IDS="${OPTPILOT_LOCAL_PACKAGE_NAME}"
 # Keep this deployment's published packages, outputs, and prepared runtimes
 # separate from every older OptPilot checkout on the same host.
 export OPTPILOT_REALM_ROOT

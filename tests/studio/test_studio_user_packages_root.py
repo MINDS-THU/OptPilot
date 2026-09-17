@@ -150,7 +150,7 @@ class FirstStartRegistrationTest(unittest.TestCase):
                 ),
                 patch.dict(
                     os.environ,
-                    {"OPTPILOT_REFRESH_CONFIGURED_PACKAGES": "1"},
+                    {"OPTPILOT_REFRESH_CONFIGURED_PACKAGE_IDS": "managed"},
                 ),
             ):
                 result = _register_user_packages(
@@ -163,6 +163,38 @@ class FirstStartRegistrationTest(unittest.TestCase):
             calls[0]["operation_id"],
             r"^studio/configured-refresh/managed/6/[0-9a-f]{64}$",
         )
+
+    def test_managed_refresh_does_not_touch_an_unlisted_package(self) -> None:
+        from optpilot_studio.ui.server import _register_user_packages
+
+        with tempfile.TemporaryDirectory() as tmp:
+            packages = Path(tmp) / "packages"
+            _make_package(packages, "student_package")
+            calls = []
+            runtime = SimpleNamespace(
+                catalog=SimpleNamespace(
+                    read_head=lambda **_k: SimpleNamespace(revision=2)
+                ),
+                configured_package_ingress=SimpleNamespace(
+                    publish=lambda **kwargs: calls.append(kwargs)
+                ),
+            )
+            with (
+                patch(
+                    "optpilot.realm.config.default_packages_root",
+                    return_value=packages,
+                ),
+                patch.dict(
+                    os.environ,
+                    {"OPTPILOT_REFRESH_CONFIGURED_PACKAGE_IDS": "managed"},
+                ),
+            ):
+                result = _register_user_packages(
+                    SimpleNamespace(realm_runtime=runtime, catalog_roots=[])
+                )
+
+        self.assertEqual(result, [])
+        self.assertEqual(calls, [])
 
     def test_one_bad_package_does_not_stop_the_others(self) -> None:
         from optpilot.realm.configured_package_ingress import (

@@ -43901,11 +43901,17 @@ def _register_user_packages(state: UiState) -> List[str]:
     from optpilot.realm.content import AllowedTreeSource
 
     registered: List[str] = []
-    refresh_configured = _ui_env_flag(
-        "OPTPILOT_REFRESH_CONFIGURED_PACKAGES", False
-    )
+    refresh_configured_ids = {
+        value
+        for value in re.split(
+            r"[\s,]+",
+            os.environ.get("OPTPILOT_REFRESH_CONFIGURED_PACKAGE_IDS", "").strip(),
+        )
+        if value
+    }
     for root in roots:
         package_id = _package_plan_package_id(root.name)
+        refresh_configured = package_id in refresh_configured_ids
         published_head = None
         try:
             published_head = runtime.catalog.read_head(package_id=package_id)
