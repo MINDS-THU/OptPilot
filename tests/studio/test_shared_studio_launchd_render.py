@@ -99,6 +99,14 @@ class SharedStudioLaunchdRenderTests(unittest.TestCase):
         self.assertIn('requirements-openhands.txt', preflight)
         self.assertIn('OpenHands package version mismatch', preflight)
 
+    def test_openhands_skips_unused_browser_tool_preload(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        launcher = (
+            root / "deploy" / "shared-studio" / "openhands.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("export OH_PRELOAD_TOOLS=0", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()

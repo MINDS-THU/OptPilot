@@ -11,6 +11,9 @@ mkdir -p "${RUNTIME_ROOT}"
 printf '%s\n' "$$" > "${RUNTIME_ROOT}/openhands.pid"
 cd "${OPTPILOT_PRIVATE_ROOT}/openhands"
 export OH_ENABLE_VSCODE=0
+# Studio grants only OpenHands' task tracker as a native tool. Avoid loading
+# the unused browser toolchain during server startup.
+export OH_PRELOAD_TOOLS=0
 export OPENHANDS_SUPPRESS_BANNER=1
 export OH_SECRET_KEY
 export OH_WEB_URL="http://${OPENHANDS_HOST}:${OPENHANDS_PORT}"
