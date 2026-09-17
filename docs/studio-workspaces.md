@@ -123,12 +123,12 @@ Useful launch options:
 ```bash
 uv run optpilot ui \
   --workspace-runtime-bin docker \
-  --workspace-runtime-image optpilot/workspace-dev:latest \
+  --workspace-runtime-image optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15 \
   --workspace-runtime-port-start 18766
 ```
 
 When no image is specified, Studio builds and uses
-`optpilot/workspace-dev:latest` from the packaged runtime Dockerfile. The image
+`optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15` from the packaged runtime Dockerfile. The image
 includes Code Server, Python, `uv`, Node.js, npm, git, ripgrep, and common build
 tools.
 

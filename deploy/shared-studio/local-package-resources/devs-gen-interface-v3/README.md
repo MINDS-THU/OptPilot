@@ -250,7 +250,7 @@ interface:
     DEVS_DISPLAY_PI_MODEL: deepseek/deepseek-v4.1-flash
     DEVS_DISPLAY_PI_THINKING: "off"
     DEVS_GENERATED_EXECUTION_MODE: container
-    DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:latest
+    DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15
 ```
 
 For a manual launch outside Studio, the deployment host must provide Docker or

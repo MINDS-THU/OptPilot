@@ -387,7 +387,7 @@ so preview, terminal, and assistant debugging all point at the same container.
 Studio seeds each workspace Code Server profile with the shared OptPilot default
 layout, while the profile remains stored under that workspace runtime.
 
-The default workspace image is `optpilot/workspace-dev:latest`, built by Studio
+The default workspace image is `optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15`, built by Studio
 from the packaged runtime Dockerfile when the image is not already available.
 It includes Code Server, Python, `uv`, Node.js, npm, git, ripgrep, and common
 build tools. Production deployments may replace it with an organization-curated
@@ -468,7 +468,7 @@ CLI flags:
 - `OPTPILOT_WORKSPACE_CODE_SERVER_PASSWORD`
 
 On first use, Studio inspects the configured workspace image. If the default
-`optpilot/workspace-dev:latest` image is missing, Studio builds it from the
+`optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15` image is missing, Studio builds it from the
 packaged Dockerfile. If a non-default image is configured, Studio pulls it when
 missing. Production deployments should usually pre-pull or pre-build the
 curated workspace image, but local Studio must still handle first-run image

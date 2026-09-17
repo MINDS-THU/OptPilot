@@ -133,7 +133,7 @@ interface:
     # prepared runtime. Generated Python never runs in the credential-bearing
     # interface process.
     DEVS_GENERATED_EXECUTION_MODE: container
-    DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:latest
+    DEVS_GENERATED_EXECUTION_IMAGE: optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15
   runtime:
     sandbox: process
     setup:

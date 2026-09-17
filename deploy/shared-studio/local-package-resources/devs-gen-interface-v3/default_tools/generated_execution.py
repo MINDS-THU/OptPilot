@@ -26,7 +26,9 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
 
-DEFAULT_EXECUTION_IMAGE = "optpilot/workspace-dev:latest"
+DEFAULT_EXECUTION_IMAGE = (
+    "optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15"
+)
 DEFAULT_CONTAINER_MEMORY_MIB = 512
 DEFAULT_CONTAINER_CPUS = 1.0
 DEFAULT_CONTAINER_PIDS = 64

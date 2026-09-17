@@ -7669,7 +7669,10 @@ class MvpIntegrationTest(unittest.TestCase):
             state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
             status = state.workspace_runtime.global_status()
 
-        self.assertEqual(status["image"], "optpilot/workspace-dev:latest")
+        self.assertEqual(
+            status["image"],
+            "optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15",
+        )
         self.assertTrue(status["build_image"])
         self.assertTrue(status["dockerfile"].endswith("workspace_runtime/Dockerfile"))
         self.assertEqual(status["runtime"]["cpu_limit"], "2")

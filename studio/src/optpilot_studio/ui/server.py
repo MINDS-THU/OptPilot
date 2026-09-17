@@ -764,8 +764,13 @@ DERIVED_WORKSPACE_FIELDS = {
     "runtime",
 }
 
-DEFAULT_WORKSPACE_RUNTIME_IMAGE = "optpilot/workspace-dev:latest"
-DEFAULT_WORKSPACE_RUNTIME_BASE_IMAGE = "ghcr.io/coder/code-server:latest"
+DEFAULT_WORKSPACE_RUNTIME_IMAGE = (
+    "optpilot/workspace-dev:code-server-4.137.0-node-22.19.0-uv-0.12.15"
+)
+DEFAULT_WORKSPACE_RUNTIME_BASE_IMAGE = (
+    "ghcr.io/coder/code-server:4.137.0@"
+    "sha256:57ac684d44deb6fa94317b3e8f3e128dd7fb897fffd95b4efcd16f56ce607971"
+)
 READ_ONLY_WORKSPACE_PRUNE_GRACE_SECONDS = 30
 CODE_SERVER_DEFAULT_USER_SETTINGS: JsonDict = {
     "chat.agent.enabled": False,
