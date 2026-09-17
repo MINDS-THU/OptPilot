@@ -31,12 +31,12 @@ const RUN_ZERO_ACTIVE_GUIDANCE_DELAY_MS = 12_000;
 // Thirty minutes is long enough to cover a slow language-model exchange or a
 // heavy evaluation, and short enough that nobody watches a dead Run all day.
 const RUN_STALLED_GUIDANCE_DELAY_MS = 30 * 60_000;
-const CORE_REQUEST_TIMEOUT_MS = 20_000;
+const CORE_REQUEST_TIMEOUT_MS = 30_000;
 // A first Catalog load may need to project and inspect several substantial
 // research packages. It is bounded, but legitimately slower than ordinary
 // Studio status requests on network-synchronized filesystems.
 const CATALOG_REQUEST_TIMEOUT_MS = 60_000;
-const PLATFORM_STATUS_TIMEOUT_MS = 12_000;
+const PLATFORM_STATUS_TIMEOUT_MS = 30_000;
 const RUNS_REQUEST_TIMEOUT_MS = 15_000;
 const RUN_DETAIL_REQUEST_TIMEOUT_MS = 20_000;
 const STUDY_LAUNCH_RECONNECT_LIMIT = 8;
@@ -1242,7 +1242,9 @@ async function refreshAgentSessionSummaries() {
   const requestSeq = ++state.agentSessionSummaryRequestSeq;
   const sessionIdsAtRequestStart = new Set(state.agentSessions.map((session) => session.id));
   try {
-    const payload = await getJson("/api/agent-sessions?summary=1", { timeoutMs: 12000 });
+    const payload = await getJson("/api/agent-sessions?summary=1", {
+      timeoutMs: CORE_REQUEST_TIMEOUT_MS,
+    });
     if (requestSeq !== state.agentSessionSummaryRequestSeq) {
       return { loaded: false, stale: true, workspacesChanged: false };
     }
