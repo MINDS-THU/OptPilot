@@ -8050,6 +8050,11 @@ class MvpIntegrationTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertIsNot(first, second)
 
+    def test_studio_listener_accepts_a_classroom_arrival_burst(self) -> None:
+        from optpilot_studio.ui.server import _StudioThreadingHTTPServer
+
+        self.assertEqual(_StudioThreadingHTTPServer.request_queue_size, 128)
+
     def test_ui_workspace_runtime_marks_old_image_container_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

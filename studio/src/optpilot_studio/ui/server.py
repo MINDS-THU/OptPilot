@@ -265,6 +265,16 @@ from .shared_auth import AuthPrincipal, ClassroomAuth, SharedAuth
 
 JsonDict = Dict[str, Any]
 
+
+class _StudioThreadingHTTPServer(ThreadingHTTPServer):
+    """Accept a classroom-sized arrival burst without dropping connections."""
+
+    # ``ThreadingHTTPServer`` inherits TCPServer's backlog of five. Browsers
+    # open several requests at once, so even a modest class can overflow it
+    # before handler threads are scheduled. macOS caps listen(2) at 128 by
+    # default; asking for that full queue is cheap and remains kernel-bounded.
+    request_queue_size = 128
+
 _REQUEST_PRINCIPAL: ContextVar[Optional[AuthPrincipal]] = ContextVar(
     "optpilot_request_principal", default=None
 )
@@ -5506,7 +5516,7 @@ def run_ui(
         runtime_supervisor_claim.close()
         raise
     state: Optional[UiState] = None
-    server: Optional[ThreadingHTTPServer] = None
+    server: Optional[_StudioThreadingHTTPServer] = None
     try:
         state = UiState(
             cwd=cwd,
@@ -5528,7 +5538,7 @@ def run_ui(
         agent_tick_interval_seconds=STUDIO_AGENT_TICK_INTERVAL_SECONDS,
         )
         handler_cls = _handler_factory(state)
-        server = ThreadingHTTPServer((host, port), handler_cls)
+        server = _StudioThreadingHTTPServer((host, port), handler_cls)
         # Request handlers must finish before Studio closes coordination or
         # Realm descriptors. ThreadingHTTPServer defaults to daemon handlers,
         # which server_close() deliberately does not join.
