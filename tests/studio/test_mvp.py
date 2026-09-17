@@ -8134,6 +8134,25 @@ class MvpIntegrationTest(unittest.TestCase):
             [19150, 19151, 19152, 19153, 19154],
         )
 
+    def test_workspace_absence_proof_does_not_require_docker_info(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = UiState(cwd=Path(tmp_dir), catalog_roots=[], run_roots=[])
+            responses = [
+                subprocess.CompletedProcess([], 1, "", "No such container"),
+                subprocess.CompletedProcess([], 1, "", "No such object"),
+                subprocess.CompletedProcess([], 0, "", ""),
+            ]
+            with patch.object(
+                state.workspace_runtime,
+                "_container_executable",
+                return_value="docker",
+            ), patch("optpilot_studio.ui.server.subprocess.run", side_effect=responses) as run:
+                result = state.workspace_runtime._remove_container("absent-container")
+
+        self.assertTrue(result["terminal_confirmed"])
+        self.assertEqual(result["state"], "absent")
+        self.assertNotIn("info", [call.args[0][1] for call in run.call_args_list])
+
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
         study_spec = load_study_spec(str(repo_root / "tests" / "fixtures" / "catalog" / "studies" / "toy_random_search.yaml"))

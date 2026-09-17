@@ -4099,13 +4099,6 @@ class WorkspaceRuntimeManager:
                 "error": "container_engine_unavailable",
             }
         try:
-            daemon = subprocess.run(
-                [executable, "info"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
             removed = subprocess.run(
                 [executable, "rm", "-f", container_name],
                 capture_output=True,
@@ -4142,7 +4135,15 @@ class WorkspaceRuntimeManager:
                 "state": "unknown",
                 "error": type(error).__name__,
             }
-        daemon_ready = daemon.returncode == 0
+        # ``inspect`` proves a present object, while a successful ``ps``
+        # proves the daemon was reachable when an object is absent. A separate
+        # ``docker info`` probe added no proof and timed out under concurrent
+        # container starts, falsely turning confirmed absence into failure.
+        daemon_ready = (
+            inspected.returncode == 0
+            or removed.returncode == 0
+            or listed.returncode == 0
+        )
         if inspected.returncode == 0:
             running = inspected.stdout.strip().lower() == "true"
             terminal_confirmed = daemon_ready and not running
