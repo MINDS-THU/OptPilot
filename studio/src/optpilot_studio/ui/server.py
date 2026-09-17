@@ -1695,6 +1695,10 @@ class WorkspaceRuntimeManager:
         self._runtime_attachments: Dict[str, tuple[str, int, int]] = {}
         self._runtime_attachment_lock = threading.RLock()
         self._capacity_lock = threading.RLock()
+        # Choosing a free host port and persisting that reservation must be
+        # one operation. Concurrent Workspace starts otherwise all observe
+        # the same port as free before any of them writes its runtime record.
+        self._port_allocation_lock = threading.Lock()
         self._starting_owner_by_workspace: Dict[str, str] = {}
         self._active_operations: Dict[str, int] = {}
         self._last_touch_monotonic: Dict[str, float] = {}
@@ -2408,37 +2412,38 @@ class WorkspaceRuntimeManager:
             # was running must leave the durable pre-start proof intact and
             # must never fall through to ``docker run``.
             _check_interface_launch_cancelled(should_stop)
-            host_port = self._host_port(workspace_id)
-            command = self._container_run_command(
-                executable, workspace, container_name, host_port,
-                image=resolved_image,
-            )
-            _check_interface_launch_cancelled(should_stop)
-            record.pop("terminal_proof", None)
-            record.update(
-                {
-                    "container_name": container_name,
-                    "host_port": host_port,
-                    "status": "starting",
-                    "updated_at": _now_iso(),
-                    "image": resolved_image,
-                    "image_source": record_image_source,
-                    "workspace_root": str(root),
-                    "owner_account_id": owner_account_id,
-                    "control_mask_digest": control_mask_digest,
-                    # This is intentionally set before ``docker run``. A
-                    # timeout or interrupted subprocess may still have created
-                    # the container and therefore requires engine proof.
-                    "container_may_exist": True,
-                    "prepared_runtime_entry": str(
-                        workspace.get("_prepared_runtime_entry") or ""
-                    ),
-                    "prepared_runtime_cache_key": str(
-                        workspace.get("_prepared_runtime_cache_key") or ""
-                    ),
-                }
-            )
-            self._write_record(workspace_id, record)
+            with self._port_allocation_lock:
+                host_port = self._host_port(workspace_id)
+                command = self._container_run_command(
+                    executable, workspace, container_name, host_port,
+                    image=resolved_image,
+                )
+                _check_interface_launch_cancelled(should_stop)
+                record.pop("terminal_proof", None)
+                record.update(
+                    {
+                        "container_name": container_name,
+                        "host_port": host_port,
+                        "status": "starting",
+                        "updated_at": _now_iso(),
+                        "image": resolved_image,
+                        "image_source": record_image_source,
+                        "workspace_root": str(root),
+                        "owner_account_id": owner_account_id,
+                        "control_mask_digest": control_mask_digest,
+                        # This is intentionally set before ``docker run``. A
+                        # timeout or interrupted subprocess may still have created
+                        # the container and therefore requires engine proof.
+                        "container_may_exist": True,
+                        "prepared_runtime_entry": str(
+                            workspace.get("_prepared_runtime_entry") or ""
+                        ),
+                        "prepared_runtime_cache_key": str(
+                            workspace.get("_prepared_runtime_cache_key") or ""
+                        ),
+                    }
+                )
+                self._write_record(workspace_id, record)
             _check_interface_launch_cancelled(should_stop)
             completed = subprocess.run(
                 command,

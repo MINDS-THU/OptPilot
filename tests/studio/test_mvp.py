@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import hashlib
 import contextlib
+import concurrent.futures
 import io
 import os
 import shlex
@@ -8102,6 +8103,36 @@ class MvpIntegrationTest(unittest.TestCase):
 
         self.assertEqual(first_status["port"], 19140)
         self.assertEqual(second_status["port"], 19141)
+
+    def test_ui_workspace_runtime_reserves_unique_ports_during_parallel_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            fake_container = _write_fake_workspace_container(tmp_path)
+            state = UiState(
+                cwd=tmp_path,
+                catalog_roots=[],
+                run_roots=[],
+                workspace_runtime=WorkspaceRuntimeOptions(
+                    executable=str(fake_container),
+                    image="fake-code-server:latest",
+                    port_start=19150,
+                ),
+            )
+            workspaces = [
+                _create_ui_workspace(
+                    state,
+                    {"title": f"Parallel {index}", "root": str(tmp_path / f"parallel-{index}")},
+                )
+                for index in range(5)
+            ]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                statuses = list(executor.map(state.workspace_runtime.start, workspaces))
+
+        self.assertEqual(
+            sorted(status["port"] for status in statuses),
+            [19150, 19151, 19152, 19153, 19154],
+        )
 
     def test_ui_run_listing_summarizes_existing_evidence_directory(self) -> None:
         repo_root = Path(__file__).resolve().parents[2]
