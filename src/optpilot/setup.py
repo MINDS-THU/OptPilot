@@ -22,6 +22,7 @@ def run_process_setup(
     root: Path,
     *,
     progress: Optional[ProgressCallback] = None,
+    prepared_root: Optional[Path] = None,
 ) -> JsonDict:
     """Run a public ``runtime.setup`` or ``interface.setup`` block in ``root``.
 
@@ -32,12 +33,17 @@ def run_process_setup(
     if not setup:
         return {"ran": False, "steps": []}
     root = root.resolve()
+    prepared = None
+    if prepared_root is not None:
+        validate_prepared_process_setup(setup)
+        prepared = prepared_root.resolve()
+        prepared.mkdir(parents=True, exist_ok=True)
     steps = list(setup.get("steps") or [])
     timeout = int(setup.get("timeoutSeconds", 600) or 600)
     base_env = setup_env(setup)
     completed_steps = []
     for index, step in enumerate(steps):
-        commands = setup_commands_for_step(step, root)
+        commands = setup_commands_for_step(step, root, prepared_root=prepared)
         step_results = []
         for command in commands:
             cwd = setup_cwd(step, root)
@@ -71,6 +77,38 @@ def run_process_setup(
                 )
         completed_steps.append({"uses": step.get("uses"), "commands": step_results})
     return {"ran": True, "steps": completed_steps}
+
+
+def validate_prepared_process_setup(setup: JsonDict | None) -> None:
+    """Reject setup shapes that cannot be safely shared as a dependency layer.
+
+    A prepared Resource-action runtime is immutable and may be used by several
+    executions at once.  Only typed outputs whose destination OptPilot can
+    redirect into that immutable layer are accepted here.  The ordinary
+    per-copy setup path remains available for every other setup declaration.
+    """
+
+    if not setup or setup.get("cache") != "prepared":
+        raise ValueError(
+            "Prepared Resource-action setup requires runtime.setup.cache: prepared."
+        )
+    if setup.get("envFromHost"):
+        raise ValueError(
+            "Prepared Resource-action setup cannot depend on envFromHost values."
+        )
+    for index, step in enumerate(setup.get("steps") or []):
+        kind = str(step.get("uses") or "")
+        if kind != "python-venv":
+            raise ValueError(
+                "Prepared Resource-action setup currently supports only typed "
+                f"python-venv steps; step {index + 1} uses {kind!r}."
+            )
+        if bool(step.get("installProject")):
+            raise ValueError(
+                "Prepared Resource-action python-venv setup cannot use "
+                "installProject because an editable install would retain a "
+                "per-run source path. Install declared requirements instead."
+            )
 
 
 def prepared_runtime_from_setup(setup: JsonDict | None, root: Path) -> JsonDict:
@@ -158,7 +196,12 @@ def _minimal_host_env() -> Dict[str, str]:
     return minimal_host_env()
 
 
-def setup_commands_for_step(step: JsonDict, root: Path) -> List[List[str]]:
+def setup_commands_for_step(
+    step: JsonDict,
+    root: Path,
+    *,
+    prepared_root: Optional[Path] = None,
+) -> List[List[str]]:
     kind = str(step.get("uses") or "")
     cwd = setup_cwd(step, root)
     if kind == "uv":
@@ -173,7 +216,12 @@ def setup_commands_for_step(step: JsonDict, root: Path) -> List[List[str]]:
     if kind == "python-venv":
         venv = str(step.get("venv") or ".venv")
         python = str(step.get("python") or sys.executable)
-        venv_path = _safe_child(cwd, venv)
+        runtime_cwd = cwd
+        if prepared_root is not None:
+            relative_cwd = cwd.relative_to(root.resolve())
+            runtime_cwd = _safe_child(prepared_root.resolve(), str(relative_cwd))
+            runtime_cwd.mkdir(parents=True, exist_ok=True)
+        venv_path = _safe_child(runtime_cwd, venv)
         commands = [[python, "-m", "venv", str(venv_path)]]
         pip = _venv_pip(venv_path)
         requirements = list(step.get("requirements", []) or [])

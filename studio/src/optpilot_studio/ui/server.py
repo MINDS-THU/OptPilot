@@ -16,6 +16,7 @@ import json
 import math
 import mimetypes
 import os
+import platform
 import posixpath
 import re
 import secrets
@@ -93,6 +94,7 @@ from optpilot.resource_actions import (
     find_resource_action,
     run_resource_action,
 )
+from optpilot.setup import run_process_setup, validate_prepared_process_setup
 from optpilot.package_validation import (
     retained_execution_blocks_smoke,
     uses_locked_python_runtime_setup,
@@ -13165,6 +13167,14 @@ def _public_resource_action_run(record: JsonDict) -> JsonDict:
             "stderr_tail": str(summary.get("stderr_tail") or "")[-4000:],
             "error": summary.get("error"),
         }
+        prepared_runtime = summary.get("prepared_runtime")
+        if isinstance(prepared_runtime, Mapping):
+            payload["result"]["prepared_runtime"] = deepcopy(
+                dict(prepared_runtime)
+            )
+        setup = summary.get("setup")
+        if isinstance(setup, Mapping):
+            payload["result"]["setup"] = deepcopy(dict(setup))
     return payload
 
 
@@ -13488,6 +13498,75 @@ def _resource_action_contract_digest(
     )
 
 
+def _resource_action_prepared_provider_identity(
+    setup: Mapping[str, Any],
+) -> JsonDict:
+    """Describe the host interpreter provider that builds an action runtime."""
+
+    interpreters: List[JsonDict] = []
+    for step in setup.get("steps") or []:
+        declared = str(step.get("python") or sys.executable)
+        located = (
+            Path(declared).expanduser()
+            if Path(declared).expanduser().is_absolute()
+            else Path(shutil.which(declared) or declared)
+        )
+        resolved = located.resolve(strict=True)
+        linked = resolved.stat()
+        interpreters.append(
+            {
+                "declared": declared,
+                "path": str(resolved),
+                "device": int(linked.st_dev),
+                "inode": int(linked.st_ino),
+                "size": int(linked.st_size),
+                "mtimeNs": int(linked.st_mtime_ns),
+            }
+        )
+    return {
+        "executor": "studio-host-process",
+        "interpreter": {
+            "kind": "python",
+            "abi": str(getattr(sys.implementation, "cache_tag", "")),
+            "version": platform.python_version(),
+            "builders": interpreters,
+        },
+        "os": platform.system().lower(),
+        "architecture": platform.machine().lower(),
+    }
+
+
+def _resource_action_prepared_key_payload(
+    state: UiState,
+    *,
+    resource_uid: str,
+    resource_id: str,
+    action: ResourceActionSpec,
+    action_contract_digest: str,
+) -> Optional[JsonDict]:
+    setup = action.runtime.get("setup") if isinstance(action.runtime, Mapping) else None
+    if not isinstance(setup, Mapping) or setup.get("cache") != "prepared":
+        return None
+    normalized_setup = dict(setup)
+    validate_prepared_process_setup(normalized_setup)
+    return state.prepared_runtime_cache.key_payload(
+        source_identity={
+            "kind": "resource-action-approved-tree",
+            "resourceUid": resource_uid,
+            "contractDigest": action_contract_digest,
+        },
+        setup=normalized_setup,
+        provider_identity=_resource_action_prepared_provider_identity(
+            normalized_setup
+        ),
+        component_identity={
+            "kind": "resource-action",
+            "resourceId": resource_id,
+            "actionId": action.action_id,
+        },
+    )
+
+
 def _delete_resource_action_runtime(state: UiState, runtime_id: str) -> bool:
     """Delete a per-run action runtime that never submitted a container.
 
@@ -13754,6 +13833,13 @@ def _start_resource_action_run(
             action=f"resource action {action.action_id!r}",
         )
         action_host_env = {**os.environ, **granted_env}
+        prepared_key_payload = _resource_action_prepared_key_payload(
+            state,
+            resource_uid=resource_uid,
+            resource_id=str(resource_raw.get("id") or ""),
+            action=action,
+            action_contract_digest=actual_contract_digest,
+        )
         output_root, workspace_id = _resource_action_output_root(
             state,
             workspace_id=requested_workspace_id,
@@ -13815,7 +13901,74 @@ def _start_resource_action_run(
         terminal_status = "failed"
         terminal_summary: Optional[JsonDict] = None
         terminal_error: Optional[str] = None
+        prepared_lease = None
+        prepared_cache_fallback = False
         try:
+            prepared_runtime_root: Optional[Path] = None
+            use_private_setup = True
+            if prepared_key_payload is not None:
+                setup = dict(action.runtime.get("setup") or {})
+
+                def build_prepared_runtime(
+                    _entry_root: Path, payload_root: Path
+                ) -> None:
+                    update_progress(
+                        {
+                            "activity_key": "prepare_runtime",
+                            "activity_state": "running",
+                            "title": "Preparing the shared action runtime",
+                            "detail": "Installing this exact dependency layer once.",
+                        }
+                    )
+                    run_process_setup(
+                        setup,
+                        manifest_path.parent,
+                        prepared_root=payload_root,
+                    )
+
+                update_progress(
+                    {
+                        "activity_key": "prepare_runtime",
+                        "activity_state": "running",
+                        "title": "Checking the action runtime cache",
+                        "detail": "Reusing only an exact, sealed dependency layer.",
+                    }
+                )
+                try:
+                    prepared_lease = state.prepared_runtime_cache.acquire(
+                        key_payload=prepared_key_payload,
+                        launch_id=f"resource-action-{request_id}",
+                        build=build_prepared_runtime,
+                    )
+                except (OSError, RuntimeError):
+                    # Cache availability is an optimization, not a condition
+                    # for running an otherwise valid Resource action. Preserve
+                    # the established private-setup behavior without reusing a
+                    # partial or stale cache entry.
+                    update_progress(
+                        {
+                            "activity_key": "prepare_runtime",
+                            "activity_state": "running",
+                            "title": "Preparing a private action runtime",
+                            "detail": "The shared cache was unavailable; continuing safely.",
+                        }
+                    )
+                    prepared_cache_fallback = True
+                else:
+                    prepared_runtime_root = prepared_lease.payload_root
+                    use_private_setup = False
+                    update_progress(
+                        {
+                            "activity_key": "prepare_runtime",
+                            "activity_state": "completed",
+                            "title": "Action runtime is ready",
+                            "detail": (
+                                "Reused the sealed dependency layer."
+                                if prepared_lease.cache_status == "hit"
+                                else "Built and sealed the dependency layer."
+                            ),
+                        }
+                    )
             summary = run_resource_action(
                 manifest_path,
                 action.action_id,
@@ -13829,7 +13982,18 @@ def _start_resource_action_run(
                     "OPTPILOT_WORKSPACE_ID": workspace_id,
                 },
                 progress_callback=update_progress,
+                run_setup=use_private_setup,
+                prepared_runtime_root=prepared_runtime_root,
             )
+            if prepared_lease is not None:
+                summary["prepared_runtime"] = prepared_lease.public_summary()
+            elif prepared_cache_fallback:
+                summary["prepared_runtime"] = {
+                    "enabled": True,
+                    "status": "private-fallback",
+                    "scope": "per-run-private-setup",
+                    "readOnlyAtRuntime": False,
+                }
             for key in ("error", "stdout_tail", "stderr_tail"):
                 if isinstance(summary.get(key), str):
                     summary[key] = sanitize_run_text(summary[key])
@@ -13840,6 +14004,13 @@ def _start_resource_action_run(
         except Exception as error:  # surfaced verbatim: local authored action
             terminal_error = sanitize_run_text(str(error))
         finally:
+            if prepared_lease is not None:
+                try:
+                    state.prepared_runtime_cache.release(prepared_lease)
+                except Exception:
+                    # The cache's restart recovery owns stale lease cleanup.
+                    # Never turn a completed user action into a false failure.
+                    pass
             # A terminal status promises that the per-run executable snapshot
             # is no longer in use. Publish it only after cleanup has returned,
             # so status polling and test/project teardown cannot race deletion.

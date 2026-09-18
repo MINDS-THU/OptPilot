@@ -22,9 +22,10 @@ Execution contract (what the authored command sees):
 - The current direct-process executor can run only actions that explicitly
   grant ``network: enabled``.  It fails closed for ``network: disabled``
   because a host subprocess cannot truthfully enforce network isolation.
-- When the action declares ``runtime.setup``, the steps run in the resource
-  root before the command (Studio's prepared-runtime cache is not used by
-  this local path; setup scripts should be idempotent).
+- When the action declares ``runtime.setup``, the steps normally run in the
+  resource root before the command. Studio may instead supply an already
+  sealed prepared dependency root for an explicit ``cache: prepared`` setup;
+  direct callers keep the original per-run behavior unless they do so.
 - A ``runtime.setup`` step that builds a Python environment (``python-venv``
   or ``uv``) *owns the action's imports*: a ``python`` / ``python3`` command
   head then resolves to that prepared interpreter instead of the interpreter
@@ -59,6 +60,8 @@ INPUT_PLACEHOLDER_PREFIX = "{input:"
 INPUTS_FILE_ENV = "OPTPILOT_RESOURCE_ACTION_INPUTS_FILE"
 OUTPUT_ROOT_ENV = "OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"
 PROGRESS_FILE_ENV = "OPTPILOT_RESOURCE_ACTION_PROGRESS_FILE"
+PREPARED_RUNTIME_ROOT_ENV = "OPTPILOT_PREPARED_RUNTIME_ROOT"
+PREPARED_RUNTIME_ACCESS_ENV = "OPTPILOT_PREPARED_RUNTIME_ACCESS"
 
 _ACTION_CONTEXT_ENV_KEYS = frozenset(
     {
@@ -320,6 +323,7 @@ def run_resource_action(
     host_env: Mapping[str, str] | None = None,
     context_env: Mapping[str, str] | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    prepared_runtime_root: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Execute one declared resource action headlessly and return a summary.
 
@@ -393,7 +397,24 @@ def run_resource_action(
     # dependency closure. Resolve the interpreter it declares before anything
     # is created, so "the runtime was never built" fails closed here with a
     # fixable message instead of surfacing as an ImportError from the command.
-    runtime_hints = _declared_runtime_hints(runtime_setup, resource_root)
+    prepared_root: Path | None = None
+    if prepared_runtime_root is not None:
+        if run_setup:
+            raise ValueError(
+                "prepared_runtime_root requires run_setup=False; a sealed "
+                "runtime must never be modified during action execution."
+            )
+        from .setup import validate_prepared_process_setup
+
+        validate_prepared_process_setup(
+            dict(runtime_setup) if isinstance(runtime_setup, Mapping) else None
+        )
+        prepared_root = Path(prepared_runtime_root).expanduser().resolve(strict=True)
+        if not prepared_root.is_dir():
+            raise ValueError("Prepared runtime root is not a directory.")
+    runtime_hints = _declared_runtime_hints(
+        runtime_setup, prepared_root or resource_root
+    )
     declared_python = runtime_hints.get("pythonExecutable")
     if (
         declared_python is not None
@@ -478,6 +499,14 @@ def run_resource_action(
             if key in _ACTION_CONTEXT_ENV_KEYS and value not in {None, ""}
         }
         run_env.update(normalized_context)
+        if prepared_root is not None:
+            run_env.update(
+                {
+                    PREPARED_RUNTIME_ROOT_ENV: str(prepared_root),
+                    PREPARED_RUNTIME_ACCESS_ENV: "read-only",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
         path_entries = runtime_hints.get("pathPrepend")
         if path_entries:
             from .setup import apply_prepared_env
@@ -560,6 +589,8 @@ def run_resource_action(
             )
         if setup_summary is not None:
             result["setup"] = {"ran": bool(setup_summary.get("ran"))}
+        elif prepared_root is not None:
+            result["setup"] = {"ran": False, "cache": "prepared"}
         secret_values = [
             environment[name]
             for name in action.secrets_from_host

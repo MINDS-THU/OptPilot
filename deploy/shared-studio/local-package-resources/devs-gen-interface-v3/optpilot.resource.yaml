@@ -76,14 +76,15 @@ actions:
     runtime:
       sandbox: process
       setup:
+        cache: prepared
         timeoutSeconds: 1800
         steps:
           # The generation pipeline imports smolagents, litellm, pydantic and
           # ~40 transitive packages. Their closure contains native wheels
           # (pydantic-core, aiohttp, tokenizers, numpy, scipy, pillow), so it
-          # cannot be a vendored pure-wheel lock — this action builds its own
-          # venv from the same requirements file the interface uses instead of
-          # borrowing whatever happens to sit in the host installation.
+          # cannot be a vendored pure-wheel lock. Studio prepares the exact
+          # venv once from the same requirements file the interface uses and
+          # reuses it read-only instead of borrowing host site-packages.
           - uses: python-venv
             venv: .runtime/action-venv
             requirements: [requirements-interface.txt]

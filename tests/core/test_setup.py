@@ -9,7 +9,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from optpilot.setup import run_process_setup, setup_commands_for_step
+from optpilot.setup import (
+    run_process_setup,
+    setup_commands_for_step,
+    validate_prepared_process_setup,
+)
 
 
 class SetupCommandInterpreterTest(unittest.TestCase):
@@ -88,6 +92,48 @@ class RunProcessSetupInterpreterTest(unittest.TestCase):
         self.assertEqual(
             (self.root / "marker.txt").read_text(encoding="utf-8"), "ready"
         )
+
+    def test_prepared_python_venv_is_built_outside_the_source_tree(self) -> None:
+        prepared = self.root / "prepared"
+        source = self.root / "source"
+        source.mkdir()
+        setup = {
+            "cache": "prepared",
+            "steps": [
+                {
+                    "uses": "python-venv",
+                    "venv": ".runtime/action-venv",
+                }
+            ],
+        }
+
+        summary = run_process_setup(setup, source, prepared_root=prepared)
+
+        self.assertTrue(summary["ran"])
+        self.assertFalse((source / ".runtime").exists())
+        self.assertTrue(
+            (prepared / ".runtime" / "action-venv" / "bin" / "python").is_file()
+        )
+
+    def test_prepared_setup_rejects_unsafe_or_source_bound_steps(self) -> None:
+        invalid = (
+            {
+                "cache": "prepared",
+                "envFromHost": ["TOKEN"],
+                "steps": [{"uses": "python-venv"}],
+            },
+            {
+                "cache": "prepared",
+                "steps": [{"uses": "command", "command": ["make"]}],
+            },
+            {
+                "cache": "prepared",
+                "steps": [{"uses": "python-venv", "installProject": True}],
+            },
+        )
+        for setup in invalid:
+            with self.subTest(setup=setup), self.assertRaises(ValueError):
+                validate_prepared_process_setup(setup)
 
 
 if __name__ == "__main__":

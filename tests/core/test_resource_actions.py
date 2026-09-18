@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -618,6 +619,44 @@ out = pathlib.Path(os.environ["OPTPILOT_RESOURCE_ACTION_OUTPUT_ROOT"])
         self.assertIn("--skip-setup", message)
         self.assertIn(str(self.venv_dir), message)
         self.assertFalse(self.output_dir.exists())
+
+    def test_sealed_prepared_runtime_runs_without_mutating_the_source(self) -> None:
+        prepared = self.root / "prepared"
+        prepared_python = prepared / ".runtime" / "action-venv" / "bin" / "python"
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(prepared_python.parent.parent)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.action["runtime"]["setup"]["cache"] = "prepared"
+        self.resource_path.write_text(
+            yaml.safe_dump(_resource([self.action]), sort_keys=False),
+            encoding="utf-8",
+        )
+
+        summary = run_resource_action(
+            self.resource_path,
+            "generate",
+            output_root=self.output_dir,
+            run_setup=False,
+            prepared_runtime_root=prepared,
+        )
+
+        self.assertTrue(summary["ok"], summary)
+        self.assertEqual(summary["setup"], {"ran": False, "cache": "prepared"})
+        self.assertEqual(
+            Path(summary["command"][0]),
+            prepared.resolve() / ".runtime" / "action-venv" / "bin" / "python",
+        )
+        self.assertFalse((self.resource_dir / ".runtime").exists())
+        observed = json.loads(
+            (self.output_dir / "runtime.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            Path(observed["prefix"]),
+            prepared.resolve() / ".runtime" / "action-venv",
+        )
 
 
 class ResourceCliTest(unittest.TestCase):

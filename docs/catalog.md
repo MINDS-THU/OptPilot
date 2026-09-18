@@ -684,6 +684,17 @@ Actions differ from interface `outputs.actions`: an interface output action
 runs against one sealed output tree of a live interface launch, while a
 resource action is a standalone headless operation of the resource itself.
 
+A Resource action may opt into dependency reuse with
+`runtime.setup.cache: prepared`. Studio keys the layer to the exact approved
+resource tree, setup declaration, host interpreter, and platform; builds it
+single-flight; and seals it read-only. Each action still receives an independent
+source snapshot, input file, progress stream, and output directory. If the
+cache is unavailable, Studio falls back to the ordinary private setup. The
+current reusable action recipe supports typed `python-venv` steps without
+`envFromHost` or editable project installs; unsupported recipes fail validation
+instead of silently sharing mutable or source-bound state. Direct CLI action
+runs retain their existing private-setup behavior.
+
 The interface declaration is the portable contextual-interface contract for
 grants, resources, readiness, and accepted selections. Current catalog launch
 supports process-declared profiles through Studio's managed authoring runtime

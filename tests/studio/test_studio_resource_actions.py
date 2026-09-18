@@ -190,6 +190,117 @@ print("bundle generated")
                 {**request, "inputs": {"name": "Grace"}},
             )
 
+    def test_opted_in_action_builds_once_then_reuses_a_sealed_runtime(self) -> None:
+        config = (
+            self.package
+            / "resources"
+            / "demo-generator"
+            / "optpilot.resource.yaml"
+        )
+        raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        raw["actions"][0]["runtime"] = {
+            "sandbox": "process",
+            "setup": {
+                "cache": "prepared",
+                "steps": [
+                    {
+                        "uses": "python-venv",
+                        "venv": ".runtime/action-venv",
+                    }
+                ],
+            },
+        }
+        config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        entry = next(
+            item
+            for item in _catalog_payload(self.state)["resources"]
+            if item["id"] == "demo-generator"
+        )
+        digest = self._action_digest(entry["uid"])
+        results = []
+        for index in range(2):
+            request_id = f"aa345678-1234-4234-8234-123456789ab{index}"
+            _start_resource_action_run(
+                self.state,
+                {
+                    "request_id": request_id,
+                    "resource_uid": entry["uid"],
+                    "action_id": "generate",
+                    "inputs": {"name": f"run-{index}"},
+                    "_approved_action_contract_digest": digest,
+                },
+            )
+            settled = self._await_run(request_id)
+            self.assertEqual(settled["status"], "succeeded", settled)
+            results.append(settled["result"])
+
+        self.assertEqual(
+            [item["prepared_runtime"]["status"] for item in results],
+            ["built", "hit"],
+        )
+        self.assertEqual(
+            results[0]["prepared_runtime"]["key"],
+            results[1]["prepared_runtime"]["key"],
+        )
+        self.assertEqual(
+            [item["setup"] for item in results],
+            [
+                {"ran": False, "cache": "prepared"},
+                {"ran": False, "cache": "prepared"},
+            ],
+        )
+        self.assertEqual(
+            list(self.state.runtime_dir.glob("resource-action-copy-*")), []
+        )
+
+    def test_cache_failure_preserves_the_private_setup_behavior(self) -> None:
+        config = (
+            self.package
+            / "resources"
+            / "demo-generator"
+            / "optpilot.resource.yaml"
+        )
+        raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        raw["actions"][0]["runtime"] = {
+            "sandbox": "process",
+            "setup": {
+                "cache": "prepared",
+                "steps": [{"uses": "python-venv", "venv": ".venv"}],
+            },
+        }
+        config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+        entry = next(
+            item
+            for item in _catalog_payload(self.state)["resources"]
+            if item["id"] == "demo-generator"
+        )
+        request_id = "bb345678-1234-4234-8234-123456789abc"
+        with mock.patch.object(
+            self.state.prepared_runtime_cache,
+            "acquire",
+            side_effect=OSError("cache volume unavailable"),
+        ):
+            _start_resource_action_run(
+                self.state,
+                {
+                    "request_id": request_id,
+                    "resource_uid": entry["uid"],
+                    "action_id": "generate",
+                    "inputs": {"name": "fallback"},
+                    "_approved_action_contract_digest": self._action_digest(
+                        entry["uid"]
+                    ),
+                },
+            )
+            settled = self._await_run(request_id)
+
+        self.assertEqual(settled["status"], "succeeded", settled)
+        self.assertEqual(settled["result"]["setup"], {"ran": True})
+        self.assertEqual(
+            settled["result"]["prepared_runtime"]["status"],
+            "private-fallback",
+        )
+
     def test_optional_token_grant_is_redacted_from_action_progress(self) -> None:
         config = (
             self.package
