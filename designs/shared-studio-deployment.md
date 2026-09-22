@@ -471,14 +471,17 @@ conformance, and the headless `generate` action.
    local Catalog package without changing the existing gallery resource.
 2. Implement shared auth disabled by default and run upstream tests.
 3. Start Studio, Code Server, and presentations on loopback only.
-4. test Nginx on a separate local/public port set with Code Server password
-   still enabled;
+4. test Nginx on a separate local/public port set while retaining the
+   loopback-only Code Server listeners;
 5. verify all authentication and listener gates, including service failure;
-6. switch Code Server to `auth none` only for the fully gated deployment and
-   rerun the entire matrix;
+6. verify the fully gated deployment with Code Server `auth none` and rerun
+   the entire matrix; this is the current shared-login mode, not a later
+   migration step;
 7. perform bounded concurrency and resource tests before classroom use.
 
 Rollback stops the new Nginx instance first. Because all upstream services are
 loopback-only, stopping Nginx removes remote reachability immediately. The
-previous deployment is not overwritten, and the upstream `devs-gen-interface`
-remains available independently of v3.
+previous deployment is not overwritten. Immutable Realm revisions and existing
+Workspaces remain available; the deployment installer removes only the retired
+v2 template from its deployment-owned source tree and does not delete those
+saved revisions or Workspaces.

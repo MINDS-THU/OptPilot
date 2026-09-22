@@ -111,3 +111,40 @@ jobs:
 
       - name: Run smoke tests
         run: ./scripts/smoke_test.sh
+
+  deployment-static:
+    name: Validate shared deployment and DEVS v3 package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install source checkout
+        run: python -m pip install -e .
+
+      - name: Check deployment scripts
+        run: |
+          for script_file in deploy/shared-studio/*.sh \
+            deploy/shared-studio/local-package-resources/devs-gen-interface-v3/*.sh; do
+            bash -n "$script_file"
+          done
+
+      - name: Validate DEVS Generator v3 package
+        run: |
+          optpilot package validate \
+            deploy/shared-studio/local-package-resources/devs-gen-interface-v3 \
+            --check-source --check-setup-files
+
+      - name: Run local v3 contract tests
+        working-directory: deploy/shared-studio/local-package-resources/devs-gen-interface-v3
+        run: |
+          python -m pip install -r requirements-interface.txt
+          python -m unittest \
+            devs_display.backend.test_generated_python_response \
+            devs_display.backend.test_generated_interface_contract \
+            devs_display.backend.test_generated_member_contract \
+            devs_display.backend.test_event_trace_conformance \
+            devs_display.backend.test_simulation_metrics_contract

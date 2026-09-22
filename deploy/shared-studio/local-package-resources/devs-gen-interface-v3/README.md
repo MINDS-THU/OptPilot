@@ -159,6 +159,7 @@ happens to provide:
 runtime:
   sandbox: process
   setup:
+    cache: prepared
     timeoutSeconds: 1800
     steps:
       - uses: python-venv
@@ -171,6 +172,12 @@ interpreter running `optpilot` — so the action imports exactly what it
 declares. The first run builds the venv and can take several minutes; later
 runs reuse it. `--skip-setup` reuses an already-built venv and fails closed
 with a fixable message if it is missing.
+
+In Shared Studio, `cache: prepared` makes this action runtime eligible for the
+managed prepared-runtime cache. The cache is keyed by the resource and setup
+inputs, built once, sealed read-only, and reused only for independent action
+launches. Direct CLI execution does not use that Studio cache and keeps its
+usual private setup behavior.
 
 This venv is deliberately separate from the interface's prepared runtime at
 `.runtime/prepared/python-venv`. Both are built from

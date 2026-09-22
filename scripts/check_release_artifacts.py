@@ -167,6 +167,7 @@ SOURCE_ONLY_EXECUTABLE_PATHS = {
     "deploy/shared-studio/render_nginx.py",
     "deploy/shared-studio/renew_certificate.sh",
     "deploy/shared-studio/studio.sh",
+    "deploy/shared-studio/workspace_image.sh",
 }
 
 SOURCE_EXECUTABLE_PATHS = ALLOWED_EXECUTABLE_PATHS | SOURCE_ONLY_EXECUTABLE_PATHS

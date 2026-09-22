@@ -640,8 +640,10 @@ The execution contract:
   logs; they do not create a Realm evidence record.
 - An optional `runtime` block (process sandbox) may declare `setup` steps;
   the local headless path runs them in the resource root before the command,
-  so setup scripts should be idempotent. Container runtimes are not
-  executable by this path.
+  so setup scripts should be idempotent. In Shared Studio, a setup declaring
+  `cache: prepared` may instead use Studio's sealed prepared-runtime cache;
+  the action still receives a fresh source snapshot, input, output directory,
+  and progress stream. Container runtimes are not executable by this path.
 - A setup step that builds a Python environment (`python-venv` or `uv`) owns
   the action's dependency closure: a `python` / `python3` command head then
   resolves to *that* interpreter instead of the one running optpilot, and its
