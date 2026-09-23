@@ -5356,7 +5356,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=(None, ()),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer",
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer",
                 return_value=fake_server,
             ),
             mock.patch(
@@ -5407,7 +5407,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                     "optpilot_studio.ui.server.UiState"
                 ) as state_constructor,
                 mock.patch(
-                    "optpilot_studio.ui.server.ThreadingHTTPServer"
+                    "optpilot_studio.ui.server._StudioThreadingHTTPServer"
                 ) as server_constructor,
             ):
                 with self.assertRaises(StudioRuntimeSupervisorBusy):
@@ -5437,7 +5437,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 "optpilot_studio.ui.server.LocalRealmRuntime.open"
             ) as open_runtime,
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer"
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer"
             ) as server_constructor,
         ):
             with self.assertRaises(RealmIntegrityError):
@@ -5477,7 +5477,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 "optpilot_studio.ui.server.UiState"
             ) as state_constructor,
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer"
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer"
             ) as server_constructor,
         ):
             with self.assertRaisesRegex(RuntimeError, "Realm open failure"):
@@ -5519,7 +5519,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 side_effect=RuntimeError("injected UiState construction failure"),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer"
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer"
             ) as server_constructor,
         ):
             with self.assertRaisesRegex(RuntimeError, "UiState construction failure"):
@@ -5580,7 +5580,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=mock.Mock(),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer",
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer",
                 return_value=fake_server,
             ),
             mock.patch(
@@ -5647,7 +5647,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=mock.Mock(),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer",
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer",
                 return_value=fake_server,
             ),
             mock.patch(
@@ -5710,7 +5710,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=mock.Mock(),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer",
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer",
                 return_value=fake_server,
             ),
             mock.patch(
@@ -5767,7 +5767,7 @@ class StudioRealmRunsTest(unittest.TestCase):
                 return_value=mock.Mock(),
             ),
             mock.patch(
-                "optpilot_studio.ui.server.ThreadingHTTPServer",
+                "optpilot_studio.ui.server._StudioThreadingHTTPServer",
                 return_value=fake_server,
             ),
             mock.patch(

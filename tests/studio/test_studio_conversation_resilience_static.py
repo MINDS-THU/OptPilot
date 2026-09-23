@@ -217,7 +217,8 @@ class StudioConversationResilienceStaticTest(unittest.TestCase):
 
         self.assertIn("AbortController", fetch)
         self.assertIn("Studio did not respond in time", fetch)
-        self.assertIn("timeoutMs: 12000", refresh)
+        self.assertIn("const CORE_REQUEST_TIMEOUT_MS = 30_000", self.source)
+        self.assertIn("timeoutMs: CORE_REQUEST_TIMEOUT_MS", refresh)
         self.assertIn("timeoutMs: 15000", hydrate)
         self.assertIn("timeoutMs: 15000", create)
 
