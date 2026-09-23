@@ -2428,6 +2428,10 @@ class StudioInterfaceOutputLifecycleTest(unittest.TestCase):
             "available": True,
             "error": "Cannot connect to a private test socket path",
         }
+        with self.state._runtime_health_lock:
+            self.state._runtime_health_last = None
+        with self.state._catalog_public_entry_lock:
+            self.state._catalog_public_entry_cache.clear()
 
         entry = _catalog_payload(self.state)["resources"][0]
         profile_action = entry["interface"]["profiles"][0]["launch"]
