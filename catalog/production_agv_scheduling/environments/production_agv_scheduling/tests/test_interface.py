@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -171,6 +172,19 @@ class InterfaceServerTests(unittest.TestCase):
         self.server.server_close()
         self.server.application.close()
         self.thread.join(timeout=2)
+
+    def test_startup_does_not_require_reverse_dns(self) -> None:
+        with patch("socket.getfqdn", side_effect=AssertionError("unexpected reverse DNS")):
+            server = create_server(
+                host="127.0.0.1",
+                port=0,
+                environment_root=ENVIRONMENT_ROOT,
+                runtime_root=Path(self.temporary.name),
+            )
+        self.addCleanup(server.application.close)
+        self.addCleanup(server.server_close)
+        self.assertEqual(server.server_name, "127.0.0.1")
+        self.assertEqual(server.server_port, server.server_address[1])
 
     def test_ready_candidate_and_dynamic_same_origin_config(self) -> None:
         ready = _get_json(self.base_url + "/ready")
