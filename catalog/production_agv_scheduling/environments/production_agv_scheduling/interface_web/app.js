@@ -26,6 +26,7 @@ let hasCompletedRun = false;
 let actionPending = false;
 let lastState = null;
 let operationSerial = 0;
+let fixedInputs = false;
 const MIN_MOTION_HORIZON = 11;
 
 async function request(path, options = {}) {
@@ -47,13 +48,23 @@ function optionsPayload() {
 
 async function loadCandidate() {
   const payload = await request("/api/candidate");
-  elements.scheduler.value = payload.candidate["scheduler.py"];
-  elements.estimator.value = payload.candidate["param_estimator.py"];
+  fixedInputs = payload.fixed_inputs === true;
+  elements.scheduler.value = payload.candidate["scheduler.py"] || "";
+  elements.estimator.value = payload.candidate["param_estimator.py"] || "";
   elements.seed.value = payload.defaults.seed;
   elements.horizon.value = payload.defaults.simulation_horizon;
   elements.timeStep.value = payload.defaults.time_step;
   elements.replaySpeed.value = String(payload.defaults.replay_speed);
   elements.disableFaults.checked = payload.defaults.disable_faults;
+  if (fixedInputs) {
+    for (const input of [elements.seed, elements.horizon, elements.timeStep, elements.disableFaults]) input.disabled = true;
+    for (const editor of document.querySelectorAll(".editor")) editor.hidden = true;
+    elements.additionalFiles.hidden = true;
+    elements.candidateSource.textContent = payload.source === "trial" ? "Original trial settings" : "Saved candidate";
+    elements.run.textContent = "Run simulation";
+    updateHorizonHint();
+    return;
+  }
   elements.candidateSource.textContent = payload.source;
   elements.additionalFiles.textContent = payload.additional_files.length
     ? `${payload.additional_files.length} helper file(s) under policy/ are preserved when this candidate runs.`
@@ -75,7 +86,7 @@ async function runCandidate() {
     const state = await request("/api/run", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
+      body: JSON.stringify(fixedInputs ? {} : {
         candidate: {
           "scheduler.py": elements.scheduler.value,
           "param_estimator.py": elements.estimator.value,

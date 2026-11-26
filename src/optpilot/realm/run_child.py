@@ -450,7 +450,7 @@ class ExactPlanChildRunRequest:
         """Return all request facts for trusted service-side confirmation.
 
         The result contains owner/content authority coordinates and must not be
-        sent to a browser.  Studio uses an actor-bound redacted projection.
+        sent to the client. Use an actor-bound redacted projection.
         """
 
         return {

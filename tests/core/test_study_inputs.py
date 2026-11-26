@@ -243,7 +243,7 @@ class StudyInputsFailClosedTest(unittest.TestCase):
 class StudyInputsTypedRejectionTest(unittest.TestCase):
     """Launch-input rejections carry a stable machine code.
 
-    Studio branches on the code (asking the user for missing values rather
+    Clients branch on the code (asking the user for missing values rather
     than reporting a generic failure), so these codes are contract.
     """
 
@@ -354,7 +354,7 @@ class StudyInputsNoInputsRegressionTest(unittest.TestCase):
 
 class StudyInputsCliParsingTest(unittest.TestCase):
     def _parse(self, argv: list[str]):
-        from optpilot.cli import _parse_launch_inputs, build_parser
+        from optpilot._retired_cli import _parse_launch_inputs, build_parser
 
         args = build_parser().parse_args(argv)
         return _parse_launch_inputs(args)

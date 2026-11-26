@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Validate release metadata and distribution artifact boundaries.
-
-The public ``optpilot`` distribution must remain a self-contained core package.
-The source-only ``optpilot-studio`` distribution is checked when its artifact
-directory is supplied explicitly.
-"""
+"""Validate release metadata and distribution artifact boundaries."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import stat
 import subprocess
@@ -30,11 +26,12 @@ CORE_FORBIDDEN_SDIST_PREFIXES = (
     ".github/",
     ".optpilot-ui/",
     "catalog/",
+    "website/",
     "docs/",
     "runs/",
     "scripts/",
     "site/",
-    "studio/",
+    "desktop/",
     "tests/",
     "workspace/",
     *RESEARCH_SCRATCH_PREFIXES,
@@ -44,7 +41,6 @@ CORE_FORBIDDEN_WHEEL_PREFIXES = (
     "optpilot/ui/",
     "optpilot/assistant_assets/",
     "optpilot/docs_assets/",
-    "optpilot_studio/",
     "optpilot_examples/",
     *RESEARCH_SCRATCH_PREFIXES,
 )
@@ -53,6 +49,8 @@ CORE_REQUIRED_WHEEL_ENTRIES = {
     "optpilot/__init__.py",
     "optpilot/__main__.py",
     "optpilot/cli.py",
+    "optpilot/authoring/contract.json",
+    "optpilot/authoring/optpilot-evaluation/SKILL.md",
     "optpilot/config.py",
     "optpilot/runner.py",
     "optpilot/realm/__init__.py",
@@ -65,41 +63,13 @@ CORE_REQUIRED_SDIST_ENTRIES = {
     "pyproject.toml",
     "src/optpilot/__init__.py",
     "src/optpilot/cli.py",
+    "src/optpilot/authoring/contract.json",
+    "src/optpilot/authoring/optpilot-evaluation/SKILL.md",
     "src/optpilot/config.py",
     "src/optpilot/runner.py",
     "src/optpilot/realm/__init__.py",
 }
 
-STUDIO_REQUIRED_WHEEL_ENTRIES = {
-    "optpilot_studio/__init__.py",
-    "optpilot_studio/agent.py",
-    "optpilot_studio/cli.py",
-    "optpilot_studio/assistant_assets/prompts/system.md",
-    "optpilot_studio/docs_assets/index.md",
-    "optpilot_studio/docs_assets/operations.md",
-    "optpilot_studio/ui/server.py",
-    "optpilot_studio/ui/static/app.js",
-    "optpilot_studio/ui/static/index.html",
-    "optpilot_studio/ui/static/styles.css",
-    "optpilot_studio/ui/workspace_runtime/Dockerfile",
-}
-
-STUDIO_REQUIRED_SDIST_ENTRIES = {
-    "LICENSE",
-    "README.md",
-    "pyproject.toml",
-    "src/optpilot_studio/__init__.py",
-    "src/optpilot_studio/agent.py",
-    "src/optpilot_studio/cli.py",
-    "src/optpilot_studio/assistant_assets/prompts/system.md",
-    "src/optpilot_studio/docs_assets/index.md",
-    "src/optpilot_studio/docs_assets/operations.md",
-    "src/optpilot_studio/ui/server.py",
-    "src/optpilot_studio/ui/static/app.js",
-    "src/optpilot_studio/ui/static/index.html",
-    "src/optpilot_studio/ui/static/styles.css",
-    "src/optpilot_studio/ui/workspace_runtime/Dockerfile",
-}
 
 def _distributed_executable_paths() -> set[str]:
     """Return executable paths that may appear in a distribution archive."""
@@ -137,12 +107,15 @@ def _artifact_executable_path_allowed(path: str) -> bool:
 
 
 ALLOWED_EXECUTABLE_PATHS = {
+    "catalog/display_calibration/open_desktop.command",
+    "catalog/display_calibration/重跑演示.command",
     "catalog/devs_gallery/resources/devs-gen-interface/_optpilot_launch_interface.sh",
     "catalog/or_solving/methods/coopa_solver/launch_console.sh",
     "catalog/devs_gallery/resources/devs-gen-interface/_start_backend.sh",
     "catalog/devs_gallery/resources/devs-gen-interface/_start_frontend.sh",
     "scripts/smoke_test.sh",
-    "scripts/start_services.sh",
+    "tests/fixtures/harbor/help-topic/solution/solve.sh",
+    "tests/fixtures/harbor/help-topic/tests/test.sh",
 }
 
 
@@ -154,10 +127,6 @@ def main(argv: list[str] | None = None) -> int:
         default="dist",
         help="Directory containing the core wheel and sdist",
     )
-    parser.add_argument(
-        "--studio-dist-dir",
-        help="Optional directory containing the source-only Studio wheel and sdist",
-    )
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
     version, version_errors = _check_versions(root)
@@ -165,41 +134,29 @@ def main(argv: list[str] | None = None) -> int:
     errors.extend(_check_source_modes(root))
     if version:
         errors.extend(_check_core_artifacts(Path(args.dist_dir), root, version))
-        if args.studio_dist_dir:
-            errors.extend(
-                _check_studio_artifacts(Path(args.studio_dist_dir), version)
-            )
     if errors:
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    checked = "core and Studio" if args.studio_dist_dir else "core"
-    print(f"Release artifact checks passed ({checked}).")
+    print("Release artifact checks passed (core).")
     return 0
 
 
 def _check_versions(root: Path) -> tuple[str, list[str]]:
     core_version = _first_match(root / "pyproject.toml", r'^version = "([^"]+)"')
-    studio_version = _first_match(
-        root / "studio" / "pyproject.toml", r'^version = "([^"]+)"'
-    )
-    studio_pin = _first_match(
-        root / "studio" / "pyproject.toml", r'"optpilot==([^"]+)"'
-    )
     core_init = _first_match(
         root / "src" / "optpilot" / "__init__.py",
         r'^__version__ = "([^"]+)"',
     )
-    studio_init = _first_match(
-        root / "studio" / "src" / "optpilot_studio" / "__init__.py",
-        r'^__version__ = "([^"]+)"',
-    )
+    contract = root / "src" / "optpilot" / "authoring" / "contract.json"
+    try:
+        authoring_version = json.loads(contract.read_text())["coreVersion"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return "", [f"Invalid desktop authoring contract: {error}"]
     versions = {
         "core pyproject": core_version,
-        "studio pyproject": studio_version,
-        "studio dependency pin": studio_pin,
         "core __init__": core_init,
-        "studio __init__": studio_init,
+        "desktop authoring contract": authoring_version,
     }
     missing = [name for name, value in versions.items() if not value]
     if missing:
@@ -250,38 +207,6 @@ def _check_core_artifacts(dist_dir: Path, root: Path, version: str) -> list[str]
                 sdist,
                 required=expected_sdist,
                 forbidden_prefixes=CORE_FORBIDDEN_SDIST_PREFIXES,
-            )
-        )
-    return errors
-
-
-def _check_studio_artifacts(dist_dir: Path, version: str) -> list[str]:
-    wheel, sdist, errors = _artifact_pair(dist_dir, "optpilot_studio", version)
-    if wheel:
-        errors.extend(
-            _check_wheel(
-                wheel,
-                required=STUDIO_REQUIRED_WHEEL_ENTRIES,
-                forbidden_prefixes=("optpilot/", *RESEARCH_SCRATCH_PREFIXES),
-                metadata_name="optpilot_studio",
-                version=version,
-                required_entry_points=(
-                    "optpilot-studio = optpilot_studio.ui.server:main",
-                    "ui = optpilot_studio.cli:add_ui_subcommand",
-                ),
-                required_metadata=(f"Requires-Dist: optpilot=={version}",),
-            )
-        )
-    if sdist:
-        errors.extend(
-            _check_sdist(
-                sdist,
-                required=STUDIO_REQUIRED_SDIST_ENTRIES,
-                forbidden_prefixes=(
-                    "src/optpilot/",
-                    "tests/",
-                    *RESEARCH_SCRATCH_PREFIXES,
-                ),
             )
         )
     return errors
@@ -461,7 +386,8 @@ def _check_source_modes(root: Path) -> list[str]:
             mode = meta.split(" ", 1)[0]
         except ValueError:
             continue
-        recorded[relative] = mode
+        if (root / relative).exists():
+            recorded[relative] = mode
     for relative, mode in sorted(recorded.items()):
         if mode == "120000":  # a symlink records its own mode; not our concern
             continue

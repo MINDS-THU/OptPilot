@@ -21,6 +21,4 @@ The frontend owns:
   table
 
 The service is launched through the resource-level
-`_optpilot_launch_interface.sh` script. Studio writes runtime files into its
-launch-owned runtime root. Direct execution uses the resource's ignored
-`.runtime/` directory, so sessions and logs never mix with authored source.
+`_optpilot_launch_interface.sh` script. Standalone execution stores runtime files under the resource’s `.runtime/` directory.

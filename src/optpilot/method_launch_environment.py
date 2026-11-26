@@ -2,7 +2,7 @@
 
 Authored ``method.runtime.envFromHost`` entries are requirements, not
 reproducible Study inputs.  Their names are retained in the Method contract so
-Studio can explain what a Method needs.  A non-secret binding revision records
+a client can explain what a Method needs.  A non-secret binding revision records
 which settings snapshot a Run selected, while the corresponding values are a
 one-use in-memory handoff to a newly started Method process.
 

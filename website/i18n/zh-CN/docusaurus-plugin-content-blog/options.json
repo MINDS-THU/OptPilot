@@ -1,0 +1,14 @@
+{
+  "title": {
+    "message": "研究",
+    "description": "The title for the blog used in SEO"
+  },
+  "description": {
+    "message": "关于 OptPilot 实验模型、实现、应用案例和相关项目的工程札记。",
+    "description": "The description for the blog used in SEO"
+  },
+  "sidebar.title": {
+    "message": "所有研究札记",
+    "description": "The label for the left sidebar"
+  }
+}

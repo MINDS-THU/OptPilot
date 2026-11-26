@@ -1,6 +1,6 @@
 """Actor-bound local read service for canonical Realm runs.
 
-The Studio or another local server constructs one :class:`LocalRealmContext`
+A local client constructs one :class:`LocalRealmContext`
 at startup.  Request handlers use its bound read service and therefore never
 accept a principal id, database path, run-root path, or workspace path from an
 HTTP request.  Run ids remain canonical Realm identities rather than encoded

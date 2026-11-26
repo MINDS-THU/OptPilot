@@ -90,13 +90,15 @@ class AllowedTreeSource:
     ignore-file language.  It lets a trusted caller omit well-known generated
     directory trees (for example ``node_modules``) while the content service
     still performs one descriptor-rooted, race-detecting capture of every
-    selected byte.
+    selected byte. ``excluded_entry_prefixes`` omits matching names before
+    opening them, including symlinks, for caller-owned credential policies.
     """
 
     allowed_root: Path
     relative_selection: str = "."
     expected_generation: Optional[int] = None
     excluded_directory_names: tuple[str, ...] = ()
+    excluded_entry_prefixes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.allowed_root, Path):
@@ -111,6 +113,15 @@ class AllowedTreeSource:
             raise ValueError("expected_generation must be a nonnegative integer.")
         if not isinstance(self.excluded_directory_names, tuple):
             raise TypeError("excluded_directory_names must be a tuple of names.")
+        prefixes = self.excluded_entry_prefixes
+        if not isinstance(prefixes, tuple) or any(
+            not isinstance(prefix, str) or not prefix or prefix in {".", ".."}
+            or any(char in prefix for char in ("/", "\\", "\0"))
+            for prefix in prefixes
+        ):
+            raise ValueError("excluded_entry_prefixes must contain nonempty filename prefixes.")
+        if prefixes != tuple(sorted(set(prefixes))):
+            raise ValueError("excluded_entry_prefixes must be unique and sorted.")
         names = self.excluded_directory_names
         if any(not isinstance(name, str) for name in names):
             raise TypeError("excluded_directory_names must contain only strings.")
@@ -635,6 +646,7 @@ class LocalContentStore:
                 limits=limits,
                 ignored_xattrs=self.ignored_source_xattrs,
                 excluded_directory_names=source.excluded_directory_names,
+                excluded_entry_prefixes=source.excluded_entry_prefixes,
             )
             entries = []
             for node in before.nodes:
@@ -670,6 +682,7 @@ class LocalContentStore:
                 limits=limits,
                 ignored_xattrs=self.ignored_source_xattrs,
                 excluded_directory_names=source.excluded_directory_names,
+                excluded_entry_prefixes=source.excluded_entry_prefixes,
             )
             if after != before:
                 raise SourceChanged("Source tree changed during capture.")
@@ -1948,6 +1961,7 @@ def _inventory(
     limits: SealLimits,
     ignored_xattrs: frozenset[str],
     excluded_directory_names: tuple[str, ...] = (),
+    excluded_entry_prefixes: tuple[str, ...] = (),
 ) -> _Inventory:
     root_info = os.fstat(root_fd)
     if not stat.S_ISDIR(root_info.st_mode):
@@ -1959,6 +1973,8 @@ def _inventory(
     def visit(directory_fd: int, prefix: str) -> None:
         nonlocal logical_bytes
         for name in os.listdir(directory_fd):
+            if name.startswith(excluded_entry_prefixes):
+                continue
             raw_path = f"{prefix}/{name}" if prefix else name
             # Validate before any destination name is derived from source text.
             validate_portable_paths([raw_path], limits=limits)

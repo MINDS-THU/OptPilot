@@ -1,0 +1,730 @@
+{
+  "blog.index.kicker": {
+    "message": "项目日志"
+  },
+  "blog.returnToIndex": {
+    "message": "返回全部工程笔记"
+  },
+  "theme.ErrorPageContent.title": {
+    "message": "页面已崩溃。",
+    "description": "The title of the fallback page when the page crashed"
+  },
+  "theme.BackToTopButton.buttonAriaLabel": {
+    "message": "回到顶部",
+    "description": "The ARIA label for the back to top button"
+  },
+  "theme.blog.archive.title": {
+    "message": "历史博文",
+    "description": "The page & hero title of the blog archive page"
+  },
+  "theme.blog.archive.description": {
+    "message": "历史博文",
+    "description": "The page & hero description of the blog archive page"
+  },
+  "theme.blog.paginator.navAriaLabel": {
+    "message": "博文列表分页导航",
+    "description": "The ARIA label for the blog pagination"
+  },
+  "theme.blog.paginator.newerEntries": {
+    "message": "较新的博文",
+    "description": "The label used to navigate to the newer blog posts page (previous page)"
+  },
+  "theme.blog.paginator.olderEntries": {
+    "message": "较旧的博文",
+    "description": "The label used to navigate to the older blog posts page (next page)"
+  },
+  "theme.blog.post.paginator.navAriaLabel": {
+    "message": "博文分页导航",
+    "description": "The ARIA label for the blog posts pagination"
+  },
+  "theme.blog.post.paginator.newerPost": {
+    "message": "较新一篇",
+    "description": "The blog post button label to navigate to the newer/previous post"
+  },
+  "theme.blog.post.paginator.olderPost": {
+    "message": "较旧一篇",
+    "description": "The blog post button label to navigate to the older/next post"
+  },
+  "theme.tags.tagsPageLink": {
+    "message": "查看所有标签",
+    "description": "The label of the link targeting the tag list page"
+  },
+  "theme.colorToggle.ariaLabel.mode.system": {
+    "message": "system mode",
+    "description": "The name for the system color mode"
+  },
+  "theme.colorToggle.ariaLabel.mode.light": {
+    "message": "浅色模式",
+    "description": "The name for the light color mode"
+  },
+  "theme.colorToggle.ariaLabel.mode.dark": {
+    "message": "暗黑模式",
+    "description": "The name for the dark color mode"
+  },
+  "theme.colorToggle.ariaLabel": {
+    "message": "切换浅色/暗黑模式（当前为{mode}）",
+    "description": "The ARIA label for the color mode toggle"
+  },
+  "theme.docs.breadcrumbs.navAriaLabel": {
+    "message": "页面路径",
+    "description": "The ARIA label for the breadcrumbs"
+  },
+  "theme.docs.paginator.navAriaLabel": {
+    "message": "文件选项卡",
+    "description": "The ARIA label for the docs pagination"
+  },
+  "theme.docs.paginator.previous": {
+    "message": "上一页",
+    "description": "The label used to navigate to the previous doc"
+  },
+  "theme.docs.paginator.next": {
+    "message": "下一页",
+    "description": "The label used to navigate to the next doc"
+  },
+  "theme.docs.tagDocListPageTitle.nDocsTagged": {
+    "message": "{count} 篇文档带有标签",
+    "description": "Pluralized label for \"{count} docs tagged\". Use as much plural forms (separated by \"|\") as your language support (see https://www.unicode.org/cldr/cldr-aux/charts/34/supplemental/language_plural_rules.html)"
+  },
+  "theme.docs.tagDocListPageTitle": {
+    "message": "{nDocsTagged}「{tagName}」",
+    "description": "The title of the page for a docs tag"
+  },
+  "theme.docs.versions.unreleasedVersionLabel": {
+    "message": "此为 {siteTitle} {versionLabel} 版尚未发行的文档。",
+    "description": "The label used to tell the user that he's browsing an unreleased doc version"
+  },
+  "theme.docs.versions.unmaintainedVersionLabel": {
+    "message": "此为 {siteTitle} {versionLabel} 版的文档，现已不再积极维护。",
+    "description": "The label used to tell the user that he's browsing an unmaintained doc version"
+  },
+  "theme.docs.versions.latestVersionSuggestionLabel": {
+    "message": "最新的文档请参阅 {latestVersionLink} ({versionLabel})。",
+    "description": "The label used to tell the user to check the latest version"
+  },
+  "theme.docs.versions.latestVersionLinkLabel": {
+    "message": "最新版本",
+    "description": "The label used for the latest version suggestion link label"
+  },
+  "theme.common.editThisPage": {
+    "message": "编辑此页",
+    "description": "The link label to edit the current page"
+  },
+  "theme.docs.versionBadge.label": {
+    "message": "版本：{versionLabel}"
+  },
+  "theme.common.headingLinkTitle": {
+    "message": "{heading}的直接链接",
+    "description": "Title for link to heading"
+  },
+  "theme.lastUpdated.atDate": {
+    "message": "于 {date} ",
+    "description": "The words used to describe on which date a page has been last updated"
+  },
+  "theme.lastUpdated.byUser": {
+    "message": "由 {user} ",
+    "description": "The words used to describe by who the page has been last updated"
+  },
+  "theme.lastUpdated.lastUpdatedAtBy": {
+    "message": "最后{byUser}{atDate}更新",
+    "description": "The sentence used to display when a page has been last updated, and by who"
+  },
+  "theme.navbar.mobileVersionsDropdown.label": {
+    "message": "选择版本",
+    "description": "The label for the navbar versions dropdown on mobile view"
+  },
+  "theme.NotFound.title": {
+    "message": "找不到页面",
+    "description": "The title of the 404 page"
+  },
+  "theme.tags.tagsListLabel": {
+    "message": "标签：",
+    "description": "The label alongside a tag list"
+  },
+  "theme.AnnouncementBar.closeButtonAriaLabel": {
+    "message": "关闭",
+    "description": "The ARIA label for close button of announcement bar"
+  },
+  "theme.admonition.caution": {
+    "message": "警告",
+    "description": "The default label used for the Caution admonition (:::caution)"
+  },
+  "theme.admonition.danger": {
+    "message": "危险",
+    "description": "The default label used for the Danger admonition (:::danger)"
+  },
+  "theme.admonition.info": {
+    "message": "信息",
+    "description": "The default label used for the Info admonition (:::info)"
+  },
+  "theme.admonition.note": {
+    "message": "备注",
+    "description": "The default label used for the Note admonition (:::note)"
+  },
+  "theme.admonition.tip": {
+    "message": "提示",
+    "description": "The default label used for the Tip admonition (:::tip)"
+  },
+  "theme.admonition.warning": {
+    "message": "注意",
+    "description": "The default label used for the Warning admonition (:::warning)"
+  },
+  "theme.blog.sidebar.navAriaLabel": {
+    "message": "最近博文导航",
+    "description": "The ARIA label for recent posts in the blog sidebar"
+  },
+  "theme.DocSidebarItem.expandCategoryAriaLabel": {
+    "message": "展开侧边栏分类 '{label}'",
+    "description": "The ARIA label to expand the sidebar category"
+  },
+  "theme.DocSidebarItem.collapseCategoryAriaLabel": {
+    "message": "折叠侧边栏分类 '{label}'",
+    "description": "The ARIA label to collapse the sidebar category"
+  },
+  "theme.IconExternalLink.ariaLabel": {
+    "message": "(opens in new tab)",
+    "description": "The ARIA label for the external link icon"
+  },
+  "theme.NavBar.navAriaLabel": {
+    "message": "主导航",
+    "description": "The ARIA label for the main navigation"
+  },
+  "theme.NotFound.p1": {
+    "message": "我们找不到您要找的页面。",
+    "description": "The first paragraph of the 404 page"
+  },
+  "theme.NotFound.p2": {
+    "message": "请联系原始链接来源网站的所有者，并告知他们链接已损坏。",
+    "description": "The 2nd paragraph of the 404 page"
+  },
+  "theme.navbar.mobileLanguageDropdown.label": {
+    "message": "选择语言",
+    "description": "The label for the mobile language switcher dropdown"
+  },
+  "theme.TOCCollapsible.toggleButtonLabel": {
+    "message": "本页总览",
+    "description": "The label used by the button on the collapsible TOC component"
+  },
+  "theme.blog.post.readMore": {
+    "message": "阅读更多",
+    "description": "The label used in blog post item excerpts to link to full blog posts"
+  },
+  "theme.blog.post.readMoreLabel": {
+    "message": "阅读 {title} 的全文",
+    "description": "The ARIA label for the link to full blog posts from excerpts"
+  },
+  "theme.blog.post.readingTime.plurals": {
+    "message": "阅读需 {readingTime} 分钟",
+    "description": "Pluralized label for \"{readingTime} min read\". Use as much plural forms (separated by \"|\") as your language support (see https://www.unicode.org/cldr/cldr-aux/charts/34/supplemental/language_plural_rules.html)"
+  },
+  "theme.CodeBlock.wordWrapToggle": {
+    "message": "切换自动换行",
+    "description": "The title attribute for toggle word wrapping button of code block lines"
+  },
+  "theme.CodeBlock.copy": {
+    "message": "复制",
+    "description": "The copy button label on code blocks"
+  },
+  "theme.CodeBlock.copied": {
+    "message": "复制成功",
+    "description": "The copied button label on code blocks"
+  },
+  "theme.CodeBlock.copyButtonAriaLabel": {
+    "message": "复制代码到剪贴板",
+    "description": "The ARIA label for copy code blocks button"
+  },
+  "theme.docs.breadcrumbs.home": {
+    "message": "主页面",
+    "description": "The ARIA label for the home page in the breadcrumbs"
+  },
+  "theme.docs.sidebar.collapseButtonTitle": {
+    "message": "收起侧边栏",
+    "description": "The title attribute for collapse button of doc sidebar"
+  },
+  "theme.docs.sidebar.collapseButtonAriaLabel": {
+    "message": "收起侧边栏",
+    "description": "The title attribute for collapse button of doc sidebar"
+  },
+  "theme.docs.sidebar.navAriaLabel": {
+    "message": "文档侧边栏",
+    "description": "The ARIA label for the sidebar navigation"
+  },
+  "theme.docs.sidebar.closeSidebarButtonAriaLabel": {
+    "message": "关闭导航栏",
+    "description": "The ARIA label for close button of mobile sidebar"
+  },
+  "theme.navbar.mobileSidebarSecondaryMenu.backButtonLabel": {
+    "message": "← 回到主菜单",
+    "description": "The label of the back button to return to main menu, inside the mobile navbar sidebar secondary menu (notably used to display the docs sidebar)"
+  },
+  "theme.docs.sidebar.toggleSidebarButtonAriaLabel": {
+    "message": "切换导航栏",
+    "description": "The ARIA label for hamburger menu button of mobile navigation"
+  },
+  "theme.navbar.mobileDropdown.collapseButton.expandAriaLabel": {
+    "message": "Expand the dropdown",
+    "description": "The ARIA label of the button to expand the mobile dropdown navbar item"
+  },
+  "theme.navbar.mobileDropdown.collapseButton.collapseAriaLabel": {
+    "message": "Collapse the dropdown",
+    "description": "The ARIA label of the button to collapse the mobile dropdown navbar item"
+  },
+  "theme.docs.sidebar.expandButtonTitle": {
+    "message": "展开侧边栏",
+    "description": "The ARIA label and title attribute for expand button of doc sidebar"
+  },
+  "theme.docs.sidebar.expandButtonAriaLabel": {
+    "message": "展开侧边栏",
+    "description": "The ARIA label and title attribute for expand button of doc sidebar"
+  },
+  "theme.blog.post.plurals": {
+    "message": "{count} 篇博文",
+    "description": "Pluralized label for \"{count} posts\". Use as much plural forms (separated by \"|\") as your language support (see https://www.unicode.org/cldr/cldr-aux/charts/34/supplemental/language_plural_rules.html)"
+  },
+  "theme.blog.tagTitle": {
+    "message": "{nPosts} 含有标签「{tagName}」",
+    "description": "The title of the page for a blog tag"
+  },
+  "theme.blog.author.pageTitle": {
+    "message": "{authorName} - {nPosts}",
+    "description": "The title of the page for a blog author"
+  },
+  "theme.blog.authorsList.pageTitle": {
+    "message": "作者",
+    "description": "The title of the authors page"
+  },
+  "theme.blog.authorsList.viewAll": {
+    "message": "查看所有作者",
+    "description": "The label of the link targeting the blog authors page"
+  },
+  "theme.blog.author.noPosts": {
+    "message": "该作者尚未撰写任何文章。",
+    "description": "The text for authors with 0 blog post"
+  },
+  "theme.contentVisibility.unlistedBanner.title": {
+    "message": "未列出页",
+    "description": "The unlisted content banner title"
+  },
+  "theme.contentVisibility.unlistedBanner.message": {
+    "message": "此页面未列出。搜索引擎不会对其索引，只有拥有直接链接的用户才能访问。",
+    "description": "The unlisted content banner message"
+  },
+  "theme.contentVisibility.draftBanner.title": {
+    "message": "草稿页",
+    "description": "The draft content banner title"
+  },
+  "theme.contentVisibility.draftBanner.message": {
+    "message": "此页面是草稿，仅在开发环境中可见，不会包含在正式版本中。",
+    "description": "The draft content banner message"
+  },
+  "theme.docs.DocCard.categoryDescription.plurals": {
+    "message": "{count} 个项目",
+    "description": "The default description for a category card in the generated index about how many items this category includes"
+  },
+  "theme.ErrorPageContent.tryAgain": {
+    "message": "重试",
+    "description": "The label of the button to try again rendering when the React error boundary captures an error"
+  },
+  "theme.common.skipToMainContent": {
+    "message": "跳到主要内容",
+    "description": "The skip to content label used for accessibility, allowing to rapidly navigate to main content with keyboard tab/enter navigation"
+  },
+  "theme.tags.tagsPageTitle": {
+    "message": "标签",
+    "description": "The title of the tag list page"
+  },
+  "homepage.hero.eyebrow": {
+    "message": "开源实验基础设施"
+  },
+  "homepage.hero.title": {
+    "message": "输入版本可冻结，运行结果可追溯。"
+  },
+  "homepage.hero.lead": {
+    "message": "在版本化项目中定义任务、评估实例、候选方案和可选生成器。审查后，OptPilot 会在执行前冻结所选版本。"
+  },
+  "homepage.hero.subtitle": {
+    "message": "公开的 Python Core 和 CLI 可在本地运行。OptPilot Desktop 是源码私有的独立客户端，目前尚未发布安装包。"
+  },
+  "homepage.hero.getStarted": {
+    "message": "开始使用"
+  },
+  "homepage.hero.exploreStudio": {
+    "message": "了解 Desktop"
+  },
+  "homepage.desktop.status.title": {
+    "message": "安装包尚未公开发布"
+  },
+  "homepage.desktop.status.text": {
+    "message": "Desktop 源码保存在私有仓库，目前尚无公开安装包可供下载。"
+  },
+  "homepage.manifest.label": {
+    "message": "项目清单"
+  },
+  "homepage.manifest.tasks": {
+    "message": "评测契约与指标"
+  },
+  "homepage.manifest.instances": {
+    "message": "具体评估案例"
+  },
+  "homepage.manifest.suites": {
+    "message": "选定的实例集合"
+  },
+  "homepage.manifest.candidates": {
+    "message": "参数或程序提交"
+  },
+  "homepage.manifest.studies": {
+    "message": "指标、预算和运行条件"
+  },
+  "homepage.manifest.reviewed": {
+    "message": "已审查的不可变版本"
+  },
+  "homepage.manifest.run": {
+    "message": "Run · Trial · Attempt · 证据"
+  },
+  "homepage.hero.showcase.alt": {
+    "message": "OptPilot Studio 目录与环境详情界面"
+  },
+  "homepage.hero.showcase.label": {
+    "message": "当前 Studio"
+  },
+  "homepage.hero.showcase.flow": {
+    "message": "对话 → 目录 → 运行设置 → 证据"
+  },
+  "homepage.proof.ariaLabel": {
+    "message": "项目概况"
+  },
+  "homepage.proof.version": {
+    "message": "Core 版本"
+  },
+  "homepage.proof.python": {
+    "message": "Python"
+  },
+  "homepage.proof.license": {
+    "message": "开源"
+  },
+  "homepage.proof.realm": {
+    "message": "CLI 与 Desktop"
+  },
+  "homepage.boundary.eyebrow": {
+    "message": "审查版本构成执行边界"
+  },
+  "homepage.boundary.title": {
+    "message": "项目清单经过审查，再冻结执行。"
+  },
+  "homepage.boundary.description": {
+    "message": "OptPilot 校验实验契约，冻结所选产物版本，并持久记录运行、试验、尝试和评估结果。"
+  },
+  "homepage.boundary.diagram.ariaLabel": {
+    "message": "版本化实验项目经审查后生成可追溯运行"
+  },
+  "homepage.boundary.project.title": {
+    "message": "项目"
+  },
+  "homepage.boundary.project.text": {
+    "message": "版本化的 Task、Instance、Suite、Candidate 与可选 Generator。"
+  },
+  "homepage.boundary.study.title": {
+    "message": "已审查 Study"
+  },
+  "homepage.boundary.study.text": {
+    "message": "冻结精确版本、指标、重复次数、预算和执行设置。"
+  },
+  "homepage.boundary.run.title": {
+    "message": "Run 记录"
+  },
+  "homepage.boundary.run.text": {
+    "message": "记录 Trial、Attempt、分数、失败和证据。"
+  },
+  "homepage.boundary.reviewArrow": {
+    "message": "审查 →"
+  },
+  "homepage.boundary.executeArrow": {
+    "message": "执行 →"
+  },
+  "homepage.boundary.evidence.title": {
+    "message": "共享项目记录"
+  },
+  "homepage.boundary.evidence.text": {
+    "message": "Python CLI 与 Desktop 读取同一版本和实验记录。"
+  },
+  "homepage.capabilities.eyebrow": {
+    "message": "版本化项目模型"
+  },
+  "homepage.capabilities.title": {
+    "message": "定义实验，再检查实际运行内容。"
+  },
+  "homepage.capabilities.description": {
+    "message": "Task 定义评测契约与指标，Suite 选择 Instance，Candidate 和可选 Generator 组成经过审查的 Study。"
+  },
+  "homepage.capabilities.contracts.title": {
+    "message": "版本化产物"
+  },
+  "homepage.capabilities.contracts.description": {
+    "message": "Task 定义评测契约和指标；Instance 提供具体案例；Suite、Candidate 与可选 Generator 组成已审查的 Study。"
+  },
+  "homepage.capabilities.contracts.detail": {
+    "message": "Task · Instance · Suite · Candidate"
+  },
+  "homepage.capabilities.execution.title": {
+    "message": "冻结后执行"
+  },
+  "homepage.capabilities.execution.description": {
+    "message": "Study 审查会解析不可变版本并记录指标、预算与执行设置，然后再启动 Run。"
+  },
+  "homepage.capabilities.execution.detail": {
+    "message": "先审查，再启动或恢复"
+  },
+  "homepage.capabilities.evidence.title": {
+    "message": "可检查的结果"
+  },
+  "homepage.capabilities.evidence.description": {
+    "message": "Run 在项目实验记录中保留实际输入、分数、失败信息及 Trial 和 Attempt 证据。"
+  },
+  "homepage.capabilities.evidence.detail": {
+    "message": "检查版本、Trial 和 Attempt"
+  },
+  "homepage.capabilities.studio.title": {
+    "message": "图形化 Desktop 客户端"
+  },
+  "homepage.capabilities.studio.description": {
+    "message": "Desktop 与公开 Python Core 和 CLI 使用相同的项目清单及实验记录。"
+  },
+  "homepage.capabilities.studio.detail": {
+    "message": "Desktop 源码保持私有"
+  },
+  "homepage.capabilities.boundary.title": {
+    "message": "当前可执行边界"
+  },
+  "homepage.capabilities.boundary.text": {
+    "message": "原生参数和可调用程序 Candidate 通过受信任的本地 Python 评测执行。Harbor Candidate 通过本地 Docker 作业运行。系统也支持 Manual Task 和已注册的 POSIX SSH worker。校验会拒绝不支持的产物与运行器组合。"
+  },
+  "homepage.capabilities.boundary.link": {
+    "message": "查看能力矩阵"
+  },
+  "homepage.workflow.eyebrow": {
+    "message": "从清单到保留结果"
+  },
+  "homepage.workflow.title": {
+    "message": "Run 启动前先审查精确输入。"
+  },
+  "homepage.workflow.define.title": {
+    "message": "定义"
+  },
+  "homepage.workflow.define.description": {
+    "message": "在 optpilot.experiment.yaml 中编写 Task、Instance、Suite、Candidate 和 Study。"
+  },
+  "homepage.workflow.validate.title": {
+    "message": "校验"
+  },
+  "homepage.workflow.validate.description": {
+    "message": "校验清单、引用文件、产物契约和已编写的 Study。"
+  },
+  "homepage.workflow.run.title": {
+    "message": "运行"
+  },
+  "homepage.workflow.run.description": {
+    "message": "审查以冻结精确产物版本，然后使用返回的 review ID 启动 Run。"
+  },
+  "homepage.workflow.decide.title": {
+    "message": "决策"
+  },
+  "homepage.workflow.decide.description": {
+    "message": "从共享实验记录检查 Run、Trial 和 Attempt 结果。"
+  },
+  "homepage.terminal.core": {
+    "message": "核心 CLI"
+  },
+  "homepage.terminal.studio": {
+    "message": "完整 Studio"
+  },
+  "homepage.terminal.sourceCheckout": {
+    "message": "源码检出"
+  },
+  "homepage.terminal.note": {
+    "message": "公开仓库包含 Python Core、CLI、示例和技术文档；Desktop 源码单独私有维护。"
+  },
+  "homepage.studio.imageAlt": {
+    "message": "显示目录的当前 OptPilot Studio 界面"
+  },
+  "homepage.studio.visual.label": {
+    "message": "本地工作界面"
+  },
+  "homepage.studio.visual.value": {
+    "message": "你的源代码 · 你的运行时 · 你的证据"
+  },
+  "homepage.studio.eyebrow": {
+    "message": "OptPilot Desktop"
+  },
+  "homepage.studio.title": {
+    "message": "使用同一项目模型的私有客户端。"
+  },
+  "homepage.studio.description": {
+    "message": "Desktop 提供项目产物、版本化实验、结果及已连接编程助手的图形界面，并读取与 Core CLI 相同的清单和实验记录。"
+  },
+  "homepage.studio.catalog.title": {
+    "message": "项目产物"
+  },
+  "homepage.studio.catalog.text": {
+    "message": "检查已保存的 Task、Instance、Suite、Candidate 和 Generator 版本。"
+  },
+  "homepage.studio.runSetups.title": {
+    "message": "Study 与 Run"
+  },
+  "homepage.studio.runSetups.text": {
+    "message": "审查冻结输入和执行条件，显式启动并检查保留结果。"
+  },
+  "homepage.studio.workspaces.title": {
+    "message": "可编辑产物"
+  },
+  "homepage.studio.workspaces.text": {
+    "message": "编辑项目产物，同时保留已保存版本与实验结果。"
+  },
+  "homepage.studio.assistant.title": {
+    "message": "已连接的助手"
+  },
+  "homepage.studio.assistant.text": {
+    "message": "在可用环境中使用已配置的编程助手，重要操作前显式审查。"
+  },
+  "homepage.studio.cta": {
+    "message": "使用公开 Core"
+  },
+  "homepage.studio.docs": {
+    "message": "阅读文档"
+  },
+  "homepage.research.eyebrow": {
+    "message": "研究软件包"
+  },
+  "homepage.research.title": {
+    "message": "研究成果也运行在同一个公开契约上。"
+  },
+  "homepage.research.description": {
+    "message": "论文配套项目通过当前实验模型展示仿真生成、策略设计和运筹求解。"
+  },
+  "homepage.research.viewAll": {
+    "message": "浏览全部软件包"
+  },
+  "homepage.research.read": {
+    "message": "阅读软件包介绍"
+  },
+  "homepage.positioning.eyebrow": {
+    "message": "在技术栈中扮演精确角色"
+  },
+  "homepage.positioning.title": {
+    "message": "OptPilot 是控制平面，而不是替代你已有的智能。"
+  },
+  "homepage.positioning.is.title": {
+    "message": "OptPilot 是"
+  },
+  "homepage.positioning.is.contract": {
+    "message": "提案与评估之间的契约"
+  },
+  "homepage.positioning.is.runtime": {
+    "message": "保留式本地执行边界"
+  },
+  "homepage.positioning.is.evidence": {
+    "message": "证据与恢复系统"
+  },
+  "homepage.positioning.is.workbench": {
+    "message": "通过 Studio 提供的人类工作台"
+  },
+  "homepage.positioning.isNot.title": {
+    "message": "OptPilot 不是"
+  },
+  "homepage.positioning.isNot.optimizer": {
+    "message": "替代优化器或求解器"
+  },
+  "homepage.positioning.isNot.simulator": {
+    "message": "替代仿真器或基准"
+  },
+  "homepage.positioning.isNot.agent": {
+    "message": "通用智能体框架"
+  },
+  "homepage.positioning.isNot.saas": {
+    "message": "托管式多用户 SaaS"
+  },
+  "homepage.final.eyebrow": {
+    "message": "让下一次运行可检查"
+  },
+  "homepage.final.title": {
+    "message": "冻结输入，保留证据。"
+  },
+  "homepage.final.description": {
+    "message": "从教程项目开始，审查一个 Study，然后通过 CLI 检查 Run 证据。"
+  },
+  "homepage.final.getStarted": {
+    "message": "运行教程"
+  },
+  "homepage.final.github": {
+    "message": "在 GitHub 查看"
+  },
+  "homepage.meta.title": {
+    "message": "版本化实验项目与可检查结果"
+  },
+  "homepage.meta.description": {
+    "message": "OptPilot 官方项目网站：版本化实验项目、冻结执行和可检查结果。"
+  },
+  "overview.release": {"message": "OptPilot Core 0.2.0 · Python 3.10+ · Apache-2.0"},
+  "overview.title": {"message": "OptPilot 概览"},
+  "overview.lead": {"message": "OptPilot 是用于版本化、可测量实验的开源 Python 包和 CLI。项目清单定义评测契约、具体案例、候选提交和经过审查的执行计划。"},
+  "overview.desktopIntro": {"message": "OptPilot Desktop 是源码私有的独立客户端。两个入口使用同一份项目清单和"},
+  "overview.desktopOutro": {"message": "实验记录。Desktop 安装包尚未公开发布。"},
+  "overview.why.eyebrow": {"message": "设计目的"},
+  "overview.why.title": {"message": "让每个实验都对应到实际输入。"},
+  "overview.why.p1": {"message": "评测工作包括编写的契约、具体案例、可执行提交、运行条件和外部服务。当这些部分独立变化时，很难确认某个分数究竟由哪些输入产生。"},
+  "overview.why.p2": {"message": "OptPilot 保存产物版本，校验 Study 选择，并在执行前冻结精确输入。每个 Run 都保留实际使用的版本和检查结果所需的证据。"},
+  "overview.model.eyebrow": {"message": "项目模型"},
+  "overview.model.title": {"message": "产物组合成经过审查的 Study。"},
+  "overview.task.title": {"message": "Task 与 Instance"},
+  "overview.task.text": {"message": "Task 定义评分契约和指标。Instance 提供一个具体评估案例及其输入。"},
+  "overview.suite.title": {"message": "Suite 与 Candidate"},
+  "overview.suite.text": {"message": "Suite 选择 Instance。Candidate 可以是参数集合、可调用程序或受支持的 Harbor Agent 配置。"},
+  "overview.study.title": {"message": "Generator 与 Study"},
+  "overview.study.text": {"message": "可选 Generator 提出 Candidate。Study 选择精确产物，并设置指标、预算、重复次数和执行条件。"},
+  "overview.run.title": {"message": "Run、Trial 与 Attempt"},
+  "overview.run.text": {"message": "Run 执行经过审查的 Study 版本。每个 Candidate、Instance 和重复组合构成一个 Trial，重试则会新增 Attempt。"},
+  "overview.lifecycle.eyebrow": {"message": "运行生命周期"},
+  "overview.lifecycle.title": {"message": "审查冻结计划，Run 记录实际执行。"},
+  "overview.lifecycle.text": {"message": "Study 可比较固定 Candidate、使用反馈驱动的 Generator、生成单个解，或针对冻结任务包运行受支持的 Harbor Agent 配置。"},
+  "overview.diagram.project": {"message": "项目"},
+  "overview.diagram.projectText": {"message": "定义 Task、案例、Suite 与 Candidate"},
+  "overview.diagram.study": {"message": "已审查 Study"},
+  "overview.diagram.studyText": {"message": "冻结版本和运行条件"},
+  "overview.diagram.run": {"message": "Run 记录"},
+  "overview.diagram.runText": {"message": "记录 Trial、Attempt 和结果"},
+  "overview.diagram.ledger": {"message": "共享项目实验记录"},
+  "overview.diagram.evidence": {"message": "实际输入 · 分数 · 失败 · 证据"},
+  "overview.contract.eyebrow": {"message": "Candidate 契约"},
+  "overview.contract.title": {"message": "审查会在执行前检查产物。"},
+  "overview.contract.text": {"message": "原生 Task 接受参数或可调用程序 Candidate。Harbor Task 使用 Harbor 任务包和受支持的 Agent 配置。启动前，审查会校验所选版本和运行器。"},
+  "overview.contract.task": {"message": "Task 声明"},
+  "overview.contract.taskText": {"message": "Grader、Candidate 契约、指标和可选反馈指标。"},
+  "overview.contract.candidate": {"message": "Candidate 声明"},
+  "overview.contract.candidateText": {"message": "参数值、可调用入口及文件，或受支持的 Harbor Agent 配置。"},
+  "overview.contract.review": {"message": "Study 审查记录"},
+  "overview.contract.reviewText": {"message": "不可变产物版本、指标、预算、重复次数和选定运行器。"},
+  "overview.execution.eyebrow": {"message": "执行与信任"},
+  "overview.execution.title": {"message": "选择适合任务的运行器。"},
+  "overview.execution.paths": {"message": "可用路径"},
+  "overview.execution.native": {"message": "原生参数和可调用程序 Candidate"},
+  "overview.execution.python": {"message": "在独立 worker 进程中运行受信任的本地 Python 评测"},
+  "overview.execution.generator": {"message": "可选的反馈驱动 Candidate Generator"},
+  "overview.execution.harbor": {"message": "通过本地 Docker 作业运行 Harbor Agent 配置"},
+  "overview.execution.manual": {"message": "人工 Task、已注册资源计划和 POSIX SSH worker"},
+  "overview.execution.boundary": {"message": "执行边界"},
+  "overview.execution.boundaryText": {"message": "本地 Python 会运行受信任的项目代码，并非对抗性沙箱。Harbor 使用自身任务隔离。不支持的产物与运行器组合会在执行前校验失败。"},
+  "overview.execution.link": {"message": "查看可执行能力 →"},
+  "overview.desktop.eyebrow": {"message": "桌面客户端"},
+  "overview.desktop.title": {"message": "以图形界面访问同一项目记录。"},
+  "overview.desktop.sharedTitle": {"message": "共享实验模型"},
+  "overview.desktop.sharedText": {"message": "Desktop 和 Python CLI 使用同一份清单、冻结产物版本和 Run 结果。"},
+  "overview.desktop.privateTitle": {"message": "私有源码"},
+  "overview.desktop.privateText": {"message": "Desktop 源码单独保存在私有仓库。公开仓库包含 Core、示例和文档。"},
+  "overview.desktop.statusTitle": {"message": "分发状态"},
+  "overview.desktop.statusText": {"message": "目前尚未在公开 GitHub Releases 发布安装包。"},
+  "overview.next.eyebrow": {"message": "继续探索"},
+  "overview.next.desktop": {"message": "OptPilot Desktop"},
+  "overview.next.desktopText": {"message": "查看客户端概览和当前分发状态。"},
+  "overview.next.packages": {"message": "研究项目"},
+  "overview.next.packagesText": {"message": "了解 DEVS-Gen、轨迹引导启发式设计和 COOPA。"},
+  "overview.next.start": {"message": "开始使用"},
+  "overview.next.startText": {"message": "校验项目、审查 Study 并检查 Run。"}
+}

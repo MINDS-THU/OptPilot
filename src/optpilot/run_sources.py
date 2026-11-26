@@ -2,7 +2,7 @@
 
 Runtime source preparation deliberately does not live here. Canonical runs
 retain one immutable package artifact and realize it through Realm projections;
-Studio uses this module only to choose the smallest source tree that contains a
+this module chooses the smallest source tree that contains a
 component config and its referenced Python package.
 """
 

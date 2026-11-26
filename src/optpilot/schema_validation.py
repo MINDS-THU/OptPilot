@@ -93,10 +93,13 @@ def require_public_config_schema(raw: Dict[str, Any], *, config_path: str | Path
 
 
 def _validator_for(config: str):
+    return _validator_for_document(SCHEMA_BY_CONFIG[config])
+
+
+def _validator_for_document(schema_name):
     from jsonschema import Draft202012Validator
     from referencing import Registry, Resource
 
-    schema_name = SCHEMA_BY_CONFIG[config]
     schemas = _load_schema_documents()
     registry = Registry().with_resources(
         [
@@ -118,6 +121,7 @@ def _load_schema_documents() -> Dict[str, Dict[str, Any]]:
 
 
 def _schema_relative_paths() -> Iterable[str]:
+    yield "experiment.schema.json"
     yield "environment.schema.json"
     yield "method.schema.json"
     yield "resource.schema.json"
@@ -139,3 +143,11 @@ def _json_path(parts: Iterable[Any]) -> str:
         else:
             result += f".{part}"
     return result
+
+
+def validate_experiment_schema(raw):
+    """Check project structure using packaged references; no remote schema retrieval."""
+    validator = _validator_for_document("experiment.schema.json")
+    error = next(validator.iter_errors(raw), None)
+    if error is not None:
+        raise ValueError(f"{_json_path(error.absolute_path)}: {error.message}")

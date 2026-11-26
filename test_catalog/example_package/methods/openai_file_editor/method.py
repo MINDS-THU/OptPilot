@@ -213,7 +213,7 @@ class OpenAIFileEditMethod:
         if not api_key:
             raise ValueError(
                 f"OpenAIFileEditMethod requires {api_key_env_var}. Declare it in runtime.envFromHost "
-                "and configure it in Studio Settings or the host environment before launching."
+                "and export it in the host environment before launching."
             )
 
         payload = {

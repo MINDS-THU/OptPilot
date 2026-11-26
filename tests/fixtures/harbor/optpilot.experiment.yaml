@@ -1,0 +1,14 @@
+tasks:
+  - id: identify-card
+    name: Name the editable project node
+    runner: harbor
+    harborTask: help-topic
+    decisionContract: {format: agent}
+    metrics: [reward]
+instances:
+  - {id: help-topic, name: Work card terminology, task: identify-card}
+suites:
+  - {id: terminology, name: Project map terminology, instances: [help-topic]}
+candidates:
+  - {id: oracle, name: Reference solution, format: agent, agent: {name: oracle}}
+  - {id: nop, name: Empty response, format: agent, agent: {name: nop}}

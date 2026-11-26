@@ -14,8 +14,8 @@ word "optimize".
 Two deliberate choices. The declared field is separate from `tags`, which are
 free-form labels a package author picks for their own reasons; conflating them
 would mean every future reader has to guess which tags carry meaning. And the
-table lives here, in the core, so the command line, Studio, and anything later
-that wants to route a request all agree on what the words mean.
+table lives here, in the core, so the command line, desktop, and other consumers
+use the same vocabulary to route requests.
 """
 
 from __future__ import annotations

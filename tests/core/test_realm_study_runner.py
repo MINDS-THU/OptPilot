@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import tempfile
 import unittest
@@ -375,6 +376,58 @@ class RealmStudyRunnerTest(unittest.TestCase):
                 row.coordinate
             ).exists()
         )
+
+    def test_real_worker_uses_configured_tmpdir_and_cleans_up_its_socket(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp", prefix="op-t-") as temporary:
+            temporary_root = Path(temporary).resolve()
+            observed_path = temporary_root / "worker-temp.json"
+            (self.package_root / "local_package" / "method.py").write_text(
+                "import json, os, tempfile\n"
+                "from pathlib import Path\n"
+                "class RetainedMethod:\n"
+                "    def __init__(self, definition, study_spec, rng):\n"
+                "        pass\n"
+                "    def propose(self, n_candidates, study_state, evidence_view):\n"
+                "        with tempfile.TemporaryDirectory() as temporary:\n"
+                f"            Path({str(observed_path)!r}).write_text(json.dumps({{\n"
+                "                'env': os.environ.get('TMPDIR'),\n"
+                "                'created_parent': str(Path(temporary).parent),\n"
+                "            }))\n"
+                "        return [{'candidate_id': 'malformed', 'format': 'parameters',\n"
+                "                 'spec': {'x': 0.5}, 'unexpected': True}]\n"
+                "    def observe(self, observations):\n"
+                "        pass\n",
+                encoding="utf-8",
+            )
+            handles = []
+            original_realize = RetainedBatchRuntimeProvider.realize
+
+            def capture_realize(provider, snapshot, **kwargs):
+                handle = original_realize(provider, snapshot, **kwargs)
+                handles.append(handle)
+                return handle
+
+            with mock.patch.dict(
+                os.environ, {"OPTPILOT_RUNTIME_TMPDIR": str(temporary_root)}
+            ), mock.patch.object(
+                RetainedBatchRuntimeProvider, "realize", new=capture_realize
+            ):
+                summary = realm_study_runner.run_local_realm_study(
+                    runtime=self.runtime,
+                    package_root=self.package_root,
+                    study_config_path=self.study_path,
+                    operation_id="realm-study-run/configured-temp",
+                )
+            self.assertEqual(summary.run_status, "failed")
+            self.assertEqual(summary.stop_code, "protocol_error")
+            self.assertEqual(len(handles), 1)
+            self.assertTrue(handles[0].closed)
+            self.assertEqual(
+                json.loads(observed_path.read_text(encoding="utf-8")),
+                {"env": str(temporary_root), "created_parent": str(temporary_root)},
+            )
+            self.assertEqual(len(list(temporary_root.glob("oprbw-*"))), 1)
+            self.assertEqual(list(temporary_root.glob("oprbw-*/*.sock")), [])
 
     def test_run_id_can_be_derived_purely_before_launch(self) -> None:
         operation_id = "realm-study-run/predeclared"

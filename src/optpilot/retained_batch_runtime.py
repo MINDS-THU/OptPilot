@@ -209,7 +209,7 @@ def _report_cleanup_diagnostic(
     """Write one bounded provider-local diagnostic before the public redaction.
 
     The caller still receives only :class:`RetainedBatchRuntimeError`.  This
-    line is for the local Studio operator and is deliberately bounded so a
+    line is for the local operator and is deliberately bounded so a
     malformed provider exception cannot flood the service terminal.
     """
 
@@ -582,7 +582,9 @@ class RetainedBatchRuntimeProvider:
     volume, and supervisor services.  It never opens another authority or
     provider root.  ``socket_parent`` is a provider-private placement knob used
     only because AF_UNIX path lengths are substantially shorter than normal
-    Realm projection paths.
+    Realm projection paths.  When omitted, the trusted host setting
+    ``OPTPILOT_RUNTIME_TMPDIR`` selects an existing short directory for sockets
+    and worker temporary files; without it the socket parent remains ``/tmp``.
     """
 
     def __init__(
@@ -594,7 +596,7 @@ class RetainedBatchRuntimeProvider:
             | MethodLaunchEnvironmentDescriptor
             | None
         ) = None,
-        socket_parent: Path = Path("/tmp"),
+        socket_parent: Path | None = None,
         python_executable: Path | None = None,
         request_client: Callable[..., Mapping[str, Any]] = (
             unix_batch_worker_request
@@ -653,6 +655,12 @@ class RetainedBatchRuntimeProvider:
         else:
             self._method_environment_descriptor = method_environment
             self._method_environment_values = None
+        configured_tmpdir = _configured_runtime_tmpdir()
+        if socket_parent is None:
+            socket_parent = configured_tmpdir or Path("/tmp")
+        self._worker_temp_environment = (
+            {"TMPDIR": str(configured_tmpdir)} if configured_tmpdir is not None else {}
+        )
         if not isinstance(socket_parent, Path) or not socket_parent.is_absolute():
             raise ValueError("socket_parent must be an absolute Path.")
         self._socket_parent = socket_parent
@@ -911,6 +919,7 @@ class RetainedBatchRuntimeProvider:
                 cwd=str(control_root),
                 env={
                     **_MINIMAL_ENV,
+                    **self._worker_temp_environment,
                     # Python's randomized string/set hashing otherwise changes
                     # method behavior across controller recovery despite an
                     # identical retained seed policy.
@@ -1908,6 +1917,7 @@ class RetainedBatchRuntimeProvider:
                 cwd=str(control_root),
                 env={
                     **_MINIMAL_ENV,
+                    **self._worker_temp_environment,
                     "PYTHONHASHSEED": str(int(definition.digest[:8], 16)),
                 },
                 private_env_names=method_environment_descriptor.names,
@@ -3961,6 +3971,32 @@ def _remove_staging_entry(parent_fd: int, name: str, *, missing_ok: bool) -> Non
             "retained file-candidate cleanup identity changed."
         )
     os.rmdir(name, dir_fd=parent_fd)
+
+
+def _configured_runtime_tmpdir() -> Path | None:
+    """Resolve explicit host configuration without inheriting ambient TMPDIR."""
+    configured = os.environ.get("OPTPILOT_RUNTIME_TMPDIR")
+    if configured is None:
+        return None
+    path = Path(configured)
+    if not path.is_absolute():
+        raise ValueError("OPTPILOT_RUNTIME_TMPDIR must be an absolute directory path.")
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.stat()
+    except (OSError, RuntimeError) as error:
+        raise ValueError(
+            "OPTPILOT_RUNTIME_TMPDIR must name an existing directory."
+        ) from error
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ValueError("OPTPILOT_RUNTIME_TMPDIR must name an existing directory.")
+    # These suffix lengths match the private namespace and per-worker socket.
+    socket_path = resolved / ("oprbw-" + "0" * 16) / ("w-" + "0" * 24 + ".sock")
+    if len(os.fsencode(socket_path)) > MAX_UNIX_SOCKET_PATH_BYTES:
+        raise ValueError(
+            "OPTPILOT_RUNTIME_TMPDIR is too long for retained worker Unix sockets."
+        )
+    return resolved
 
 
 def _prepare_socket_namespace(parent: Path, *, realm_id: str) -> Path:

@@ -247,6 +247,10 @@ def validate_authoring_config(
             package_settings, PackageSettings
         ):
             raise TypeError("package_settings must be PackageSettings or None.")
+        if config_path.name == "optpilot.experiment.yaml":
+            from .experiment import validate_manifest
+            validate_manifest(config_path)
+            return {"valid": True, "path": str(config_path), "errors": []}
         raw = _load_yaml(config_path)
         schema_result = validate_public_config_schema(raw, config_path=config_path)
         if not schema_result.valid:
@@ -1175,13 +1179,6 @@ def _public_candidate_context(candidate: Dict[str, Any]) -> Dict[str, Any]:
 
 def declared_context_paths(declaration: Mapping[str, Any]) -> set:
     """Every context token an environment offers the method paired with it.
-
-    ONE definition, shared by the compiler's compatibility rules and by
-    Studio's pairing check. They were separate copies once and drifted:
-    Studio's never learned about policyValidation, so every trace-aware
-    policy-search pairing was reported incompatible while the compiler
-    considered it fine. A method that requires a token the environment does
-    not offer cannot run, so a wrong answer here blocks a launch outright.
 
     It reads the same names from either an environment's authored settings or
     a compiled candidate context, because the two use the same names for the

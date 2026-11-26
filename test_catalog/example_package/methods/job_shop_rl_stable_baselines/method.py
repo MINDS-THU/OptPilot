@@ -101,7 +101,7 @@ class StableBaselinesJobShopMethod:
         except ImportError as exc:
             raise RuntimeError(
                 "This example requires a working Stable-Baselines3/PyTorch stack. "
-                "Install it with `uv sync --all-packages --group examples` and ensure PyTorch can be imported."
+                "Install it with `uv sync --group examples` and ensure PyTorch can be imported."
             ) from exc
 
         total_timesteps = int(self.settings.get("totalTimesteps", 256))

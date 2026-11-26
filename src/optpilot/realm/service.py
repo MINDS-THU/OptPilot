@@ -1,6 +1,6 @@
 """Single internal facade for bound local capture and lifecycle reconciliation.
 
-The retained runtime and Studio compose this boundary for package, workspace,
+The retained runtime and local clients compose this boundary for package, workspace,
 attempt, and interface content.  Domain code should continue to use it instead
 of raw ledger adapters or physical store paths, preserving one canonical
 metadata writer and one token-fenced mutation protocol.

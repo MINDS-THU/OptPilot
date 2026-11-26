@@ -11,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from optpilot.cli import main as cli_main
+from optpilot._retired_cli import main as cli_main
 from optpilot.package_validation import validate_package
 from tests.core.test_realm_local_study_package import (
     _write_package,

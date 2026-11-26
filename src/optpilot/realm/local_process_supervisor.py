@@ -49,6 +49,7 @@ try:  # pragma: no branch - the public constructor also checks availability
 except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     fcntl = None  # type: ignore[assignment]
 
+from ._sqlite_bootstrap import enable_wal
 from ._validation import finite_time, lower_hex_digest, positive_int
 from .errors import RealmConflict, RealmIntegrityError, RealmNotFound
 
@@ -3663,13 +3664,18 @@ class LocalProcessSupervisor:
             timeout=30.0,
             isolation_level=None,
         )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA trusted_schema = OFF")
-        connection.execute("PRAGMA secure_delete = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 30000")
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA trusted_schema = OFF")
+            connection.execute("PRAGMA secure_delete = ON")
+            enable_wal(connection)
+            connection.execute("PRAGMA synchronous = FULL")
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     #: How long a redaction checkpoint keeps retrying before conceding, and
     #: how often it retries. Module-level so a test can force the concession.

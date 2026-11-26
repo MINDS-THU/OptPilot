@@ -20,94 +20,62 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install source checkout
-        run: python -m pip install -e . -e ./studio
+        run: python -m pip install -e .
 
       - name: Build and inspect distributions
         run: |
           python -m pip install build
           rm -rf dist-check
           python -m build --wheel --sdist --outdir dist-check
-          python -m build --wheel --sdist --outdir dist-check/studio studio
-          python scripts/check_release_artifacts.py dist-check \
-            --studio-dist-dir dist-check/studio
+          python scripts/check_release_artifacts.py dist-check
 
-      - name: Verify core package without Studio
+      - name: Verify isolated core wheel
         run: |
           python -m venv /tmp/optpilot-core-check
           /tmp/optpilot-core-check/bin/python -m pip install --upgrade pip
           /tmp/optpilot-core-check/bin/python -m pip install dist-check/optpilot-*.whl
           /tmp/optpilot-core-check/bin/optpilot --help
-          /tmp/optpilot-core-check/bin/optpilot validate tests/fixtures/catalog/studies/toy_random_search.yaml
-          /tmp/optpilot-core-check/bin/optpilot package validate tests/fixtures/catalog
-          rm -rf /tmp/optpilot-core-realm
-          /tmp/optpilot-core-check/bin/optpilot run \
-            test_catalog/example_package/studies/job_shop_rule_parameters_baseline.yaml \
-            --package-root test_catalog/example_package \
-            --realm-root /tmp/optpilot-core-realm
+          /tmp/optpilot-core-check/bin/optpilot validate tests/fixtures/harbor/optpilot.experiment.yaml
+          /tmp/optpilot-core-check/bin/optpilot validate catalog/document_search/optpilot.experiment.yaml
+          /tmp/optpilot-core-check/bin/optpilot experiment run \
+            --project catalog/document_search \
+            --suite help-questions \
+            --candidate word-count \
+            --candidate bm25 \
+            --store /tmp/optpilot-core-experiments
           /tmp/optpilot-core-check/bin/python - <<'PY'
           import importlib.resources
-          import importlib.util
-          assert importlib.resources.files("optpilot.schemas").joinpath("study.schema.json").is_file()
+          authoring = importlib.resources.files("optpilot").joinpath("authoring")
+          assert authoring.joinpath("contract.json").is_file()
+          assert authoring.joinpath("optpilot-evaluation", "SKILL.md").is_file()
+          assert importlib.resources.files("optpilot.schemas").joinpath("experiment.schema.json").is_file()
           assert importlib.resources.files("optpilot.realm.migrations").joinpath("0001_realm_core.sql").is_file()
-          raise SystemExit(1 if importlib.util.find_spec("optpilot_studio") else 0)
           PY
 
-      - name: Run core-only unit tests without Studio
+      - name: Run core unit tests
         run: /tmp/optpilot-core-check/bin/python -m unittest discover -s tests/core -p 'test_*.py'
 
-      - name: Verify core source distribution and Studio artifact
+      - name: Verify core source distribution
         run: |
           python -m venv /tmp/optpilot-sdist-check
           /tmp/optpilot-sdist-check/bin/python -m pip install --upgrade pip
           /tmp/optpilot-sdist-check/bin/python -m pip install dist-check/optpilot-*.tar.gz
           /tmp/optpilot-sdist-check/bin/optpilot --help
 
-          python -m venv /tmp/optpilot-studio-check
-          /tmp/optpilot-studio-check/bin/python -m pip install --upgrade pip
-          /tmp/optpilot-studio-check/bin/python -m pip install \
-            dist-check/optpilot-*.whl \
-            dist-check/studio/optpilot_studio-*.whl
-          /tmp/optpilot-studio-check/bin/optpilot ui --help
-          /tmp/optpilot-studio-check/bin/optpilot-studio --help
-          /tmp/optpilot-studio-check/bin/python - <<'PY'
-          import importlib.resources
-          assert importlib.resources.files("optpilot_studio.ui").joinpath("static/index.html").is_file()
-          assert importlib.resources.files("optpilot_studio.ui").joinpath("workspace_runtime/Dockerfile").is_file()
-          assert importlib.resources.files("optpilot_studio.docs_assets").joinpath("operations.md").is_file()
-          assert importlib.resources.files("optpilot_studio.assistant_assets").joinpath("prompts/system.md").is_file()
-          PY
-
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -p 'test_*.py'
-
-      - name: Validate production and AGV package
+      - name: Test production and AGV example
         run: |
-          optpilot package validate catalog/production_agv_scheduling \
-            --check-imports --check-source --check-setup-files
           python catalog/production_agv_scheduling/scripts/run_package_tests.py
           cd catalog/production_agv_scheduling
           sha256sum --check UNITY_BUILD.sha256
 
-      - name: Validate public catalog packages
+      - name: Validate versioned experiment manifests
         run: |
-          optpilot package validate catalog/devs_gallery --check-source
-          optpilot package validate catalog/or_solving --check-source
-          optpilot package validate catalog/optpilot_tutorial --check-source
-
-      - name: Smoke public packages (no LLM, no external services)
-        run: |
-          optpilot run catalog/production_agv_scheduling/studies/smoke.yaml \
-            --package-root catalog/production_agv_scheduling
-          optpilot run catalog/devs_gallery/studies/seird_minimize_deaths.yaml \
-            --package-root catalog/devs_gallery
-          optpilot run catalog/optpilot_tutorial/studies/find_best_settings.yaml \
-            --package-root catalog/optpilot_tutorial
+          for manifest in catalog/*/optpilot.experiment.yaml; do
+            optpilot validate "$manifest"
+          done
 
       - name: Compile package
         run: python -m compileall src/optpilot
-
-      - name: Compile Studio package
-        run: python -m compileall studio/src/optpilot_studio
 
       - name: Run smoke tests
         run: ./scripts/smoke_test.sh

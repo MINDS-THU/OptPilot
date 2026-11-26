@@ -1,5 +1,5 @@
 site_name: OptPilot
-site_url: https://MINDS-THU.github.io/OptPilot/
+site_url: https://minds-thu.github.io/OptPilot/reference/
 site_description: Documentation for OptPilot, an orchestrator for AI-assisted iterative optimization studies.
 site_author: OptPilot contributors
 
@@ -75,19 +75,16 @@ nav:
       - Configuration Reference: configuration.md
       - How a Run Works: how-it-works.md
       - Evidence: evidence.md
+      - External results: external-results.md
   - Research Packages:
       - "DEVS-Gen": devs-gallery.md
       - "Generate and Optimize: DEVS-Gen x Heuristic Design": generate-and-optimize.md
       - "LLM-Guided Heuristic Design": llm-policy-search.md
       - "COOPA": or-solving.md
       - "Build Your First Package": tutorial-package.md
-  - OptPilot Studio:
-      - OptPilot Studio: ui.md
-      - Workspace Management: studio-workspaces.md
-      - OptPilot Assistant: assistant.md
+  - Desktop client: ui.md
   - Contributor Guide:
       - Development: development.md
-      - Release Readiness Review: release-readiness-review.md
 
 extra:
   generator: false

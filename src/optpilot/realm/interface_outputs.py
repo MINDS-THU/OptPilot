@@ -1,6 +1,6 @@
 """Generic launch-scoped interface output generations.
 
-Interfaces do not export host paths or ask Studio to register a domain-specific
+Interfaces do not export host paths or ask a client to register a domain-specific
 artifact.  They append bounded records that select a file or tree below one of
 the root handles granted for that launch.  OptPilot validates those records and
 immediately seals each selected generation through the ordinary content
@@ -407,7 +407,7 @@ def list_interface_output_tree_paths(
             try:
                 portable_path = validate_portable_path(relative_path)
             except ContentRejected:
-                # Non-portable names can remain runtime data, but Studio must
+                # Non-portable names can remain runtime data, but the client must
                 # never offer a choice that the content plane cannot retain.
                 continue
             if len(results) >= max_entries:

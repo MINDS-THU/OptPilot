@@ -1,6 +1,6 @@
 """Portable planning records for one contextual Environment Preview.
 
-The compiler in this module is deliberately below Studio and above provider
+The compiler in this module is deliberately below the client and above provider
 realization.  It reads one exact retained environment revision from a resolved
 candidate inspection target and produces only immutable, provider-neutral
 facts.  Host paths, store placement, credentials, leases, ports on the host,

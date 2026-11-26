@@ -1,0 +1,72 @@
+environments:
+  - id: simulated-panel
+    name: 带固定色偏的模拟显示屏
+    settings:
+      panel_bias: [1.10, 0.94, 1.05]
+
+tasks:
+  - id: measure-gray
+    name: 测量灰阶的 RGB 偏差
+    description: 用模拟色度计测量三通道响应，计算读数与目标灰阶的平均绝对误差。
+    environment: simulated-panel
+    evaluator: grading.py:evaluate
+    files: [bench_client.py, bench_server.py, connection.json]
+    decisionContract:
+      format: parameters
+      schema:
+        channel_gains:
+          valueType: array
+          items: {valueType: float, min: 0, max: 2}
+          minItems: 3
+          maxItems: 3
+    parameters:
+      gray_level: {valueType: int, min: 0, max: 255}
+    metrics:
+      - name: rgb_mae
+        description: 红、绿、蓝三通道读数与目标值的平均绝对误差，越小越好。
+        unit: RGB 码值
+        direction: minimize
+    resourceRequirements:
+      - capability: demo.display.colorimeter
+        resourceId: demo.display.colorimeter
+        mode: capacity
+        unit: seat
+        minimum: 1
+
+instances:
+  - id: gray-64
+    name: 暗灰（64）
+    task: measure-gray
+    parameters: {gray_level: 64}
+  - id: gray-192
+    name: 亮灰（192）
+    task: measure-gray
+    parameters: {gray_level: 192}
+
+suites:
+  - id: gray-levels
+    name: 两个灰阶
+    instances: [gray-64, gray-192]
+
+candidates:
+  - id: factory
+    name: 原厂增益
+    format: parameters
+    value: {channel_gains: [1.0, 1.0, 1.0]}
+  - id: compensated
+    name: 色偏补偿
+    format: parameters
+    value: {channel_gains: [0.91, 1.06, 0.95]}
+
+studies:
+  - id: calibration
+    title: 两种校准方案的灰阶误差
+    suiteIds: [gray-levels]
+    candidateIds: [factory, compensated]
+    metric: rgb_mae
+    direction: minimize
+    repetitions: 1
+    retries: 0
+    timeoutSeconds: 30
+    resourceBudgets:
+      - {capability: demo.display.colorimeter, unit: seat, limit: 1}

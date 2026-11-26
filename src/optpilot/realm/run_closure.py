@@ -1,7 +1,7 @@
 """Portable immutable environment/runtime closure for one run.
 
 These records are the semantic inputs from which canonical attempts and
-Studio Debug Runs can later compile the same :class:`EvaluationSpec`.  They
+inspection runs can later compile the same :class:`EvaluationSpec`.  They
 contain only immutable content references, logical scope names, portable
 relative paths, and canonical JSON.  Store placement and provider-specific
 paths remain availability/runtime facts outside this module.

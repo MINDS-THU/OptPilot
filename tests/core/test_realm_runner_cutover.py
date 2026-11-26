@@ -9,7 +9,7 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from optpilot.cli import (
+from optpilot._retired_cli import (
     _package_smoke,
     _select_package_smoke_study,
     build_parser,
@@ -168,7 +168,7 @@ class RealmRunnerCutoverTest(unittest.TestCase):
 
     def test_cli_passes_only_package_and_realm_authority(self) -> None:
         with redirect_stdout(StringIO()), mock.patch(
-            "optpilot.cli.run_study", return_value=_CliSummary()
+            "optpilot._retired_cli.run_study", return_value=_CliSummary()
         ) as run:
             exit_code = cli_main(
                 [
@@ -213,10 +213,10 @@ class RealmRunnerCutoverTest(unittest.TestCase):
                 return _SmokeSummary()
 
             with mock.patch(
-                "optpilot.cli.validate_package", return_value={"valid": True}
+                "optpilot._retired_cli.validate_package", return_value={"valid": True}
             ), mock.patch(
-                "optpilot.cli.validate_authoring_config", return_value={"valid": True}
-            ), mock.patch("optpilot.cli.run_study", side_effect=launch):
+                "optpilot._retired_cli.validate_authoring_config", return_value={"valid": True}
+            ), mock.patch("optpilot._retired_cli.run_study", side_effect=launch):
                 result = _package_smoke(
                     str(package), study="studies/smoke.yaml", realm_root=None
                 )

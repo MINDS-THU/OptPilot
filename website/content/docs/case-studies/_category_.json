@@ -1,0 +1,11 @@
+{
+  "label": "Research Packages",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "title": "Research Packages",
+    "slug": "/use-cases",
+    "description": "Explore the paper companion packages and executable examples shipped with the current OptPilot release.",
+    "image": "/img/case-studies/simulation-loop.svg"
+  }
+}

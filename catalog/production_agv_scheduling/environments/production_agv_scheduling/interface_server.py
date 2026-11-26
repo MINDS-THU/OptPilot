@@ -40,6 +40,7 @@ class InterfaceApplication:
         candidate_root: Path | None = None,
         runtime_root: Path | None = None,
         viewer_wait_seconds: float = 12.0,
+        visual_context: dict[str, Any] | None = None,
     ) -> None:
         self.environment_root = environment_root.resolve()
         self.web_root = self.environment_root / "interface_web"
@@ -58,6 +59,7 @@ class InterfaceApplication:
             candidate_root=candidate_root,
             runtime_root=runtime_root,
             viewer_wait_seconds=viewer_wait_seconds,
+            visual_context=visual_context,
         )
         self._origin_lock = threading.Lock()
         self._websocket_origins: set[str] = set()
@@ -416,6 +418,7 @@ def create_server(
     candidate_root: Path | None = None,
     runtime_root: Path | None = None,
     viewer_wait_seconds: float = 12.0,
+    visual_context: dict[str, Any] | None = None,
 ) -> InterfaceHTTPServer:
     root = (
         Path(__file__).resolve().parent
@@ -427,6 +430,7 @@ def create_server(
         candidate_root=candidate_root,
         runtime_root=runtime_root,
         viewer_wait_seconds=viewer_wait_seconds,
+        visual_context=visual_context,
     )
     try:
         return InterfaceHTTPServer((host, port), application)
@@ -441,6 +445,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", default=8080, type=int)
     arguments = parser.parse_args(argv)
     server = create_server(host=arguments.host, port=arguments.port)
+    serve(server)
+    return 0
+
+
+def serve(server: InterfaceHTTPServer) -> None:
     stop = threading.Event()
 
     def request_stop(_signum: int, _frame: Any) -> None:
@@ -458,7 +467,6 @@ def main(argv: list[str] | None = None) -> int:
         stop.set()
         server.server_close()
         server.application.close()
-    return 0
 
 
 def _presentation_endpoint(headers: Any) -> tuple[str, int, bool]:

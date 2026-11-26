@@ -9,9 +9,7 @@ python -m devs_app.run --mode server
 
 The server creates per-session workspaces under the launch-owned runtime root,
 builds DEVS/xDEVS projects from natural-language requests, and exposes them to
-the frontend through the FastAPI service in `devs_display/backend/`. Studio
-supplies that root; direct execution defaults to `.runtime/` at the resource
-root.
+the frontend through the FastAPI service in `devs_display/backend/`. Standalone execution defaults to `.runtime/` under the resource root.
 
 The active generation path is intentionally small:
 

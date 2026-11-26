@@ -47,6 +47,7 @@ class CandidateReplayManager:
         candidate_root: Path | None = None,
         runtime_root: Path | None = None,
         viewer_wait_seconds: float = 12.0,
+        visual_context: dict[str, Any] | None = None,
     ) -> None:
         self.environment_root = environment_root.resolve()
         self.broker = broker
@@ -63,6 +64,7 @@ class CandidateReplayManager:
         )
         self.runtime_root.mkdir(parents=True, exist_ok=True)
         self.viewer_wait_seconds = max(0.0, float(viewer_wait_seconds))
+        self.visual_context = visual_context
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._process: subprocess.Popen[bytes] | None = None
@@ -81,6 +83,18 @@ class CandidateReplayManager:
     def candidate_payload(self) -> dict[str, Any]:
         """Return the two primary editable files and bounded metadata."""
 
+        if self.visual_context is not None:
+            context = self.visual_context
+            settings = context["environment"]
+            return {
+                "additional_files": [],
+                "candidate": {},
+                "defaults": {"disable_faults": settings["disable_faults"], "replay_speed": 1.0,
+                             "seed": context["seed"], "simulation_horizon": settings["simulation_horizon"],
+                             "time_step": settings["time_step"]},
+                "fixed_inputs": True,
+                "source": context.get("mode", "interactive"),
+            }
         files = _validated_candidate_files(self.candidate_root)
         primary = {
             name: (self.candidate_root / name).read_text(encoding="utf-8")
@@ -129,7 +143,13 @@ class CandidateReplayManager:
             return result
 
     def start(self, request: dict[str, Any]) -> dict[str, Any]:
-        source, settings, seed, replay_speed = _validated_run_request(request)
+        if self.visual_context is None:
+            source, settings, seed, replay_speed = _validated_run_request(request)
+        else:
+            source = {}
+            seed = self.visual_context["seed"]
+            settings = dict(self.visual_context["environment"], repeat_runs=1, seeds=[seed])
+            replay_speed = 1.0
         with self._lock:
             if self._active_locked():
                 raise InterfaceRequestError(

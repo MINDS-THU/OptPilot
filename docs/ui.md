@@ -1,291 +1,40 @@
----
-title: OptPilot Studio
-description: The conversation-first local GUI for finding capabilities, setting up work, operating interfaces, and inspecting results.
----
+# Desktop workflow
 
-# OptPilot Studio
+Open a project folder and connect a coding assistant. The left pane holds conversations and their writable working directories. The right pane shows **项目关系图**, a saved version or evaluation, or the editor for a working directory. Use **返回关系图** to return to the graph.
 
-OptPilot Studio is the local web UI for OptPilot. It is included in the full
-source checkout, not in the PyPI core package.
+The message toolbar shows the connected assistant's available mode and model controls next to the paperclip. Select files with the paperclip or drop them onto the message box. Remove any file before sending; the assistant receives copies in its working directory. Press **Enter** to send and **Shift+Enter** for a new line.
 
-Studio is organized around one working loop:
+The macOS toolbar has six pages. **智能体** manages coding assistants, their provider accounts and connection profiles. **技能** manages the machine's skill library, including discovery, ZIP import and which assistants can use each skill. **MCP 服务** manages MCP servers and chooses which assistants receive them. **资源** contains experimental resource inventory, compute locations, project commands and job records. **用量** shows local and project request records and cost estimates. **设置** configures local Python, Harbor and shared credentials.
 
-1. Start in a **Conversation** and describe what you want to accomplish.
-2. Let the Assistant recommend published Catalog capabilities, or open **Catalog** to
-   browse Environments, Methods, and Resources directly.
-3. Review the setup or inputs before anything runs.
-4. Operate a simulator or other rich interface in the full main area, or let
-   OptPilot run the work in the background.
-5. Return to a Conversation and recover running interfaces and Runs from
-   **Open work**. Durable items remain in Run setups, Runs, and Workspaces.
+**用量** shows the local ledger and the selected project. API estimates use CC Switch’s recorded pricing. Per-project estimates match retained Codex or Claude Code request records by their original session IDs and show pricing coverage. Agent-reported costs appear separately. **Refresh** rereads the ledger. **同步本机日志** imports new local usage records. When standalone CC Switch owns the configuration, these pages support reading. Choose **在 OptPilot 中接管编辑** and confirm to quit the standalone process and enable writing in the same window.
 
-Conversation is the default surface, but it is not the only way to use Studio.
-Catalog remains directly browsable, and focused interfaces do not depend on the
-Assistant remaining visible.
+**新建会话** lets you choose the primary working directory. Reuse a folder to share files, select another directory, or choose **创建独立工作副本**. Copies exclude credentials, dependency directories and ledgers. All working directories contribute to the same project records. The **工作目录** list above the conversation shows the primary directory and any attached directories. Click **附加目录** to link another folder to the conversation. The **助手可写** label means the connected assistant can use that folder; the editor can open attached folders even when the assistant does not support additional directories. Removing an attachment leaves its files on disk. Project command submissions are associated with their project and appear in **资源** job records; they are not currently linked to the conversation that submitted them.
 
-## Start Studio
+Browse environments, tasks, task instances, task instance sets, candidates, generators and evaluations in the graph. A task instance set (**任务实例集**) pins specific instance versions so different candidates can be evaluated on the same inputs. Version nodes show what the artifact does, how many questions or files it has when available, and how often it has been evaluated. Evaluation nodes show recorded scores, sample counts, and progress. Use **收起细节** to fit more nodes on screen. **在图中查找** matches names, types, versions or evaluation states; press Enter or use **下一处匹配** to locate a match.
 
-First install the full source checkout from [Installation](installation.md).
+Read the stage headings from left to right and follow the arrows. Select a node to highlight its immediate relationships, then choose an entry under **上游** or **下游** to follow it. Drag empty canvas space to pan. **适应画布** shows the whole graph, and clicking the zoom percentage returns to 100%. **加宽** gives the graph the full workspace. Choose **恢复分栏** to return to the same conversation and draft.
 
-Then run:
+Click a node to open its nearby summary and jump directly to its first recorded related message. The desktop switches conversations, scrolls to the message and highlights it when a source exists. Use **位置列表** to choose another related message. Double-click, press Enter on the node, or use the summary's open button to see the full detail. Evaluation details show the input versions, scores, per-question results and failures.
 
-```bash
-uv run optpilot ui --open-browser
-```
+Saved versions have three tabs. **概览** shows what the version defines, such as task metrics or question parameters. **文件** opens the saved files in the embedded Code Server editor with a nested folder tree and breadcrumbs. The toolbar shows **只读**; the editor opens the saved contents, regardless of changes in working directories. If the editor cannot start, the file tab shows the reason and a retry action. **关联** links to exact versions and evaluations. A Harbor environment may be part of a task package, for example in its `Dockerfile`.
 
-The default URL is usually:
+Click a folder under **工作目录** to open the writable editor. The toolbar shows the path and whether the folder is a draft. The embedded editor uses local `code-server`; **简易编辑器** is available if it is missing or fails to start. To change a saved version, choose **开始修改** in its read-only detail. This opens an independent draft from that version and attaches it to the active writable conversation when available. The draft's version link in the directory list locates its source in the graph; **编辑草稿** on the node opens the writable copy. Reopening the same draft preserves its edits. Switching conversations does not change the folder currently open in the editor.
 
-```text
-http://127.0.0.1:8765/
-```
+Save the changed files and choose **保存为新版本** to review the actual differences. An unchanged draft does not create a version. You can write a change note or use **让助手生成说明**, when available, then edit it before **确认保存新版本**. Draft file edits and saved notes leave the original version and its evaluations unchanged.
 
-Studio scans packages under `catalog/` by default. The largest bundled package
-is `catalog/production_agv_scheduling/`.
+The public CLI reads the same frozen bytes with `optpilot experiment version-file VERSION_ID SAVED_PATH --project PROJECT_DIRECTORY`. It returns UTF-8 content up to 512 KiB, or an explicit binary/size limitation, together with the file size and SHA-256. Only paths saved in that version are accepted.
 
-## First 10 Minutes In Studio
+Review and start an evaluation from **设置评测**. Choose a generator and its budget for feedback-driven submissions. The right pane keeps queued and running evaluations visible above the graph, editor or details. Each active row shows the name, current phase and trial counts; click it for details. Native trials show the current candidate and question when known. Harbor shows when it is waiting for per-question results. The inspector supports **Run same study again**, cancellation, resume after controller interruption, per-question results and generation records. Save/start/import actions can be recorded in the active conversation; operations without one have zero message references.
 
-Start with this path:
+Follow links in an evaluation to open its input versions, or follow links in a version to view evaluations that used it. **Add comparison to chat draft** and **Add trial evidence to chat draft** create removable attachments. Draft attachments become conversation references when sent. Results remain available after restart.
 
-1. On the opening Conversation, choose a suggested intent or describe a problem
-   in your own words.
-2. Review the Environment, Method, or Resource cards recommended by the
-   Assistant. Open **Catalog** whenever you want to inspect the available
-   components yourself.
-3. Ask to evaluate one of the ready-made Run setups, or find
-   **Tutorial · Find better factory settings** in Catalog.
-4. Review the **Run setup**: Environment, Method, objective, direction, and
-   budget. Expand its detailed configuration only when needed.
-5. Choose **Launch run** explicitly. Starting work is never implied by ordinary
-   Assistant prose.
-6. Follow the running item in **Open work**. Open the Run to inspect its
-   Overview and Candidates; **Trials**, **Trial attempts**, **Trial results**,
-   **Saved files**, and **Event history** are under **More**.
-7. Open a Candidate. Its saved values and evaluation details load directly.
-   Use **View files** without creating a Workspace, and choose **Try once** or
-   **Open interactive interface** when eligible.
-8. In a full-stage interface, choose **Ask from this page** to open the currently
-   selected Conversation without restarting the interface. Studio includes the
-   current page and selected object as read-only context for that request. This
-   does not create another Conversation or make any Workspace available. If no
-   Conversation is selected, start or select one first. Returning to a
-   Conversation or closing the interface view does not itself stop the
-   underlying work.
-9. Choose **Edit in Workspace** only when you want an eligible complete project
-   to become durable editable work. For a configured mutable source, use
-   **Link local folder**.
-10. Use **Settings** to configure the assistant runtime and declared local
-    values. They are stored as plaintext in the project-scoped
-    `.optpilot-ui/settings.json` and are not copied into Run evidence; a
-    synchronized project directory may synchronize that file. Studio Settings
-    is not a secret vault.
+Harbor uses Docker and its own agent authentication. In Settings set **Harbor executable** and explicitly choose available local Codex/Claude authentication. Agent identities and model settings belong in saved Candidate configurations. The inspector links to the real job folder and shows individual external Trial IDs.
 
-![Studio catalog workflow](assets/studio-catalog.png)
+## Project tools
 
-_Captured from the Studio source checkout with the bundled `catalog/` packages loaded._
+Open **项目工具** to connect a local graphical tool. The heading shows its working directory. With multiple directories in the conversation, choose the one the tool should use. Each directory has its own launch and connection settings.
 
-## Navigation And Working Surfaces
+To connect a tool already running on this Mac, enter its loopback HTTP address and choose **打开界面**. An HTML file inside the selected working directory also works. A directory can offer shortcuts through `.optpilot-preview.json`; shortcuts do not run programs. To start a tool from OptPilot, expand **从工作目录启动工具**, enter the executable and a JSON array of arguments, then choose **启动工具**. Use **启动日志** to find the tool's address when it prints one. **关闭界面** disconnects the view and leaves the tool running; **停止工具** stops the process OptPilot started.
 
-The left rail separates conversations from the three durable OptPilot
-destinations. You never need to remember which conversation created a Study,
-Run, or Workspace in order to find it again.
+SimCraft, for example, can start through its `start.sh` with an absolute scene path followed by `--port 8766 --no-browser`; then open `http://127.0.0.1:8766/`. SimCraft manages its own scene and asset libraries. Put the outputs you need in your working directory before saving an OptPilot version. If a tool switches ports when it switches scenes, use its own browser window for that step and open the new address in OptPilot.
 
-| Item | What it is for |
-| --- | --- |
-| New conversation | Start a separate problem or line of work. |
-| Catalog | Browse reusable Environments, Methods, and Resources directly. |
-| Run setups (Studies) | Configure or reopen a Run setup, then launch a Run. |
-| Runs | Monitor active Runs and inspect retained results. |
-| Conversations | Return to earlier discussions and their associated work. |
-| Settings | Configure the Assistant, approval defaults, and project-scoped local values. |
-
-A **Conversation** is the durable discussion thread. **OptPilot Assistant** is
-the participant that responds and acts inside that thread; it is not a second
-kind of conversation. The **Ask from this page** action on Catalog, Study, Run,
-Candidate, Workspace, and interface surfaces opens the currently selected
-Conversation with the visible page as additional context.
-
-Conversation cards are deliberately compact: they show a topic title, current
-state, and only a nonzero Workspace count. Studio derives an immediate title
-from the first substantive request, and the Assistant can refine it during the
-same turn or after a material change of goal. The rail does not show a total
-Conversation count or repeat “New conversation” on every card.
-
-When a Workspace is open, the Conversation list is replaced by a compact
-list of editable projects. Read-only Catalog source never appears in that list.
-Use **Manage Workspaces** in the Conversation Workspace panel to open the
-editable Workspace surface at any time.
-
-On the Conversation surface, the right-hand **Workspaces in this conversation**
-panel shows only the editable Workspaces that the current Conversation can use.
-This is not another Workspace collection: each project remains a durable
-Workspace with its own lifetime, and no files are copied. **Add Workspace**
-makes a project available, **Open Workspace** opens
-the ordinary editable surface, **Make default** chooses the file and command
-target used when a request does not name one, and **Remove** affects only the
-current Conversation. It never deletes the Workspace or removes it from Catalog.
-
-Current-page context and Conversation Workspaces are deliberately different. Asking
-about a Catalog item, Run, Candidate, or interface gives the Conversation a
-bounded read-only description of that selection. A Workspace becomes editable
-Assistant context only after the user explicitly makes that Workspace available
-in **Workspaces in this conversation**.
-
-Creating a Workspace or adding a local folder from this panel makes it available
-to the current Conversation immediately. At narrower widths the same panel
-moves above the Conversation and can be collapsed, so it does not squeeze the
-message area.
-
-The current browser addresses for Catalog entries, Studies, Runs, Candidates,
-Workspaces, and interfaces remain refresh-safe. Existing bookmarks and links
-such as `#/studies/...`, `#/runs/...`, and `#/workspaces/...` continue to open
-the corresponding focused surface. User-facing surfaces present the saved
-configuration that binds an Environment, Method, objective, and budget as a
-**Run setup**; `study` remains the configuration kind name in the YAML schema,
-API routes, and CLI commands.
-
-## Open Work
-
-**Open work** is a compact process monitor, not a new kind of saved object. It
-contains only work that may continue — or is waiting on you — while you leave
-its page:
-
-- an interface that is starting, running, stopping, failed, or needs cleanup
-- a Run that is still being prepared or needs attention
-- a queued, preparing, running, or stopping Run
-- a Conversation with a pending approval (the card returns you to that
-  Conversation to approve or reject; it never creates a new one)
-- a finished interface session whose reported outputs are still reviewable
-  (the card returns you to its outputs; dismiss it once you are done)
-
-It does not contain Conversations as such, Workspaces, read-only source
-viewers, saved Studies, completed Runs, or ordinary Assistant messages.
-Workspaces stay out deliberately: a Workspace is a durable saved object with
-its own named destination, not a process that finishes — listing it here
-would blur "work in flight" with "work you keep". Durable items live in their
-named destinations and stay reachable from there.
-
-Select an item to open its normal detailed surface. Leaving that surface does
-not cancel a Run or stop an interface. Completed Runs remain under **Runs**,
-saved Run setups remain under **Run setups**, Workspaces remain under
-**Workspaces**, and Assistant activity remains with its Conversation.
-
-## Source Viewer And Workspace Editor
-
-The same full-stage workbench is reused for two deliberately different modes:
-
-| Mode | What you see | What it means |
-| --- | --- | --- |
-| **Read-only Catalog item** | A **Source** tab, a static component name, and an **Open source** action. | These are the exact published files. Inspecting them does not create a Workspace and cannot modify the Catalog version. |
-| **Workspace · Editable** | **Code**, optional **Interface**, and **Publish** tabs, an editable Workspace name, and an **Open Workspace editor** action. | This is durable editable work listed under Workspaces. |
-
-Choose **Edit in Workspace** from a Catalog source only when you actually want
-an editable project. That explicit action creates or reopens the editable
-boundary; merely viewing source does not.
-
-## Assistant Cards And Run Setups
-
-The Assistant currently presents three structured card families: published
-Catalog recommendations, Run setups, and Runs (including a Run launch while it
-is being prepared). A card carries the exact Catalog reference or object
-identity behind the recommendation. Catalog recommendation cards may offer a
-declared interface, and Run setup cards may open their Workspace; these are
-actions on those cards, not separate interface, Workspace, or output card
-families. Buttons on a card invoke known Studio actions; links or prose generated
-in a chat message do not become privileged actions.
-
-A Run setup exposes the common choices directly:
-
-- Environment and Method
-- objective metric and direction
-- evaluation budget
-- compatibility and readiness
-- advanced execution and evidence settings when needed
-
-The Assistant may propose values, but the user can inspect and change them.
-Launching remains an explicit, approval-aware action. For arbitrary component
-settings that do not have a declared form contract, Studio shows the known
-inputs and lets the user inspect the underlying YAML instead of guessing field
-semantics.
-
-## Full-Stage Interfaces
-
-Environments, Methods, and Resources may declare interactive interfaces. When
-one is opened, it occupies the main area so the user can operate it without a
-permanent split-screen Conversation. Use **Ask from this page** to reveal the
-currently selected Conversation as an overlay and include the interface as
-read-only page context. Hiding the overlay preserves both the Conversation and
-the live interface session.
-
-Catalog interfaces run over read-only published source plus private,
-launch-scoped runtime and output storage. Workspace interfaces run from the
-selected editable Workspace. Candidate interfaces retain their exact Run,
-Candidate, and job coordinates. Studio never puts presentation credentials in
-the refresh-safe address.
-
-## Catalog And Workspace Actions
-
-Catalog entries may expose these actions:
-
-| Action | Behavior |
-| --- | --- |
-| View source | Opens the published version read-only without creating a Workspace. |
-| Edit in Workspace | Creates or reopens one editable Workspace for intentional changes. |
-| Open interface | Starts the declared interface over read-only source and temporary launch storage. Prepared dependencies may be reused. |
-| Run Resource action | Shows the registered command, network grant, timeout, and environment/secret names, then asks for confirmation. The current host executor runs only reviewed actions that declare `network: enabled`; secret values stay hidden and are redacted from results. |
-| Configure Run setup | Choose a compatible Environment or Method and open a Run setup while preserving the exact Catalog reference. |
-
-A configured source card is labeled **Local source · Mutable**. **Link local
-folder** connects that existing folder as one editable Workspace without
-copying it and opens the normal **Publish** flow.
-
-Selecting a Run opens its recorded evidence directly; there is no public
-“Open as Workspace” step. Candidate values and evaluation details load directly,
-and **View files** is a short-lived bounded file view. **Edit in Workspace** creates
-or reopens durable editable work only for an eligible complete project.
-**Save to Shortlist** keeps a decision and its note inside the source Run
-without creating a Workspace or runtime.
-
-When comparing file Candidates, Studio first shows the sealed manifest changes.
-Use **View text diff** on one added, removed, or changed file to inspect its
-contents. This is a direct, read-only operation over the two exact retained
-Candidate trees. Text diffs are intentionally bounded to strict UTF-8 files no
-larger than 48 KiB and 4,000 lines per side. If a complete diff cannot be
-returned, Studio explains why; use **View files** for broader manual inspection.
-
-The **Shortlist** tab appears after its first Candidate is saved. Edit the
-Shortlist name, Candidate notes, membership, and order, then choose **Save
-changes**. **More** contains saved history, export, and **Delete Shortlist**.
-Viewing an earlier saved version does not discard unsaved edits to the current
-one, and deleting a Shortlist never deletes its source Run.
-
-When **Try once** or **Open interactive interface** finishes, the result
-offers **Save inspection to Shortlist** for an already-saved Candidate or
-**Save Candidate and inspection** otherwise. This preserves bounded terminal
-results, not the live process or interface.
-
-For the package model behind these entries, see
-[Packages and Catalogs](catalog.md).
-
-## Platform Status
-
-Studio reports the local services it can see:
-
-| Service | Meaning |
-| --- | --- |
-| Studio | The local UI server is reachable. |
-| Code editor | The embedded editor is reachable; its current implementation uses code-server. |
-| Assistant | The Conversation assistant is configured and reachable; its current tool runtime uses OpenHands. |
-| Sandbox | The Workspace container runtime is available. |
-
-Not every workflow requires every service. Browsing Catalog and launching
-CLI-style Studies only require Studio and the core runner. Editing Workspaces in
-the embedded Code editor requires code-server. Assistant tool execution requires
-OpenHands and, for Workspace actions, a Workspace runtime.
-
-## Related Pages
-
-- [Workspace Management](studio-workspaces.md): editable projects, Code Server,
-  previews, and Workspace containers.
-- [OptPilot Assistant](assistant.md): conversations, OpenHands setup, Assistant
-  cards, tools, approvals, and local credential handling.
-- [Installation](installation.md): why Studio is source-checkout only.

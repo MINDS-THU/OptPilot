@@ -1686,6 +1686,47 @@ class LocalProcessSupervisorTest(unittest.TestCase):
         self.assertEqual(proof.disposition, "exited")
         _wait_pid_gone(child_pid)
 
+    def test_service_group_term_preserves_authenticated_cleanup(self) -> None:
+        leader_path = self.base / "group-term-leader.pid"
+        child_path = self.base / "group-term-child.pid"
+        request = self._request(
+            "import os,subprocess,sys,time; from pathlib import Path; "
+            f"Path({str(leader_path)!r}).write_text(str(os.getpid())); "
+            "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+            f"Path({str(child_path)!r}).write_text(str(p.pid)); time.sleep(60)"
+        )
+        self._launch(self._supervisor(), request)
+        _wait_for(leader_path)
+        _wait_for(child_path)
+        launch_dir = self._launch_dir("launch-a")
+        handshake = _read_record(launch_dir / "handshake.json")
+        wrapper_pid = handshake["wrapper_pid"]
+        leader_pid = int(leader_path.read_text())
+        child_pid = int(child_path.read_text())
+        try:
+            # systemd's default KillMode=control-group sends TERM to both the
+            # private monitor/watchdog and the separately grouped user worker.
+            os.killpg(wrapper_pid, signal.SIGTERM)
+            try:
+                os.killpg(leader_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            restarted = self._supervisor()
+            proof = self._launch(restarted, request).wait(timeout=7.0)
+            self.assertEqual(proof.disposition, "killed")
+            self.assertTrue(proof.started)
+            self.assertEqual(restarted.validate_terminal_proof(proof), proof)
+            self.assertEqual(self._launch(self._supervisor(), request).wait(), proof)
+            _wait_pid_gone(wrapper_pid)
+            _wait_pid_gone(leader_pid)
+            _wait_pid_gone(child_pid)
+        finally:
+            for process_group in (wrapper_pid, leader_pid):
+                try:
+                    os.killpg(process_group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def test_wrapper_death_recovers_after_restart_and_drains_descendants(self) -> None:
         leader_path = self.base / "recovered-leader.pid"
         child_path = self.base / "recovered-child.pid"

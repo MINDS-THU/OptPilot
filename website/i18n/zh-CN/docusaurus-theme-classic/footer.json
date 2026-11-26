@@ -1,0 +1,54 @@
+{
+  "link.title.Product": {
+    "message": "产品",
+    "description": "The title of the footer links column with title=Product"
+  },
+  "link.title.Learn": {
+    "message": "学习",
+    "description": "The title of the footer links column with title=Learn"
+  },
+  "link.title.Project": {
+    "message": "项目",
+    "description": "The title of the footer links column with title=Project"
+  },
+  "link.item.label.Overview": {
+    "message": "概览",
+    "description": "The label of footer link with label=Overview"
+  },
+  "link.item.label.OptPilot Desktop": {
+    "message": "OptPilot Desktop",
+    "description": "The label of footer link with label=OptPilot Desktop"
+  },
+  "link.item.label.Research Packages": {
+    "message": "研究软件包",
+    "description": "The label of footer link with label=Research Packages"
+  },
+  "link.item.label.Getting Started": {
+    "message": "开始使用",
+    "description": "The label of footer link with label=Getting Started"
+  },
+  "link.item.label.Executable Capabilities": {
+    "message": "可执行能力",
+    "description": "The label of footer link with label=Executable Capabilities"
+  },
+  "link.item.label.Runs and Evidence": {
+    "message": "运行与证据",
+    "description": "The label of footer link with label=Runs and Evidence"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub"
+  },
+  "link.item.label.Issues": {
+    "message": "问题跟踪",
+    "description": "The label of footer link with label=Issues"
+  },
+  "link.item.label.Apache License 2.0": {
+    "message": "Apache 2.0 许可证",
+    "description": "The label of footer link with label=Apache License 2.0"
+  },
+  "copyright": {
+    "message": "Copyright © 2026 OptPilot contributors · MINDS-THU.",
+    "description": "The footer copyright"
+  }
+}

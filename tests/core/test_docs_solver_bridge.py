@@ -19,7 +19,7 @@ from pathlib import Path
 import yaml
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DOCS = _ROOT / "studio" / "src" / "optpilot_studio" / "docs_assets"
+_DOCS = _ROOT / "docs"
 _SEARCH_PAGE = _DOCS / "generate-and-optimize.md"
 _SOLVER_PAGE = _DOCS / "or-solving.md"
 
@@ -32,23 +32,13 @@ class SolverBridgeTest(unittest.TestCase):
         )
 
     def test_the_walkthrough_names_the_input_a_person_must_fill(self) -> None:
-        study = yaml.safe_load(
-            (_ROOT / "catalog/or_solving/studies/solve_or_problem.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-        inputs = study.get("inputs") or {}
-        required = [
-            name for name, spec in inputs.items() if "default" not in (spec or {})
-        ]
-        self.assertEqual(
-            required,
-            ["problem"],
-            "the walkthrough tells people to fill exactly this input",
-        )
+        manifest = yaml.safe_load((_ROOT / "catalog/or_solving/optpilot.experiment.yaml").read_text())
+        task = manifest["tasks"][0]
+        self.assertTrue(task["observations"]["problem"])
+        self.assertIn("solve", [s["id"] for s in manifest["studies"]])
         page = _SEARCH_PAGE.read_text(encoding="utf-8")
         self.assertIn("`problem`", page)
-        self.assertIn("solve-or-problem", page)
+        self.assertIn("--study solve", page)
 
     def test_the_walkthrough_gives_a_usable_example(self) -> None:
         page = _SEARCH_PAGE.read_text(encoding="utf-8")

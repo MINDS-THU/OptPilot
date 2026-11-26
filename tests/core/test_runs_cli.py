@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from optpilot.cli import build_parser, main as cli_main
+from optpilot._retired_cli import build_parser, main as cli_main
 
 
 class _InteractiveInput(io.StringIO):

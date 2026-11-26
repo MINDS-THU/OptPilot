@@ -2141,7 +2141,7 @@ def compile_retained_process_attempt_runtime(
 
     ``container_execution_supported`` is an explicit opt-in from the one caller
     that can actually run a container. Every other caller -- operator debug
-    jobs, Studio probes -- keeps refusing, so a surface that cannot start a
+    jobs, capability probes -- keeps refusing, so a surface that cannot start a
     container never reports a container study as runnable.
     """
 

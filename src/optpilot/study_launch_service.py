@@ -1,6 +1,6 @@
 """Durable Core lifecycle for retained study launch and run handoff.
 
-Studio may request and render this service, but it never owns a launcher,
+A client may request and render this service, but it never owns a launcher,
 process, run status mirror, or controller fence.  Before handoff the durable
 Operator Job is authoritative.  The immutable handoff row switches authority
 to the canonical run and its fenced controller.
@@ -175,7 +175,7 @@ def _normalize_method_environment_binding(
             f"method_environment_binding.requirements[{index}].name",
         )
         source = raw.get("source")
-        if source not in {"process-environment", "studio-settings"}:
+        if source not in {"process-environment", "client-settings"}:
             raise ValueError(
                 "method_environment_binding requirement source is unsupported."
             )
@@ -205,7 +205,7 @@ def _normalize_method_environment_binding(
         )
     expected_source = {
         "process-lifetime": "process-environment",
-        "settings-revision": "studio-settings",
+        "settings-revision": "client-settings",
     }.get(recoverability)
     if expected_source is not None and any(
         item["source"] != expected_source for item in requirements
@@ -289,9 +289,6 @@ class StudyLaunchView:
         finished_at = None if outcome is None else outcome.created_at
         return {
             "launch_id": self.launch_id,
-            # ``job_id`` remains an alias while the Studio browser migrates
-            # from its old process-local row vocabulary.
-            "job_id": self.launch_id,
             "run_id": self.run_id,
             "study_name": display.get("study_name"),
             "environment_id": display.get("environment_id"),

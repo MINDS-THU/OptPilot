@@ -17,6 +17,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from optpilot.method_protocol_limits import MAX_BATCH_EXCHANGE_ITEMS
 from optpilot.method_launch_environment import MethodLaunchEnvironment
@@ -1360,6 +1361,102 @@ class Method:
             Path(first_init.diagnostic_path).read_text(encoding="utf-8"),
             "grown diagnostics\n",
         )
+
+    def test_ambient_tmpdir_preserves_default_socket_parent_and_launch_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"TMPDIR": str(self.root)}):
+            os.environ.pop("OPTPILOT_RUNTIME_TMPDIR", None)
+            default_provider = RetainedBatchRuntimeProvider(self.graph)
+            self.assertEqual(default_provider._socket_parent, Path("/tmp"))
+            self.provider = RetainedBatchRuntimeProvider(
+                self.graph,
+                socket_parent=Path(self.socket_temporary.name),
+                request_client=self.client,
+                socket_probe=self._fake_socket_probe,
+            )
+        self._realize()
+        self.assertEqual(
+            dict(self.supervisor.reserve_requests[-1].env),
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONHASHSEED": str(int(self.definition.digest[:8], 16)),
+            },
+        )
+
+    def test_configured_tmpdir_survives_attachment_and_inactive_reconstruction(self) -> None:
+        temporary_root = Path(self.socket_temporary.name)
+        alias = temporary_root / "alias"
+        alias.symlink_to(temporary_root, target_is_directory=True)
+        with mock.patch.dict(os.environ, {"OPTPILOT_RUNTIME_TMPDIR": str(alias)}):
+            self.provider = RetainedBatchRuntimeProvider(
+                self.graph,
+                request_client=self.client,
+                socket_probe=self._fake_socket_probe,
+            )
+            first = self._realize()
+            first_request = self.supervisor.reserve_requests[-1]
+            initialization = RetainedBatchWorkerInit.from_bytes(
+                Path(first_request.argv[-1]).read_bytes()
+            )
+            self.assertEqual(first_request.env["TMPDIR"], str(temporary_root.resolve()))
+            self.assertEqual(
+                Path(initialization.socket_path).parent.parent, temporary_root.resolve()
+            )
+            recovering_provider = RetainedBatchRuntimeProvider(
+                self.graph,
+                request_client=self.client,
+                socket_probe=self._fake_socket_probe,
+            )
+            second = recovering_provider.realize(self.snapshot)
+            self.handles.append(second)
+            self.assertEqual(second.attachment_kind, "attached")
+            self.assertEqual(self.supervisor.reserve_requests[-1], first_request)
+            self.assertEqual(self.supervisor.physical_starts, 1)
+            terminal = _snapshot(self.definition, run_state="succeeded", current_revision=2)
+            self.ledger.current = terminal
+            receipt = recovering_provider.reconcile_inactive(terminal)
+        self.assertEqual(receipt.worker_disposition, "stopped")
+        self.assertTrue(receipt.resources_reconciled)
+        self.assertTrue(self.supervisor.rows[first.identity.launch_token].retired)
+        self.assertEqual(self.supervisor.physical_starts, 1)
+
+    def test_explicit_socket_parent_overrides_configured_tmpdir(self) -> None:
+        temporary_root = Path(self.socket_temporary.name)
+        explicit = temporary_root / "s"
+        explicit.mkdir()
+        with mock.patch.dict(os.environ, {"OPTPILOT_RUNTIME_TMPDIR": str(temporary_root)}):
+            self.provider = RetainedBatchRuntimeProvider(
+                self.graph,
+                socket_parent=explicit,
+                request_client=self.client,
+                socket_probe=self._fake_socket_probe,
+            )
+        self._realize()
+        request = self.supervisor.reserve_requests[-1]
+        initialization = RetainedBatchWorkerInit.from_bytes(Path(request.argv[-1]).read_bytes())
+        self.assertEqual(Path(initialization.socket_path).parent.parent, explicit.resolve())
+        self.assertEqual(request.env["TMPDIR"], str(temporary_root.resolve()))
+
+    def test_configured_tmpdir_rejects_invalid_or_overlong_paths(self) -> None:
+        temporary_root = Path(self.socket_temporary.name)
+        regular_file = temporary_root / "file"
+        regular_file.write_text("file", encoding="utf-8")
+        overlong = temporary_root / ("x" * MAX_UNIX_SOCKET_PATH_BYTES)
+        overlong.mkdir()
+        for configured, message in (
+            ("", "absolute"),
+            ("relative", "absolute"),
+            (str(temporary_root / "missing"), "existing directory"),
+            (str(regular_file), "existing directory"),
+            (str(overlong), "too long"),
+        ):
+            with self.subTest(configured=configured), mock.patch.dict(
+                os.environ, {"OPTPILOT_RUNTIME_TMPDIR": configured}
+            ), self.assertRaisesRegex(ValueError, "OPTPILOT_RUNTIME_TMPDIR.*" + message):
+                RetainedBatchRuntimeProvider(self.graph)
+        self.assertEqual(self.supervisor.physical_starts, 0)
+        self.assertEqual(list(temporary_root.glob("oprbw-*")), [])
 
     def test_launch_environment_reaches_only_the_method_worker_request(self) -> None:
         study = _study()

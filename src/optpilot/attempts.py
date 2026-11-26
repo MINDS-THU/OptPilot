@@ -1,6 +1,6 @@
 """One-attempt evaluation semantics without evidence or budget side effects.
 
-This module is deliberately below both the canonical run adopter and Studio's
+This module is deliberately below both the canonical run adopter and the
 inspection adopter.  Callers provide an already-resolved candidate, configured
 validator/materializer/environment adapter, caller-owned identifiers, and an
 existing fresh workspace binding.  :class:`AttemptExecutor` executes exactly

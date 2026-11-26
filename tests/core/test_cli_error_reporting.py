@@ -7,7 +7,7 @@ import io
 import unittest
 from unittest import mock
 
-from optpilot.cli import build_parser, main
+from optpilot._retired_cli import build_parser, main
 from optpilot.method_launch_environment import MethodLaunchEnvironmentError
 
 
@@ -33,7 +33,7 @@ class CliErrorReportingTests(unittest.TestCase):
     def test_expected_run_error_is_concise_and_nonzero(self) -> None:
         stderr = io.StringIO()
         with mock.patch(
-            "optpilot.cli.run_study",
+            "optpilot._retired_cli.run_study",
             side_effect=MethodLaunchEnvironmentError(
                 "method_environment_missing",
                 "Missing Method environment variable: EXAMPLE_API_KEY."

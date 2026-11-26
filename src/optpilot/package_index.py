@@ -74,7 +74,7 @@ class PackageIndex:
 
 
 def expand_package_roots(roots: Iterable[str | Path]) -> List[Path]:
-    """Expand catalog roots into package roots using Studio-compatible rules."""
+    """Expand catalog roots into package roots for package discovery."""
 
     expanded: List[Path] = []
     for root_value in roots:

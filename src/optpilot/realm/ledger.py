@@ -41,6 +41,7 @@ from ..attempts import (
     OutputDeclaration,
 )
 from ..run_execution_profile import RunExecutionProfile
+from ._sqlite_bootstrap import enable_wal
 from ._validation import (
     finite_time,
     freeze_json,
@@ -1220,9 +1221,7 @@ class RealmLedger(
         self._pin_authority_files()
         connection = self._connect()
         try:
-            mode = str(
-                connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-            ).lower()
+            mode = enable_wal(connection)
             if mode != "wal":
                 raise RealmIntegrityError(
                     f"Realm ledger requires WAL mode, got {mode!r}."
@@ -1235,6 +1234,9 @@ class RealmLedger(
             if realm is None:
                 raise RealmIntegrityError("Realm identity is missing after migration.")
             self._realm_id = _text(realm["value"], "realm identity")
+        except BaseException:
+            self.close()
+            raise
         finally:
             connection.close()
         self._assert_authority_path()
@@ -12596,7 +12598,7 @@ class RealmLedger(
                 or not isinstance(item.get("revision_id"), str)
                 or not item.get("revision_id")
                 or item.get("source")
-                not in {"process-environment", "studio-settings"}
+                not in {"process-environment", "client-settings"}
                 for item in method_environment_binding["requirements"]
             )
         ):

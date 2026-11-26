@@ -130,7 +130,7 @@ class RealmStudyLaunchServiceTest(unittest.TestCase):
                 {
                     "name": "TEST_METHOD_API_KEY",
                     "revision_id": "environment-revision-0123456789abcdef0123456789abcdef",
-                    "source": "studio-settings",
+                    "source": "client-settings",
                 }
             ],
             "schema": "optpilot.method-environment-binding.v1",
@@ -437,7 +437,7 @@ class RealmStudyLaunchServiceTest(unittest.TestCase):
         facts predate ``method_environment_binding`` used to raise from
         ``to_dict()``/``list_reconcilable()`` — failing the whole Runs
         listing and, worse, startup reconciliation, which left live runs
-        orphaned after a Studio restart.
+        orphaned after a client restart.
         """
 
         healthy = self.plan("healthy-modern")

@@ -421,6 +421,7 @@ class ConfiguredPackageIngressService:
                 if (
                     source.excluded_directory_names
                     != expected_excluded_directory_names
+                    or source.excluded_entry_prefixes
                 ):
                     raise RealmIntegrityError(
                         "Configured package source exclusions disagree with the "

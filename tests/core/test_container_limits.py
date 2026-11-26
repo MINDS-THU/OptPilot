@@ -164,7 +164,7 @@ class LaunchMergeTest(unittest.TestCase):
 
 class ApprovalDisplayTest(unittest.TestCase):
     def test_the_approval_prompt_names_a_component_that_raises(self) -> None:
-        from optpilot.cli import _raised_limits_for_image
+        from optpilot._retired_cli import _raised_limits_for_image
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -186,7 +186,7 @@ class ApprovalDisplayTest(unittest.TestCase):
         self.assertIn("memory 16g", lines[0])
 
     def test_no_catalog_means_no_lines(self) -> None:
-        from optpilot.cli import _raised_limits_for_image
+        from optpilot._retired_cli import _raised_limits_for_image
 
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(_raised_limits_for_image(Path(tmp), IMAGE), [])

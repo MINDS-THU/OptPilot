@@ -2,7 +2,7 @@
 
 This React/Vite app is the browser interface for the DEVS Simulation Generator
 Interface resource. It is launched by `_start_frontend.sh` and talks to the
-FastAPI backend through the Studio preview proxy.
+FastAPI backend.
 
 The frontend provides:
 

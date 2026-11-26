@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from optpilot.cli import main as cli_main
+from optpilot._retired_cli import main as cli_main
 from optpilot.config import validate_authoring_config
 from optpilot.resource_actions import (
     compile_resource_actions,

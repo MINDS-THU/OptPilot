@@ -1,0 +1,65 @@
+---
+title: Research Packages
+description: Explore the paper companion projects and executable examples in the OptPilot repository.
+hide_table_of_contents: true
+---
+
+import Link from '@docusaurus/Link';
+import {useBaseUrlUtils} from '@docusaurus/useBaseUrl';
+import {useCasePreviews} from '@site/src/content/listingData';
+
+export function UseCasesGrid() {
+	const {withBaseUrl} = useBaseUrlUtils();
+
+	return (
+		<div className="useCasesGallery">
+			{useCasePreviews.map((useCase, index) => (
+				<Link key={useCase.href} className="useCaseCard" to={useCase.href}>
+					<div className="useCasePreview">
+						{useCase.previewImage ? (
+							<img
+								className="useCaseImage"
+								src={withBaseUrl(useCase.previewImage)}
+								alt={useCase.imageTitle}
+							/>
+						) : (
+							<div className={`useCaseFallback ${
+								useCase.tone === 'teal'
+									? 'useCaseToneTeal'
+									: useCase.tone === 'amber'
+										? 'useCaseToneAmber'
+										: 'useCaseToneSlate'
+							}`}>
+								<span>OPTPILOT / RESEARCH</span>
+								<strong>{useCase.imageTitle}</strong>
+								<p>{useCase.imageCaption}</p>
+							</div>
+						)}
+						<span className="useCaseIndex">0{index + 1}</span>
+					</div>
+					<div className="useCaseContent">
+						<div className="useCaseMeta">
+							<span>{useCase.metric}</span>
+							<span className="useCaseArrow" aria-hidden="true">↗</span>
+						</div>
+						<h3>{useCase.title}</h3>
+						<div className="useCaseBodyText">{useCase.abstract}</div>
+						<div className="useCaseTags" aria-hidden="true">
+							{useCase.tags.map((tag) => <span key={tag}>{tag}</span>)}
+						</div>
+					</div>
+				</Link>
+			))}
+		</div>
+	);
+}
+
+# Research Packages
+
+The repository contains three paper companion projects and one deliberately small tutorial project. They are executable examples: each project declares experiment artifacts and Studies that exercise the same public Core contracts.
+
+<UseCasesGrid />
+
+The companion packages cover simulation generation, parameter tuning, executable policy design from event traces, and natural-language operations-research solving. The [tutorial package](https://minds-thu.github.io/OptPilot/reference/tutorial-package/) is the shortest path for learning how to author your own integration.
+
+For exact commands, prerequisites, limitations, and paper links, use the [DEVS-Gen](https://minds-thu.github.io/OptPilot/reference/devs-gallery/), [heuristic-design](https://minds-thu.github.io/OptPilot/reference/llm-policy-search/), and [COOPA](https://minds-thu.github.io/OptPilot/reference/or-solving/) guides.

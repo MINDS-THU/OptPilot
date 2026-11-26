@@ -491,6 +491,7 @@ def _run_group_authority_sentinel(
     """Hold exact group authority and execute recovery from inside the group."""
 
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
     try:
         _write_pipe_byte(state_write_fd, _AUTHORITY_READY)
         _write_pipe_byte(ready_write_fd, _SENTINEL_READY)
@@ -630,6 +631,11 @@ def _run(
     *,
     fault_mode: str | None = None,
 ) -> int:
+    # Service managers may terminate the complete cgroup after the controller
+    # dies. Keep one authenticated monitor alive long enough to drain the exact
+    # worker group and publish its killed proof. Block TERM across fork so no
+    # child briefly inherits the wrong role's handler.
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
     try:
         manifest = _read_canonical_record(manifest_path)
         _validate_manifest(manifest, lock_fd)
@@ -650,6 +656,8 @@ def _run(
     command_read_fd, command_write_fd = os.pipe()
     watchdog_pid = os.fork()
     if watchdog_pid == 0:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         try:
             if private_environment_fd >= 0:
                 os.close(private_environment_fd)
@@ -671,6 +679,8 @@ def _run(
             os.close(state_read_fd)
             os.close(command_write_fd)
 
+    # TERM becomes ordinary primary-monitor loss; the watchdog owns recovery.
+    signal.signal(signal.SIGTERM, lambda _signum, _frame: os._exit(143))
     os.close(primary_read_fd)
     os.close(state_read_fd)
     os.close(command_write_fd)
@@ -680,6 +690,7 @@ def _run(
         fault_read_fd, fault_write_fd = os.pipe()
     worker_pid = os.fork()
     if worker_pid == 0:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
         try:
             os.close(primary_write_fd)
             if fault_read_fd is not None and fault_write_fd is not None:
@@ -746,6 +757,7 @@ def _run(
             argv = request["argv"]
             env = dict(request["env"])
             env.update(private_environment)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             os.execvpe(argv[0], argv, env)
         except BaseException:
             os._exit(127)
@@ -765,6 +777,7 @@ def _run(
     if fault_write_fd is not None:
         os.close(fault_write_fd)
 
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     try:
         status = _waitpid(worker_pid)
         try:

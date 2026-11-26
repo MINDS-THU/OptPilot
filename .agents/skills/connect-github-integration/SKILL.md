@@ -15,11 +15,11 @@ kinds.
 
 Before authoring, read:
 
-- `docs/tutorial-package.md` for the supported create/check/run/register loop
+- `docs/tutorial-package.md` for the supported create/check/run workflow
 - `docs/capabilities.md` for the executable boundary
 - `docs/candidate-contracts.md` for Candidate formats
 - `docs/configuration.md` for config fields and callable shapes
-- `docs/catalog.md` for package layout and Studio publication
+- `docs/catalog.md` for package layout and validation
 - `docs/methods.md` when wrapping an optimizer or search loop
 
 Use tracked packages as examples:
@@ -77,10 +77,7 @@ The Environment owns what is valid. A fixed-shape Method may declare
 ## Author A Portable Package
 
 For a source-controlled package, work outside OptPilot's tracked `catalog/`
-directory—for example in a project repository or the OS-local package root
-described in `docs/tutorial-package.md`. A Studio Workspace may instead keep
-draft configs under `optpilot_configs/`; the Workspace **Publish** flow materializes the final
-portable package layout.
+directory, for example in a project repository.
 
 A package settings file preserves identity across moves and updates:
 
@@ -246,17 +243,6 @@ is safe and dependencies are available. A direct Run uses:
 uv run optpilot run path/to/package/studies/smoke.yaml \
   --package-root path/to/package
 ```
-
-For a Studio Workspace:
-
-1. Discover existing `optpilot_configs` before broad source scans.
-2. Prepare the package plan and repair every schema, source, setup, import,
-   callable-shape, and source-closure error.
-3. For an Environment-plus-Method package, add the smallest deterministic smoke
-   Study and require a completed Run with zero logical failures and the declared
-   objective metric.
-4. Register only the exact artifact that passed Check/Test. Registration and
-   smoke may require user approval; never manufacture approval.
 
 Static schema validation is not proof of run readiness. If credentials,
 licenses, native dependencies, hardware, or long training block the real path,

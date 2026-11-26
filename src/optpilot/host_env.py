@@ -15,7 +15,7 @@ An entry may now carry a default::
       - OPTPILOT_STRICT_MODE          # still required, as before
 
 A bare name behaves exactly as it always did. A default is used only when the
-host supplies nothing, so setting the value in Studio Settings or exporting it
+host supplies nothing, so supplying or exporting the value explicitly
 still wins.
 
 Secrets are deliberately excluded. ``secretsFromHost`` remains a plain list of

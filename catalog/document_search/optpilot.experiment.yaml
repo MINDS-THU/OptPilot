@@ -1,0 +1,52 @@
+environments:
+  - id: manual
+    name: OptPilot help documents
+    settings: {language: English}
+tasks:
+  - id: rank
+    name: Rank help documents by relevance
+    environment: manual
+    evaluator: grading.py:evaluate
+    files: [documents.json]
+    decisionContract: {format: program}
+    parameters: {query: {valueType: string}}
+    metrics: [reciprocal_rank, top_one]
+instances:
+  - id: chat-question
+    name: Open a new discussion
+    task: rank
+    parameters: {query: "how do I start a fresh chat?"}
+    private: {target: chat}
+  - id: folder-question
+    name: Isolate changes to files
+    task: rank
+    parameters: {query: "how can I change files without changing the original?"}
+    private: {target: folder}
+  - id: retry-question
+    name: Retry a failed execution
+    task: rank
+    parameters: {query: "does retrying a failed trial use another budget slot?"}
+    private: {target: attempt}
+  - id: results-question
+    name: Discuss a comparison
+    task: rank
+    parameters: {query: "how do I bring results into a conversation?"}
+    private: {target: evidence}
+  - id: guide-question
+    name: Install authoring help
+    task: rank
+    parameters: {query: "where can I install the evaluation guide?"}
+    private: {target: skill}
+suites:
+  - id: help-questions
+    name: Five help questions
+    instances: [chat-question, folder-question, retry-question, results-question, guide-question]
+candidates:
+  - id: word-count
+    name: Word count
+    format: program
+    entrypoint: word_count.py:rank
+  - id: bm25
+    name: BM25
+    format: program
+    entrypoint: bm25.py:rank

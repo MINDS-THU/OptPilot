@@ -1,6 +1,6 @@
 """Bounded, path-free presentation records for the canonical run timeline.
 
-The Realm stores a complete ordered event stream for recovery, but Studio does
+The Realm stores a complete ordered event stream for recovery, but a client does
 not need raw recovery payloads.  This module exposes only stable event metadata
 and a digest of the omitted payload.  Pages are anchored to an exact run head;
 callers refresh the head before requesting a newer live page.

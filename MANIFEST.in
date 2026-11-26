@@ -4,9 +4,9 @@ prune catalog
 prune design
 prune designs
 prune docs
+prune website
 prune resource
 prune scripts
-prune studio
 prune tests
 prune .optpilot-ui
 prune .pytest_cache
@@ -25,3 +25,4 @@ recursive-exclude . __pycache__
 # whatever filesystem built it, not from the repository.
 prune src/optpilot.egg-info
 global-exclude *.egg-info
+prune desktop

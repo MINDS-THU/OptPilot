@@ -68,8 +68,7 @@ evaluator:
   pythonPath: [.]
 ```
 
-For user-owned registrations, Studio creates `catalog/local_package/` on
-demand. Registered configs should use the same local-import pattern.
+Use the same package-local imports in your own projects.
 
 ## Current Retained Studies
 
@@ -92,7 +91,7 @@ After installing the optional example dependencies, the three JobShopLib solver
 studies and the Stable-Baselines study are retained-launchable too:
 
 ```bash
-uv sync --all-packages --group examples
+uv sync --group examples
 uv run optpilot run catalog/example_package/studies/job_shop_lib_dispatching_rule.yaml \
   --package-root catalog/example_package
 uv run optpilot run catalog/example_package/studies/job_shop_simulated_annealing.yaml \
@@ -115,7 +114,7 @@ additional local setup requirement:
 
 | Study | Retained capability | Local setup |
 | --- | --- | --- |
-| `job_shop_openai_dispatch_rule.yaml` | `ready` | Add `OPENROUTER_API_KEY` under Studio Settings → Local environment variables, or export it before a CLI launch. |
+| `job_shop_openai_dispatch_rule.yaml` | `ready` | Export `OPENROUTER_API_KEY` before running the study. |
 
 Package validation and retained launch capability are deliberately separate.
 Use `optpilot package validate ... --check-imports` to validate all authored

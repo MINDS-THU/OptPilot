@@ -1,4 +1,4 @@
-"""The release checker proves licence and cross-distribution boundaries."""
+"""The release checker proves licence and Python distribution boundaries."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 from scripts.check_release_artifacts import (
-    STUDIO_REQUIRED_SDIST_ENTRIES,
+    CORE_REQUIRED_SDIST_ENTRIES,
     _check_sdist,
     _check_wheel,
 )
@@ -57,15 +57,15 @@ class ReleaseArtifactCheckerTest(unittest.TestCase):
         )
         self.assertEqual(complete_errors, [])
 
-    def test_studio_sdist_requires_license_and_rejects_core_package_prefix(
+    def test_core_sdist_requires_license_and_excludes_the_desktop(
         self,
     ) -> None:
-        self.assertIn("LICENSE", STUDIO_REQUIRED_SDIST_ENTRIES)
+        self.assertIn("LICENSE", CORE_REQUIRED_SDIST_ENTRIES)
         with tempfile.TemporaryDirectory() as raw:
-            path = Path(raw) / "optpilot_studio-1.tar.gz"
+            path = Path(raw) / "optpilot-1.tar.gz"
             payload = b"from __future__ import annotations\n"
             member = tarfile.TarInfo(
-                "optpilot_studio-1/src/optpilot/__init__.py"
+                "optpilot-1/desktop/src/main/index.ts"
             )
             member.size = len(payload)
             with tarfile.open(path, "w:gz") as archive:
@@ -74,14 +74,14 @@ class ReleaseArtifactCheckerTest(unittest.TestCase):
             errors = _check_sdist(
                 path,
                 required=set(),
-                forbidden_prefixes=("src/optpilot/",),
+                forbidden_prefixes=("desktop/",),
             )
 
         self.assertEqual(
             errors,
             [
-                "optpilot_studio-1.tar.gz contains forbidden entry: "
-                "src/optpilot/__init__.py"
+                "optpilot-1.tar.gz contains forbidden entry: "
+                "desktop/src/main/index.ts"
             ],
         )
 

@@ -5,7 +5,7 @@ it had nowhere to carry a human name -- and "Run setups" is a primary page.
 A new install listed eighteen entries reading `production-agv-pso-weighted-rules`
 and `abp-tune-timeout`, which say almost nothing about what they do.
 
-Studies therefore take an optional `title`, and Studio prefers it. This pins
+Studies therefore take an optional `title`, for clients to display. This pins
 that every shipped Run setup uses one, since the field being optional is
 exactly what lets it be forgotten.
 """
@@ -74,17 +74,6 @@ class RunSetupNamesTest(unittest.TestCase):
             if str(raw.get("title") or "").strip() == str(raw.get("name") or "").strip()
         ]
         self.assertEqual(lazy, [], f"title merely repeats the identifier: {lazy}")
-
-    def test_studio_prefers_the_title(self) -> None:
-        server = (
-            _ROOT / "studio/src/optpilot_studio/ui/server.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn(
-            'label = raw.get("title") or raw.get("name")',
-            server,
-            "the displayed label must prefer the readable title",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

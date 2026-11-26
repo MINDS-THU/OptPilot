@@ -15,7 +15,6 @@ from serpapi import GoogleSearch
 
 from smolagents import Tool
 
-from .cookies import COOKIES
 from .mdconvert import FileConversionException, MarkdownConverter, UnsupportedFormatException
 
 
@@ -38,8 +37,7 @@ class SimpleTextBrowser:
         self.viewport_current_page = 0
         self.viewport_pages: list[tuple[int, int]] = list()
         
-        self.request_kwargs = request_kwargs or {}
-        self.request_kwargs["cookies"] = COOKIES  # assign cookies early
+        self.request_kwargs = dict(request_kwargs or {})
 
         self.serpapi_key = serpapi_key
         self._mdconvert = MarkdownConverter()

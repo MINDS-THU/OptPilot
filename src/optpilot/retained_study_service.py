@@ -66,13 +66,8 @@ RETAINED_STUDY_SOURCE_ROLE = "study-package-source"
 RETAINED_STUDY_PREPARATION_RECEIPT_FORMAT = (
     "optpilot.retained-study-preparation-receipt.v1"
 )
-# Keep this exact tuple aligned with Studio's
-# ``CONFIGURED_PACKAGE_CAPTURE_EXCLUDED_DIRS``.  Whole-package Studio capture
-# already omits these machine-local generated directories.  The retained CLI
-# path must select the same authored bytes so a cache created by importing or
-# testing a package cannot change its source identity.  This is intentionally a
-# basename-only directory policy: ordinary files (including ``*.pyc``) and
-# every other directory remain part of the captured package.
+# Import and test caches must not change the identity of authored package
+# source. Only directory basenames are excluded here.
 RETAINED_STUDY_SOURCE_EXCLUDED_DIRECTORY_NAMES = (
     ".git",
     ".mypy_cache",

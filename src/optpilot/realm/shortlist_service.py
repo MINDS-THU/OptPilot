@@ -1,7 +1,7 @@
 """Run-local Shortlist facade over revisioned Review Collections.
 
 The Review Collection aggregate remains the persistence and retention
-authority.  This module supplies the narrower product contract used by Studio:
+authority.  This module supplies the narrower product contract for a run-local shortlist:
 
 * every mutation carries the complete user draft;
 * one current card identifies one Candidate in one Run;

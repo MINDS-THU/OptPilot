@@ -26,7 +26,7 @@ from .content import LocalContentStore
 from .editable_workspace_service import RealmEditableWorkspaceService
 from .environment_preview_binding import RealmEnvironmentPreviewBinder
 from .ephemeral_volume_service import RealmEphemeralVolumeService
-from .errors import RealmConflict
+from .errors import RealmConflict, RealmNotFound
 from .inspection_service import RealmInspectionTargetService
 from .interface_output_service import RealmInterfaceOutputSessionService
 from .ledger import PrincipalRecord, RealmLedger
@@ -160,6 +160,7 @@ class LocalRealmRuntime:
         *,
         realm_root: Path,
         actor_principal_id: str | None = None,
+        refresh_capacity: bool = True,
         container_web_executable: str | None = None,
         trusted_container_gateway_images: (
             Sequence[ContainerGatewayImageTrust] | None
@@ -170,9 +171,15 @@ class LocalRealmRuntime:
         Production callers omit ``actor_principal_id`` and bind the principal
         derived from the server-observed OS account.  The explicit value is a
         trusted application-composition and test seam; it must never be filled
-        from request data.
+        from request data. ``refresh_capacity=False`` preserves an existing
+        allocation pool for inspection from outside the controller cgroup.
+        New execution opens retain the default capacity discovery.
         """
 
+        # Inspection can happen outside the controller's cgroup. Re-sampling
+        # there must not revoke active reservations made inside its allocation.
+        if type(refresh_capacity) is not bool:
+            raise TypeError("refresh_capacity must be a boolean.")
         if actor_principal_id is not None:
             actor_principal_id = required_text(
                 actor_principal_id,
@@ -233,25 +240,34 @@ class LocalRealmRuntime:
                 gateway_images,
             )
 
-            capacity_limits = conservative_local_host_capacity_limits()
-            capacity_pool = ledger.ensure_operator_capacity_pool(
-                operation_id=(
-                    "local-runtime/bootstrap/operator-capacity/"
-                    + request_digest(
-                        {
-                            "actor_principal_id": actor_principal_id,
-                            "limits": dict(capacity_limits),
-                            "pool_name": LOCAL_OPERATOR_CAPACITY_POOL,
-                            "schema": "optpilot.local-capacity-bootstrap.v1",
-                        }
+            capacity_pool = None
+            if not refresh_capacity:
+                try:
+                    capacity_pool = ledger.read_operator_capacity_pool(
+                        pool_name=LOCAL_OPERATOR_CAPACITY_POOL,
                     )
-                    + "/attempt-"
-                    + uuid.uuid4().hex
-                ),
-                actor_principal_id=actor_principal_id,
-                pool_name=LOCAL_OPERATOR_CAPACITY_POOL,
-                limits=capacity_limits,
-            )
+                except RealmNotFound:
+                    pass
+            if capacity_pool is None:
+                capacity_limits = conservative_local_host_capacity_limits()
+                capacity_pool = ledger.ensure_operator_capacity_pool(
+                    operation_id=(
+                        "local-runtime/bootstrap/operator-capacity/"
+                        + request_digest(
+                            {
+                                "actor_principal_id": actor_principal_id,
+                                "limits": dict(capacity_limits),
+                                "pool_name": LOCAL_OPERATOR_CAPACITY_POOL,
+                                "schema": "optpilot.local-capacity-bootstrap.v1",
+                            }
+                        )
+                        + "/attempt-"
+                        + uuid.uuid4().hex
+                    ),
+                    actor_principal_id=actor_principal_id,
+                    pool_name=LOCAL_OPERATOR_CAPACITY_POOL,
+                    limits=capacity_limits,
+                )
 
             content_root = prepare_private_directory(root / _CONTENT_DIRECTORY)
             store = LocalContentStore(
@@ -477,7 +493,7 @@ class LocalRealmRuntime:
             raise RuntimeError("Local Realm runtime is closed.")
         if self.container_gateway_trust_source != "realm":
             raise RealmConflict(
-                "This Studio session uses an exact Preview trust override and "
+                "This session uses an exact Preview trust override and "
                 "cannot be changed while it is running."
             )
         provider = self.container_web_provider

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from optpilot.cli import build_parser, main as cli_main
+from optpilot._retired_cli import build_parser, main as cli_main
 
 
 _IMAGE = "example.invalid/optpilot-preview@sha256:" + ("a" * 64)
@@ -143,7 +143,6 @@ class EnvironmentPreviewTrustCliTest(unittest.TestCase):
             )
 
             self.assertEqual(approved["action"], "approve")
-            self.assertTrue(approved["studio_restart_required"])
             self.assertEqual(approved["active"]["image_ref"], _IMAGE)
             self.assertEqual(approved["active"]["python_executable"], "python3")
             self.assertEqual(
@@ -178,7 +177,6 @@ class EnvironmentPreviewTrustCliTest(unittest.TestCase):
             )
 
             self.assertEqual(revoked["action"], "revoke")
-            self.assertTrue(revoked["studio_restart_required"])
             self.assertIsNone(revoked["active"])
             self.assertEqual(after_revoke["active"], [])
             self.assertEqual(after_revoke["count"], 0)

@@ -73,7 +73,7 @@ def _rehydrate_attached_inspection_outcomes(
 ) -> tuple[ReviewCollectionEntryDraft, ...]:
     """Replace public inspection references with their stored authority records.
 
-    Studio never receives the target or execution authority held in an Operator
+    The client never receives the target or execution authority held in an Operator
     Job outcome.  A normal browser round-trip therefore cannot reproduce the
     stored mapping byte-for-byte.  Treat an outcome supplied in a draft as an
     opaque reference by ``operator_job_id`` and resolve it only against an

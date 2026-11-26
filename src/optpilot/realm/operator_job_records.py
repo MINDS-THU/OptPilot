@@ -1,6 +1,6 @@
 """Path-free durable records for supervised Operator Jobs.
 
-An Operator Job is the common control-plane envelope for Studio-started work.
+An Operator Job is the common control-plane envelope for operator-requested work.
 The records in this module deliberately describe immutable logical facts and
 provider-neutral lifecycle evidence.  Host paths, process ids, ports, secret
 values, and provider-private backend tokens belong to execution bindings and
@@ -371,7 +371,7 @@ class OperatorJobTarget:
 
 @dataclass(frozen=True)
 class OperatorJobLaunchPlan:
-    """Exact approval unit for any supervised Studio-started execution.
+    """Exact approval unit for any supervised operator-requested execution.
 
     ``resource_claims`` uses provider-neutral integer units keyed by logical
     resource name (for example ``cpu_millis`` or ``gpu_count``).  Provider

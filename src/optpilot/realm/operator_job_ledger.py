@@ -1548,7 +1548,7 @@ class OperatorJobLedgerMixin:
     ) -> Tuple[OperatorJobRecord, ...]:
         """List authorized jobs attached to one persisted selection source.
 
-        Studio derives these coordinates from its authorized run/workspace
+        The caller derives these coordinates from its authorized run/workspace
         context.  The query never accepts a job owner as a substitute for the
         source and filters every result through the derived owner's direct ACL.
         """

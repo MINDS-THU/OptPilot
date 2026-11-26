@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -32,6 +32,7 @@ dependencies = [
   "jsonschema>=4",
   "PyYAML>=6.0",
   "referencing>=0.30",
+  "tomli>=2; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -68,17 +69,14 @@ optpilot = "optpilot.cli:main"
 package-dir = {"" = "src"}
 packages = [
   "optpilot",
+  "optpilot.authoring",
   "optpilot.realm",
   "optpilot.realm.migrations",
   "optpilot.schemas",
+  "optpilot.schemas.defs",
 ]
 
 [tool.setuptools.package-data]
+"optpilot" = ["authoring/contract.json", "authoring/optpilot-evaluation/SKILL.md"]
 "optpilot.schemas" = ["*.json", "defs/*.json"]
 "optpilot.realm" = ["migrations/*.sql"]
-
-[tool.uv.workspace]
-members = ["studio"]
-
-[tool.uv.sources]
-optpilot = { workspace = true }

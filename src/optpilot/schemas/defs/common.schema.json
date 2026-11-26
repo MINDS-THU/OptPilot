@@ -291,7 +291,7 @@
           "type": "boolean"
         },
         "showInOutputCard": {
-          "description": "Whether Studio also presents this action on each output card. Set false when the interface already provides the action in its own UI.",
+          "description": "Whether a client also presents this action on each output card. Set false when the interface already provides the action in its own UI.",
           "type": "boolean"
         },
         "runtime": {
@@ -341,7 +341,7 @@
         "presentation": {"$ref": "#/definitions/interfacePresentation"},
         "accepts": {"$ref": "#/definitions/interfaceAccepts"},
         "outputs": {
-          "description": "Opt in to Studio's launch-scoped output reporting protocol and optionally register commands available for every reported tree output. Actual output ids, labels, kinds, and relative paths remain dynamic.",
+          "description": "Opt in to the launch-scoped output reporting protocol and optionally register commands available for every reported tree output. Actual output ids, labels, kinds, and relative paths remain dynamic.",
           "$ref": "#/definitions/interfaceOutputs"
         }
       }
@@ -373,7 +373,7 @@
         "presentation": {"$ref": "#/definitions/interfacePresentation"},
         "accepts": {"$ref": "#/definitions/interfaceAccepts"},
         "outputs": {
-          "description": "Opt in to Studio's launch-scoped output reporting protocol and optionally register commands available for every reported tree output. Actual output ids, labels, kinds, and relative paths remain dynamic.",
+          "description": "Opt in to the launch-scoped output reporting protocol and optionally register commands available for every reported tree output. Actual output ids, labels, kinds, and relative paths remain dynamic.",
           "$ref": "#/definitions/interfaceOutputs"
         }
       }

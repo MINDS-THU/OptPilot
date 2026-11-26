@@ -23,8 +23,7 @@ Execution contract (what the authored command sees):
   grant ``network: enabled``.  It fails closed for ``network: disabled``
   because a host subprocess cannot truthfully enforce network isolation.
 - When the action declares ``runtime.setup``, the steps run in the resource
-  root before the command (Studio's prepared-runtime cache is not used by
-  this local path; setup scripts should be idempotent).
+  root before the command. Setup scripts should be idempotent.
 - A ``runtime.setup`` step that builds a Python environment (``python-venv``
   or ``uv``) *owns the action's imports*: a ``python`` / ``python3`` command
   head then resolves to that prepared interpreter instead of the interpreter

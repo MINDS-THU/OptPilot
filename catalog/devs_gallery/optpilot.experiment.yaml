@@ -1,0 +1,185 @@
+environments:
+- id: abp-world
+  name: Alternating-bit protocol simulator
+  settings:
+    totalPackets: 20
+    simulateTime: 5000.0
+  files:
+  - environments/abp/devs_project/ABP_D1.py
+  - environments/abp/devs_project/ABP_D1_libs/ABP_Receiver.py
+  - environments/abp/devs_project/ABP_D1_libs/ABP_Sender.py
+  - environments/abp/devs_project/ABP_D1_libs/DeterministicLossChannel.py
+  - environments/abp/devs_project/ABP_D1_libs/__init__.py
+  - environments/abp/devs_project/devs_utils/__init__.py
+  - environments/abp/devs_project/devs_utils/devs_context.py
+  - environments/abp/devs_project/devs_utils/devs_logger.py
+  - environments/abp/devs_project/devs_utils/distributions.py
+  - environments/abp/devs_project/devs_utils/inject.py
+  - environments/abp/devs_project/run_abp_d1.py
+  - environments/abp/evaluator.py
+  - environments/abp/grade_versioned.py
+  - environments/abp/runtime_dependencies/THIRD_PARTY_NOTICES.md
+  - environments/abp/runtime_dependencies/licenses/xdevs-3.0.0-LICENSE.txt
+  - environments/abp/runtime_dependencies/requirements.lock
+  - environments/abp/runtime_dependencies/vendor/xdevs-3.0.0-py3-none-any.whl
+- id: seird-world
+  name: Epidemic spread simulator (SEIRD)
+  settings:
+    simulationTime: 30.0
+    totalPopulation: 1000
+    dt: 0.1
+  files:
+  - environments/seird/devs_project/SEIRD_D1.py
+  - environments/seird/devs_project/SEIRD_D1_libs/SEIRDIntegrator.py
+  - environments/seird/devs_project/SEIRD_D1_libs/SEIRDReporter.py
+  - environments/seird/devs_project/SEIRD_D1_libs/__init__.py
+  - environments/seird/devs_project/devs_utils/__init__.py
+  - environments/seird/devs_project/devs_utils/devs_context.py
+  - environments/seird/devs_project/devs_utils/devs_logger.py
+  - environments/seird/devs_project/devs_utils/distributions.py
+  - environments/seird/devs_project/devs_utils/inject.py
+  - environments/seird/devs_project/run_seird_d1.py
+  - environments/seird/evaluator.py
+  - environments/seird/grade_versioned.py
+  - environments/seird/runtime_dependencies/THIRD_PARTY_NOTICES.md
+  - environments/seird/runtime_dependencies/licenses/xdevs-3.0.0-LICENSE.txt
+  - environments/seird/runtime_dependencies/requirements.lock
+  - environments/seird/runtime_dependencies/vendor/xdevs-3.0.0-py3-none-any.whl
+tasks:
+- id: abp
+  environment: abp-world
+  evaluator: environments/abp/grade_versioned.py:evaluate
+  decisionContract:
+    format: parameters
+    schema:
+      timeout:
+        valueType: float
+        min: 5.0
+        max: 200.0
+        default: 20.0
+        description: Sender retransmission timeout (ms). Too short wastes bandwidth
+          on spurious retransmissions; too long stalls recovery after a loss.
+      sender_delay:
+        valueType: float
+        min: 1.0
+        max: 50.0
+        default: 10.0
+        description: Sender preparation delay per packet (ms).
+      receiver_delay:
+        valueType: float
+        min: 1.0
+        max: 50.0
+        default: 10.0
+        description: Receiver processing delay per packet (ms).
+      channel_delay:
+        valueType: float
+        min: 0.5
+        max: 20.0
+        default: 3.0
+        description: One-way subnet transmission delay (ms).
+      seed:
+        valueType: int
+        min: 0
+        max: 10000
+        default: 42
+        description: Deterministic noise seed for both lossy subnets.
+  metrics: &id001
+  - packets_delivered
+  - retransmissions
+  - forward_dropped
+  - ack_dropped
+  feedbackMetrics: *id001
+- id: seird
+  environment: seird-world
+  evaluator: environments/seird/grade_versioned.py:evaluate
+  decisionContract:
+    format: parameters
+    schema:
+      transmission_rate:
+        valueType: float
+        min: 0.1
+        max: 10.0
+        default: 2.5
+        description: Basic transmission rate between compartments.
+      mortality:
+        valueType: float
+        min: 0.0
+        max: 100.0
+        default: 10.0
+        description: Percentage of infective individuals who die.
+      incubation_period:
+        valueType: float
+        min: 0.5
+        max: 30.0
+        default: 5.0
+        description: Mean days from exposure to infectiousness.
+      infectivity_period:
+        valueType: float
+        min: 1.0
+        max: 60.0
+        default: 14.0
+        description: Mean days an individual stays infective.
+      initial_infective:
+        valueType: int
+        min: 1
+        max: 500
+        default: 10
+        description: Infective individuals at time zero.
+  metrics: &id002
+  - deceased
+  - recovered
+  - infective
+  - exposed
+  - susceptible
+  feedbackMetrics: *id002
+instances:
+- id: abp-default
+  task: abp
+- id: seird-default
+  task: seird
+suites:
+- id: abp-suite
+  instances:
+  - abp-default
+- id: seird-suite
+  instances:
+  - seird-default
+candidates:
+- id: abp-baseline
+  format: parameters
+  value:
+    timeout: 20.0
+    sender_delay: 10.0
+    receiver_delay: 10.0
+    channel_delay: 3.0
+    seed: 42
+- id: seird-baseline
+  format: parameters
+  value:
+    transmission_rate: 2.5
+    mortality: 10.0
+    incubation_period: 5.0
+    infectivity_period: 14.0
+    initial_infective: 10
+generators:
+- id: random-search
+  entrypoint: generate.py:propose
+studies:
+- id: abp-search
+  suiteIds:
+  - abp-suite
+  candidateIds:
+  - abp-baseline
+  generatorId: random-search
+  generationBudget: 5
+  metric: packets_delivered
+  direction: maximize
+- id: seird-search
+  suiteIds:
+  - seird-suite
+  candidateIds:
+  - seird-baseline
+  generatorId: random-search
+  generationBudget: 5
+  metric: deceased
+  direction: minimize

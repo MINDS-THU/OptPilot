@@ -115,7 +115,7 @@ class RunExecutionDescriptor:
             if names:
                 if self.method_environment_source not in {
                     "process-environment",
-                    "studio-settings",
+                    "client-settings",
                 }:
                     raise ValueError("Method environment source is unsupported.")
                 if self.method_environment_recoverability not in {
