@@ -14,6 +14,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -126,6 +127,11 @@ class InterfaceHTTPServer(ThreadingHTTPServer):
     ) -> None:
         self.application = application
         super().__init__(server_address, InterfaceRequestHandler)
+
+    def server_bind(self) -> None:
+        # Use the bound address directly so loopback startup cannot wait on reverse DNS.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class InterfaceRequestHandler(BaseHTTPRequestHandler):
