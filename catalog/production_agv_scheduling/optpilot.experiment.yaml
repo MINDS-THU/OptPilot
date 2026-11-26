@@ -1,0 +1,194 @@
+environments:
+- id: factory
+  name: Production and AGV factory
+  interface:
+    title: AGV factory floor
+    entrypoint: environments/production_agv_scheduling/visual_launch.py
+    readyPath: /ready
+    supportsTrialSettings: true
+    defaultSeed: 123
+    settings: [time_unit, simulation_horizon, time_step, disable_faults, order_interval, fault_interval, fault_duration, repeat_runs, seeds, stability_lambda]
+    filePrefixes:
+    - environments/production_agv_scheduling/factory_sim
+    - environments/production_agv_scheduling/simpy
+    files:
+    - environments/production_agv_scheduling/interface_runtime.py
+    - environments/production_agv_scheduling/interface_server.py
+    - environments/production_agv_scheduling/interface_worker.py
+    - environments/production_agv_scheduling/simulation_runner.py
+    - environments/production_agv_scheduling/mqtt_bridge.py
+    - environments/production_agv_scheduling/replay.py
+    - environments/production_agv_scheduling/enhanced_snapshot.py
+    - environments/production_agv_scheduling/commands.py
+    - environments/production_agv_scheduling/snapshot.py
+    - environments/production_agv_scheduling/initial/param_estimator.py
+    - environments/production_agv_scheduling/interface_web/app.js
+    - environments/production_agv_scheduling/interface_web/index.html
+    - environments/production_agv_scheduling/interface_web/styles.css
+    - environments/production_agv_scheduling/unity_webgl/index.html
+    - environments/production_agv_scheduling/unity_webgl/Build/SimPy.data.unityweb
+    - environments/production_agv_scheduling/unity_webgl/Build/SimPy.framework.js.unityweb
+    - environments/production_agv_scheduling/unity_webgl/Build/SimPy.loader.js
+    - environments/production_agv_scheduling/unity_webgl/Build/SimPy.wasm.unityweb
+    - environments/production_agv_scheduling/unity_webgl/StreamingAssets/MQTTBroker.json
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/MemoryProfiler.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/favicon.ico
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/fullscreen-button.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/progress-bar-empty-dark.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/progress-bar-empty-light.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/progress-bar-full-dark.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/progress-bar-full-light.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/style.css
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/unity-logo-dark.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/unity-logo-light.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/webgl-logo.png
+    - environments/production_agv_scheduling/unity_webgl/TemplateData/webmemd-icon.png
+  settings:
+    time_unit: minutes
+    simulation_horizon: 30.0
+    time_step: 0.5
+    disable_faults: true
+    order_interval:
+    - 10.0
+    - 10.0
+    fault_interval:
+    - 120.0
+    - 180.0
+    fault_duration:
+    - 20.0
+    - 60.0
+    repeat_runs: 1
+    seeds:
+    - 123
+    stability_lambda: 0.35
+  files:
+  - environments/production_agv_scheduling/interface_runtime.py
+  - environments/production_agv_scheduling/interface_server.py
+  - environments/production_agv_scheduling/interface_worker.py
+  - environments/production_agv_scheduling/simulation_runner.py
+  - environments/production_agv_scheduling/__init__.py
+  - environments/production_agv_scheduling/policy_endpoint.py
+  - environments/production_agv_scheduling/mqtt_bridge.py
+  - environments/production_agv_scheduling/replay.py
+  - environments/production_agv_scheduling/enhanced_snapshot.py
+  - environments/production_agv_scheduling/commands.py
+  - environments/production_agv_scheduling/evaluator.py
+  - environments/production_agv_scheduling/grade_versioned.py
+  - environments/production_agv_scheduling/snapshot.py
+  - environments/production_agv_scheduling/settings/variable_arrivals.json
+  - environments/production_agv_scheduling/settings/baselines.json
+  - environments/production_agv_scheduling/settings/llm.json
+  - environments/production_agv_scheduling/settings/faults.json
+  - environments/production_agv_scheduling/settings/smoke.json
+  - environments/production_agv_scheduling/settings/meta.json
+  - environments/production_agv_scheduling/settings/long_horizon.json
+  - environments/production_agv_scheduling/initial/param_estimator.py
+  - environments/production_agv_scheduling/initial/scheduler.py
+  - environments/production_agv_scheduling/factory_sim/run_multi_line_simulation.py
+  - environments/production_agv_scheduling/factory_sim/__init__.py
+  - environments/production_agv_scheduling/simpy/util.py
+  - environments/production_agv_scheduling/simpy/rt.py
+  - environments/production_agv_scheduling/simpy/events.py
+  - environments/production_agv_scheduling/simpy/__init__.py
+  - environments/production_agv_scheduling/simpy/core.py
+  - environments/production_agv_scheduling/simpy/exceptions.py
+  - environments/production_agv_scheduling/factory_sim/config/__init__.py
+  - environments/production_agv_scheduling/factory_sim/config/path_timing.py
+  - environments/production_agv_scheduling/factory_sim/config/schemas.py
+  - environments/production_agv_scheduling/factory_sim/config/topics.py
+  - environments/production_agv_scheduling/factory_sim/config/factory_layout_multi.json
+  - environments/production_agv_scheduling/factory_sim/game_logic/kpi_calculator.py
+  - environments/production_agv_scheduling/factory_sim/game_logic/fault_system.py
+  - environments/production_agv_scheduling/factory_sim/game_logic/__init__.py
+  - environments/production_agv_scheduling/factory_sim/game_logic/order_generator.py
+  - environments/production_agv_scheduling/factory_sim/agent_interface/multi_line_command_handler.py
+  - environments/production_agv_scheduling/factory_sim/agent_interface/__init__.py
+  - environments/production_agv_scheduling/factory_sim/simulation/line.py
+  - environments/production_agv_scheduling/factory_sim/simulation/__init__.py
+  - environments/production_agv_scheduling/factory_sim/simulation/factory_multi.py
+  - environments/production_agv_scheduling/factory_sim/utils/config_loader.py
+  - environments/production_agv_scheduling/factory_sim/utils/mqtt_client.py
+  - environments/production_agv_scheduling/factory_sim/utils/sqlite_db.py
+  - environments/production_agv_scheduling/factory_sim/utils/__init__.py
+  - environments/production_agv_scheduling/factory_sim/utils/topic_manager.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/conveyor.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/warehouse.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/__init__.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/agv.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/station.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/quality_checker.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/product.py
+  - environments/production_agv_scheduling/factory_sim/simulation/entities/base.py
+  - environments/production_agv_scheduling/unity_webgl/StreamingAssets/MQTTBroker.json
+  - environments/production_agv_scheduling/simpy/resources/store.py
+  - environments/production_agv_scheduling/simpy/resources/resource.py
+  - environments/production_agv_scheduling/simpy/resources/__init__.py
+  - environments/production_agv_scheduling/simpy/resources/container.py
+  - environments/production_agv_scheduling/simpy/resources/base.py
+tasks:
+- id: scheduling
+  name: Factory scheduling
+  environment: factory
+  evaluator: environments/production_agv_scheduling/grade_versioned.py:evaluate
+  parameters:
+    simulation_horizon: {valueType: float, title: Simulation horizon, unit: min, min: 11, max: 500, default: 30.0}
+    time_step: {valueType: float, title: Decision interval, unit: min, min: 0.1, max: 10, default: 0.5}
+    disable_faults: {valueType: bool, title: Disable equipment faults, default: true}
+  environmentParameters:
+    simulation_horizon: simulation_horizon
+    time_step: time_step
+    disable_faults: disable_faults
+  decisionContract:
+    format: program
+    description: 'decide(operation, snapshot=None): reset state or return scheduling
+      commands for a public snapshot.'
+  metrics:
+  - total_score
+  - mean_total_score
+  - std_total_score
+  - min_total_score
+  - max_total_score
+  - stability_fitness
+  - worst_seed
+  - worst_total_score
+  - replication_count
+  - mean_efficiency_score
+  - mean_quality_cost_score
+  - mean_agv_score
+  - mean_order_completion
+  - mean_production_cycle
+  - mean_device_utilization
+  - mean_first_pass_rate
+  - mean_cost_efficiency
+  - mean_charge_strategy
+  - mean_energy_efficiency
+  - mean_utilization
+  - mean_policy_fallback_replans
+  - policy_fallback_replication_count
+instances:
+- id: short-shift
+  name: Short shift
+  task: scheduling
+- id: shift-with-faults
+  name: Shift with equipment faults
+  task: scheduling
+  parameters: {simulation_horizon: 180.0, disable_faults: false}
+suites:
+- id: smoke
+  instances:
+  - short-shift
+candidates:
+- id: baseline
+  format: program
+  entrypoint: environments/production_agv_scheduling/policy_endpoint.py:decide
+  files:
+  - environments/production_agv_scheduling/initial/scheduler.py
+  - environments/production_agv_scheduling/initial/param_estimator.py
+studies:
+- id: smoke
+  suiteIds:
+  - smoke
+  candidateIds:
+  - baseline
+  metric: total_score
+  timeoutSeconds: 180

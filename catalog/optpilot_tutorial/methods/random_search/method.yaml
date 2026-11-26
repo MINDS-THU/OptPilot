@@ -1,0 +1,20 @@
+apiVersion: optpilot.io/v1
+config: method
+id: tutorial-random-search
+name: Seeded random search
+description: A minimal Method that samples the Environment's declared parameter ranges.
+tasks: [learn-optpilot, tune-parameters]
+tags: [tutorial, random-search, parameters]
+
+entrypoint:
+  python: method:TutorialRandomSearch
+  pythonPath: ["."]
+  protocol: batch
+
+settings:
+  batchSize: 2
+
+accepts:
+  formats: [parameters]
+  requires:
+    context: [candidate.parameters.schema]

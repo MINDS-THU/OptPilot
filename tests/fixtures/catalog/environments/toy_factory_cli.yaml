@@ -1,0 +1,50 @@
+apiVersion: optpilot.io/v1
+config: environment
+id: toy-factory-cli
+description: Toy simulator invoked through a command
+tags: [toy, cli]
+
+evaluator:
+  pythonPath:
+    - ../../../..
+  command:
+    - "{python}"
+    - "-m"
+    - "tests.fixtures.catalog.cli_toy_factory_env"
+    - "--candidate"
+    - "{candidate_json}"
+    - "--settings"
+    - "{settings_file}"
+    - "--output"
+    - "{metrics_file}"
+  timeoutSeconds: 120
+  settings:
+    target_x: 4.2
+    target_y: 7
+
+candidate:
+  format: parameters
+  description: Search parameters accepted by the CLI toy factory evaluator.
+  parameters:
+    schema:
+      x:
+        valueType: float
+        min: 0.0
+        max: 8.0
+      y:
+        valueType: int
+        min: 1
+        max: 10
+      mode:
+        valueType: categorical
+        values: [balanced, aggressive, conservative]
+
+metrics:
+  source: file
+  path: metrics.json
+  keys: [throughput, cycle_time]
+
+outputFiles:
+  - "metrics.json"
+  - "stdout.log"
+  - "stderr.log"

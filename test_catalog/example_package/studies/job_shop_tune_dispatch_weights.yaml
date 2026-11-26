@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-tune-dispatch-weights
+description: Tune weighted dispatch-rule parameters on the shared job-shop validation cases.
+tags: [job-shop, optimizer, parameters, no-api]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_rule_parameters.yaml
+methodConfig: ../methods/tune_dispatch_weights/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+budget:
+  maxTrials: 12
+
+execution:
+  parallelism: 3
+  timeoutSeconds: 60
+
+evidence:
+  level: standard
+
+reproducibility:
+  seed: 0

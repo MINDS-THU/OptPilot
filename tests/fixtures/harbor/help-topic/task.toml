@@ -1,0 +1,7 @@
+schema_version = "1.4"
+[verifier]
+timeout_sec = 30.0
+[agent]
+timeout_sec = 30.0
+[environment]
+build_timeout_sec = 90.0

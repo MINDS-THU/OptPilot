@@ -1,0 +1,8 @@
+[
+  {"id":"chat","title":"Start a fresh chat","text":"Each work card has a conversation. Start fresh chat opens another conversation on the same card. A coding agent reads the project files and responds to the message."},
+  {"id":"folder","title":"Edit in a separate folder","text":"A work card can share its folder with another card. To change files independently, open Directory and select Edit in a separate folder. Begin a chat in the new directory."},
+  {"id":"attempt","title":"Retry a failed trial","text":"A logical trial occupies one budget slot. Each execution attempt has an outcome. A retry creates another attempt for the same trial and preserves the execution history."},
+  {"id":"evidence","title":"Bring comparison results into a conversation","text":"Open the results table. Select a baseline and a second candidate. The comparison shows the difference between their scores. Choose a destination work card and add the comparison to its chat draft."},
+  {"id":"skill","title":"Install the OptPilot evaluation guide","text":"In Skills select the coding agent and current project. Install the evaluation guide. The agent discovers the guide in the project's native skills folder and can prepare evaluation definitions."},
+  {"id":"version","title":"Save a version","text":"A saved version captures declared inputs, including source code and data. An evaluation records which versions it used. Editing project files later leaves the original run reproducible."}
+]

@@ -1,0 +1,27 @@
+apiVersion: optpilot.io/v1
+config: study
+name: tutorial-find-best-settings
+title: Tutorial · Find better factory settings
+description: Run six deterministic trials and retain the best combined score.
+tasks: [learn-optpilot, tune-parameters]
+tags: [tutorial, quick-start]
+
+environmentConfig: ../environments/toy_factory/environment.yaml
+methodConfig: ../methods/random_search/method.yaml
+
+objective:
+  metric: score
+  direction: maximize
+
+budget:
+  maxTrials: 6
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 30
+
+evidence:
+  level: standard
+
+reproducibility:
+  seed: 7

@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/experiment.schema.json",
+  "title": "OptPilot experiment project",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "environments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/environment"
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/instance"
+      }
+    },
+    "suites": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/suite"
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/candidate"
+      }
+    },
+    "generators": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/generator"
+      }
+    },
+    "studies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/study"
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false,
+  "$defs": {
+    "resourceRequirements": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["capability", "unit", "mode"],
+        "properties": {
+          "capability": {"type": "string", "minLength": 1, "maxLength": 128},
+          "unit": {"type": "string", "minLength": 1, "maxLength": 64},
+          "mode": {"enum": ["capacity", "consumable", "quota"]},
+          "minimum": {"type": "number", "minimum": 0},
+          "maximum": {"type": "number", "minimum": 0},
+          "expected": {"type": "number", "minimum": 0},
+          "parameter": {"type": "string", "minLength": 1},
+          "resourceId": {"type": "string", "minLength": 1},
+          "properties": {"type": "object"},
+          "location": {"type": "string", "minLength": 1},
+          "constraints": {"type": "object"}
+        }
+      }
+    },
+    "resourceBudgets": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["capability", "unit", "limit"],
+        "properties": {
+          "capability": {"type": "string", "minLength": 1},
+          "unit": {"type": "string", "minLength": 1},
+          "limit": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+    "parameterMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "https://optpilot.io/schemas/defs/candidate.schema.json#/definitions/parameter"
+      }
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settings": {
+          "type": "object"
+        },
+        "interface": {
+          "type": "object",
+          "properties": {
+            "entrypoint": {"type": "string", "minLength": 1},
+            "files": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "filePrefixes": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "settings": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "title": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "readyPath": {"type": "string", "minLength": 1},
+            "supportsTrialSettings": {"type": "boolean"},
+            "defaultSeed": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+          },
+          "required": ["entrypoint"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "metric": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "direction": {
+              "enum": [
+                "maximize",
+                "minimize"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "contract": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "enum": [
+            "parameters",
+            "program",
+            "agent"
+          ]
+        },
+        "schema": {
+          "$ref": "#/$defs/parameterMap"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input": {},
+        "output": {}
+      },
+      "required": [
+        "format"
+      ],
+      "additionalProperties": false
+    },
+    "task": {
+      "type": "object",
+      "properties": {
+        "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decisionContract": {
+          "$ref": "#/$defs/contract"
+        },
+        "evaluator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/metric"
+          }
+        },
+        "parameters": {
+          "$ref": "#/$defs/parameterMap"
+        },
+        "observations": {},
+        "feedbackMetrics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "environmentParameters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "isolation": {
+          "enum": [
+            "trusted-local",
+            "none"
+          ]
+        },
+        "runner": {
+          "enum": [
+            "trusted-local",
+            "native",
+            "manual",
+            "harbor"
+          ]
+        },
+        "harborTask": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "decisionContract",
+        "metrics"
+      ],
+      "additionalProperties": false
+    },
+    "instance": {
+      "type": "object",
+      "properties": {
+        "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "private": {
+          "type": "object"
+        },
+        "visualSeed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "suite": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "instances": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "id",
+        "instances"
+      ],
+      "additionalProperties": false
+    },
+    "candidate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "format": {
+              "const": "parameters"
+            },
+            "value": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "id",
+            "format",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "format": {
+              "const": "program"
+            },
+            "entrypoint": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "id",
+            "format",
+            "entrypoint"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "format": {
+              "const": "agent"
+            },
+            "agent": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "model_name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "override_timeout_sec": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "override_setup_timeout_sec": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "kwargs": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reasoning_effort": {
+                      "enum": [
+                        "none",
+                        "minimal",
+                        "low",
+                        "medium",
+                        "high",
+                        "xhigh",
+                        "max"
+                      ]
+                    },
+                    "max_turns": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "max_budget_usd": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "config": {
+                      "type": "object",
+                      "properties": {
+                        "model_provider": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "model_providers": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "base_url": {
+                                "type": "string",
+                                "pattern": "^https?://[^@?#]+$"
+                              },
+                              "wire_api": {
+                                "const": "responses"
+                              },
+                              "env_key": {
+                                "type": "string",
+                                "pattern": "^[A-Z][A-Z0-9_]*$"
+                              },
+                              "supports_websockets": {
+                                "type": "boolean"
+                              },
+                              "http_headers": {
+                                "type": "object",
+                                "properties": {
+                                  "Host": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z0-9.:[\\]-]+$"
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "id",
+            "format",
+            "agent"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "generator": {
+      "type": "object",
+      "properties": {
+        "outputFormat": {"enum": ["candidate", "value"]},
+        "resourceRequirements": {"$ref": "#/$defs/resourceRequirements"},
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "entrypoint"
+      ],
+      "additionalProperties": false
+    },
+    "study": {
+      "type": "object",
+      "properties": {
+        "resourceBudgets": {"$ref": "#/$defs/resourceBudgets"},
+        "sshTarget": {"type": "string", "minLength": 1, "maxLength": 128},
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "suiteIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "instanceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "candidateIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "generatorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generationBudget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "metric": {
+          "type": "string",
+          "minLength": 1
+        },
+        "direction": {
+          "enum": [
+            "maximize",
+            "minimize"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

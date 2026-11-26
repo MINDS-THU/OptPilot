@@ -1,0 +1,37 @@
+---
+sidebar_position: 2
+title: OptPilot Desktop
+description: Understand how the private OptPilot Desktop client uses the public experiment project model.
+hide_table_of_contents: false
+---
+
+# OptPilot Desktop
+
+import Admonition from '@theme/Admonition';
+
+OptPilot Desktop is a graphical client for versioned experiment projects. It uses the same `optpilot.experiment.yaml` manifest and `.optpilot/experiments` ledger as the public Python Core and CLI.
+
+The public [OptPilot repository](https://github.com/MINDS-THU/OptPilot) contains Core, CLI, examples and technical documentation. Desktop source is maintained in a private OptPilot-Desktop repository.
+
+<Admonition type="info" title="Distribution status">
+
+Desktop source is maintained privately. After macOS, Windows and Linux builds pass release acceptance, installers will be published as assets on public GitHub Releases. Downloads are not available yet.
+
+</Admonition>
+
+## Project workflow
+
+Desktop works with versioned Environments, Tasks, Instances, Suites, Candidates, optional Generators and Studies. Reviewing a Study freezes its selected artifact versions and run conditions. A Run records Trials, Attempts, inputs, scores, failures and evidence in the shared project ledger.
+
+The graphical client provides artifact editing, experiment setup, result inspection, resource management and connected coding-assistant workflows. The assistant is optional. Consequential experiment execution remains an explicit action.
+
+## Data and execution
+
+- Project versions and experiment evidence live in `.optpilot/experiments` within the project.
+- Local Python grading executes trusted project code and is not an adversarial sandbox.
+- Harbor uses its own task isolation and requires Docker and Harbor setup.
+- API credentials remain with the configured provider and are not stored in experiment evidence.
+
+## Core CLI
+
+Install and run the public Python Core using the [installation guide](https://minds-thu.github.io/OptPilot/reference/installation/). The [first experiment guide](https://minds-thu.github.io/OptPilot/reference/getting-started/) explains validation, Study review, execution and result inspection.

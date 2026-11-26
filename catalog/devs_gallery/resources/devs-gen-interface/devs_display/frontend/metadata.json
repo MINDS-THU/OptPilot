@@ -1,0 +1,5 @@
+{
+  "name": "DEVS Generator Interface",
+  "description": "A browser interface for generating, inspecting, and visualizing xDEVS Python simulation models.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: study
+name: toy-evidence-aware-method
+description: Exercise a user-owned method that reads prior evidence
+tags: [mvp, toy, user-method, evidence-view]
+
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/evidence_aware_method.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+budget:
+  maxTrials: 2
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

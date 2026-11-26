@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-lib-dispatching-rule
+description: Evaluate JobShopLib DispatchingRuleSolver through schedule-solution candidates.
+tags: [job-shop, job-shop-lib, dispatching-rule, schedule-solution]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_schedule_solution.yaml
+methodConfig: ../methods/job_shop_lib_dispatching_rule/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+budget:
+  maxTrials: 1
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0

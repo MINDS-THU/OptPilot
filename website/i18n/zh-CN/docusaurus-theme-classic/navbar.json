@@ -1,0 +1,34 @@
+{
+  "title": {
+    "message": "OptPilot",
+    "description": "The title in the navbar"
+  },
+  "logo.alt": {
+    "message": "MINDS-THU",
+    "description": "The alt text of navbar logo"
+  },
+  "item.label.Overview": {
+    "message": "概览",
+    "description": "Navbar item with label Overview"
+  },
+  "item.label.Desktop": {
+    "message": "Desktop",
+    "description": "Navbar item with label Desktop"
+  },
+  "item.label.Research Packages": {
+    "message": "研究软件包",
+    "description": "Navbar item with label Research Packages"
+  },
+  "item.label.Engineering Notes": {
+    "message": "工程札记",
+    "description": "Navbar item with label Engineering Notes"
+  },
+  "item.label.Documentation": {
+    "message": "文档",
+    "description": "Navbar item with label Documentation"
+  },
+  "item.label.GitHub": {
+    "message": "GitHub",
+    "description": "Navbar item with label GitHub"
+  }
+}

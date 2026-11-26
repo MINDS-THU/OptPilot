@@ -1,0 +1,11 @@
+methods:
+  label: Methods
+  permalink: /methods
+
+release:
+  label: Release
+  permalink: /release
+
+architecture:
+  label: Architecture
+  permalink: /architecture

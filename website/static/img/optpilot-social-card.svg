@@ -1,0 +1,42 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#F7F8F8"/>
+  <rect x="0" y="0" width="12" height="630" fill="#593466"/>
+
+  <text x="72" y="78" fill="#593466" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" letter-spacing="1.2">MINDS-THU / OPEN SOURCE</text>
+  <line x1="72" y1="104" x2="1128" y2="104" stroke="#D5DADD"/>
+
+  <text x="72" y="230" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="78" font-weight="700" letter-spacing="-3">OptPilot Core</text>
+  <text x="72" y="288" fill="#59656E" font-family="Arial, Helvetica, sans-serif" font-size="28">Versioned experiment projects</text>
+  <text x="72" y="328" fill="#59656E" font-family="Arial, Helvetica, sans-serif" font-size="28">with frozen inputs and retained evidence.</text>
+
+  <g transform="translate(650 180)">
+    <line x1="0" y1="0" x2="478" y2="0" stroke="#D5DADD"/>
+    <g transform="translate(0 34)">
+      <text x="0" y="18" fill="#593466" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">01</text>
+      <text x="0" y="62" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">Project</text>
+      <text x="0" y="92" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="16">defines artifacts</text>
+    </g>
+    <text x="132" y="101" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="20">→</text>
+    <g transform="translate(174 20)">
+      <rect width="150" height="112" fill="#F1EBF3"/>
+      <text x="18" y="32" fill="#593466" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">02</text>
+      <text x="18" y="72" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">Study</text>
+      <text x="18" y="96" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="15">freezes versions</text>
+    </g>
+    <text x="348" y="101" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="20">→</text>
+    <g transform="translate(390 34)">
+      <text x="0" y="18" fill="#593466" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">03</text>
+      <text x="0" y="62" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">Run</text>
+      <text x="0" y="92" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="16">retains evidence</text>
+    </g>
+    <line x1="0" y1="164" x2="478" y2="164" stroke="#D5DADD"/>
+    <text x="0" y="198" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700">Project experiment ledger</text>
+    <text x="478" y="198" text-anchor="end" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="14">actual inputs · scores · failures · evidence</text>
+  </g>
+
+  <line x1="72" y1="526" x2="1128" y2="526" stroke="#D5DADD"/>
+  <text x="72" y="572" fill="#20282F" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">v0.2.0</text>
+  <text x="170" y="572" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="18">Python 3.10+</text>
+  <text x="330" y="572" fill="#7B858D" font-family="Arial, Helvetica, sans-serif" font-size="18">Apache-2.0</text>
+  <text x="1128" y="572" text-anchor="end" fill="#593466" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">minds-thu.github.io/OptPilot</text>
+</svg>

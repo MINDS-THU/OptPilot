@@ -1,0 +1,23 @@
+name: train-tiny-a
+machine_count: 3
+lower_bound: 10
+due_date: 14
+jobs:
+  - - machine: 0
+      duration: 3
+    - machine: 1
+      duration: 2
+    - machine: 2
+      duration: 2
+  - - machine: 1
+      duration: 2
+    - machine: 2
+      duration: 4
+    - machine: 0
+      duration: 1
+  - - machine: 2
+      duration: 2
+    - machine: 0
+      duration: 3
+    - machine: 1
+      duration: 1

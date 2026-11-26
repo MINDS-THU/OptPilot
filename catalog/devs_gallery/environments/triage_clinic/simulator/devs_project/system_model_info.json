@@ -1,0 +1,468 @@
+{
+  "PatientGenerator": {
+    "class_name": "PatientGenerator",
+    "file_path": "generated_simulator/devs_project/TriageClinic_libs/PatientGenerator.py",
+    "logic_path": "TriageClinic.PatientGenerator",
+    "specification": {
+      "function": "Generates patients at random intervals during a shift. Each patient is assigned an ID, urgency level (1-3), exam duration, and arrival time. Stops generating after shift_duration expires.",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "Parent coupled model, or None"
+        },
+        {
+          "name": "shift_duration",
+          "type": "float",
+          "structure": "Total duration of the shift; no patients generated after this time"
+        },
+        {
+          "name": "inter_arrival_mean",
+          "type": "float",
+          "structure": "Mean inter-arrival time for patients (exponential distribution)"
+        },
+        {
+          "name": "urgency_probs",
+          "type": "list[float]",
+          "structure": "Probability weights for urgency levels 1, 2, 3"
+        },
+        {
+          "name": "exam_durations",
+          "type": "list[float]",
+          "structure": "Mean exam durations for each urgency level [level1_mean, level2_mean, level3_mean]"
+        }
+      ],
+      "input_ports": [],
+      "output_ports": [
+        {
+          "name": "patient_out",
+          "type": "dict",
+          "structure": "{'id': int, 'urgency': int (1-3), 'exam_duration': float, 'arrival_time': float}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Emits generated patient data when a new patient arrives"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "next_id",
+        "param",
+        "parent",
+        "payload_to_send"
+      ],
+      "properties": [],
+      "public_methods": [
+        "deltext",
+        "deltint",
+        "exit",
+        "initialize",
+        "lambdaf",
+        "trace_state"
+      ],
+      "child_instances": {}
+    }
+  },
+  "WaitingRoom": {
+    "class_name": "WaitingRoom",
+    "file_path": "generated_simulator/devs_project/TriageClinic_libs/ClinicCore_libs/WaitingRoom.py",
+    "logic_path": "TriageClinic.ClinicCore.WaitingRoom",
+    "specification": {
+      "function": "Maintains a waiting queue of patients. Receives new patients on 'patient_in' and removal requests on 'remove_patient'. When new patients arrive while idle, immediately transitions to 'OUTPUT_READY' phase to emit arrival notifications on 'patient_arrival' in the same simulation time step.",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "Parent coupled model, or None"
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "patient_in",
+          "type": "dict",
+          "structure": "{'id': int, ...} A patient record with at least an identifier",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives new patients from the parent coupled model (via ClinicCore EIC)"
+          }
+        },
+        {
+          "name": "remove_patient",
+          "type": "dict",
+          "structure": "{'patient_id': int} Request to remove patient by id",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives removal notifications from the TriagePolicy"
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "patient_arrival",
+          "type": "dict",
+          "structure": "{'id': int, ...} The patient record that just arrived",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Immediately notifies the TriagePolicy of each new arrival so it can maintain a consistent local queue view"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "parent",
+        "pending_arrivals",
+        "waiting_queue"
+      ],
+      "properties": [],
+      "public_methods": [
+        "deltext",
+        "deltint",
+        "exit",
+        "initialize",
+        "lambdaf",
+        "trace_state"
+      ],
+      "child_instances": {}
+    }
+  },
+  "TriagePolicy": {
+    "class_name": "TriagePolicy",
+    "file_path": "generated_simulator/devs_project/TriageClinic_libs/ClinicCore_libs/TriagePolicy.py",
+    "logic_path": "TriageClinic.ClinicCore.TriagePolicy",
+    "specification": {
+      "function": "Implements triage decision logic: maintains a waiting queue, selects next patient based on policy (FIFO, highest urgency first, urgency-weighted waiting time) when doctor is free, and outputs selected patient, removal signal, or queue empty signal.",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "Parent coupled model, or None"
+        },
+        {
+          "name": "policy",
+          "type": "str",
+          "structure": "Triage policy: 'FIFO', 'highest_urgency_first', or 'urgency_weighted_waiting_time'"
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "patient_arrival",
+          "type": "dict",
+          "structure": "{'id': int, 'arrival_time': float, 'urgency': int, ...}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives patient data when a new patient arrives"
+          }
+        },
+        {
+          "name": "doctor_free",
+          "type": "dict",
+          "structure": "any dict (signal)",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives notification that the doctor is free"
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "selected_patient",
+          "type": "dict",
+          "structure": "Patient dict with id, arrival_time, urgency, etc.",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends the selected patient to the doctor"
+          }
+        },
+        {
+          "name": "remove_patient",
+          "type": "dict",
+          "structure": "{'patient_id': int}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends removal signal for the selected patient"
+          }
+        },
+        {
+          "name": "queue_empty",
+          "type": "dict",
+          "structure": "{'queue_empty': bool}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends signal when queue is empty and doctor is free"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "doctor_free",
+        "param",
+        "parent",
+        "queue",
+        "queue_empty_signal",
+        "removal",
+        "selected_patient"
+      ],
+      "properties": [],
+      "public_methods": [
+        "deltext",
+        "deltint",
+        "exit",
+        "initialize",
+        "lambdaf",
+        "trace_state"
+      ],
+      "child_instances": {}
+    }
+  },
+  "Doctor": {
+    "class_name": "Doctor",
+    "file_path": "generated_simulator/devs_project/TriageClinic_libs/ClinicCore_libs/Doctor.py",
+    "logic_path": "TriageClinic.ClinicCore.Doctor",
+    "specification": {
+      "function": "Atomic model representing a doctor in a walk-in clinic. Processes patients from 'patient_in' when IDLE, performs examination for 'exam_duration' while BUSY, computes urgency-weighted waiting time, sends 'doctor_free' signal upon completion, and sends 'final_stats' when 'queue_empty' is received and shift_duration elapsed. Ignores inputs after sending final statistics.",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "dict",
+          "structure": "Parent coupled model, or None"
+        },
+        {
+          "name": "shift_duration",
+          "type": "float",
+          "structure": "Duration of the doctor's shift"
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "patient_in",
+          "type": "dict",
+          "structure": "{'id': int, 'arrival_time': float, 'urgency': float, 'exam_duration': float} - patient data",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives selected patient from TriagePolicy"
+          }
+        },
+        {
+          "name": "queue_empty",
+          "type": "dict",
+          "structure": "{'event': 'queue_empty'}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives signal that the patient queue is empty"
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "doctor_free",
+          "type": "dict",
+          "structure": "{'event': 'free'}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends signal that the doctor is free"
+          }
+        },
+        {
+          "name": "final_stats",
+          "type": "dict",
+          "structure": "{'patients_served': int, 'avg_urgency_weighted_waiting_time': float}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Sends final statistics at end of shift when queue is empty"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "current_patient",
+        "final_stats_sent",
+        "param",
+        "parent",
+        "patients_served",
+        "payload_doctor_free",
+        "payload_final_stats",
+        "queue_empty_received",
+        "total_urgency_weighted_waiting_time"
+      ],
+      "properties": [],
+      "public_methods": [
+        "deltext",
+        "deltint",
+        "exit",
+        "initialize",
+        "lambdaf",
+        "trace_state"
+      ],
+      "child_instances": {}
+    }
+  },
+  "ClinicCore": {
+    "class_name": "ClinicCore",
+    "file_path": "generated_simulator/devs_project/TriageClinic_libs/ClinicCore.py",
+    "logic_path": "TriageClinic.ClinicCore",
+    "specification": {
+      "function": "Encapsulates the clinic workflow: waiting room, triage policy, and doctor. Receives incoming patients, manages the queue, applies an optimizable urgency-weighted triage policy, and outputs final performance statistics. Sub-models: self.waiting_room (WaitingRoom), self.triage_policy (TriagePolicy), self.doctor (Doctor).",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "Parent coupled model, or None"
+        }
+      ],
+      "input_ports": [
+        {
+          "name": "patient_in",
+          "type": "dict",
+          "structure": "{'id': int, ...} Patient record with at least an identifier",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Receives new patients from external environment"
+          }
+        }
+      ],
+      "output_ports": [
+        {
+          "name": "final_stats",
+          "type": "dict",
+          "structure": "{'patients_served': int, 'avg_urgency_weighted_waiting_time': float}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Outputs final performance statistics at end of shift"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "doctor",
+        "param",
+        "parent",
+        "triage_policy",
+        "waiting_room"
+      ],
+      "properties": [],
+      "public_methods": [],
+      "child_instances": {
+        "doctor": "Doctor",
+        "triage_policy": "TriagePolicy",
+        "waiting_room": "WaitingRoom"
+      }
+    }
+  },
+  "TriageClinic": {
+    "class_name": "TriageClinic",
+    "file_path": "generated_simulator/devs_project/TriageClinic.py",
+    "logic_path": "TriageClinic",
+    "specification": {
+      "function": "Top-level walk-in clinic simulation. Sub-models: self.patient_gen (PatientGenerator), self.clinic_core (ClinicCore). Routes patients from PatientGenerator to ClinicCore and outputs final performance statistics.",
+      "external_io": [],
+      "model_init_args": [
+        {
+          "name": "name",
+          "type": "str",
+          "structure": "Model instance name"
+        },
+        {
+          "name": "parent",
+          "type": "Coupled | None",
+          "structure": "Parent coupled model, or None"
+        },
+        {
+          "name": "shift_duration",
+          "type": "float",
+          "structure": "Total shift duration"
+        },
+        {
+          "name": "inter_arrival_mean",
+          "type": "float",
+          "structure": "Mean inter-arrival time (exponential distribution)"
+        },
+        {
+          "name": "urgency_probs",
+          "type": "list[float]",
+          "structure": "Probability weights for urgency levels 1,2,3"
+        },
+        {
+          "name": "exam_durations",
+          "type": "list[float]",
+          "structure": "Mean exam durations for each urgency level"
+        }
+      ],
+      "input_ports": [],
+      "output_ports": [
+        {
+          "name": "final_stats",
+          "type": "dict",
+          "structure": "{'patients_served': int, 'avg_urgency_weighted_waiting_time': float}",
+          "protocol": {
+            "initial_state": "empty",
+            "initial_signal": "None",
+            "description": "Emits final clinic performance statistics at end of shift"
+          }
+        }
+      ]
+    },
+    "generated_interface": {
+      "instance_attributes": [
+        "clinic_core",
+        "parent",
+        "patient_gen"
+      ],
+      "properties": [],
+      "public_methods": [],
+      "child_instances": {
+        "clinic_core": "ClinicCore",
+        "patient_gen": "PatientGenerator"
+      }
+    }
+  }
+}

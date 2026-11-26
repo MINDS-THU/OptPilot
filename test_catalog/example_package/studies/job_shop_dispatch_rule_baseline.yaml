@@ -1,0 +1,26 @@
+apiVersion: optpilot.io/v1
+config: study
+name: job-shop-dispatch-rule-baseline
+description: Evaluate the baseline dispatch_rule.py file candidate on the job-shop environment.
+tags: [job-shop, baseline, files]
+
+environmentConfig: ../environments/job_shop_scheduling/environment_dispatch_rule.yaml
+methodConfig: ../methods/baseline_file_copy/method.yaml
+
+objective:
+  metric: normalized_makespan
+  direction: minimize
+  secondaryMetrics: [makespan, tardiness, utilization]
+
+budget:
+  maxTrials: 1
+
+execution:
+  parallelism: 1
+  timeoutSeconds: 60
+
+evidence:
+  level: full
+
+reproducibility:
+  seed: 0

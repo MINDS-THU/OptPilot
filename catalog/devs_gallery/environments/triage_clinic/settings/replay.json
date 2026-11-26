@@ -1,0 +1,6 @@
+{
+  "scoreDirection": "minimize",
+  "scoreMetric": "avg_urgency_weighted_waiting_time",
+  "seedArgument": "seed",
+  "seeds": [7, 11, 23]
+}

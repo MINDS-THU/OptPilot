@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: study
+name: toy-lifecycle-method
+description: Exercise a user-owned lifecycle method loaded through the python component hook
+tags: [mvp, toy, user-method, lifecycle-method]
+
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/lifecycle_fixed_parameter_method.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+budget:
+  maxTrials: 2
+
+execution:
+  parallelism: 2
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

@@ -1,0 +1,121 @@
+{
+  "or_knowledge_base": {
+    "linear_programming": {
+      "applications": {
+        "diet_problem": null,
+        "work_scheduling": null,
+        "capital_budgeting": null,
+        "blending_problems": null
+      },
+      "modeling_techniques": null,
+      "assumptions": null,
+      "simplex_method": null,
+      "degenerate_and_unbounded_solutions": null,
+      "post_optimality_and_sensitivity_analysis": null,
+      "interior_point_approaches": null,
+      "duality_theory": null,
+      "revised_simplex_method": null,
+      "dual_simplex_method": null,
+      "parametric_programming": null,
+      "goal_programming": null
+    },
+    "transportation_problem": {
+      "transportation_model_and_variants": null,
+      "transportation_simplex_method": null,
+      "transshipment_problems": null
+    },
+    "linear_assignment_problem": {
+      "assignment_model": null,
+      "hungarian_algorithm": null
+    },
+    "network_flows_and_optimization": {
+      "shortest_path_problem": null,
+      "minimum_spanning_tree_problem": null,
+      "maximum_flow_problem": null,
+      "minimum_cost_flow_problem": null,
+      "cpm_and_pert_problems": null,
+      "network_simplex_method": null
+    },
+    "deterministic_dynamic_programming": {
+      "applications": {
+        "knapsack_fly_away_cargo_loading_problems": null,
+        "workforce_size_problems": null,
+        "equipment_replacement_problems": null,
+        "investment_problems": null,
+        "inventory": null
+      },
+      "forward_and_backward_recursions": null
+    },
+    "integer_programming": {
+      "applications_and_modeling_techniques": {
+        "capital_budgeting": null,
+        "set_covering_and_set_partitioning_problems": null,
+        "fixed_charge_problem": null,
+        "either_or_and_if_then_constraints": null
+      },
+      "branch_and_bound_algorithm": null,
+      "cutting_plane_algorithm": null,
+      "traveling_salesman_problem_and_solution_methods": null
+    },
+    "nonlinear_programming": {
+      "unconstrained_algorithms": {
+        "direct_search_methods": null,
+        "gradient_methods": null
+      },
+      "constrained_algorithms": {
+        "separable_programming": null,
+        "quadratic_programming": null,
+        "chance_constrained_programming": null,
+        "linear_combinations_method": null
+      }
+    },
+    "metaheuristics": {
+      "steepest_ascent_and_descent_greedy_algorithms": null,
+      "tabu_search": null,
+      "simulated_annealing": null,
+      "genetic_algorithms": null,
+      "ant_colony_optimization": null,
+      "particle_swarm_techniques": null
+    },
+    "decision_analysis_and_game_theory": {
+      "multi_criteria_decision_making": null,
+      "decision_making_under_certainty": null,
+      "decision_making_under_risk_and_uncertainty": {
+        "analytic_hierarchy_process": null,
+        "electre": null,
+        "decision_tree_based_expected_value_criterion": null,
+        "utility_theory": null
+      },
+      "two_person_zero_sum_and_constant_sum_games": null,
+      "robust_decision_making": null
+    },
+    "modeling_under_uncertainty": {
+      "stochastic_processes": null,
+      "markov_chains": null,
+      "chapman_kolmogorov_equations": null,
+      "states_and_properties": null,
+      "stochastic_programming": null
+    },
+    "queueing_systems": {
+      "components_of_a_queueing_model": null,
+      "relationship_between_exponential_and_poisson_distributions": null,
+      "birth_and_death_process_based_queueing_models": null,
+      "queueing_models_involving_non_exponential_distributions": null,
+      "priority_discipline_queueing_models": null,
+      "queueing_networks": null
+    },
+    "simulation": {
+      "monte_carlo_simulation": null,
+      "continuous_and_discrete_time_models": null,
+      "simulation_methodology": {
+        "sampling_from_probability_distributions": null
+      },
+      "random_number_generation": null
+    },
+    "fundamentals_of_systems_dynamics": {
+      "principles_of_systems_dynamics": null,
+      "balancing_loops": null,
+      "feedback_loops": null
+    }
+  }
+}

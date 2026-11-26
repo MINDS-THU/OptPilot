@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: study
+name: toy-random-search
+description: Exercise the platform loop with the v1 authoring config
+tags: [mvp, toy, reference-method]
+
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/reference_random_search.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+budget:
+  maxTrials: 12
+
+execution:
+  parallelism: 4
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

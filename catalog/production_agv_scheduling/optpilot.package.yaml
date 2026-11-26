@@ -1,0 +1,16 @@
+apiVersion: optpilot.io/v1
+config: package
+# Identifies this package, so moving or renaming its folder still
+# updates this package rather than creating a second one. Keep it as
+# it is when moving or renaming.
+# Copying the folder to start a SEPARATE package is the one case where
+# you change it: replace the value below with 32 different hex
+# characters, so the copy is its own package with its own history.
+# Do not delete the line -- a package without this cannot be read.
+identity: da09b269505371ed830534e451eec79e
+title: LLM-Guided Heuristic Design
+category: research
+description: "Improve executable decision policies using repeated simulation, event-level traces, and parallel LLM revisions; includes production and AGV scheduling as the reference case study."
+paper:
+  title: "LLM-Guided Heuristic Design from Simulation Traces: A Case Study in Dynamic Production and AGV Scheduling"
+  url: https://arxiv.org/abs/2608.09343

@@ -1,0 +1,428 @@
+"""OpenAI-compatible file edit method for file-candidate examples."""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Tuple
+
+from optpilot.candidate_staging import CandidateBundleStager, CandidateFileMapping
+from optpilot.provenance import PromptStore, build_generator_record, build_model_record
+
+
+class OpenAIFileEditMethod:
+    def __init__(self, definition: Dict[str, Any], study_spec, rng):
+        self.definition = definition
+        self.study_spec = study_spec
+        self.rng = rng
+        self.config = dict(definition.get("config", {}))
+        self.candidate_context = dict(self.study_spec.candidate.get("context", {}))
+        self.target_files = _editable_paths_from_context(self.candidate_context)
+        if not self.target_files:
+            raise ValueError("OpenAIFileEditMethod requires candidate_context.files.editable.")
+        self.source_files = self._resolve_source_files()
+        self.primary_metric = str(self.study_spec.objective["primaryMetric"]["name"])
+        self.primary_direction = str(self.study_spec.objective["primaryMetric"]["direction"])
+        self.include_baseline = bool(self.config.get("includeBaselineCandidate", True))
+        self._baseline_emitted = False
+        self._edit_index = 0
+        self.observations: List[Dict[str, Any]] = []
+
+    def propose(self, n_candidates: int, study_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        runtime_context = dict(study_state.get("runtime_context", {}))
+        candidate_staging_dir = runtime_context.get("candidate_staging_dir")
+        if not candidate_staging_dir:
+            raise ValueError("OpenAIFileEditMethod requires runtime_context.candidate_staging_dir.")
+
+        candidate_stager = CandidateBundleStager(candidate_staging_dir)
+        prompt_store = None
+        if runtime_context.get("prompt_store_dir"):
+            prompt_store = PromptStore(
+                runtime_context["prompt_store_dir"],
+                content_ref_mode=runtime_context.get("prompt_content_ref_mode", "absolute"),
+            )
+
+        candidates: List[Dict[str, Any]] = []
+        remaining = int(n_candidates)
+
+        if remaining > 0 and self.include_baseline and not self._baseline_emitted:
+            candidates.append(self._build_baseline_candidate(candidate_stager))
+            self._baseline_emitted = True
+            remaining -= 1
+
+        for _ in range(remaining):
+            prompt_messages = self._build_prompt_messages(study_state)
+            prompt_record = (
+                prompt_store.store_prompt(
+                    messages=prompt_messages,
+                    metadata={"method_id": self.definition["id"], "target_files": list(self.target_files)},
+                )
+                if prompt_store is not None
+                else None
+            )
+            candidate_summary, candidate_files = self._request_edit(prompt_messages)
+            candidates.append(self._stage_candidate(candidate_stager, candidate_summary, candidate_files, prompt_record))
+
+        return candidates
+
+    def observe(self, observations: List[Dict[str, Any]]) -> None:
+        self.observations.extend(observations)
+
+    def _build_baseline_candidate(self, candidate_stager: CandidateBundleStager) -> Dict[str, Any]:
+        mappings = [
+            CandidateFileMapping(source=self._source_file_for(relative_path), path=relative_path)
+            for relative_path in self.target_files
+        ]
+        return candidate_stager.stage_files(
+            mappings,
+            candidate_id=f"{self.definition['id']}-baseline",
+            lineage={"parents": [], "source": "baseline_source_tree"},
+            generator={
+                "method_id": self.definition["id"],
+                "strategy": "baseline_source_snapshot",
+                "owned_by": "user",
+                "summary": "Baseline candidate copied from the environment-provided source files.",
+            },
+        )
+
+    def _build_prompt_messages(self, study_state: Dict[str, Any]) -> List[Dict[str, str]]:
+        prompt_parts = [
+            "You are proposing the next candidate for an OptPilot study.",
+            f"Primary metric: {self.primary_metric} ({self.primary_direction}).",
+            f"Completed trials so far: {int(study_state.get('completed_trials', 0))}.",
+            "Allowed target files:",
+            *[f"- {path}" for path in self.target_files],
+            "Current source files:",
+            self._render_source_snapshot(),
+            "Environment-provided references:",
+            self._render_method_references(),
+            "Recent observations:",
+            self._render_recent_observations(),
+            "Return JSON only using exactly this shape:",
+            _response_shape_example(self.target_files),
+            "The `files` array must include one or more allowed target files. "
+            "Each `content` value must contain the complete replacement file, not a patch.",
+        ]
+
+        messages = [{"role": "system", "content": self._load_system_prompt()}]
+        messages.append({"role": "user", "content": "\n\n".join(prompt_parts)})
+        return messages
+
+    def _load_system_prompt(self) -> str:
+        method_context = self.candidate_context.get("methodContext", {})
+        instructions = method_context.get("instructions", []) or []
+        if instructions:
+            return Path(str(instructions[0])).read_text(encoding="utf-8")
+        return str(self.config.get("systemPrompt", "Return JSON with full updated file contents."))
+
+    def _render_source_snapshot(self) -> str:
+        blocks = []
+        for relative_path in self.target_files:
+            source_text = self._source_file_for(relative_path).read_text(encoding="utf-8")
+            language = _fence_language(relative_path)
+            blocks.append(f"FILE: {relative_path}\n```{language}\n{source_text}\n```")
+        return "\n\n".join(blocks)
+
+    def _render_method_references(self) -> str:
+        method_context = self.candidate_context.get("methodContext", {})
+        references = method_context.get("references", []) if isinstance(method_context, dict) else []
+        if not references:
+            return "No environment references provided."
+
+        remaining_bytes = int(self.config.get("maxReferenceBytes", 16000))
+        max_file_bytes = int(self.config.get("maxReferenceFileBytes", 8000))
+        blocks = []
+        for reference in references:
+            if remaining_bytes <= 0:
+                blocks.append("Additional references omitted because the reference context budget was reached.")
+                break
+            if not isinstance(reference, dict) or not reference.get("path"):
+                continue
+            path = Path(str(reference["path"]))
+            header = _reference_header(reference, path)
+            if not path.is_file():
+                blocks.append(f"{header}\nReference file is not available at prompt-build time.")
+                continue
+            byte_limit = min(max_file_bytes, remaining_bytes)
+            content, bytes_used, truncated = _read_reference_text(path, byte_limit)
+            remaining_bytes -= bytes_used
+            language = _fence_language(path.name)
+            suffix = "\n\n[truncated]" if truncated else ""
+            blocks.append(f"{header}\n```{language}\n{content}\n```{suffix}")
+        return "\n\n".join(blocks) if blocks else "No readable environment references provided."
+
+    def _render_recent_observations(self) -> str:
+        if not self.observations:
+            return "No prior observations yet."
+        lines = []
+        for observation in self.observations[-3:]:
+            metric_values = dict(observation.get("metric_values", {}))
+            lines.append(
+                json.dumps(
+                    {
+                        "trial_id": observation.get("trial_id"),
+                        "candidate_id": _candidate_id(observation),
+                        "status": observation.get("status"),
+                        "metric_values": metric_values,
+                        "event_summary": observation.get("event_summary", {}),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        best = self._best_observation()
+        if best is not None:
+            lines.append(
+                "Best observation so far:\n"
+                + json.dumps(
+                    {
+                        "trial_id": best.get("trial_id"),
+                        "candidate_id": _candidate_id(best),
+                        "status": best.get("status"),
+                        "metric_values": best.get("metric_values", {}),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        return "\n\n".join(lines)
+
+    def _best_observation(self) -> Dict[str, Any] | None:
+        best = None
+        for observation in self.observations:
+            if observation.get("status") != "success":
+                continue
+            metric_values = observation.get("metric_values", {})
+            if self.primary_metric not in metric_values:
+                continue
+            if best is None or _is_better(
+                float(metric_values[self.primary_metric]),
+                float(best["metric_values"][self.primary_metric]),
+                self.primary_direction,
+            ):
+                best = observation
+        return best
+
+    def _request_edit(self, messages: List[Dict[str, str]]) -> Tuple[str, Dict[str, str]]:
+        api_key_env_var = str(self.config.get("apiKeyEnvVar", "OPENAI_API_KEY"))
+        api_key = os.environ.get(api_key_env_var)
+        if not api_key:
+            raise ValueError(
+                f"OpenAIFileEditMethod requires {api_key_env_var}. Declare it in runtime.envFromHost "
+                "and export it in the host environment before launching."
+            )
+
+        payload = {
+            "model": self.config.get("model", "gpt-4.1-mini"),
+            "temperature": float(self.config.get("temperature", 0.2)),
+            "response_format": {"type": "json_object"},
+            "messages": messages,
+        }
+        max_tokens = self.config.get("maxTokens")
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+
+        request = urllib.request.Request(
+            self.config.get("apiBase", "https://api.openai.com/v1/chat/completions"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=int(self.config.get("requestTimeoutSeconds", 120))) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI request failed with HTTP {exc.code}: {detail}") from exc
+
+        data = json.loads(raw)
+        content = data["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+        edited_files = _extract_edited_files(parsed, self.target_files)
+        return str(parsed.get("summary", "LLM edited candidate files.")), edited_files
+
+    def _stage_candidate(
+        self,
+        candidate_stager: CandidateBundleStager,
+        summary: str,
+        edited_files: Dict[str, str],
+        prompt_record: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            mappings: List[CandidateFileMapping] = []
+            for relative_path in self.target_files:
+                source_path = self._source_file_for(relative_path)
+                destination = tmp_root / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(edited_files.get(relative_path, source_path.read_text(encoding="utf-8")), encoding="utf-8")
+                mappings.append(CandidateFileMapping(source=destination, path=relative_path))
+
+            best = self._best_observation()
+            model_record = build_model_record(
+                provider=str(self.config.get("provider", "openai")),
+                model=str(self.config.get("model", "gpt-4.1-mini")),
+                parameters={
+                    "temperature": float(self.config.get("temperature", 0.2)),
+                    "max_tokens": int(self.config.get("maxTokens", 0) or 0),
+                },
+            )
+            candidate = candidate_stager.stage_files(
+                mappings,
+                candidate_id=f"{self.definition['id']}-edit-{self._edit_index:04d}",
+                lineage={"parents": [_candidate_id(best)] if best else []},
+                generator=build_generator_record(
+                    method_id=self.definition["id"],
+                    strategy="openai_file_edit",
+                    prompt_record=prompt_record,
+                    model_record=model_record,
+                    extra={
+                        "owned_by": "user",
+                        "summary": summary,
+                        "edited_paths": sorted(edited_files),
+                    },
+                ),
+            )
+            self._edit_index += 1
+            return candidate
+
+    def _resolve_source_files(self) -> Dict[str, Path]:
+        method_context = self.candidate_context.get("methodContext", {})
+        references = (
+            method_context.get("references", [])
+            if isinstance(method_context, dict)
+            else []
+        )
+        templates = {
+            str(reference.get("name")): Path(str(reference.get("path")))
+            for reference in references
+            if isinstance(reference, dict)
+            and reference.get("type") == "candidate_template"
+            and reference.get("name")
+            and reference.get("path")
+        }
+        source_files: Dict[str, Path] = {}
+        for relative_path in self.target_files:
+            source = templates.get(relative_path)
+            if source is None or not source.is_file():
+                raise FileNotFoundError(
+                    "OpenAIFileEditMethod requires one candidate_template "
+                    f"methodContext reference named {relative_path!r}."
+                )
+            source_files[relative_path] = source
+        return source_files
+
+    def _source_file_for(self, relative_path: str) -> Path:
+        return self.source_files[relative_path]
+
+
+def _is_better(candidate: float, incumbent: float, direction: str) -> bool:
+    if direction == "minimize":
+        return candidate < incumbent
+    return candidate > incumbent
+
+
+def _candidate_id(record: Dict[str, Any] | None) -> str | None:
+    if not record:
+        return None
+    return record.get("candidate_id")
+
+
+def _reference_header(reference: Dict[str, Any], path: Path) -> str:
+    details = {
+        "name": reference.get("name") or path.name,
+        "path": str(path),
+    }
+    if reference.get("type"):
+        details["type"] = reference["type"]
+    if reference.get("mimeType"):
+        details["mimeType"] = reference["mimeType"]
+    if reference.get("description"):
+        details["description"] = reference["description"]
+    return "REFERENCE: " + json.dumps(details, sort_keys=True)
+
+
+def _read_reference_text(path: Path, max_bytes: int) -> Tuple[str, int, bool]:
+    if max_bytes <= 0:
+        return "", 0, True
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    truncated = len(data) > max_bytes
+    sample = data[:max_bytes]
+    return sample.decode("utf-8", errors="replace"), len(sample), truncated
+
+
+def _editable_paths_from_context(candidate_context: Dict[str, Any]) -> List[str]:
+    files = candidate_context.get("files", {})
+    editable = files.get("editable", []) or []
+    paths = [str(item["path"]) for item in editable if isinstance(item, dict) and item.get("path")]
+    if paths:
+        return paths
+    return [str(path) for path in files.get("required", []) or []]
+
+
+def _extract_edited_files(parsed: Dict[str, Any], target_files: Iterable[str]) -> Dict[str, str]:
+    allowed = {str(path) for path in target_files}
+    files_payload = parsed.get("files")
+    if not isinstance(files_payload, list) or not files_payload:
+        raise ValueError(
+            "OpenAIFileEditMethod expected the model response to include a non-empty "
+            "`files` list with at least one edited target file."
+        )
+
+    edited_files: Dict[str, str] = {}
+    for index, item in enumerate(files_payload):
+        if not isinstance(item, dict):
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must be an object.")
+        path = str(item.get("path", ""))
+        if not path:
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must define path.")
+        if path not in allowed:
+            raise ValueError(
+                f"OpenAIFileEditMethod response path {path!r} is not editable. "
+                f"Allowed paths: {sorted(allowed)!r}."
+            )
+        if "content" not in item or not isinstance(item["content"], str):
+            raise ValueError(f"OpenAIFileEditMethod response files[{index}] must define string content.")
+        edited_files[path] = item["content"]
+
+    if not edited_files:
+        raise ValueError("OpenAIFileEditMethod response did not contain any editable files.")
+    return edited_files
+
+
+def _response_shape_example(target_files: Iterable[str]) -> str:
+    return json.dumps(
+        {
+            "summary": "Short description of the change.",
+            "files": [
+                {
+                    "path": path,
+                    "content": "Full updated file content.",
+                }
+                for path in target_files
+            ],
+        },
+        indent=2,
+    )
+
+
+def _fence_language(relative_path: str) -> str:
+    suffix = Path(relative_path).suffix.lower()
+    return {
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".md": "markdown",
+        ".txt": "text",
+    }.get(suffix, "")

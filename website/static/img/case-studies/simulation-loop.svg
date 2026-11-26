@@ -1,0 +1,21 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="700" rx="36" fill="#F5EEE6"/>
+  <rect x="72" y="90" width="288" height="200" rx="28" fill="#FFFFFF" stroke="#D8D0C3"/>
+  <text x="110" y="152" fill="#1C3738" font-family="Space Grotesk, Arial, sans-serif" font-size="38" font-weight="700">Method</text>
+  <text x="110" y="208" fill="#6A7D7C" font-family="Manrope, Arial, sans-serif" font-size="28">Propose code edits from run evidence.</text>
+  <rect x="840" y="90" width="288" height="200" rx="28" fill="#FFFFFF" stroke="#D8D0C3"/>
+  <text x="878" y="152" fill="#1C3738" font-family="Space Grotesk, Arial, sans-serif" font-size="38" font-weight="700">Simulator</text>
+  <text x="878" y="208" fill="#6A7D7C" font-family="Manrope, Arial, sans-serif" font-size="28">Evaluate behavior under rollout.</text>
+  <rect x="456" y="308" width="288" height="200" rx="28" fill="#173A3C"/>
+  <text x="502" y="370" fill="#F8F4EC" font-family="Space Grotesk, Arial, sans-serif" font-size="38" font-weight="700">OptPilot</text>
+  <text x="502" y="426" fill="#D1E2DE" font-family="Manrope, Arial, sans-serif" font-size="28">Validate, materialize, execute, and record evidence.</text>
+  <path d="M360 188H610" stroke="#C96D3D" stroke-width="14" stroke-linecap="round"/>
+  <path d="M604 170L642 188L604 206" stroke="#C96D3D" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M840 188H590" stroke="#126C6B" stroke-width="14" stroke-linecap="round"/>
+  <path d="M596 170L558 188L596 206" stroke="#126C6B" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M600 308V250" stroke="#31586A" stroke-width="14" stroke-linecap="round"/>
+  <path d="M582 258L600 220L618 258" stroke="#31586A" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M600 508V566" stroke="#31586A" stroke-width="14" stroke-linecap="round"/>
+  <path d="M582 558L600 596L618 558" stroke="#31586A" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="438" y="636" fill="#1C3738" font-family="Manrope, Arial, sans-serif" font-size="30">External simulator, user-owned code, OptPilot-managed study loop.</text>
+</svg>

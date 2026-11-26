@@ -1,0 +1,10 @@
+{
+  "coreVersion": "0.2.0",
+  "rules": [
+    "Author optpilot.experiment.yaml in the working directory. Environment defines system behavior; Task defines observations, decision contract, parameters and metrics; Instance binds a Task; Suite selects Instances.",
+    "Candidates are parameters, programs or Harbor agent configurations. Generators propose parameters or frozen executable programs using only explicitly allowed feedback. Run detail retains every generation input and output.",
+    "Use the supplied application CLI and shared project ledger. Declare supporting files; Core freezes actual files and dependency versions. Never edit result databases, transcripts or provenance.",
+    "Review exact suite, candidate and generator versions before execution. Read Run and Trial IDs from real results; report missing scores, failures and matched coverage.",
+    "Use public experiment commands and the bundled optpilot-evaluation guide. The old environment/method/study CLI is retired."
+  ]
+}

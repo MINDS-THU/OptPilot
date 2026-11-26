@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install source checkout
+        run: python -m pip install -e .
+
+      - name: Build and inspect distributions
+        run: |
+          python -m pip install build
+          rm -rf dist-check
+          python -m build --wheel --sdist --outdir dist-check
+          python scripts/check_release_artifacts.py dist-check
+
+      - name: Verify isolated core wheel
+        run: |
+          python -m venv /tmp/optpilot-core-check
+          /tmp/optpilot-core-check/bin/python -m pip install --upgrade pip
+          /tmp/optpilot-core-check/bin/python -m pip install dist-check/optpilot-*.whl
+          /tmp/optpilot-core-check/bin/optpilot --help
+          /tmp/optpilot-core-check/bin/optpilot validate tests/fixtures/harbor/optpilot.experiment.yaml
+          /tmp/optpilot-core-check/bin/optpilot validate catalog/document_search/optpilot.experiment.yaml
+          /tmp/optpilot-core-check/bin/optpilot experiment run \
+            --project catalog/document_search \
+            --suite help-questions \
+            --candidate word-count \
+            --candidate bm25 \
+            --store /tmp/optpilot-core-experiments
+          /tmp/optpilot-core-check/bin/python - <<'PY'
+          import importlib.resources
+          authoring = importlib.resources.files("optpilot").joinpath("authoring")
+          assert authoring.joinpath("contract.json").is_file()
+          assert authoring.joinpath("optpilot-evaluation", "SKILL.md").is_file()
+          assert importlib.resources.files("optpilot.schemas").joinpath("experiment.schema.json").is_file()
+          assert importlib.resources.files("optpilot.realm.migrations").joinpath("0001_realm_core.sql").is_file()
+          PY
+
+      - name: Run core unit tests
+        run: /tmp/optpilot-core-check/bin/python -m unittest discover -s tests/core -p 'test_*.py'
+
+      - name: Verify core source distribution
+        run: |
+          python -m venv /tmp/optpilot-sdist-check
+          /tmp/optpilot-sdist-check/bin/python -m pip install --upgrade pip
+          /tmp/optpilot-sdist-check/bin/python -m pip install dist-check/optpilot-*.tar.gz
+          /tmp/optpilot-sdist-check/bin/optpilot --help
+
+      - name: Test production and AGV example
+        run: |
+          python catalog/production_agv_scheduling/scripts/run_package_tests.py
+          cd catalog/production_agv_scheduling
+          sha256sum --check UNITY_BUILD.sha256
+
+      - name: Validate versioned experiment manifests
+        run: |
+          for manifest in catalog/*/optpilot.experiment.yaml; do
+            optpilot validate "$manifest"
+          done
+
+      - name: Compile package
+        run: python -m compileall src/optpilot
+
+      - name: Run smoke tests
+        run: ./scripts/smoke_test.sh

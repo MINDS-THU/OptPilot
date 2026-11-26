@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "0fa809b8-2024-454e-9724-7e3cedde2f5e",
+  "task_name": "help-topic",
+  "trial_name": "help-topic__oor5jn9",
+  "task_checksum": "d73b6d58e6bbb7b62af14d6764fb10b267d20d86fcc301cc3ed8dc9042ea4d23",
+  "agent_info": {
+    "name": "nop",
+    "version": "1.0.0",
+    "model_info": null
+  },
+  "verifier_result": {
+    "rewards": {
+      "reward": 0.0
+    }
+  },
+  "exception_info": null,
+  "started_at": "2026-11-22T09:19:20.553248Z",
+  "finished_at": "2026-11-22T09:19:46.684372Z",
+  "reward_valid": true,
+  "task_id": {
+    "path": "help-topic"
+  },
+  "trial_uri": "help-topic__oor5jn9",
+  "config": {
+    "task": {
+      "path": "help-topic"
+    },
+    "agent": {
+      "name": "nop"
+    }
+  }
+}

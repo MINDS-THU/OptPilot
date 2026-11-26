@@ -1,0 +1,96 @@
+# Publishes the default image -- the one every package runs in unless it names
+# its own. Held to stricter rules than any package image (design §4): published
+# only by this automated build, public from its first publication, and never
+# deleted, since every run that used it records its fingerprint.
+name: default-image
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ["images/default/**", ".github/workflows/default-image.yml"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Registries require a lowercase repository name, and an organisation
+      # name is free to contain capitals -- MINDS-THU does. Passing the owner
+      # through unchanged makes the tag invalid and the build fails before it
+      # starts, saying only "repository name must be lowercase".
+      - name: Lowercase the owner for the image name
+        id: owner
+        run: echo "name=$(printf %s "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # The runner's stock Docker can build only for its own machine type. The
+      # tags below ask for Intel and ARM in one image, which needs the buildx
+      # builder -- and, because the Dockerfile executes commands while
+      # building, an emulator for the machine type the runner is not.
+      # Without these two steps the build fails immediately with
+      # "Multi-platform build is not supported for the docker driver".
+      - name: Enable emulation for the other machine type
+        uses: docker/setup-qemu-action@v3
+
+      - name: Enable the multi-platform builder
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: images/default
+          push: true
+          tags: ghcr.io/${{ steps.owner.outputs.name }}/optpilot-default:latest
+          platforms: linux/amd64,linux/arm64
+
+      - name: Report the fingerprint a release must pin
+        run: |
+          echo "Published manifest digest: ${{ steps.push.outputs.digest }}"
+          echo "A release records ghcr.io/${{ steps.owner.outputs.name }}/optpilot-default@${{ steps.push.outputs.digest }}"
+
+      # The registry makes a new image private by default, and a private image
+      # answers strangers with the same refusal as a nonexistent one -- so the
+      # author sees it work while everyone else is told, in effect, that it
+      # does not exist. Publishing therefore ends by asking the registry, with
+      # no credentials at all, whether the image is readable (design §4).
+      - name: Verify a stranger can pull it
+        run: |
+          MANIFEST="https://ghcr.io/v2/${{ steps.owner.outputs.name }}/optpilot-default/manifests/latest"
+          # For a private package the registry refuses one step earlier than
+          # expected: it declines to issue even an anonymous pull token,
+          # answering 401 to the token request itself. The first run assumed
+          # the refusal would come at the manifest fetch, so the empty token
+          # reply crashed the JSON parse and this step ended in a traceback
+          # instead of its own message. Both refusal points now land on the
+          # same explanation.
+          TOKEN=$(curl -sS "https://ghcr.io/token?scope=repository:${{ steps.owner.outputs.name }}/optpilot-default:pull&service=ghcr.io" \
+            | tr -d '\n' | sed -n 's/.*"token" *: *"\([^"]*\)".*/\1/p')
+          if [ -n "$TOKEN" ]; then
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Accept: application/vnd.oci.image.index.v1+json" \
+              "$MANIFEST")
+          else
+            STATUS="no-token"
+          fi
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Anonymous pull returned HTTP $STATUS. The image is" \
+              "most likely still private -- make the package public in the" \
+              "repository's package settings, or nobody but this account can" \
+              "run anything built on it."
+            exit 1
+          fi
+          echo "Anonymous pull OK."

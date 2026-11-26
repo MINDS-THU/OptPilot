@@ -1,0 +1,45 @@
+tasks:
+- id: or-report
+  name: OR answer record completeness
+  evaluator: environments/or_problem/evaluator.py:evaluate
+  decisionContract:
+    format: parameters
+    schema:
+      objective_value:
+        valueType: float
+        description: The reported objective value (0.0 when no answer was found).
+      answer_found:
+        valueType: bool
+        description: Whether the solver produced a numeric answer.
+      report_json:
+        valueType: string
+        description: The full solution artifact as JSON text (schema optpilot.or-solving-report.v1)
+          — formulation, confidence, routing, generated code, and raw agent response.
+  metrics:
+  - solved
+  - objective_value
+  - artifact_bytes
+  observations:
+    problem: Maximize 3x + 2y with x + y <= 4, x,y >= 0.
+    model: openrouter/qwen/qwen3-coder
+instances:
+- id: problem
+  task: or-report
+suites:
+- id: problems
+  instances:
+  - problem
+generators:
+- id: coopa
+  entrypoint: generate.py:propose
+  files:
+  - methods/coopa_solver/coopa_shim.py
+  - methods/coopa_solver/coopa_solver.py
+studies:
+- id: solve
+  suiteIds:
+  - problems
+  generatorId: coopa
+  generationBudget: 1
+  metric: solved
+  timeoutSeconds: 1800

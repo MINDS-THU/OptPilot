@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://optpilot.io/schemas/defs/runtime.schema.json",
+  "definitions": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sandbox": {
+          "enum": [
+            "process",
+            "container"
+          ]
+        },
+        "setup": {
+          "$ref": "common.schema.json#/definitions/setup"
+        },
+        "container": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The image this component runs in. It must already be built and is named by fingerprint: a tag can resolve to different bytes later, so a record naming one would not describe what ran. There is deliberately no way to declare a build -- building fetches software from the network, and what it fetches can differ between builds.",
+          "required": [
+            "image",
+            "platform"
+          ],
+          "properties": {
+            "image": {
+              "type": "string",
+              "pattern": "^(?:sha256:[0-9a-f]{64}|[^\\s@]+@sha256:[0-9a-f]{64})$"
+            },
+            "platform": {
+              "type": "string",
+              "description": "The architecture the image is built for, such as linux/amd64. Required: the same reference on a machine of a different architecture is different bytes under the same name.",
+              "minLength": 1
+            },
+            "network": {
+              "enum": [
+                "enabled",
+                "disabled"
+              ]
+            },
+            "limits": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Raised resource limits for this component's containers. OptPilot applies defaults; a raised limit is shown when the image is approved, because raising one is part of what is being agreed to.",
+              "properties": {
+                "cpus": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?$"
+                },
+                "memory": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)?[kmgKMG]i?[bB]?$"
+                },
+                "pids": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              }
+            }
+          }
+        },
+        "workdir": {
+          "type": "string"
+        },
+        "env": {
+          "$ref": "common.schema.json#/definitions/envObject"
+        },
+        "envFromHost": {
+          "$ref": "common.schema.json#/definitions/stringList"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "container"
+            ],
+            "not": {
+              "required": [
+                "setup"
+              ]
+            }
+          },
+          "else": {
+            "not": {
+              "required": [
+                "container"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "methodRuntime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/runtime"
+        },
+        {
+          "if": {
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "workdir"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "environmentRuntime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/runtime"
+        },
+        {
+          "if": {
+            "required": [
+              "sandbox"
+            ],
+            "properties": {
+              "sandbox": {
+                "const": "container"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "workdir"
+                  ]
+                },
+                {
+                  "required": [
+                    "env"
+                  ]
+                },
+                {
+                  "required": [
+                    "envFromHost"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

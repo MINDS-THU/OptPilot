@@ -1,0 +1,22 @@
+apiVersion: optpilot.io/v1
+config: study
+name: toy-user-method
+description: Exercise a user-owned method loaded through the python component hook
+tags: [mvp, toy, user-method]
+
+environmentConfig: ../environments/toy_factory.yaml
+methodConfig: ../methods/fixed_parameter_method.yaml
+
+objective:
+  metric: throughput
+  direction: maximize
+
+budget:
+  maxTrials: 3
+
+execution:
+  parallelism: 3
+  timeoutSeconds: 120
+
+reproducibility:
+  seed: 7

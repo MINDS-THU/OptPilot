@@ -1,0 +1,17 @@
+<svg width="1200" height="700" viewBox="0 0 1200 700" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="700" rx="36" fill="#132629"/>
+  <rect x="58" y="74" width="1084" height="552" rx="30" fill="#FFFDF9"/>
+  <text x="102" y="144" fill="#1C3738" font-family="Space Grotesk, Arial, sans-serif" font-size="40" font-weight="700">Heuristic method family</text>
+  <rect x="102" y="188" width="296" height="134" rx="22" fill="#F0FAF9" stroke="#CDE3E1"/>
+  <text x="130" y="242" fill="#126C6B" font-family="Space Grotesk, Arial, sans-serif" font-size="30" font-weight="700">EOH</text>
+  <text x="130" y="284" fill="#496564" font-family="Manrope, Arial, sans-serif" font-size="24">Evolutionary operator hints with shared contracts.</text>
+  <rect x="452" y="188" width="296" height="134" rx="22" fill="#FFF3E9" stroke="#E9D6C4"/>
+  <text x="480" y="242" fill="#965832" font-family="Space Grotesk, Arial, sans-serif" font-size="30" font-weight="700">FUNSEARCH</text>
+  <text x="480" y="284" fill="#496564" font-family="Manrope, Arial, sans-serif" font-size="24">Repository-backed search over heuristic candidates.</text>
+  <rect x="802" y="188" width="296" height="134" rx="22" fill="#EFF4F8" stroke="#D3DEE6"/>
+  <text x="830" y="242" fill="#31586A" font-family="Space Grotesk, Arial, sans-serif" font-size="30" font-weight="700">HEURAGENIX</text>
+  <text x="830" y="284" fill="#496564" font-family="Manrope, Arial, sans-serif" font-size="24">Alternative strategy, same environment contract.</text>
+  <rect x="102" y="382" width="996" height="176" rx="26" fill="#173A3C"/>
+  <text x="140" y="444" fill="#F8F4EC" font-family="Space Grotesk, Arial, sans-serif" font-size="38" font-weight="700">Evidence-forward comparison</text>
+  <text x="140" y="494" fill="#D1E2DE" font-family="Manrope, Arial, sans-serif" font-size="28">Keep candidate histories, metrics, and final artifacts visible while comparing several LLM-assisted methods against one study interface.</text>
+</svg>

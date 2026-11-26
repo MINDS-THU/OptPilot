@@ -1,0 +1,67 @@
+environments:
+- id: toy_factory-world
+  name: Toy factory
+  settings:
+    demand: 72
+  files:
+  - environments/toy_factory/evaluator.py
+  - environments/toy_factory/grade_versioned.py
+tasks:
+- id: toy_factory
+  environment: toy_factory-world
+  evaluator: environments/toy_factory/grade_versioned.py:evaluate
+  decisionContract:
+    format: parameters
+    schema:
+      workers:
+        valueType: int
+        min: 2
+        max: 8
+        default: 5
+        description: Number of workers assigned to the line.
+      buffer_capacity:
+        valueType: int
+        min: 4
+        max: 20
+        default: 12
+        description: Maximum number of jobs waiting between stations.
+      mode:
+        valueType: categorical
+        values:
+        - efficient
+        - balanced
+        - fast
+        default: balanced
+        description: Operating emphasis used by the toy model.
+  metrics: &id001
+  - score
+  - throughput
+  - operating_cost
+  feedbackMetrics: *id001
+instances:
+- id: toy_factory-default
+  task: toy_factory
+suites:
+- id: toy_factory-suite
+  instances:
+  - toy_factory-default
+candidates:
+- id: toy_factory-baseline
+  format: parameters
+  value:
+    workers: 5
+    buffer_capacity: 12
+    mode: balanced
+generators:
+- id: random-search
+  entrypoint: generate.py:propose
+studies:
+- id: toy_factory-search
+  suiteIds:
+  - toy_factory-suite
+  candidateIds:
+  - toy_factory-baseline
+  generatorId: random-search
+  generationBudget: 5
+  metric: score
+  direction: maximize
