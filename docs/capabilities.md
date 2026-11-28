@@ -1,11 +1,26 @@
-# Executable capabilities
+# Choosing where evaluation happens
 
-Core executes reviewed immutable Studies from `optpilot.experiment.yaml`. Native local Tasks accept parameter or callable-program Candidates and support fixed comparisons, repetitions, retries, cancellation and feedback-driven Generators. Generated Candidates may contain executable files. Each Trial and Attempt records its state, actual used versions, metrics, evidence and failures.
+Start with how you obtain a measurement. A Python grader can measure a proposed policy in a simulator. A Harbor verifier can grade an agent's work in a container. A technician can enter a bench reading against a human work order. The choice determines who runs the work and what evidence will be available afterward.
 
-Harbor runs distinct saved agent configurations against the same frozen task package in a local Docker-backed Harbor job. It preserves actual external job/Trial IDs, agent/model reports, verifier rewards and failure details. External result import requires reviewed version bindings, is idempotent per source/job, and preserves partial coverage without representing imported work as locally executed.
+| Execution path | What you supply | Where grading happens | What to inspect |
+| --- | --- | --- | --- |
+| Native Python | A Python grader and parameter or program Candidates | Local worker processes | Trial metrics, grader evidence, errors and Attempts |
+| Native Python over SSH | The same Task plus a registered `sshTarget` | A trusted POSIX host with Python and the project dependencies | Native results and the remote job receipt |
+| Harbor | A local Harbor task package and distinct agent configurations | Harbor starts a local Docker-backed job | Job and Trial IDs, verifier rewards, reported models and errors |
+| Manual | A parameter Candidate, declared metrics and an operator | The operator claims the work order and submits a measurement | Identity, measurement receipt, metrics and optional evidence |
 
-Desktop is distributed separately from the public Core repository. It owns conversations, editable working directories, credential settings and execution controls while using the same project manifest and experiment ledger as the CLI. Shared folders reuse files. Independent copies separate edits while sharing one project ledger. For a versioned native Python Study users can also select a registered POSIX SSH worker. Grading runs remotely with frozen inputs, while the Study controller and Generator remain local. The controller can reconnect to the same remote attempt and retrieve its result.
+A Study selects Tasks served by one compatible runner. Both native paths support a Generator. With SSH, the controller and Generator run locally and only the Trial grading moves to the remote host. A manual Task uses one operator-confirmed Attempt per Trial.
 
-Tasks, instances, candidates and generators can declare capacity, consumables and windowed quotas. A Study can constrain total usage. The plan matches requirements against registered supplies, shows remaining capacity and distinguishes whole-batch coverage from the ability to start the next trial. The shared registry coordinates projects using the same registry. Manual trials let an operator claim work and submit metrics and evidence. Usage receipts and measured durations can inform later plans. See [operations](operations.md) for the CLI workflow, registry scope and SSH setup.
+## Where the evaluation boundary lies
 
-Local Python is trusted execution. Harbor provides its own environment isolation. Hosted model versions can only be pinned to the extent the provider exposes them.
+**Native Python** executes trusted project code with the worker account's permissions. A program Candidate runs in its own process and receives arguments chosen by the grader. Filesystem and network access follow the operating system's permissions. When grading over SSH, the selected host receives the frozen files and grader inputs, including the Instance's private values.
+
+**Harbor** starts from the saved task directory and agent configuration. Its package specifies the environment and verifier. Its runner owns agent authentication, randomness and retries. A provider may change what a hosted model identifier resolves to. Inspect both the requested agent configuration and the actual report when comparing model runs.
+
+**Manual work** records what an operator measured. Include the instrument reading, units or supporting observation in the receipt's evidence when the result depends on them. The shared resource registry can reserve a device or operator slot for participating projects. Physical access and measurements still come from the person or device involved.
+
+## When another system already ran the evaluation
+
+An external result can be imported into a reviewed Study with explicit bindings for the reported Candidates and Instances. The resulting record preserves the source, external job identity and reported coverage. This lets you inspect an outside measurement alongside other results even when only a job summary is available. [Import external results](external-results.md)
+
+The CLI and Desktop use the same project manifest and experiment ledger. Choose the CLI to script reviews and execution, or open a project in Desktop to inspect versions, work orders and relationships visually. [Project operations](operations.md) · [Desktop workflow](ui.md)

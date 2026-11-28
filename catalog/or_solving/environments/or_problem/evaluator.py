@@ -39,7 +39,7 @@ def evaluate(candidate, context):
         for key in _REQUIRED_REPORT_KEYS:
             if not report.get(key):
                 problems.append(f"report is missing {key!r}")
-    elif report is not None:
+    elif not problems:
         problems.append("report_json must encode a JSON object")
 
     if answer_found:

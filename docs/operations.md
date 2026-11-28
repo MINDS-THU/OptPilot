@@ -1,14 +1,26 @@
-# Local operation
+# Run and resource operations
 
-Keep project files and `.optpilot/experiments` together. Desktop transcripts and settings live in Electron's user-data workspace (or `OPTPILOT_DATA_DIR`). Credentials use operating-system encryption or the selected agent's own login. Do not publish private profiles or authentication files.
+Use these procedures when a run is waiting, a lab resource needs to be shared, or an operator needs to record a measurement. The commands assume you are in the directory containing `optpilot.experiment.yaml` and have the Core CLI installed. From a uv checkout, prefix each command with `uv run`. Replace uppercase identifiers with the IDs from your own review, run, work order or allocation.
 
-Back up the closed application and project ledgers before replacing the app. A reviewed Study can be rerun from frozen versions even after source files change. Cancellation affects only the requested Run. Trusted local Python can access host resources; use a suitable external sandbox for untrusted submissions.
+## Continue or cancel a run
 
-Harbor must be installed and Docker running. `OPTPILOT_HARBOR_EXECUTABLE` selects its absolute executable for CLI use. `OPTPILOT_HARBOR_CODEX_LOGIN=1` and `OPTPILOT_HARBOR_CLAUDE_SETTINGS=1` explicitly select local authentication. Failures and missing scores must be reported rather than replaced with baselines.
+```sh
+optpilot experiment detail RUN_ID
+```
 
-## Register experimental resources and run a reviewed evaluation
+Look at `state`, `error`, `reviewId` and the latest attempt for the affected trial. A waiting run can need an instrument, a receipt, an operator or a remote worker. `experiment run` exits with status 1 when the run returns in a state other than `succeeded`, including `waiting`. The run's JSON record explains what to do next.
 
-Declare resource requirements on a versioned Task, Instance, Candidate or Generator. For example, a candidate calling a licensed tool can use the following entry in its manifest.
+Once the stated condition is satisfied, resume with both original identifiers.
+
+```sh
+optpilot experiment run --review STUDY_ID --run-id RUN_ID
+```
+
+Completed trials retain their results. To repeat the comparison from the beginning, use the same review and omit `--run-id` to get a new run. To stop work on a particular run, use `optpilot experiment cancel RUN_ID` and check its detail. Cancellation is terminal once confirmed.
+
+## Register a shared supply
+
+Suppose a group has one concurrent solver license. The versioned task or candidate using it needs this manifest entry.
 
 ```yaml
 resourceRequirements:
@@ -18,40 +30,109 @@ resourceRequirements:
     minimum: 1
 ```
 
-Register the available supply once for all projects sharing this OptPilot registry. This example represents a concurrency allowance administered by the user. For consumables, `capacity` is the gross quantity supplied, including subsequent replenishments; confirmed withdrawals remain recorded. For quotas, specify `windowSeconds` for the fixed accounting window and put shared endpoints in the same pool. OptPilot can reserve its own allowance; check provider limits if other applications draw from that account.
-
-Remove a supply from future plans with **资源 → 实验资源 → 删除** or `optpilot experiment resource-delete RESOURCE_ID`. Release active reservations and reconcile outstanding usage first. Completed evaluations retain their allocation and measurement records. An adapter that explicitly registers the device again can make it available to future plans.
-
-On the same page, **运行项目命令** runs a script on a selected computer or configured backend. **作业记录** shows its status, logs and outputs. To compare candidate scores, open the evaluation in the project graph.
+Register the group's actual allowance under a stable pool ID. The following POSIX-shell example reads the registration as JSON from standard input. You can also save the JSON in a file and pass its path to `resource-register`.
 
 ```sh
 optpilot experiment resource-register - <<'JSON'
-{"id":"lab-seat","name":"Lab solver allowance","capability":"solver.concurrent","mode":"capacity","unit":"seat","capacity":1}
+{
+  "id": "lab-solver",
+  "name": "Lab solver license",
+  "capability": "solver.concurrent",
+  "mode": "capacity",
+  "unit": "seat",
+  "capacity": 1,
+  "access": "allocate",
+  "owner": "Optimization lab"
+}
 JSON
 optpilot experiment resource-inventory
-optpilot experiment resource-plan STUDY_REVISION --project .
-optpilot experiment run --review STUDY_REVISION --run-id RUN_ID --project .
-optpilot experiment run-resources RUN_ID --project .
 ```
 
-In the inventory, `owner` identifies the person or team responsible for the supply. Use `access: inspect` to register a source whose availability can be consulted. Allocation requires `access: allocate`. An optional `verifiedAt` timestamp records when a person confirmed the entry. In the desktop app, the **资源** toolbar button opens the inventory. **设置评测 → 运行计划** shows gaps and allows the user to register matching resources in place.
+Pick the mode that matches how supply becomes available again.
 
-In the desktop editor, select a registered resource by name to require a particular pool, or choose a common requirement or enter a description such as “翻译评审员”. The review carries that requirement into the supply form. Enter the actual available total separately. When an existing pool matches the units and physical requirements, **使用已有资源** lets you confirm that the two names refer to the same capability. Future evaluations share the same balance. Experiment budgets can select requirements already declared by the chosen versions.
+| Mode | Example | How to maintain it |
+| --- | --- | --- |
+| `capacity` | A solver seat or instrument | Register the number that can be used at once. The reservation is released when the work finishes. |
+| `consumable` | Material stock | Register the gross amount supplied. Add replenishments to that total. Receipted withdrawals reduce availability. |
+| `quota` | An allowance per hour | Register capacity in the provider's units. Use `windowSeconds` for a fixed accounting window. Endpoints sharing one allowance should draw from the same pool. |
 
-A Run in `waiting` can be waiting for a missing or occupied resource, a usage receipt or a human work order. Read the Run's reason. Repeat the run command with its original identifiers to continue. A capacity reservation is released after the work finishes. For stock used by a started attempt, record the actual amount against its allocation's owner and key. Reuse the same receipt when submitting a measurement again. A cancelled but unused reservation releases its hold. An uncertain withdrawal remains pending until reconciled. Run details preserve the evidence.
+`access: inspect` makes a supply visible for consultation. `access: allocate` authorizes reservations from the pool. Projects using the same registry coordinate with one another. When other software or people also use a device, the owner or adapter must account for them. The [calibration tutorial](resource-tutorial.md) shows an adapter synchronizing the registry with the device itself.
+
+To withdraw an offer, use `optpilot experiment resource-delete RESOURCE_ID` after resolving its held or pending allocations. Completed runs retain the allocation history. An adapter that registers the device again can make it available for new plans.
+
+## Plan and reconcile an allocation
+
+Review the study after saving its requirements. Inspect its plan before you start the run.
 
 ```sh
+optpilot experiment resource-plan STUDY_ID
+```
+
+`canStartNext` describes whether the next planned work can start. Inspect `items` and `coverageIssues` for claims and gaps across the study. A projection for the whole study can exceed the remaining inventory even if the next trial fits. A preview makes no reservation. At execution time the registry checks the supply again.
+
+If a requirement has a matching resource under a different capability name, verify that it is the same pool, with compatible units and properties. The plan can return `linkCandidates`. To confirm a match, pass the item's `key`, `capability` and the selected resource ID.
+
+```sh
+optpilot experiment resource-link STUDY_ID CLAIM_KEY CAPABILITY RESOURCE_ID
+optpilot experiment resource-plan STUDY_ID
+```
+
+Use `--claim-index N` when the same key and capability occur several times. In Desktop, open **资源** (Resources) to inspect supply. The run plan under **设置评测** (evaluation setup) can register a missing supply or link an existing one.
+
+Read the allocations and observations after a run has started. For an outstanding consumable or quota measurement, take the `owner` and `key` from the relevant allocation. Here the recorded withdrawal is seven units and `receipt-17` is the source measurement's identifier.
+
+```sh
+optpilot experiment run-resources RUN_ID
 optpilot experiment resource-observe RUN_ID OWNER KEY 7 receipt-17
 ```
 
-For evaluations performed by a person, set `runner: manual` on a Task with a parameter decision contract and declare its metrics. Inspect offered work, claim it under the operator name, and enter a JSON object with one numeric value for each declared metric. The original Trial retains the operator, receipt, readings and optional evidence. Continue with the same work order after reconnecting.
+Use `--partial` while more readings are due. Consumption readings are increments, so each additional withdrawal needs its own receipt. Resubmitting an identical receipt is safe. A final zero records that no further quantity was used. A started allocation whose withdrawal remains unknown stays pending. If a run was waiting for the reading, resume it using its original review and run IDs.
+
+## Submit a human measurement
+
+For a task with `runner: manual`, a parameter candidate and declared metrics, starting the run offers a work order. Locate the trial, inspect the instructions and claim it under the operator's name.
 
 ```sh
 optpilot experiment manual-tasks RUN_ID
-optpilot experiment manual-claim RUN_ID TRIAL_ID OPERATOR
-optpilot experiment manual-complete RUN_ID TRIAL_ID metrics.json MEASUREMENT_ID --evidence evidence.json
+optpilot experiment manual-claim RUN_ID TRIAL_ID "Lab operator"
 ```
 
-For a trusted POSIX SSH worker, register a target with fields `id`, `name`, `host` (an SSH configuration alias) and `python` (default `python3`). Verify the host key and login using the account that runs OptPilot. Install the project's Python dependencies there. Run `optpilot experiment ssh-probe TARGET_ID`, then select the target when reviewing a native Python Study or set `sshTarget` in the Study. The remote job receives the chosen versions' frozen files and instance grading inputs. The local controller orchestrates the Study and each optional generator call. Submitted worker processes retain a job ID and their result in the remote account under `~/.local/share/optpilot/ssh-trials`. Resume the original Run after a connection interruption to collect the same receipt. Quota and usage estimates in the registry reflect work known to OptPilot.
+Create `metrics.json` with a finite number for every metric listed in the order. For a task that declares only `latency_ms`, a reading could be `{"latency_ms": 42.5}`. Use an identifier from the measurement as the receipt. Include a JSON evidence file when you have supporting details.
 
-Set `OPTPILOT_RESOURCE_STORE` to a directory to use a separate resource registry. On one machine Desktop and CLI otherwise share the user's default registry. A manual registry coordinates OptPilot participants using that same authority; external equipment calendars and third-party license usage require independent confirmation.
+```sh
+optpilot experiment manual-complete RUN_ID TRIAL_ID metrics.json MEASUREMENT_ID --evidence evidence.json
+optpilot experiment manual-tasks RUN_ID
+```
+
+Completion records the operator, receipt and readings on the trial and advances the run. After a disconnect, look up the same work order. Submitting the identical measurement again returns its recorded state.
+
+## Use an SSH worker
+
+For native Python grading on a trusted POSIX computer, configure its SSH alias, verify its host key and arrange non-interactive login from the controller. Install the grader's dependencies in the target's Python environment. Save `target.json` with the following fields, substituting your SSH configuration alias.
+
+```json
+{"id":"lab-worker","name":"Lab worker","host":"lab-node","python":"python3"}
+```
+
+```sh
+optpilot experiment ssh-register target.json
+optpilot experiment ssh-probe lab-worker
+```
+
+When the probe returns `"ready": true`, add `sshTarget: lab-worker` to the authored study and review it, or select the registered target during Desktop evaluation setup. The controller sends the selected frozen files and grading inputs, including any grader-private instance data, to the worker. The controller and generator stay on the local machine. If the connection drops, reconnect and resume the same run so Core can collect the existing remote job's receipt. Remote job data lives under `~/.local/share/optpilot/ssh-trials` in the worker account.
+
+## Back up project and resource records
+
+The default project ledger lives in `.optpilot/experiments` inside the project directory. When you choose `--store DIRECTORY`, use that directory for all later commands that read or resume its runs. The resource registry is shared separately. Choose it with `OPTPILOT_RESOURCE_STORE` or use the per-user default.
+
+| Platform | Default resource registry |
+| --- | --- |
+| macOS | `~/Library/Application Support/OptPilot/experiment-resources` |
+| Linux | `$XDG_DATA_HOME/OptPilot/experiment-resources`, usually `~/.local/share/OptPilot/experiment-resources` |
+| Windows | `%LOCALAPPDATA%\OptPilot\experiment-resources` |
+
+If `OPTPILOT_DATA_DIR` is set, its `experiment-resources` subdirectory supplies the default. An explicit `OPTPILOT_RESOURCE_STORE` takes precedence.
+
+Stop active controllers and close Desktop before making a filesystem backup. Copy the project and its complete ledger, the registry used by those runs, and any external stores or device receipts needed to interpret them. To preserve Desktop conversations, include its user-data workspace. Restore the corresponding directories together and use `experiment detail RUN_ID` to inspect a known run before starting new work.
+
+Local Python executes with the permissions of the current user. Use it for trusted projects. For agent evaluations that require a sandbox, choose a Harbor task and configure its environment and credentials. [Execution options](capabilities.md) · [CLI reference](cli.md)

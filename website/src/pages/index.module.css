@@ -1328,3 +1328,68 @@
     transition: none;
   }
 }
+
+.resultCard {
+  min-width: 0;
+  margin: 0;
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+  background: var(--optpilot-surface);
+  border: 1px solid var(--optpilot-border);
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 56px rgba(37, 27, 42, 0.12);
+}
+
+.resultCard figcaption strong,
+.resultCard figcaption span {
+  display: block;
+}
+
+.resultCard figcaption strong {
+  font-size: 1.35rem;
+}
+
+.resultCard figcaption span,
+.resultCard > p {
+  margin: 0.65rem 0 1rem;
+  color: var(--optpilot-ink-soft);
+  font-size: 0.95rem;
+}
+
+.resultCard table {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.resultCard th,
+.resultCard td {
+  padding: 0.7rem;
+  border: none;
+  border-bottom: 1px solid var(--optpilot-border);
+  text-align: start;
+}
+
+.resultCard thead th {
+  font-size: 0.78rem;
+}
+
+.benchText {
+  padding: 1.4rem;
+}
+
+.benchText a {
+  color: #a4d8d5;
+}
+
+.packageLinks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 2rem;
+  margin-bottom: 1.75rem;
+}
+
+.packageLinks article {
+  border-top: 1px solid var(--optpilot-border);
+  padding-top: 1rem;
+}

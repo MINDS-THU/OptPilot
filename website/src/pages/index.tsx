@@ -1,29 +1,37 @@
 import type {ReactNode} from 'react';
+import Heading from '@theme/Heading';
+import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import Translate, {translate} from '@docusaurus/Translate';
-import {useBaseUrlUtils} from '@docusaurus/useBaseUrl';
-import Layout from '@theme/Layout';
-import Heading from '@theme/Heading';
 
-import {
-  capabilityBlocks,
-  projectLinks,
-  proofPoints,
-  workflowSteps,
-} from '@site/src/data/homeContent';
-import {featuredUseCasePreviews} from '@site/src/content/listingData';
-import type {CaseStudyTone} from '@site/src/content/listingData';
-
+import {useFeaturedResearchArticles} from '@site/src/content/listingData';
+import {projectLinks} from '@site/src/data/homeContent';
 import styles from './index.module.css';
 
-const toneClassMap: Record<CaseStudyTone, string> = {
-  amber: styles.toneAmber,
-  slate: styles.toneSlate,
-  teal: styles.toneTeal,
-};
-
-function Arrow(): ReactNode {
-  return <span aria-hidden="true">→</span>;
+function SearchComparison(): ReactNode {
+  return (
+    <figure className={styles.resultCard}>
+      <figcaption>
+        <strong><Translate id="homepage.result.title">Which ranker finds the right help article?</Translate></strong>
+        <span><Translate id="homepage.result.setup">Five labeled questions · six articles · one trial per ranker and question</Translate></span>
+      </figcaption>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col"><Translate id="homepage.result.ranker">Ranker</Translate></th>
+            <th scope="col"><Translate id="homepage.result.first">Correct at rank 1</Translate></th>
+            <th scope="col"><Translate id="homepage.result.mrr">Mean reciprocal rank</Translate></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row"><Translate id="homepage.result.wordCount">Word count</Translate></th><td>3 / 5</td><td>0.767</td></tr>
+          <tr><th scope="row">BM25</th><td>5 / 5</td><td>1.000</td></tr>
+        </tbody>
+      </table>
+      <p><Translate id="homepage.result.example">On the question about editing a copy, word count ranked the intended article third. BM25 ranked it first. Open the two trials to compare their ranked lists.</Translate></p>
+      <Link href={projectLinks.gettingStarted}><Translate id="homepage.result.link">Reproduce this comparison</Translate> →</Link>
+    </figure>
+  );
 }
 
 function HomepageHeader(): ReactNode {
@@ -31,196 +39,56 @@ function HomepageHeader(): ReactNode {
     <header className={styles.hero}>
       <div className={`${styles.container} ${styles.heroLayout}`}>
         <div className={styles.heroCopy}>
-          <p className={styles.kicker}>
-            <Translate id="homepage.hero.eyebrow">Open-source experiment infrastructure</Translate>
-            <span aria-hidden="true">/</span>
-            <span>Python Core</span>
-          </p>
           <Heading as="h1" className={styles.heroTitle}>
-            <Translate id="homepage.hero.title">
-              Experiments with frozen inputs and retained results.
-            </Translate>
+            <Translate id="homepage.hero.title">Did the new solution improve?</Translate>
           </Heading>
           <p className={styles.heroLead}>
-            <Translate id="homepage.hero.lead">
-              Define tasks, evaluation cases, candidates and optional generators in a versioned project. Review freezes the selected versions before execution.
-            </Translate>
+            <Translate id="homepage.hero.lead">OptPilot is an open-source framework for iterative optimization. Compare policies, programs or parameter settings on the same cases, inspect where their behavior differs, and use those results to design the next candidate.</Translate>
           </p>
           <p className={styles.heroDetail}>
-            <Translate id="homepage.hero.subtitle">
-              The public Python Core and CLI run locally. OptPilot Desktop is a separate client with private source, and installer downloads are not published yet.
-            </Translate>
+            <Translate id="homepage.hero.subtitle">Each comparison preserves the selected versions of the candidates, cases and grader. You can change the project and still trace an earlier score to the trial that produced it.</Translate>
           </p>
           <div className={styles.heroActions}>
-            <Link className="button button--primary" href={projectLinks.gettingStarted}>
-              <Translate id="homepage.hero.getStarted">Get started</Translate>
-              <Arrow />
-            </Link>
-            <Link className="button button--secondary" to={projectLinks.desktop}>
-              <Translate id="homepage.hero.exploreStudio">About Desktop</Translate>
-            </Link>
-            <Link className={styles.inlineLink} href={projectLinks.code}>
-              GitHub <Arrow />
-            </Link>
-          </div>
-          <ul
-            className={styles.projectFacts}
-            aria-label={translate({id: 'homepage.proof.ariaLabel', message: 'Project facts'})}>
-            {proofPoints.map((point) => (
-              <li key={point.label}>
-                <strong>{point.value}</strong>
-                <span>{point.label}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className={styles.manifestStage}>
-          <div className={styles.manifestHeader}>
-            <span><Translate id="homepage.manifest.label">Project manifest</Translate></span>
-            <code>optpilot.experiment.yaml</code>
-          </div>
-          <div className={styles.manifestRows}>
-            <div><span>01</span><code>tasks</code><strong><Translate id="homepage.manifest.tasks">grading contract + metrics</Translate></strong></div>
-            <div><span>02</span><code>instances</code><strong><Translate id="homepage.manifest.instances">concrete evaluation cases</Translate></strong></div>
-            <div><span>03</span><code>suites</code><strong><Translate id="homepage.manifest.suites">selected instance sets</Translate></strong></div>
-            <div><span>04</span><code>candidates</code><strong><Translate id="homepage.manifest.candidates">parameter or program submissions</Translate></strong></div>
-            <div><span>05</span><code>studies</code><strong><Translate id="homepage.manifest.studies">metric, budget and run conditions</Translate></strong></div>
-          </div>
-          <div className={styles.manifestFooter}>
-            <span><Translate id="homepage.manifest.reviewed">Reviewed immutable versions</Translate></span>
-            <span aria-hidden="true">→</span>
-            <span><Translate id="homepage.manifest.run">Run · Trials · Attempts · evidence</Translate></span>
+            <Link className="button button--primary" href={projectLinks.gettingStarted}><Translate id="homepage.hero.getStarted">Run your first experiment</Translate> →</Link>
+            <Link className={styles.inlineLink} href={projectLinks.code}>GitHub ↗</Link>
           </div>
         </div>
+        <SearchComparison />
       </div>
     </header>
   );
 }
 
-function ArchitectureSection(): ReactNode {
-  return (
-    <section className={styles.section}>
-      <div className={styles.container}>
-        <div className={styles.sectionHeader}>
-          <p className={styles.kicker}><Translate id="homepage.boundary.eyebrow">Reviewed versions are the execution boundary</Translate></p>
-          <Heading as="h2">
-            <Translate id="homepage.boundary.title">Review freezes the project before execution.</Translate>
-          </Heading>
-          <p>
-            <Translate id="homepage.boundary.description">
-              OptPilot validates experiment contracts, freezes selected artifact versions and records each run, trial, attempt and result.
-            </Translate>
-          </p>
-        </div>
-
-        <div
-          className={styles.architecture}
-          aria-label={translate({
-            id: 'homepage.boundary.diagram.ariaLabel',
-            message: 'Versioned experiment project reviewed and executed as a retained run',
-          })}>
-          <article>
-            <span>01</span>
-            <Heading as="h3"><Translate id="homepage.boundary.project.title">Project</Translate></Heading>
-            <p><Translate id="homepage.boundary.project.text">Versioned Tasks, Instances, Suites, Candidates and optional Generators.</Translate></p>
-          </article>
-          <div className={styles.architectureArrow}><Translate id="homepage.boundary.reviewArrow">review →</Translate></div>
-          <article className={styles.realm}>
-            <span>02</span>
-            <Heading as="h3"><Translate id="homepage.boundary.study.title">Reviewed Study</Translate></Heading>
-            <p><Translate id="homepage.boundary.study.text">Freezes exact versions, metric, repetitions, budget and execution settings.</Translate></p>
-          </article>
-          <div className={styles.architectureArrow}><Translate id="homepage.boundary.executeArrow">execute →</Translate></div>
-          <article>
-            <span>03</span>
-            <Heading as="h3"><Translate id="homepage.boundary.run.title">Run ledger</Translate></Heading>
-            <p><Translate id="homepage.boundary.run.text">Records Trials, Attempts, scores, failures and evidence.</Translate></p>
-          </article>
-        </div>
-        <div className={styles.evidenceLine}>
-          <strong><Translate id="homepage.boundary.evidence.title">Shared project record</Translate></strong>
-          <span><Translate id="homepage.boundary.evidence.text">Python CLI and Desktop inspect the same versions and experiment ledger.</Translate></span>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function CapabilitiesSection(): ReactNode {
-  return (
-    <section className={`${styles.section} ${styles.subtleSection}`} id="platform">
-      <div className={`${styles.container} ${styles.capabilitiesLayout}`}>
-        <div className={styles.stickyIntro}>
-          <p className={styles.kicker}><Translate id="homepage.capabilities.eyebrow">A versioned project model</Translate></p>
-          <Heading as="h2"><Translate id="homepage.capabilities.title">Define the experiment, then inspect what ran.</Translate></Heading>
-          <p>
-            <Translate id="homepage.capabilities.description">
-              Tasks define grading contracts and metrics. Suites choose Instances. Candidates and optional Generators feed reviewed Studies.
-            </Translate>
-          </p>
-          <Link className={styles.inlineLink} href={projectLinks.capabilities}>
-            <Translate id="homepage.capabilities.boundary.link">Read the capability matrix</Translate> <Arrow />
-          </Link>
-        </div>
-
-        <div className={styles.capabilityList}>
-          {capabilityBlocks.map((block) => (
-            <article key={block.number}>
-              <span className={styles.itemNumber}>{block.number}</span>
-              <div>
-                <Heading as="h3">{block.title}</Heading>
-                <p>{block.description}</p>
-                <small>{block.detail}</small>
-              </div>
-            </article>
-          ))}
-          <aside className={styles.scopeNote}>
-            <strong><Translate id="homepage.capabilities.boundary.title">Current executable boundary</Translate></strong>
-            <p>
-              <Translate id="homepage.capabilities.boundary.text">
-                Native parameter and callable-program Candidates use trusted local Python grading. Harbor Candidates run through local Docker-backed jobs. Manual Tasks and registered POSIX SSH workers are also supported. Validation rejects unsupported artifact and runner combinations.
-              </Translate>
-            </p>
-          </aside>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function WorkflowSection(): ReactNode {
   return (
-    <section className={styles.section}>
+    <section className={styles.section} id="platform">
       <div className={`${styles.container} ${styles.workflowLayout}`}>
         <div>
-          <p className={styles.kicker}><Translate id="homepage.workflow.eyebrow">From manifest to retained result</Translate></p>
-          <Heading as="h2"><Translate id="homepage.workflow.title">Review the exact inputs before a Run starts.</Translate></Heading>
+          <Heading as="h2"><Translate id="homepage.workflow.title">From a baseline to the next candidate</Translate></Heading>
           <ol className={styles.workflowList}>
-            {workflowSteps.map((step) => (
-              <li key={step.number}>
-                <span>{step.number}</span>
-                <div>
-                  <Heading as="h3">{step.title}</Heading>
-                  <p>{step.description}</p>
-                </div>
-              </li>
-            ))}
+            <li><span>1</span><div>
+              <Heading as="h3"><Translate id="homepage.workflow.define.title">Define a comparison</Translate></Heading>
+              <p><Translate id="homepage.workflow.define.description">Choose the cases, what each candidate may change and the metric that matters. Review fixes the selected project versions and run settings.</Translate></p>
+            </div></li>
+            <li><span>2</span><div>
+              <Heading as="h3"><Translate id="homepage.workflow.run.title">Inspect individual trials</Translate></Heading>
+              <p><Translate id="homepage.workflow.run.description">Open a candidate’s result for one case. Read its measurements, the grader’s evidence and any errors alongside the average.</Translate></p>
+            </div></li>
+            <li><span>3</span><div>
+              <Heading as="h3"><Translate id="homepage.workflow.decide.title">Try a revision</Translate></Heading>
+              <p><Translate id="homepage.workflow.decide.description">Submit your own change or let a generator propose candidates within a budget. The task defines which scores the generator can use as feedback.</Translate></p>
+            </div></li>
           </ol>
+          <Link className={styles.inlineLink} href={projectLinks.generators}><Translate id="homepage.workflow.link">Run a candidate search</Translate> →</Link>
         </div>
-
-        <div className={styles.quickStart}>
-          <div className={styles.quickStartHeader}>
-            <strong><Translate id="homepage.terminal.core">Core CLI</Translate></strong>
-            <span>Python 3.10+</span>
+        <aside className={styles.quickStart}>
+          <div className={styles.quickStartHeader}><strong><Translate id="homepage.calibration.title">A comparison with one shared instrument</Translate></strong></div>
+          <div className={styles.benchText}>
+            <p><Translate id="homepage.calibration.problem">Two display settings need measurements at two gray levels. The simulated colorimeter has two channels, but the team can reserve only one at a time.</Translate></p>
+            <p><Translate id="homepage.calibration.result">When another user holds the team’s seat, the run waits. It resumes under the same ID and records the reservation, RGB readings and release for each trial.</Translate></p>
+            <Link href={projectLinks.resources}><Translate id="homepage.calibration.link">Run the resource allocation tutorial</Translate> →</Link>
           </div>
-          <pre><code>uv sync{`\n\n`}optpilot validate catalog/optpilot_tutorial/optpilot.experiment.yaml{`\n\n`}optpilot experiment review --project catalog/optpilot_tutorial --study toy_factory-search{`\n`}# then use the returned review id{`\n`}optpilot experiment run --project catalog/optpilot_tutorial --review REVIEW_ID</code></pre>
-          <p>
-            <Translate id="homepage.terminal.note">
-              The public repository contains the Python Core, CLI, examples and technical documentation. Desktop source is maintained privately.
-            </Translate>
-          </p>
-        </div>
+        </aside>
       </div>
     </section>
   );
@@ -231,50 +99,12 @@ function DesktopSection(): ReactNode {
     <section className={`${styles.section} ${styles.studioSection}`} id="desktop">
       <div className={styles.container}>
         <div className={styles.studioHeader}>
-          <div>
-            <p className={styles.kicker}><Translate id="homepage.studio.eyebrow">OptPilot Desktop</Translate></p>
-            <Heading as="h2"><Translate id="homepage.studio.title">OptPilot Desktop</Translate></Heading>
-          </div>
-          <p>
-            <Translate id="homepage.studio.description">
-              Desktop is a graphical research workspace for the public Core's versioned project model. Conversations and writable directories sit beside a relationship map of saved artifact versions, evaluations and trial evidence.
-            </Translate>
-          </p>
+          <Heading as="h2"><Translate id="homepage.studio.title">Investigate a result in Desktop</Translate></Heading>
+          <p><Translate id="homepage.studio.description">Follow a score back to the candidate and case in the project graph. Attach a trial to an assistant conversation, revise the program, and compare the new version on the same suite. The CLI reads the same project and results.</Translate></p>
         </div>
-
-        <div className={styles.desktopDetails}>
-          <aside className={styles.desktopAvailability}>
-            <strong><Translate id="homepage.desktop.status.title">Desktop source is private</Translate></strong>
-            <p><Translate id="homepage.desktop.status.text">After macOS, Windows and Linux builds pass release acceptance, installers will be published as public GitHub Release assets. Downloads are not available yet.</Translate></p>
-          </aside>
-          <div>
-            <dl className={styles.studioFeatures}>
-              <div>
-                <dt><Translate id="homepage.studio.catalog.title">Versioned project artifacts</Translate></dt>
-                <dd><Translate id="homepage.studio.catalog.text">Inspect Environments, Tasks, Instances, Suites, Candidates and Generators in the project relationship map.</Translate></dd>
-              </div>
-              <div>
-                <dt><Translate id="homepage.studio.runSetups.title">Studies, Runs and Trials</Translate></dt>
-                <dd><Translate id="homepage.studio.runSetups.text">Review frozen inputs, start evaluations explicitly, and inspect per-instance scores, failures and evidence.</Translate></dd>
-              </div>
-              <div>
-                <dt><Translate id="homepage.studio.workspaces.title">Versioned editing</Translate></dt>
-                <dd><Translate id="homepage.studio.workspaces.text">Edit a draft, review file changes and save a new version without changing earlier results.</Translate></dd>
-              </div>
-              <div>
-                <dt><Translate id="homepage.studio.assistant.title">Conversations and assistants</Translate></dt>
-                <dd><Translate id="homepage.studio.assistant.text">Work with connected coding assistants and send recorded evaluation evidence back into a conversation.</Translate></dd>
-              </div>
-            </dl>
-            <div className={styles.sectionActions}>
-              <Link className="button button--primary" href={projectLinks.gettingStarted}>
-                <Translate id="homepage.studio.cta">Use the public Core</Translate> <Arrow />
-              </Link>
-              <Link className={styles.inlineLink} href={projectLinks.documentation}>
-                <Translate id="homepage.studio.docs">Read the documentation</Translate> <Arrow />
-              </Link>
-            </div>
-          </div>
+        <div className={styles.sectionActions}>
+          <Link className="button button--primary" to={projectLinks.desktop}><Translate id="homepage.studio.cta">Explore Desktop</Translate> →</Link>
+          <a className="button button--secondary" href={projectLinks.releases}><Translate id="homepage.studio.releases">Desktop releases</Translate> ↗</a>
         </div>
       </div>
     </section>
@@ -282,88 +112,23 @@ function DesktopSection(): ReactNode {
 }
 
 function ResearchPackagesSection(): ReactNode {
-  const {withBaseUrl} = useBaseUrlUtils();
-
+  const articles = useFeaturedResearchArticles();
   return (
     <section className={`${styles.section} ${styles.researchSection}`} id="research">
       <div className={styles.container}>
         <div className={styles.researchHeader}>
-          <div className={styles.sectionHeader}>
-            <p className={styles.kicker}><Translate id="homepage.research.eyebrow">Research packages</Translate></p>
-            <Heading as="h2"><Translate id="homepage.research.title">Research that runs on the same public contract.</Translate></Heading>
-          </div>
-          <div>
-            <p>
-              <Translate id="homepage.research.description">
-                Paper companion projects exercise simulation generation, policy design and operations-research solving through the current experiment model.
-              </Translate>
-            </p>
-            <Link className={styles.inlineLink} to={projectLinks.researchPackages}>
-              <Translate id="homepage.research.viewAll">Explore all packages</Translate> <Arrow />
-            </Link>
-          </div>
+          <div className={styles.sectionHeader}><Heading as="h2"><Translate id="homepage.research.title">Experiment with a simulator or solver</Translate></Heading></div>
+          <p><Translate id="homepage.research.description">Each package starts with a different research question. Its guide explains the inputs, the evaluation method and what you can conclude from a run.</Translate></p>
         </div>
-
-        <div className={styles.researchGallery}>
-          {featuredUseCasePreviews.map((caseStudy, index) => (
-            <Link key={caseStudy.title} to={caseStudy.href} className={styles.researchCard}>
-              <div className={styles.researchVisual}>
-                {caseStudy.previewImage ? (
-                  <img
-                    src={withBaseUrl(caseStudy.previewImage)}
-                    alt={caseStudy.imageTitle}
-                  />
-                ) : (
-                  <div className={`${styles.researchFallback} ${toneClassMap[caseStudy.tone]}`}>
-                    <span>OPTPILOT / RESEARCH</span>
-                    <strong>{caseStudy.imageTitle}</strong>
-                    <p>{caseStudy.imageCaption}</p>
-                  </div>
-                )}
-                <span className={styles.researchIndex}>0{index + 1}</span>
-              </div>
-              <div className={styles.researchCardBody}>
-                <div className={styles.researchMeta}>
-                  <span>{caseStudy.metric}</span>
-                  <span className={styles.researchArrow} aria-hidden="true">↗</span>
-                </div>
-                <Heading as="h3">{caseStudy.title}</Heading>
-                <p>{caseStudy.abstract}</p>
-                <div className={styles.researchTags} aria-hidden="true">
-                  {caseStudy.tags.map((tag) => <span key={tag}>{tag}</span>)}
-                </div>
-              </div>
-            </Link>
+        <div className={styles.packageLinks}>
+          {articles.map(item => (
+            <article key={item.permalink}>
+              <Heading as="h3"><Link to={item.permalink}>{item.title}</Link></Heading>
+              <p>{item.frontMatter.preview_summary}</p>
+            </article>
           ))}
         </div>
-      </div>
-    </section>
-  );
-}
-
-function FinalCallToAction(): ReactNode {
-  return (
-    <section className={styles.finalSection}>
-      <div className={`${styles.container} ${styles.finalLayout}`}>
-        <div>
-          <p className={styles.kicker}><Translate id="homepage.final.eyebrow">Make the next run inspectable</Translate></p>
-          <Heading as="h2"><Translate id="homepage.final.title">Freeze the inputs. Keep the evidence.</Translate></Heading>
-        </div>
-        <div>
-          <p>
-            <Translate id="homepage.final.description">
-              Start with the tutorial project, review a Study, and inspect its Run evidence with the CLI.
-            </Translate>
-          </p>
-          <div className={styles.sectionActions}>
-            <Link className="button button--primary" href={projectLinks.gettingStarted}>
-              <Translate id="homepage.final.getStarted">Run the tutorial</Translate> <Arrow />
-            </Link>
-            <Link className={styles.inlineLink} href={projectLinks.code}>
-              <Translate id="homepage.final.github">View on GitHub</Translate> <Arrow />
-            </Link>
-          </div>
-        </div>
+        <Link className={styles.inlineLink} href={projectLinks.catalog}><Translate id="homepage.research.viewAll">Browse all six example projects</Translate> →</Link>
       </div>
     </section>
   );
@@ -372,23 +137,10 @@ function FinalCallToAction(): ReactNode {
 export default function Home(): ReactNode {
   return (
     <Layout
-      title={translate({
-        id: 'homepage.meta.title',
-        message: 'Inspectable infrastructure for iterative optimization',
-      })}
-      description={translate({
-        id: 'homepage.meta.description',
-        message: 'OptPilot provides versioned experiment projects, frozen Study reviews and inspectable Run evidence.',
-      })}>
+      title={translate({id: 'homepage.meta.title', message: 'Experiments for iterative optimization'})}
+      description={translate({id: 'homepage.meta.description', message: 'Compare candidate solutions on shared cases and use trial evidence to guide the next iteration.'})}>
       <HomepageHeader />
-      <main>
-        <ArchitectureSection />
-        <CapabilitiesSection />
-        <WorkflowSection />
-        <DesktopSection />
-        <ResearchPackagesSection />
-        <FinalCallToAction />
-      </main>
+      <main><WorkflowSection /><DesktopSection /><ResearchPackagesSection /></main>
     </Layout>
   );
 }

@@ -1,6 +1,6 @@
 site_name: OptPilot
 site_url: https://minds-thu.github.io/OptPilot/reference/
-site_description: Documentation for OptPilot, an orchestrator for AI-assisted iterative optimization studies.
+site_description: Inspectable experiments for iterative optimization, with frozen evaluation conditions and retained results.
 site_author: OptPilot contributors
 
 repo_name: MINDS-THU/OptPilot
@@ -61,30 +61,33 @@ markdown_extensions:
       alternate_style: true
 
 nav:
-  - Home: index.md
-  - Installation: installation.md
-  - Local Operations and Security: operations.md
-  - Getting Started:
-      - Your First Run: getting-started.md
-  - OptPilot Core:
-      - Core Model: concepts.md
-      - Executable Capabilities: capabilities.md
-      - Candidate Contracts: candidate-contracts.md
-      - Methods: methods.md
-      - Packages and Catalogs: catalog.md
-      - Configuration Reference: configuration.md
-      - How a Run Works: how-it-works.md
-      - Evidence: evidence.md
-      - External results: external-results.md
-  - Research Packages:
-      - "DEVS-Gen": devs-gallery.md
-      - "Generate and Optimize: DEVS-Gen x Heuristic Design": generate-and-optimize.md
-      - "LLM-Guided Heuristic Design": llm-policy-search.md
-      - "COOPA": or-solving.md
-      - "Build Your First Package": tutorial-package.md
-  - Desktop client: ui.md
-  - Contributor Guide:
-      - Development: development.md
+  - Overview: index.md
+  - Install OptPilot: installation.md
+  - Tutorials:
+      - Compare two search algorithms: getting-started.md
+      - Run the comparison in Desktop: ui.md
+      - Build a toy factory experiment: tutorial-package.md
+      - Share a simulated colorimeter: resource-tutorial.md
+  - How-to guides:
+      - Run a candidate search: generate-and-optimize.md
+      - Manage runs, resources and workers: operations.md
+      - Run Harbor and import external results: external-results.md
+  - Explanations:
+      - The experiment model: concepts.md
+      - What happens during a run: how-it-works.md
+      - Choosing a runner: capabilities.md
+      - Interpreting results and evidence: evidence.md
+  - Reference:
+      - Project manifest: configuration.md
+      - Command-line interface: cli.md
+      - Candidate contracts: candidate-contracts.md
+      - Generator API: methods.md
+  - Example projects:
+      - Catalog: catalog.md
+      - DEVS simulation studies: devs-gallery.md
+      - Factory scheduling: llm-policy-search.md
+      - COOPA solver reports: or-solving.md
+  - Contributing: development.md
 
 extra:
   generator: false

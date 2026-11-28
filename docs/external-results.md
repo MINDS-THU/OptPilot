@@ -1,80 +1,95 @@
-# Bring external evaluation results into OptPilot
+# Run Harbor or import an external evaluation
 
-An external runner can grade candidates and export its results. OptPilot attaches the export to a reviewed Study, which identifies the saved versions selected for comparison. Each imported trial keeps the external job and trial identifiers so you can go back to the original evidence.
+Use Harbor when an agent needs a task environment and verifier. OptPilot can launch Harbor with reviewed versions and collect its results. If another system has already run the evaluation, you can import the recorded job and link its trials to the candidate and case versions used in that job.
 
-## Import from the desktop
+## Launch a Harbor job
 
-1. Open the project, choose **设置评测**, select the suites or task instances and candidates, and choose **Review evaluation**.
-2. Open **Import results from another runner**. Choose a completed Harbor job folder, a Harbor job report, or a JSON report in the format below.
-3. Check the reported trial count. Match each external candidate and task instance name to the exact version used in that job. Select any suite version you can confirm the job used.
-4. Choose **Import results**. Open the resulting evaluation details to compare scores, inspect a trial, or take its evidence into a conversation.
+Install Harbor on the machine running Core and start Docker. Put `harbor` on `PATH`, or set `OPTPILOT_HARBOR_EXECUTABLE` to its absolute executable path. The small project below uses two built-in Harbor agents and a local verifier. It needs no model credentials. Docker needs access to the task's Ubuntu base image. [Harbor installation](https://docs.harborframework.com/getting-started/installation)
 
-For Harbor, the job folder contains a top-level `result.json` and may contain a `result.json` for each trial. Select the folder to collect both. An individual job report can also embed trial records. OptPilot reads the agent identity, task name and checksum, verifier rewards, and errors from each available trial. It uses Harbor’s reported reward validity when available. [Harbor job reports](https://github.com/harbor-framework/harbor/blob/main/src/harbor/models/job/result.py) · [Harbor trial reports](https://github.com/harbor-framework/harbor/blob/main/src/harbor/models/trial/result.py)
+From the Core checkout, run the `oracle` reference solution and the `nop` agent on the same task.
 
-A job summary may report an average and a trial count without identifying the individual trials. The evaluation details displays that summary and identifies its coverage. Actual version links appear when imported trial records identify inputs and you match those inputs to saved versions. You can import the full folder later to fill in missing records.
+```sh
+uv run optpilot experiment run --project tests/fixtures/harbor \
+  --suite terminology --candidate oracle --candidate nop
+```
 
-## Export from another runner
+The verifier checks that a file in the container has the expected text. Both agents complete, with rewards of `1` for `oracle` and `0` for `nop`. Inspect `runnerDirectory` for Harbor's job folder, `external.jobId` for the original job, and `trials[].externalTrialId` for the matching trial. A verifier reward of zero is a valid measurement. An agent exception makes the trial fail and leaves its raw reward, if any, in the evidence.
 
-Write a JSON file with a stable source name, a job ID unique within that source, and a terminal outcome. The following example records a measured score of zero and one completed attempt.
+To evaluate your own agent, declare `runner: harbor`, a relative `harborTask` directory and `decisionContract: {format: agent}` on the Task. A `format: agent` candidate identifies the agent and optional model. The frozen task package contains the instructions, environment and verifier. Configure the provider account in the runner environment. Desktop provides the Harbor executable and local authentication choices in **Settings**. From the CLI, `OPTPILOT_HARBOR_CODEX_LOGIN=1` and `OPTPILOT_HARBOR_CLAUDE_SETTINGS=1` explicitly select their respective local credentials. See the supported non-secret agent settings in the manifest reference. [Candidate contracts](candidate-contracts.md) · [Configuration](configuration.md)
+
+For a previously completed managed job, `uv run optpilot experiment refresh-results RUN_ID --project PROJECT` rereads the original reports after a Core update. It uses the existing Harbor receipts and runs no agent.
+
+## Import a completed job
+
+Importing needs a completed report and a matching Study review. It runs locally without Harbor, Docker or provider credentials. In Desktop, choose **设置评测**, review the exact versions, then choose **Import results from another runner**. Open a job folder or JSON export, match the candidate and instance names, confirm any Suite you know was used, and choose **Import results**.
+
+For a CLI example, use the bundled job folder `tests/fixtures/harbor/results`. It contains an earlier `nop` run with one measured zero. From the Core checkout, create a review for the single candidate and case in this job. Use a temporary directory for the preview and mappings.
+
+```sh
+PROJECT=tests/fixtures/harbor
+JOB="$PROJECT/results"
+WORK=$(mktemp -d)
+uv run optpilot experiment review --project "$PROJECT" \
+  --candidate nop --instance help-topic > "$WORK/review.json"
+uv run optpilot experiment inspect-results "$JOB" > "$WORK/preview.json"
+cat "$WORK/preview.json"
+```
+
+The preview identifies `nop@1.0.0`, the `help-topic` task with its checksum, and one trial. The bindings file maps those external names to the saved versions. For this known fixture, each side has exactly one candidate and instance. For other jobs, verify each identity against the source records, especially when several candidates share an agent or model name.
+
+```sh
+uv run python - "$WORK" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+work = Path(sys.argv[1])
+review = json.loads((work / 'review.json').read_text())
+preview = json.loads((work / 'preview.json').read_text())
+agent, = preview['candidates']
+case, = preview['instances']
+assert agent == 'nop@1.0.0' and case.startswith('help-topic · ')
+candidate_version, = review['candidateVersionIds']
+instance_version, = review['instanceVersionIds']
+bindings = {
+    'candidates': {agent: candidate_version},
+    'instances': {case: instance_version},
+    'suiteVersionIds': [],
+}
+(work / 'bindings.json').write_text(json.dumps(bindings))
+PY
+
+REVIEW_ID=$(uv run python -c 'import json,sys; print(json.load(sys.stdin)["id"])' < "$WORK/review.json")
+DIGEST=$(uv run python -c 'import json,sys; print(json.load(sys.stdin)["digest"])' < "$WORK/preview.json")
+uv run optpilot experiment import-results "$JOB" --project "$PROJECT" \
+  --review "$REVIEW_ID" --bindings "$WORK/bindings.json" --digest "$DIGEST"
+```
+
+Copy the returned `runId` into `uv run optpilot experiment detail RUN_ID --project "$PROJECT"`. Check `executionOrigin` (`import`), `external.coverage` (`trials`), the trial's original ID, and `metrics.reward` (`0`). The digest checks that the report still matches the preview. Importing the same records again returns the same Run. An import can add trials for the same source and job ID while preserving earlier evidence and bindings.
+
+## Export results from another runner
+
+Use `optpilot.results.v1` for a runner-specific JSON export. This example uses the metric `reward` from the fixture Task. Use stable job, trial and attempt IDs from your own runner in an actual export.
 
 ```json
 {
   "format": "optpilot.results.v1",
-  "source": "document-search-benchmark",
-  "jobId": "retrieval-27",
+  "source": "offline-grader",
+  "jobId": "job-17",
   "state": "succeeded",
   "reportedTrials": 1,
-  "summary": { "mean_reciprocal_rank": 0 },
-  "trials": [
-    {
-      "id": "query-18-at-ranker-a",
-      "candidate": "ranker-a",
-      "instance": "query-18",
-      "state": "succeeded",
-      "metrics": { "reciprocal_rank": 0 },
-      "evidence": { "matching_document_found": false },
-      "attempts": [
-        { "id": "worker-execution-73", "state": "succeeded" }
-      ]
-    }
-  ]
+  "trials": [{
+    "id": "trial-1",
+    "candidate": "reference-agent",
+    "instance": "file-content",
+    "state": "succeeded",
+    "metrics": {"reward": 1},
+    "evidence": {"matched_expected_text": true},
+    "attempts": [{"id": "attempt-1", "state": "succeeded"}]
+  }]
 }
 ```
 
-- **State** takes `succeeded`, `failed`, or `cancelled` for a job, trial, or attempt.
-- **Metrics** hold finite numbers named by the selected Task. A missing measurement has no entry. A measured zero keeps its numeric value.
-- **Trial evidence** can contain JSON such as a reference to the original grade, an error detail, or supporting measurements. When the runner identified separate attempts, list them in execution order with a stable ID for each. Store a known `repetition` or `seed` on the trial if available.
-- **Coverage** comes from the number of distinct trial records and the runner's `reportedTrials`. A summary-only export supplies this count, a `summary` object and an empty `trials` list.
-- **Timestamps** are optional. Use ISO date/time strings in `startedAt` and `finishedAt`.
+A job, trial or attempt has a terminal `state` of `succeeded`, `failed` or `cancelled`. Supply finite numeric metrics with names declared by the selected Task. Omit an unmeasured metric. Include attempt records in execution order when the runner retained them. A known `seed`, `repetition`, error, or ISO `startedAt` and `finishedAt` timestamps can add context to the trial.
 
-An import can add previously missing trial records for the same source and job ID. Repeating an identical import returns the same evaluation. OptPilot checks the recorded totals, evidence, and version assignments before accepting an update.
-
-## Import with the CLI
-
-Preview the external candidate and instance names. The preview also supplies a digest that identifies the data you reviewed.
-
-```sh
-optpilot experiment inspect-results /path/to/completed-job
-```
-
-Use the preview's names as keys in a bindings file. The values come from the saved Study review. This example uses placeholders for the version IDs.
-
-```json
-{
-  "candidates": { "ranker-a": "CANDIDATE_VERSION_ID" },
-  "instances": { "query-18": "INSTANCE_VERSION_ID" },
-  "suiteVersionIds": ["CONFIRMED_SUITE_VERSION_ID"]
-}
-```
-
-Run the import in the project that holds the review. Supply `--store` if the project keeps its retained experiment records elsewhere.
-
-```sh
-optpilot experiment import-results /path/to/completed-job \
-  --review STUDY_REVISION_ID --bindings bindings.json --digest PREVIEW_DIGEST
-optpilot experiment detail RUN_ID
-```
-
-Codex candidates can freeze a non-secret native provider under `agent.kwargs.config`: `model_provider` and `model_providers` (`name`, `base_url`, `wire_api`, `env_key`, `supports_websockets`, `http_headers: {Host: ...}`). Credentials stay in the selected runner environment. This records transport settings alongside the model; selecting local authentication alone does not copy unrelated Codex settings.
-
-When a loopback proxy routes by Host, preserve its original hostname using the supported non-secret `http_headers.Host` provider setting. Authentication headers are not accepted in the manifest. Runner exceptions exclude a Trial from valid-score aggregates even when Harbor reports a reward; the raw reward and actual model usage remain in evidence. After updating OptPilot, `optpilot experiment refresh-results RUN --project PROJECT` can re-read a completed managed Harbor job without executing it or changing original receipt files.
+A summary-only export can contain a `summary` object, `reportedTrials` and an empty `trials` list. Importing just Harbor's top-level `result.json` may likewise provide only a summary. OptPilot labels coverage `summary`, `partial` or `trials` according to the records received and the runner's reported total. If more records become available, preview and import the full folder with the additional bindings. [Evidence and provenance](evidence.md)

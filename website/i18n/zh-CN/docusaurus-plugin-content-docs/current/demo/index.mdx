@@ -1,37 +1,19 @@
 ---
 sidebar_position: 2
 title: OptPilot Desktop
-description: 了解使用公开实验项目模型的私有 OptPilot Desktop 客户端。
-hide_table_of_contents: false
+description: 从项目关系图中的评分找到一次试验，把证据带入会话，再修改和比较方案。
 ---
 
-# OptPilot Desktop
+OptPilot Desktop 把实验文件、评测结果和会话放在同一个工作区。打开项目文件夹，就能查看保存过的方案和评测。公开的 Core 命令行也可以读取并运行同一项目。
 
-import Admonition from '@theme/Admonition';
+## 从一次评测走到下一次修改
 
-OptPilot Desktop 是用于版本化实验项目的图形客户端。它与公开的 Python Core 和 CLI 使用同一份 `optpilot.experiment.yaml` 清单及 `.optpilot/experiments` 实验记录。
+1. 打开文档检索示例，选中包含五个问题的实例集和两种排序程序。检查评测设置后启动运行。
+2. 在项目关系图中打开评分比较。选中一个试验，就可以看到用户问了什么、评分程序期望找到哪篇文章，以及该方案把它排在第几位。
+3. 把试验证据加入会话。编程助手可以根据这份排序结果检查代码。把修改保存为新版本，再用原来那组问题比较效果。
 
-公开的 [OptPilot 仓库](https://github.com/MINDS-THU/OptPilot)包含 Core、CLI、示例和技术文档。Desktop 源码保存在私有的 OptPilot-Desktop 仓库。
+[阅读 Desktop 操作教程（英文）](https://minds-thu.github.io/OptPilot/reference/ui/)
 
-<Admonition type="info" title="分发状态">
+## 安装 Desktop
 
-Desktop 源码由私有仓库维护。macOS、Windows 和 Linux 安装包通过发布验收后，将作为公开 GitHub Release 附件发布。目前尚无可下载的安装包。
-
-</Admonition>
-
-## 项目工作流
-
-Desktop 支持版本化的 Environment、Task、Instance、Suite、Candidate、可选 Generator 和 Study。审查 Study 时会冻结所选产物版本及运行条件。Run 会将 Trial、Attempt、实际输入、分数、失败信息和证据写入共享项目记录。
-
-图形客户端提供产物编辑、实验设置、结果检查、资源管理和已连接编程助手工作流。助手为可选项。执行实验等重要操作需要显式启动。
-
-## 数据与执行
-
-- 项目版本和实验记录保存在项目内的 `.optpilot/experiments`。
-- 本地 Python 评估会执行受信任的项目代码，不构成对抗性沙箱。
-- Harbor 使用自身的任务隔离，并需要 Docker 和 Harbor 配置。
-- API 凭证由已配置的服务提供方管理，不会保存到实验记录中。
-
-## Core CLI
-
-请参阅[安装指南](https://minds-thu.github.io/OptPilot/reference/installation/)安装和运行公开 Python Core。[第一个实验指南](https://minds-thu.github.io/OptPilot/reference/getting-started/)介绍清单校验、Study 审查、执行和结果检查。
+对应平台的安装包发布后，可在 [GitHub Releases](https://github.com/MINDS-THU/OptPilot/releases) 下载并查看安装说明。Desktop 单独分发，源码保存在私有仓库。你也可以使用[开源 Core 命令行运行同一个示例](https://minds-thu.github.io/OptPilot/reference/getting-started/)。

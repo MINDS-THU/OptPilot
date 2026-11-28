@@ -24,13 +24,13 @@ The production build is written to `build/` for both English and Chinese locales
 
 - `src/pages/index.tsx`: homepage structure and product narrative
 - `src/pages/index.module.css`: homepage presentation and responsive behavior
-- `src/data/homeContent.ts`: shared homepage facts, links, capability blocks, and workflow steps
+- `src/data/homeContent.ts`: shared links to guides, examples and releases
 - `src/css/custom.css`: site-wide Docusaurus theme and article styles
 - `src/components/OverviewPage/`: product overview embedded in the docs route
 - `content/docs/demo/`: Desktop installation and operating guide
 - `content/docs/case-studies/`: research-package stories used by the homepage and Research Packages index
 - `content/blog/`: release and engineering notes
-- `src/content/listingData.ts`: generated content metadata used for package and note listings
+- `src/content/listingData.ts`: research article titles and summaries for the active locale
 - `i18n/zh-CN/`: Chinese UI translations and localized content when available
 - `static/img/`: brand, experiment-model, research-package, and social-preview assets
 
@@ -39,8 +39,7 @@ The production build is written to `build/` for both English and Chinese locales
 Before changing product copy, check the current OptPilot source documentation:
 
 - `README.md` for positioning, installation, and release boundaries
-- `docs/capabilities.md` for runnable versus future-facing configuration
-- `docs/ui.md` for the Desktop client's current information architecture and labels
+- `docs/capabilities.md` for supported execution paths
 - `docs/ui.md` and `docs/operations.md` for the current Desktop workflow and execution boundaries
 - `docs/devs-gallery.md`, `docs/llm-policy-search.md`, and `docs/or-solving.md` for research-package details
 - `pyproject.toml` and `src/optpilot/__init__.py` for the Core release version

@@ -8,7 +8,7 @@ const baseUrl = process.env.SITE_BASE_URL ?? '/OptPilot/';
 const config: Config = {
   title: 'OptPilot',
   tagline:
-    'Versioned experiment projects with frozen inputs and inspectable results.',
+    'Compare candidate solutions on shared cases and use the results to guide the next iteration.',
   favicon: 'img/optpilot-mark.svg',
 
   future: {
